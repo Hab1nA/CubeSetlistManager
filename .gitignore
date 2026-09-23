@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# 打包产物与工作目录（build.bat 可重建）
+build/
+dist/
+
+# ⚠ 运行时真实数据（OBS 密码/歌单/时长/设置）——严禁入库
+config.json
+playlist.json
+_bak_dist/
+crash.log
+crash.log.*
+
+# 测试/渲染输出物（工具可再生）
+_render/
+夜测_results.json
+夜测_log.txt
+
+# 本机工具状态
+.mimosa/
+.zcode/
