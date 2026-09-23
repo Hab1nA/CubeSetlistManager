@@ -333,23 +333,54 @@ class CubaseController:
         raise SwitchError("等待《%s》窗口超时（%d 秒）" % (name, OPEN_TIMEOUT))
 
     def _drain_dialogs(self, stage):
-        """处理 Steinberg 自绘弹窗：命中确认类仿人回车，其余只记录防误按，
-        同一标题只记一次。弹窗判定=排除法（非工程窗口、非 Hub/主框架）。"""
-        for h, t in _dialogs():
-            if t in self._seen:
-                continue
-            self._seen.add(t)
-            if any(m in t for m in DIALOG_ENTER_MARKS):
-                self._log("[%s] 弹窗「%s」→ 回车" % (stage, t))
-                if focus(h):
-                    human_enter()
-            elif any(m in t for m in DIALOG_LOG_MARKS):
-                self._log("[%s] 弹窗「%s」（仅记录，不按键）" % (stage, t))
-            else:
-                self._log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
+        """处理 Steinberg 自绘弹窗一轮（详见 _drain），返回是否放了确认框。"""
+        return _drain(stage, self._seen, self._log)
 
     def running(self):
         return bool(find_processes_by_prefix(PROC_PREFIX))
+
+
+def _drain(stage, seen, log):
+    """处理 Steinberg 自绘弹窗一轮：命中确认类仿人回车（返回 True，调用方
+    据此补发被模态吞掉的请求），其余只记录防误按，同一标题只记一次。
+    弹窗判定=排除法（非工程窗口、非 Hub/主框架）。"""
+    pressed = False
+    for h, t in _dialogs():
+        if t in seen:
+            continue
+        seen.add(t)
+        if any(m in t for m in DIALOG_ENTER_MARKS):
+            log("[%s] 弹窗「%s」→ 回车" % (stage, t))
+            if focus(h):
+                human_enter()
+                pressed = True
+        elif any(m in t for m in DIALOG_LOG_MARKS):
+            log("[%s] 弹窗「%s」（仅记录，不按键）" % (stage, t))
+        else:
+            log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
+    return pressed
+
+
+def close_app(timeout=60, log=print):
+    """退出整个 Cubase（只走 WM_CLOSE，绝不强杀）：先关所有工程窗口
+    （未保存修改的确认框回车=保存，沿用切歌策略），工程清完后对 Hub/
+    主框架补 WM_CLOSE 退出应用；超时只放弃不强杀。返回是否已退出。"""
+    seen, closed = set(), set()
+    for h, _t in project_windows():
+        _user32.PostMessageW(h, WM_CLOSE, 0, 0)
+        closed.add(h)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not find_processes_by_prefix(PROC_PREFIX):
+            return True
+        _drain("退出", seen, log)
+        for h, t, c in _windows():
+            if (c.startswith(WIN_CLASS_PREFIX) and t in DIALOG_IGNORE
+                    and h not in closed):
+                _user32.PostMessageW(h, WM_CLOSE, 0, 0)
+                closed.add(h)
+        time.sleep(0.5)
+    return not find_processes_by_prefix(PROC_PREFIX)
 
 
 def _dialogs():

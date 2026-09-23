@@ -84,6 +84,18 @@ def scale(root, w, h=None):
     return "%dx%d" % (int(w * s), int(h * s))
 
 
+def flatten(w):
+    """无框线表单窗（设置/键盘自动化/踩钉）的内容底色统一为窗口底色：
+    darkify 给 Frame/Label/Checkbutton 套 PANEL 面板色，在主窗里是有框
+    面板的底，在这些纯表单页里却呈现为一块块比窗口浅的色斑，看着像
+    误加的高亮——文字应直接坐在窗口底色上。只改容器/文字类底色，
+    控件（按钮/输入框/下拉）的底色不动。darkify 之后调用。"""
+    if isinstance(w, (tk.Frame, tk.Label, tk.Checkbutton)):
+        w.config(bg=BG)
+    for c in w.winfo_children():
+        flatten(c)
+
+
 def darkify(w):
     """递归套深色主题。在窗口构建完成后调用一次；此后的动态 fg（状态
     色）覆盖不受影响。Label 默认弱色，动态更新的由各自逻辑覆写；

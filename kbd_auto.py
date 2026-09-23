@@ -369,14 +369,16 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._cap = None            # (note, SlotCapture, RawMidiIn, deadline)
         self.title("键盘自动化")
         self.geometry(dpi.scale(self, 560, 820))
+        pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         tk.Label(self, text="录制：在琴上选好该音色；"
-                            "触发：发送到琴上验证。").pack(anchor="w", padx=12,
-                                                     pady=(10, 4))
+                            "触发：发送到琴上验证。").pack(
+            anchor="w", padx=pad, pady=(pad, 4))
         grid = tk.Frame(self)
-        grid.pack(fill="both", expand=True, padx=12)
+        grid.pack(fill="both", expand=True, padx=pad)
         for c, t in enumerate(("音符", "音色映射", "操作")):
             tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
-                row=0, column=c, sticky="w", pady=(0, 2))
+                row=0, column=c, sticky="w", pady=(0, 2),
+                padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
         self._slot_lbl = {}
         self._rec_btn = {}
         row = 1
@@ -422,15 +424,16 @@ class KeyboardAutoWindow(tk.Toplevel):
         for i, (key, text) in enumerate((("juno", "JUNO：…"),
                                          ("ax", "AX-09：…"))):
             lbl = tk.Label(self, text=text, anchor="w", fg=dpi.MUT)
-            lbl.pack(fill="x", padx=12,
-                     pady=(0, 6 if i == 1 else 0))
+            lbl.pack(fill="x", padx=pad,
+                     pady=(0, dpi.scale(self, 8) if i == 1 else 0))
             self._port_lbl[key] = lbl
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.darkify(self)
+        dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
         # 尺寸适配：最小=「含动作状态行」的内容需求（状态行动态出现时
         # 不会裁掉底部端口行）；初始不低于规划值与需求值
-        self.status.pack(fill="x", padx=12, pady=(6, 0),
+        self.status.pack(fill="x", padx=pad, pady=(6, 0),
                          before=self._port_lbl["juno"])
         self.update_idletasks()
         w = max(dpi.scale(self, 560), self.winfo_reqwidth())
@@ -471,7 +474,7 @@ class KeyboardAutoWindow(tk.Toplevel):
             self.status.pack_forget()
             return
         self.status.config(text=text, fg=color)
-        self.status.pack(fill="x", padx=12, pady=(6, 0),
+        self.status.pack(fill="x", padx=dpi.scale(self, 12), pady=(6, 0),
                          before=self._port_lbl["juno"])
 
     # ---- 录制 ----

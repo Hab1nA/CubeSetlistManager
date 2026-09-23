@@ -135,6 +135,7 @@ class TransportSync:
         self._last_pulse = 0.0
         self._last_note = 0.0
         self.video_state = "stopped"
+        self.current_video = None   # 最近成功触发的视频文件名（仅展示用）
         self._lock = threading.Lock()
 
     def is_following(self):
@@ -197,10 +198,12 @@ def note_handler(ctl, sync, report=print):
             ok = ctl.stop_media()
             if ok:
                 sync.set_state("stopped")
+                sync.current_video = None
         else:
             ok = ctl.set_media(target, False)
             if ok:
                 sync.set_state("playing")
+                sync.current_video = target
         report("音符 %d → %s%s" % (
             note, "熄屏" if target is None else target,
             "" if ok else " 失败：%s" % ctl.last_error))

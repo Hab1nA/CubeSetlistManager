@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""夜测编排器：分阶段对 工程播放台 做 E2E 验证（2026-09-23 夜）。
+"""夜测编排器：分阶段对 Cube Setlist Manager 做 E2E 验证（2026-09-23 夜）。
 用法：py -u night_test.py <phase>
   snap    基线快照：数据哈希/进程/MIDI 端口/窗口，存 %TEMP%/night_backup_20260923
   probe   交互桌面探针：验证 SetForegroundWindow 可用（锁屏则真机阶段必须跳过）
@@ -80,7 +80,7 @@ def p_snap():
     snap = {}
     for p in ("config.json", "playlist.json"):
         snap["root/" + p] = md5(ROOT / p)
-    ddir = ROOT / "dist" / "工程播放台"
+    ddir = ROOT / "dist" / "Cube Setlist Manager"
     snap["dist/config.json"] = md5(ddir / "config.json")
     snap["dist/playlist.json"] = md5(ddir / "playlist.json")
     crash = ddir / "crash.log"
@@ -1563,7 +1563,7 @@ def p_dist():
     import shutil
     import subprocess as sp
     PH = "dist"
-    src = ROOT / "dist" / "工程播放台"
+    src = ROOT / "dist" / "Cube Setlist Manager"
     before = {p.name: md5(p) for p in (src / "config.json",
                                        src / "playlist.json")}
     sandbox = pathlib.Path(tempfile.gettempdir()) / "night_dist_sandbox"
@@ -1576,7 +1576,7 @@ def p_dist():
     proc = sp.Popen([str(exe)], cwd=str(sandbox))
     time.sleep(20)
     alive = proc.poll() is None
-    wins = _find_windows("工程播放台")
+    wins = _find_windows("Cube Setlist Manager")
     record(PH, "dist exe 启动存活+主窗口出现", alive and bool(wins),
            "alive=%s wins=%s" % (alive, wins))
     crash_now = crash.stat().st_size if crash.exists() else 0

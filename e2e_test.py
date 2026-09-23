@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""E2E 真机测试驱动：分阶段验证 工程播放台 的各链路（模块级直跑，
+"""E2E 真机测试驱动：分阶段验证 Cube Setlist Manager 的各链路（模块级直跑，
 与 GUI 调的是同一份代码；GUI 本身是薄封装）。
 用法：py -u e2e_test.py <phase>   phase =
   preflight  环境盘点：MIDI 端口 / OBS / Cubase 进程与窗口 / JUNO 缺席降级

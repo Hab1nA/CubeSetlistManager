@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='工程播放台',
+    name='Cube Setlist Manager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,5 +40,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='工程播放台',
+    name='Cube Setlist Manager',
 )

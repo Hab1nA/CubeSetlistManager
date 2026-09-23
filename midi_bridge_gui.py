@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MIDI→OBS 视频桥状态窗：四个服务状态 + 事件日志。
+"""VJ Automator 状态窗：四个服务状态 + 事件日志。
 直接 `python midi_bridge_gui.py` 运行，或用 PyInstaller 打包成 exe。"""
 import queue
 import threading
@@ -16,7 +16,7 @@ FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("MIDI 视频桥")
+        root.title("VJ Automator")
         root.geometry(dpi.scale(root, 640, 400))
         self.rows = {}
         head = tk.Frame(root)
@@ -40,7 +40,7 @@ class App:
         tk.Button(bar, text="清空日志",
                   command=lambda: self.log.delete(0, "end")).pack(
             side="right", padx=(0, 6))
-        dpi.darkify(root)          # 与工程播放台同一套深色演出主题
+        dpi.darkify(root)          # 与Cube Setlist Manager同一套深色演出主题
 
         self.q = queue.Queue()
         self.ctl = self.sync = self.port = None
