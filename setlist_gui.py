@@ -242,8 +242,11 @@ class App:
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
-        self.vj_hint = str(cfg.get("vjPortHint") or mb.PORT_HINT)
-        self.kb_hint = str(cfg.get("kbPortHint") or kbd_auto.KB_PORT_HINT)
+        # 端口提示名：空串=停用该联动（设置页下拉「无」）；缺键才回默认
+        self.vj_hint = (mb.PORT_HINT if cfg.get("vjPortHint") is None
+                        else str(cfg["vjPortHint"]))
+        self.kb_hint = (kbd_auto.KB_PORT_HINT if cfg.get("kbPortHint") is None
+                        else str(cfg["kbPortHint"]))
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
@@ -580,8 +583,19 @@ class App:
         try:
             self._ensure_cubase()   # 最慢的后端最先拉起（冷启动约 30 秒）
             try:
-                mb.ensure_loopmidi(self.vj_hint)
-                self.q.put("loopMIDI 端口就绪")
+                hint = self.vj_hint or self.kb_hint
+                if hint:
+                    mb.ensure_loopmidi(hint)
+                    self.q.put("loopMIDI 端口就绪")
+                elif not find_processes_by_prefix("loopmidi"):
+                    # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的端口，
+                    # 不在则每次载入弹「未找到端口」。只拉起，不等端口。
+                    exe = mb._loopmidi_exe()
+                    if exe is None:
+                        raise SystemExit("找不到 loopMIDI.exe")
+                    if launch_detached(exe) <= 32:
+                        raise SystemExit("拉起 loopMIDI 失败")
+                    self.q.put("loopMIDI 已拉起（端口联动已停用）")
             except SystemExit as e:      # 单项降级：缺 loopMIDI 不拖垮其余服务
                 self.q.put("loopMIDI 未就绪：%s（VJ 触发/走带跟随不可用）" % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
@@ -605,12 +619,15 @@ class App:
                 if self.auto_advance:
                     self.q.put("自动切换工程已恢复为开启")
                 try:
-                    self.port = mb.MidiIn(
-                        self.vj_hint,
-                        mb.note_handler(self.ctl, self.sync,
-                                        report=self.q.put),
-                        on_clock=lambda: (self.sync.on_clock(),
-                                          self.watch.on_clock()))
+                    if self.vj_hint:
+                        self.port = mb.MidiIn(
+                            self.vj_hint,
+                            mb.note_handler(self.ctl, self.sync,
+                                            report=self.q.put),
+                            on_clock=lambda: (self.sync.on_clock(),
+                                              self.watch.on_clock()))
+                    else:
+                        self.q.put("VJ 触发监听已停用")
                 except SystemExit as e:  # 没有端口/被占用：只废 VJ 触发这一项
                     self.port = None
                     self.q.put("MIDI 监听未启动：%s" % e)
@@ -636,9 +653,13 @@ class App:
                 self.ax_switcher = kbd_auto.ToneSwitcher(
                     self.axcfg, self.q.put, on_result=self._on_kb_result)
                 try:
-                    self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
-                                                      self._on_kb_msg)
-                    self.q.put("键盘自动化监听已启动（%s）" % self.kb_port.name)
+                    if self.kb_hint:
+                        self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
+                                                          self._on_kb_msg)
+                        self.q.put("键盘自动化监听已启动（%s）"
+                                   % self.kb_port.name)
+                    else:
+                        self.q.put("键盘自动化监听已停用")
                 except kbd_auto.PortNotFound as e:
                     self.kb_port = None
                     self.kb_err = str(e)
@@ -1232,15 +1253,19 @@ class App:
             except Exception:
                 pass
             self.port = None
-            try:
-                self.port = mb.MidiIn(
-                    self.vj_hint,
-                    mb.note_handler(self.ctl, self.sync, report=self.q.put),
-                    on_clock=lambda: (self.sync.on_clock(),
-                                      self.watch.on_clock()))
-                self.q.put("VJ 监听已切换（%s）" % self.port.name)
-            except SystemExit as e:
-                self.q.put("VJ 监听未启动：%s" % e)
+            if not self.vj_hint:
+                self.q.put("VJ 监听已停用")
+            else:
+                try:
+                    self.port = mb.MidiIn(
+                        self.vj_hint,
+                        mb.note_handler(self.ctl, self.sync,
+                                        report=self.q.put),
+                        on_clock=lambda: (self.sync.on_clock(),
+                                          self.watch.on_clock()))
+                    self.q.put("VJ 监听已切换（%s）" % self.port.name)
+                except SystemExit as e:
+                    self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
         if self.kb_port is not None:
@@ -1249,12 +1274,15 @@ class App:
             except OSError:
                 pass
         self.kb_port = None
-        try:
-            self.kb_port = kbd_auto.RawMidiIn(self.kb_hint, self._on_kb_msg)
-            self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
-        except kbd_auto.PortNotFound as e:
-            self.kb_err = str(e)
-            self.q.put("键盘自动化停用：%s" % e)
+        if not self.kb_hint:
+            self.q.put("键盘自动化监听已停用")
+        else:
+            try:
+                self.kb_port = kbd_auto.RawMidiIn(self.kb_hint, self._on_kb_msg)
+                self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
+            except kbd_auto.PortNotFound as e:
+                self.kb_err = str(e)
+                self.q.put("键盘自动化停用：%s" % e)
 
     def _regain_focus(self):
         """把键盘焦点收回本程序（工作线程调用）。置顶只保视觉 Z 序，
@@ -1351,12 +1379,16 @@ class App:
             i = self._pending_switch
             self._pending_switch = None
             self._switch(i, "排队")     # busy 期间用户点的歌，完成后接续执行
-        hit = mb._pick(mb._in_devices(), self.vj_hint)
-        self._set(("vj", "端口名称"), hit[1] if hit else "未找到",
-                  dpi.C_OK if hit else dpi.C_ERR)
-        self._set(("vj", "端口状态"),
-                  "监听中" if self.port is not None else "未启动",
-                  dpi.C_OK if self.port is not None else dpi.C_ERR)
+        if self.vj_hint:
+            hit = mb._pick(mb._in_devices(), self.vj_hint)
+            self._set(("vj", "端口名称"), hit[1] if hit else "未找到",
+                      dpi.C_OK if hit else dpi.C_ERR)
+            self._set(("vj", "端口状态"),
+                      "监听中" if self.port is not None else "未启动",
+                      dpi.C_OK if self.port is not None else dpi.C_ERR)
+        else:
+            self._set(("vj", "端口名称"), "—")
+            self._set(("vj", "端口状态"), "已停用")
         if self.ctl is None:
             self._set(("vj", "OBS 状态"), self.start_err or "启动中…", dpi.C_ERR)
         else:
@@ -1380,6 +1412,9 @@ class App:
         if self.kb_port is not None:
             self._set(("kb", "端口名称"), self.kb_port.name, dpi.C_OK)
             self._set(("kb", "端口状态"), "监听中", dpi.C_OK)
+        elif not self.kb_hint:
+            self._set(("kb", "端口名称"), "—")
+            self._set(("kb", "端口状态"), "已停用")
         elif self.kb_err:
             self._set(("kb", "端口名称"), "未找到", dpi.C_ERR)
             self._set(("kb", "端口状态"), "未启动", dpi.C_ERR)
@@ -1489,6 +1524,9 @@ class App:
             text=remain, fg=dpi.C_WARN if remain == "时长未知" else dpi.FG)
 
 
+_ABSENT = "（当前不可用）"   # 下拉幽灵项标注：已存设定名在当前环境不在场
+
+
 class SettingsWindow(tk.Toplevel):
     """设置页：联动端口名称 / 自动播放 / 前台 / 切换确认 / 目录 / VJ显示位置。
     保存即应用——端口热切换监听、目录热生效（工程库变更触发重扫）、VJ显示
@@ -1526,14 +1564,17 @@ class SettingsWindow(tk.Toplevel):
 
         obs_cfg = (app.ctl.cfg if app.ctl is not None
                    else _load_config().get("obs") or {})
-        # VJ显示位置：列本机显示器（Windows 枚举，不依赖 OBS 在线）；已存的
-        # 屏名不在当前清单也保留显示，保存时不被悄悄清掉
-        mon_opts = ["无"] + [n for n, _r in list_screens()]
+        # VJ显示位置：列本机显示器（Windows 枚举，不依赖 OBS 在线）；已存
+        # 屏名不在当前清单则以幽灵项标注显示（设备可能只是没上电），保存
+        # 不动它，改选其它项即替换
+        mons = [n for n, _r in list_screens()]
         saved_mon = str(obs_cfg.get("projectorMonitor", "") or "")
-        if saved_mon and saved_mon not in mon_opts:
-            mon_opts.append(saved_mon)
-        self.mon_var = tk.StringVar(
-            value=saved_mon if saved_mon in mon_opts else "无")
+        mon_opts = ["无"] + mons
+        if saved_mon and saved_mon not in mons:
+            mon_opts.append(saved_mon + _ABSENT)
+        mon_val = (saved_mon if saved_mon in mons
+                   else saved_mon + _ABSENT if saved_mon else "无")
+        self.mon_var = tk.StringVar(value=mon_val)
         menu_row("VJ显示位置", self.mon_var, mon_opts)
         self.mute_var = tk.BooleanVar(value=bool(obs_cfg.get("vjMute")))
         tk.Checkbutton(body, text="VJ静音播放（视频不出声）",
@@ -1542,16 +1583,22 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(body, text="联动端口",
                  anchor="w").pack(fill="x", pady=(pad, 3))
         # 监听端口下拉：列当前在线的输入端口（loopMIDI 虚拟端口就是普通
-        # winmm 端口，一并出现）；已存的提示名若前缀命中在线端口就显示
-        # 完整端口名，命中不到才作为占位项保留（端口可能还没建）
-        ins = list(dict.fromkeys(n for _i, n in mb._in_devices()))
-        for hint in (app.vj_hint, app.kb_hint):
-            if not any(hint in n for n in ins):
-                ins.append(hint)
-        self.vj_var = tk.StringVar(value=next(
-            (n for n in ins if app.vj_hint in n), app.vj_hint))
-        self.kb_var = tk.StringVar(value=next(
-            (n for n in ins if app.kb_hint in n), app.kb_hint))
+        # winmm 端口，一并出现）；已存提示名前缀命中在线端口就显示完整
+        # 端口名，命中不到则显示幽灵项（端口可能还没建/设备未上电）
+        live = list(dict.fromkeys(n for _i, n in mb._in_devices()))
+        ins = ["无"] + live
+        for hint in dict.fromkeys(h for h in (app.vj_hint, app.kb_hint) if h):
+            if not any(hint in n for n in live):
+                ins.append(hint + _ABSENT)
+
+        def port_var(hint):
+            # 「无」=停用该联动；已存提示名在线显示全名，否则挂幽灵项
+            return tk.StringVar(value=next(
+                (n for n in live if hint and hint in n),
+                hint + _ABSENT if hint else "无"))
+
+        self.vj_var = port_var(app.vj_hint)
+        self.kb_var = port_var(app.kb_hint)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
         tk.Label(body, text="自动播放", anchor="w").pack(
@@ -1617,8 +1664,17 @@ class SettingsWindow(tk.Toplevel):
 
     def _save(self):
         app = self.app
-        vj = self.vj_var.get().strip() or mb.PORT_HINT
-        kb = self.kb_var.get().strip() or kbd_auto.KB_PORT_HINT
+
+        def raw(v):
+            # 幽灵项=设备暂不在场，去标注保留原设定名，设备恢复即自动接上
+            return v[:-len(_ABSENT)] if v.endswith(_ABSENT) else v
+
+        mon = raw(self.mon_var.get())
+        mon = "" if mon == "无" else mon
+        vj = raw(self.vj_var.get())
+        kb = raw(self.kb_var.get())
+        vj = "" if vj == "无" else (vj or mb.PORT_HINT)
+        kb = "" if kb == "无" else (kb or kbd_auto.KB_PORT_HINT)
         cont = self.cont_var.get()
         auto = self.auto_var.get() or cont
         top = self.top_var.get()
@@ -1644,8 +1700,6 @@ class SettingsWindow(tk.Toplevel):
         if app.ctl is not None and vid:
             app.ctl.cfg["videoRoot"] = vid
         # VJ显示位置：热开/关投影（没连 OBS 就只存配置，连上后自动恢复）
-        mon = self.mon_var.get()
-        mon = "" if mon == "无" else mon
         if app.ctl is not None:
             app.ctl.cfg["projectorMonitor"] = mon
             if mon and not app.ctl.apply_projector():
