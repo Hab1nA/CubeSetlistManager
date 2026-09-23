@@ -21,3 +21,4 @@ _render/
 # 本机工具状态
 .mimosa/
 .zcode/
+debug.log
