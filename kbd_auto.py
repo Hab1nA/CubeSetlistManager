@@ -17,6 +17,10 @@ LSB=1）；Favorite/Special Tone 不在 PC 映射表里，MIDI 不可直达。
 MIDI Implementation，GM 通用 SysEx Master Coarse Tuning 写 SYSTEM Master
 Key Shift（±24 半音，全局、模式无关），连按累加（软件记累计值，反向键
 抵消）；AX-09 不参与（SysEx 接收=X）。
+另有延音踏板键：E2(40)→JUNO、A2(45)→AX-09（41-44 留给以后 AX-09 音高
+移动）。按住=向琴发 CC64(Hold 1) 127、松开=发 0——两台琴官方文档都接收
+CC64；注意 JUNO 的 CC64 只作用于 MIDI IN 音符（不影响手弹），AX-09 仅
+USB 接收（真机行为待实测）。
 只捕获短消息（CC0/CC32/PC）；不收 SysEx 输入（长缓冲收包复杂且模式可
 推断补齐——ponytail: 若实测 Favorite TX 带模式 SysEx 且推断出错再升级）。"""
 import ctypes
@@ -39,7 +43,11 @@ AX_NOTES = list(range(72, 78))              # AX-09：C4 起六个半音（Cubas
 SHIFT_NOTES = {36: -1, 37: 1, 38: -12, 39: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
 SHIFT_DESC = {36: "↓1 半音", 37: "↑1 半音", 38: "↓1 八度", 39: "↑1 八度"}
 SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围 ±24 半音
-NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2",
+PEDAL_NOTES = {40: "juno", 45: "ax"}        # 延音踏板键：E2→JUNO、A2→AX-09
+                                            # （41-44 留给以后 AX-09 音高移动）
+PEDAL_DESC = {40: "按住踩下延音，松开抬起", 45: "按住踩下延音，松开抬起"}
+NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2", 40: "E2",
+              45: "A2",
               60: "C3", 61: "C#3", 62: "D3", 63: "D#3", 64: "E3",
               65: "F3", 66: "F#3", 67: "G3", 68: "G#3", 69: "A3",
               72: "C4", 73: "C#4", 74: "D4", 75: "D#4", 76: "E4", 77: "F4"}
@@ -93,6 +101,13 @@ def shift_msgs(total):
     SYSTEM:Master Key Shift），mm=28H-40H-58H=±24 半音，越界钳位。"""
     mm = min(0x58, max(0x28, 0x40 + total))
     return [("long", bytes([0xF0, 0x7F, 0x7F, 0x04, 0x04, 0x00, mm, 0xF7]), 0)]
+
+
+def pedal_msgs(on, ch):
+    """延音 CC64（Hold 1）：on=True→127 踩下、False→0 松开；ch 为 1 基通道。
+    JUNO 用 patchCh、AX-09 用 ch，与各自音色切换通道一致。"""
+    return [("short",
+             0xB0 | (ch - 1) | 64 << 8 | (0x7F if on else 0) << 16, 0)]
 
 
 def switch_msgs(slot, cfg):
@@ -303,14 +318,18 @@ class ToneSwitcher:
         if slot:
             self._q.put((slot, why))
 
+    def submit_msgs(self, msgs, why=""):
+        """预构造消息序列（全局移调/延音踏板）走同一串行队列。"""
+        self._q.put((msgs, why))
+
     def submit_shift(self, total, why=""):
         """全局移调走同一串行队列（预构造消息序列）。"""
-        self._q.put((shift_msgs(total), why))
+        self.submit_msgs(shift_msgs(total), why)
 
     def _loop(self):
         while True:
             item, why = self._q.get()
-            if isinstance(item, list):          # 预构造序列（全局移调）
+            if isinstance(item, list):          # 预构造序列（移调/延音）
                 err = send_slot(None, self.cfg, msgs=item)
                 self._log("%s%s" % (why, "失败：%s" % err if err else ""))
                 if self.on_result:
@@ -385,7 +404,9 @@ class KeyboardAutoWindow(tk.Toplevel):
         for title, notes in (("── JUNO DS-88（C3 起 10 键）──", SLOT_NOTES),
                              ("── JUNO 全局移调（C2 起 4 键）──",
                               list(SHIFT_NOTES)),
-                             ("── AX-09 Lucina（C4 起 6 键）──", AX_NOTES)):
+                             ("── JUNO 延音踏板 ──", [40]),
+                             ("── AX-09 Lucina（C4 起 6 键）──", AX_NOTES),
+                             ("── AX-09 延音踏板 ──", [45])):
             tk.Label(grid, text=title, anchor="w", fg=dpi.MUT).grid(
                 row=row, column=0, columnspan=3, sticky="w", pady=(8, 2))
             row += 1
@@ -393,8 +414,9 @@ class KeyboardAutoWindow(tk.Toplevel):
                 tk.Label(grid, text="%s（%d）" % (note_name(note), note),
                          anchor="w").grid(row=row, column=0, sticky="w",
                                           pady=2)
-                if note in SHIFT_DESC:      # 固定功能行：只显示，无录制/触发
-                    tk.Label(grid, text=SHIFT_DESC[note], anchor="w",
+                desc = SHIFT_DESC.get(note) or PEDAL_DESC.get(note)
+                if desc:                    # 固定功能行：只显示，无录制/触发
+                    tk.Label(grid, text=desc, anchor="w",
                              fg=dpi.MUT).grid(row=row, column=1, sticky="we",
                                               padx=(8, 8), pady=2)
                     row += 1
@@ -655,8 +677,14 @@ if __name__ == "__main__":
         [0xF0, 0x7F, 0x7F, 0x04, 0x04, 0x00, 0x40, 0xF7])
     assert shift_msgs(24)[0][1][6] == 0x58 and shift_msgs(-24)[0][1][6] == 0x28
     assert shift_msgs(30)[0][1][6] == 0x58 and shift_msgs(-99)[0][1][6] == 0x28
+    p = pedal_msgs(True, 1)
+    assert p[0][1] == 0xB0 | 0 | 64 << 8 | 0x7F << 16      # B0 40 7F 踩下
+    q = pedal_msgs(False, 16)
+    assert q[0][1] >> 16 & 0xFF == 0 and q[0][1] & 0x0F == 15   # BF 40 00 抬起
     assert note_name(69) == "A3" and note_name(72) == "C4"
     assert note_name(36) == "C2" and note_name(39) == "D#2"
+    assert note_name(40) == "E2" and note_name(45) == "A2"
+    assert PEDAL_NOTES == {40: "juno", 45: "ax"}
     with tempfile.TemporaryDirectory() as td:
         cpr = os.path.join(td, "s.cpr")
         save_slots(cpr, {60: {"msb": 85, "pc": 1}}, "slots")
