@@ -295,6 +295,38 @@ check("名称/内容/占位格无圆点",
       and app.rows[("vj", "走带跟随")].cget("text") == "-"
       and not app.m_map.get().startswith("● "))
 
+# 走带跟随：状态色 + 播放中带视频名（假 sync 走真实 _tick_body 渲染路径）
+class _FakeSync:
+    def __init__(self, state, video, on=True):
+        self.video_state, self.current_video, self._on = state, video, on
+
+    def is_following(self):
+        return self._on
+
+
+tl = app.rows[("vj", "走带跟随")]
+app.sync = _FakeSync("stopped", None, on=False)
+app._tick_body()
+check("走带跟随未启用=黄",
+      tl.cget("text") == "● 未启用（未收到时钟）"
+      and str(tl.cget("fg")).lower() == sg.dpi.C_WARN)
+app.sync = _FakeSync("playing", "1 开场.mp4")
+app._tick_body()
+check("走带跟随播放中=绿+视频名",
+      tl.cget("text") == "● 播放中：1 开场.mp4"
+      and str(tl.cget("fg")).lower() == sg.dpi.C_OK)
+app.sync.video_state = "paused"
+app._tick_body()
+check("走带跟随暂停=黄+视频名",
+      tl.cget("text") == "● 已暂停：1 开场.mp4"
+      and str(tl.cget("fg")).lower() == sg.dpi.C_WARN)
+app.sync.video_state, app.sync.current_video = "stopped", None
+app._tick_body()
+check("走带跟随停止=灰无名",
+      tl.cget("text") == "● 已停止" and str(tl.cget("fg")).lower() == sg.dpi.MUT)
+app.sync = None          # 还原：后续段落沿用「无同步」的原始路径
+app._tick_body()
+
 # 进度条：直接驱动 _progress 做单元断言（离线无真实工程窗口，_tick_banner
 # 走不到「有当前曲」分支）；首拍挂载时宽度未布局只挂不画，次拍出矩形
 app._progress(0.45)
@@ -452,6 +484,16 @@ check("键盘窗状态行随消息显隐",
       kw.status.winfo_ismapped()
       and kw.status["text"] == "配置目标：SongA")
 
+# --- 两窗第二列表头与数据列文字左缘对齐（数据列有 padx=(8,8) 左缩进） ---
+kb_hdr = kw._slot_lbl[kbd_auto.SLOT_NOTES[0]].master.grid_slaves(
+    row=0, column=1)[0]
+check("键盘窗音色映射表头对齐",
+      kb_hdr.winfo_rootx() == kw._slot_lbl[kbd_auto.SLOT_NOTES[0]]
+      .winfo_rootx())
+pd_first = pw._bind_lbl[pedal.ACTIONS[0][0]]
+pd_hdr = pd_first.master.grid_slaves(row=0, column=1)[0]
+check("踩钉窗绑定表头对齐", pd_hdr.winfo_rootx() == pd_first.winfo_rootx())
+
 # --- 三子窗口：最小尺寸已设，且缩到最小时内容完整 ---
 for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
     mw, mh = win.wm_minsize()
@@ -476,21 +518,59 @@ for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
     win.update_idletasks()
     win.update()
 
+# --- 三子窗口：四边留白随 DPI 缩放（回归：pack 裸像素边距高分屏下顶满） ---
+for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
+    wx, wy = win.winfo_rootx(), win.winfo_rooty()
+    l = t = r = b = 10 ** 6
+    stack = [win]
+    while stack:
+        w2 = stack.pop()
+        for c in w2.winfo_children():
+            stack.append(c)
+            if c.winfo_ismapped():
+                l = min(l, c.winfo_rootx() - wx)
+                t = min(t, c.winfo_rooty() - wy)
+                r = min(r, wx + win.winfo_width()
+                        - c.winfo_rootx() - c.winfo_width())
+                b = min(b, wy + win.winfo_height()
+                        - c.winfo_rooty() - c.winfo_height())
+    floor = sg.dpi.scale(win, 6)
+    check("%s窗四边留白≥%dpx（左%d 上%d 右%d 下%d）"
+          % (name, floor, l, t, r, b), min(l, t, r, b) >= floor)
+
+# --- 三子窗：文字/容器底色=窗口底色（回归：darkify 的 PANEL 色斑） ---
+def flat_ok(win):
+    stack = [win]
+    while stack:
+        w2 = stack.pop()
+        for c in w2.winfo_children():
+            stack.append(c)
+            if isinstance(c, (tk.Frame, tk.Label, tk.Checkbutton)) \
+                    and str(c.cget("bg")).lower() != sg.dpi.BG:
+                return c
+    return None
+
+for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
+    bad = flat_ok(win)
+    check("%s窗无面板色斑" % name if bad is None
+          else "%s窗无面板色斑（%s 仍 %s）" % (name, bad, bad.cget("bg")),
+          bad is None)
+
 # --- 设置窗：主/次按钮等大、仅颜色区分 ---
 sbtns = find_buttons(sw, {"保存并应用", "取消"})
 check("设置窗主次按钮等大",
       sbtns["保存并应用"].winfo_width() == sbtns["取消"].winfo_width()
       and sbtns["保存并应用"].winfo_height() == sbtns["取消"].winfo_height())
 
-# --- 视频桥（不起服务）---
+# --- VJ Automator（不起服务）---
 mbg.App._startup = lambda self: None
 broot = tk.Tk()
 broot.attributes("-topmost", True)  # 与主窗同：防控制台遮入截图
 bapp = mbg.App(broot)
 broot.update_idletasks(); broot.update()
-check("视频桥标题无箭头", "→" not in broot.title())
-check("视频桥深色底", broot.cget("bg") == sg.dpi.BG)
-check("视频桥 OBS 状态行", "OBS 状态" in bapp.rows)
+check("VJ Automator标题无箭头", "→" not in broot.title())
+check("VJ Automator深色底", broot.cget("bg") == sg.dpi.BG)
+check("VJ Automator OBS 状态行", "OBS 状态" in bapp.rows)
 
 try:
     shot(sw, "settings")

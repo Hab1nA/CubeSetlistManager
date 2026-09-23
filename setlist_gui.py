@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""工程播放台：素材库选歌编排播放列表 + Cubase 工程"先关后开"切换 +
-播完自动推进 + 键盘自动化联动 + VJ 视频桥状态（桥文件零改动）。
+"""Cube Setlist Manager：素材库选歌编排播放列表 + Cubase 工程"先关后开"切换 +
+播完自动推进 + 键盘自动化联动 + VJ Automator 状态（桥文件零改动）。
 界面分上下两段：上方=素材库/播放列表 + VJ 自动化/键盘自动化监控栏 + 日志（固定高）；
 下方控制区两行——行1(上)=播放配置独占整行（配置目标=标蓝选中曲/时长设定/设置）；
 行2=编排（加入/移除/上移/下移/清空，随标蓝启停）+播放（开始=回零从头播/暂停/
@@ -33,7 +33,7 @@ import kbd_auto
 import midi_bridge as mb
 import pedal
 from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
-    launch_detached
+    launch_detached, list_screens, close_obs_app, close_loopmidi
 
 FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
 DEFAULT_CUBASE_EXE = r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"
@@ -230,7 +230,7 @@ class Marquee(tk.Entry):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("工程播放台")
+        root.title("Cube Setlist Manager")
         root.geometry(dpi.scale(root, 980, 840))
         root.minsize(dpi.scale(root, 940), dpi.scale(root, 760))
         cfg = _load_config()
@@ -241,6 +241,7 @@ class App:
         self.cont_play = bool(cfg.get("autoPlay", False))  # 连续播放：切完自动起播
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
+        self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
         self.vj_hint = str(cfg.get("vjPortHint") or mb.PORT_HINT)
         self.kb_hint = str(cfg.get("kbPortHint") or kbd_auto.KB_PORT_HINT)
         self.settings_win = None
@@ -513,8 +514,7 @@ class App:
                     "退出", "正在切换工程，退出会中断切换流程。确定退出？")):
             return
         if not messagebox.askyesno(
-                "退出", "确定退出工程播放台？\n（Cubase 声音与 OBS 不受影响，"
-                       "但视频/音色/踩钉联动全部停止）"):
+                "退出", "确定退出Cube Setlist Manager？"):
             return
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
@@ -525,13 +525,33 @@ class App:
                 pass
         try:
             if self.ctl is not None:
+                self.ctl.stop_media()   # 熄屏并清文件，OBS 下次启动不续播
                 self.ctl.enabled = False
                 self.ctl.shutdown()
         except Exception:
             pass
+        if self.exit_close_apps:
+            # 非守护线程：窗口先关，后台把被控软件关完进程才退
+            threading.Thread(target=self._close_controlled,
+                             daemon=False).start()
         self.root.destroy()
 
+    def _close_controlled(self):
+        """关闭被控软件，顺序敏感：Cubase 先退（它还挂着 loopMIDI 端口），
+        OBS 次之（上面 stop_media 已把视频文件从源里清掉，场景配置存的是
+        空文件，下次启动不会自动续播），loopMIDI 最后。"""
+        cubase_ctrl.close_app(log=lambda *_: None)
+        close_obs_app()
+        close_loopmidi()
+
     # ---- 后台线程：起服务 + 扫素材库 + 探时长 ----
+
+    def _on_obs_connected(self):
+        """OBS 连上（含重连）后回调（连接线程）：报状态，按设置恢复投影。"""
+        self.q.put("OBS 已连接")
+        if self.ctl.cfg.get("projectorMonitor", "") not in ("", None, -1) \
+                and not self.ctl.apply_projector():
+            self.q.put("VJ显示位置未恢复：%s" % self.ctl.last_error)
 
     def _ensure_cubase(self):
         """启动自检：Cubase 未运行就自动拉起（冷启动到 Hub 约 30 秒，之后
@@ -573,7 +593,7 @@ class App:
             # 整链一组；链内 MIDI 口缺失仍单独降级）
             try:
                 self.ctl = ObsController(_load_config()["obs"])
-                self.ctl.on_connected = lambda: self.q.put("OBS 已连接")
+                self.ctl.on_connected = self._on_obs_connected
                 self.sync = mb.TransportSync(self.ctl, on_event=self.q.put)
                 self.watch = advance.AdvanceWatch(
                     on_finished=lambda: self.calls.put(self._advance),
@@ -1347,9 +1367,16 @@ class App:
         if self.sync is None:
             self._set(("vj", "走带跟随"), "-")
         elif not self.sync.is_following():
-            self._set(("vj", "走带跟随"), "未启用（未收到时钟）")
+            self._set(("vj", "走带跟随"), "未启用（未收到时钟）", dpi.C_WARN)
         else:
-            self._set(("vj", "走带跟随"), FOLLOW.get(self.sync.video_state, "?"))
+            vs = self.sync.video_state
+            name = self.sync.current_video
+            text = FOLLOW.get(vs, "?")
+            if name and vs in ("playing", "paused"):
+                text = "%s：%s" % (text, name)
+            self._set(("vj", "走带跟随"), text,
+                      dpi.C_OK if vs == "playing"
+                      else dpi.C_WARN if vs == "paused" else dpi.MUT)
         if self.kb_port is not None:
             self._set(("kb", "端口名称"), self.kb_port.name, dpi.C_OK)
             self._set(("kb", "端口状态"), "监听中", dpi.C_OK)
@@ -1463,16 +1490,21 @@ class App:
 
 
 class SettingsWindow(tk.Toplevel):
-    """设置页：联动端口名称 / 自动播放 / 前台 / 切换确认 / 目录。保存即应用——
-    端口热切换监听、目录热生效（工程库变更触发重扫），并写 config 持久化。"""
+    """设置页：联动端口名称 / 自动播放 / 前台 / 切换确认 / 目录 / VJ显示位置。
+    保存即应用——端口热切换监听、目录热生效（工程库变更触发重扫）、VJ显示
+    位置热开/关投影，并写 config 持久化。"""
 
     def __init__(self, app):
         super().__init__(app.root)
         self.app = app
         self.title("设置")
         self.geometry(dpi.scale(self, 600, 420))
+        # pack 的 padx/pady 是裸像素不随 DPI 缩放，字大边距小就会顶满，
+        # 边距一律过 dpi.scale（下同：键盘自动化/踩钉两窗）
+        pad = dpi.scale(self, 12)
         body = tk.Frame(self)
-        body.pack(fill="both", expand=True, padx=12, pady=(10, 6))
+        body.pack(fill="both", expand=True, padx=pad,
+                  pady=(pad, dpi.scale(self, 8)))
 
         def row(label, var):
             f = tk.Frame(body)
@@ -1481,14 +1513,49 @@ class SettingsWindow(tk.Toplevel):
             tk.Entry(f, textvariable=var).pack(
                 side="left", fill="x", expand=True)
 
-        tk.Label(body, text="联动端口（按名称匹配，保存后立即生效）",
-                 anchor="w").pack(fill="x", pady=(0, 3))
-        self.vj_var = tk.StringVar(value=app.vj_hint)
-        self.kb_var = tk.StringVar(value=app.kb_hint)
-        row("VJ 端口名称", self.vj_var)
-        row("键盘端口名称", self.kb_var)
+        self._menus = []    # 下拉不在 darkify 覆盖范围，建完统一在 darkify 后套色
+
+        def menu_row(label, var, values):
+            f = tk.Frame(body)
+            f.pack(fill="x", pady=2)
+            tk.Label(f, text=label, width=15, anchor="w").pack(side="left")
+            m = tk.OptionMenu(f, var, *values)
+            m.config(anchor="w", direction="below")
+            m.pack(side="left", fill="x", expand=True)
+            self._menus.append(m)
+
+        obs_cfg = (app.ctl.cfg if app.ctl is not None
+                   else _load_config().get("obs") or {})
+        # VJ显示位置：列本机显示器（Windows 枚举，不依赖 OBS 在线）；已存的
+        # 屏名不在当前清单也保留显示，保存时不被悄悄清掉
+        mon_opts = ["无"] + [n for n, _r in list_screens()]
+        saved_mon = str(obs_cfg.get("projectorMonitor", "") or "")
+        if saved_mon and saved_mon not in mon_opts:
+            mon_opts.append(saved_mon)
+        self.mon_var = tk.StringVar(
+            value=saved_mon if saved_mon in mon_opts else "无")
+        menu_row("VJ显示位置", self.mon_var, mon_opts)
+        self.mute_var = tk.BooleanVar(value=bool(obs_cfg.get("vjMute")))
+        tk.Checkbutton(body, text="VJ静音播放（视频不出声）",
+                       variable=self.mute_var).pack(anchor="w", pady=1)
+
+        tk.Label(body, text="联动端口",
+                 anchor="w").pack(fill="x", pady=(pad, 3))
+        # 监听端口下拉：列当前在线的输入端口（loopMIDI 虚拟端口就是普通
+        # winmm 端口，一并出现）；已存的提示名若前缀命中在线端口就显示
+        # 完整端口名，命中不到才作为占位项保留（端口可能还没建）
+        ins = list(dict.fromkeys(n for _i, n in mb._in_devices()))
+        for hint in (app.vj_hint, app.kb_hint):
+            if not any(hint in n for n in ins):
+                ins.append(hint)
+        self.vj_var = tk.StringVar(value=next(
+            (n for n in ins if app.vj_hint in n), app.vj_hint))
+        self.kb_var = tk.StringVar(value=next(
+            (n for n in ins if app.kb_hint in n), app.kb_hint))
+        menu_row("VJ 端口名称", self.vj_var, ins)
+        menu_row("键盘端口名称", self.kb_var, ins)
         tk.Label(body, text="自动播放", anchor="w").pack(
-            fill="x", pady=(12, 3))
+            fill="x", pady=(pad, 3))
         self.auto_var = tk.BooleanVar(value=app.auto_var.get())
         self.cont_var = tk.BooleanVar(value=app.cont_play)
         self.top_var = tk.BooleanVar(value=app.top_most)
@@ -1503,16 +1570,18 @@ class SettingsWindow(tk.Toplevel):
                        variable=self.top_var).pack(anchor="w", pady=1)
         tk.Checkbutton(body, text="切换工程需确认（双击切换时）",
                        variable=self.confirm_var).pack(anchor="w", pady=1)
-        tk.Label(body, text="目录", anchor="w").pack(fill="x", pady=(12, 3))
-        obs_cfg = (app.ctl.cfg if app.ctl is not None
-                   else _load_config().get("obs") or {})
+        tk.Label(body, text="目录", anchor="w").pack(fill="x", pady=(pad, 3))
         self.proj_var = tk.StringVar(value=app.ccfg.get("projectsRoot", ""))
         self.vid_var = tk.StringVar(value=obs_cfg.get("videoRoot", ""))
         row("Cubase 工程库", self.proj_var)
         row("VJ 视频目录", self.vid_var)
+        self.closeapps_var = tk.BooleanVar(value=app.exit_close_apps)
+        tk.Checkbutton(body, text="退出时关闭被控软件（Cubase/OBS/loopMIDI）",
+                       variable=self.closeapps_var).pack(anchor="w",
+                                                         pady=(pad, 1))
 
         btns = tk.Frame(self)
-        btns.pack(fill="x", padx=12, pady=(0, 10))
+        btns.pack(fill="x", padx=pad, pady=(0, dpi.scale(self, 10)))
         # 主操作绿（与主窗「开始」同级），与「取消」等宽等高、只以颜色区分
         self.save_btn = tk.Button(btns, text="保存并应用", width=10,
                                   command=self._save)
@@ -1522,6 +1591,17 @@ class SettingsWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.attributes("-topmost", True)
         dpi.darkify(self)
+        dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
+        # 下拉不在 darkify 覆盖范围（Menubutton/Menu），统一手动套同族深色
+        for m in self._menus:
+            m.config(
+                bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
+                activeforeground=dpi.FG, relief="flat", bd=0,
+                highlightthickness=1, highlightbackground=dpi.BORDER,
+                highlightcolor=dpi.C_OK, padx=8, pady=3)
+            m["menu"].config(
+                bg=dpi.FIELD, fg=dpi.FG, activebackground=dpi.SELECT,
+                activeforeground=dpi.FG)
         self.save_btn.config(bg=dpi.C_OK, fg="#101418",
                              activebackground="#7fe896")
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
@@ -1543,6 +1623,8 @@ class SettingsWindow(tk.Toplevel):
         auto = self.auto_var.get() or cont
         top = self.top_var.get()
         confirm = self.confirm_var.get()
+        mute = self.mute_var.get()
+        closeapps = self.closeapps_var.get()
         proj = self.proj_var.get().strip()
         vid = self.vid_var.get().strip()
         # 自动播放 / 前台 / 切换确认：即时生效
@@ -1552,9 +1634,24 @@ class SettingsWindow(tk.Toplevel):
         app.top_most = top
         app.root.attributes("-topmost", top)
         app.switch_confirm = confirm
+        app.exit_close_apps = closeapps
+        # VJ静音：即时生效（没连 OBS 就只存配置，连上后自动同步）
+        if app.ctl is not None:
+            app.ctl.cfg["vjMute"] = mute
+            if app.ctl.is_connected() and not app.ctl.apply_mute():
+                app.q.put("VJ静音未生效：%s" % app.ctl.last_error)
         # 目录：视频热生效；工程库变更触发重扫
         if app.ctl is not None and vid:
             app.ctl.cfg["videoRoot"] = vid
+        # VJ显示位置：热开/关投影（没连 OBS 就只存配置，连上后自动恢复）
+        mon = self.mon_var.get()
+        mon = "" if mon == "无" else mon
+        if app.ctl is not None:
+            app.ctl.cfg["projectorMonitor"] = mon
+            if mon and not app.ctl.apply_projector():
+                app.q.put("VJ显示位置未生效：%s" % app.ctl.last_error)
+            elif not mon:
+                app.ctl.close_projector()
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj
@@ -1568,10 +1665,13 @@ class SettingsWindow(tk.Toplevel):
             cfg = _load_config()
             cfg.update({"autoAdvance": auto, "autoPlay": cont,
                         "topMost": top, "switchConfirm": confirm,
+                        "exitCloseApps": closeapps,
                         "vjPortHint": vj, "kbPortHint": kb})
             obs = cfg.get("obs") or {}
             if vid:
                 obs["videoRoot"] = vid
+            obs["projectorMonitor"] = mon
+            obs["vjMute"] = mute
             cfg["obs"] = obs
             cub = cfg.get("cubase") or {}
             if proj:

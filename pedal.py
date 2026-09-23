@@ -140,13 +140,16 @@ class PedalWindow(tk.Toplevel):
         self.learner = None
         self.title("踩钉控制")
         self.geometry(dpi.scale(self, 560, 360))
+        pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         tk.Label(self, text="学习：点「学习」后踩一下踩钉；"
-                   "清除：删除该绑定。").pack(anchor="w", padx=12, pady=(10, 4))
+                   "清除：删除该绑定。").pack(anchor="w", padx=pad,
+                                            pady=(pad, 4))
         grid = tk.Frame(self)
-        grid.pack(fill="both", expand=True, padx=12)
+        grid.pack(fill="both", expand=True, padx=pad)
         for c, t in enumerate(("功能", "绑定", "操作")):
             tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
-                row=0, column=c, sticky="w", pady=(0, 2))
+                row=0, column=c, sticky="w", pady=(0, 2),
+                padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
         self._bind_lbl = {}
         for r, (action, name) in enumerate(ACTIONS, start=1):
             tk.Label(grid, text=name, anchor="w").grid(
@@ -164,10 +167,11 @@ class PedalWindow(tk.Toplevel):
                 side="left", padx=2)
             self._bind_lbl[action] = lbl
         self.status = tk.Label(self, text="…", anchor="w", fg=dpi.MUT)
-        self.status.pack(fill="x", padx=12, pady=6)
+        self.status.pack(fill="x", padx=pad, pady=(6, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.darkify(self)
+        dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
         self.update_idletasks()
         w = max(dpi.scale(self, 560), self.winfo_reqwidth())

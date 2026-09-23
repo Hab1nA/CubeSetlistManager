@@ -7,6 +7,8 @@
     "autoStart": true,
     "mediaInput": "舞台视频",
     "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
+    "projectorMonitor": "",
+    "vjMute": false,
     "retrySec": 5
   },
   "cubase": {
@@ -34,6 +36,7 @@
   "autoPlay": false,
   "topMost": true,
   "switchConfirm": true,
+  "exitCloseApps": false,
   "vjPortHint": "loopMIDI Port",
   "kbPortHint": "Keyboard Automation"
 }

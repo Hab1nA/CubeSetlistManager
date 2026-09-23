@@ -17,7 +17,9 @@ from obs_ws import ObsWs, ObsError
 
 _shell32 = ctypes.windll.shell32
 _kernel32 = ctypes.windll.kernel32
+_user32 = ctypes.windll.user32
 _TH32CS_SNAPPROCESS = 0x2
+_WM_CLOSE = 0x0010
 
 
 class _PROCESSENTRY32W(ctypes.Structure):
@@ -52,6 +54,148 @@ def launch_detached(exe, args=""):
     参数独立传递，不经 shell 字符串拼接。"""
     return _shell32.ShellExecuteW(None, "open", exe, args,
                                   os.path.dirname(exe) or None, 1)
+
+
+def process_windows(prefix):
+    """[(hwnd, 标题)]：进程名以 prefix 开头（小写）进程的可见顶层窗口。"""
+    pids = {pid for pid, _ in find_processes_by_prefix(prefix)}
+    out = []
+    if not pids:
+        return out
+    buf = ctypes.create_unicode_buffer(256)
+    pid = wintypes.DWORD()
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def on_win(hwnd, _lp):
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in pids and _user32.IsWindowVisible(hwnd):
+            if 0 < _user32.GetWindowTextLengthW(hwnd) < 255 \
+                    and _user32.GetWindowTextW(hwnd, buf, 256):
+                out.append((hwnd, buf.value))
+        return True
+
+    _user32.EnumWindows(on_win, 0)
+    return out
+
+
+def obs_projector_windows():
+    """obs64 的顶层投影窗口。obs-websocket 5.x 没有「关闭投影器」请求，
+    只能按窗口标题（含「投影」/Projector）匹配后发消息。"""
+    return [(h, t) for h, t in process_windows("obs64")
+            if "投影" in t or "Projector" in t]
+
+
+def close_obs_projectors():
+    """给所有 OBS 投影窗口发 WM_CLOSE（异步，不阻塞调用方）。返回关掉的标题。"""
+    closed = []
+    for hwnd, t in obs_projector_windows():
+        if _user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0):
+            closed.append(t)
+    return closed
+
+
+def close_process_windows(prefix):
+    """给进程名以 prefix 开头进程的所有可见顶层窗口发 WM_CLOSE（优雅关闭，
+    异步不阻塞）。返回发过的窗口标题。"""
+    return [t for h, t in process_windows(prefix)
+            if _user32.PostMessageW(h, _WM_CLOSE, 0, 0)]
+
+
+def wait_process_gone(prefix, wait_sec):
+    """等前缀进程全部退出；到点仍在返回 False。"""
+    deadline = time.time() + wait_sec
+    while find_processes_by_prefix(prefix):
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+    return True
+
+
+def close_obs_app():
+    """优雅退出 OBS（窗口收 WM_CLOSE 即保存场景配置后退出；强杀会留崩溃
+    标记，禁用）。返回是否已退出。"""
+    close_process_windows("obs64")
+    return wait_process_gone("obs64", 15)
+
+
+def close_loopmidi():
+    """关 loopMIDI：先 WM_CLOSE（托盘程序可能只缩不退），仍活着再终止——
+    虚拟 MIDI 口无用户数据，可安全终止。返回是否已退出。"""
+    close_process_windows("loopmidi")
+    if not wait_process_gone("loopmidi", 6):
+        for pid, _ in find_processes_by_prefix("loopmidi"):
+            h = _kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+            if h:
+                _kernel32.TerminateProcess(h, 0)
+                _kernel32.CloseHandle(h)
+    return wait_process_gone("loopmidi", 5)
+
+
+class _MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD),
+                ("szDevice", wintypes.WCHAR * 32)]
+
+
+class _DISPLAY_DEVICEW(ctypes.Structure):
+    _fields_ = [("cb", wintypes.DWORD),
+                ("DeviceName", wintypes.WCHAR * 32),
+                ("DeviceString", wintypes.WCHAR * 128),
+                ("StateFlags", wintypes.DWORD),
+                ("DeviceID", wintypes.WCHAR * 128),
+                ("DeviceKey", wintypes.WCHAR * 128)]
+
+
+def list_screens():
+    """本机显示器 [(名称, (x, y, 宽, 高))]，按 (y,x) 排序；不依赖 OBS 在线。
+    名称=EDID 型号名（EnumDisplayDevices 纯配置查询），同名多屏加序号。
+    ⚠ 别改用 dxva2 GetPhysicalMonitors* 取名——本机实测整屏黑死两次
+    （2026-09-23，驱动监视器路径被查僵连带桌面会话黑屏）。"""
+    names = {}
+    dd = _DISPLAY_DEVICEW()
+    dd.cb = ctypes.sizeof(dd)
+    i = 0
+    while _user32.EnumDisplayDevicesW(None, i, ctypes.byref(dd), 0):
+        if dd.StateFlags & 1:            # ATTACHED_TO_DESKTOP=活动输出
+            mon = _DISPLAY_DEVICEW()
+            mon.cb = ctypes.sizeof(mon)
+            if _user32.EnumDisplayDevicesW(dd.DeviceName, 0,
+                                           ctypes.byref(mon), 0):
+                names[dd.DeviceName] = mon.DeviceString or dd.DeviceName
+        i += 1
+
+    def _on_mon(hmon, _hdc, _rect, _data):
+        mi = _MONITORINFOEXW()
+        mi.cbSize = ctypes.sizeof(mi)
+        if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            r = mi.rcMonitor
+            out.append((names.get(mi.szDevice, mi.szDevice),
+                        (r.left, r.top, r.right - r.left,
+                         r.bottom - r.top)))
+        return True
+
+    out = []
+    cb = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
+                            ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    _user32.EnumDisplayMonitors(None, None, cb(_on_mon), 0)
+    out.sort(key=lambda m: (m[1][1], m[1][0]))
+    seen = {}
+    named = []
+    for name, rect in out:
+        if name in seen:            # 同型号多屏：显示名加序号，投影走排名兜底
+            seen[name] += 1
+            name = "%s (%d)" % (name, seen[name])
+        else:
+            seen[name] = 1
+        named.append((name, rect))
+    return named
+
+
+def _screen_match(obs_name, want):
+    """OBS 屏名 ↔ 本机屏名：OBS 在 EDID 名后追加 (N) 序号（如 NZ5(0)），
+    我们的同名序号是「 (N)」，两者都算同屏。"""
+    return (obs_name == want or obs_name.startswith(want + "(")
+            or obs_name == want.rsplit(" (", 1)[0])
 
 
 _num = re.compile(r"(\d+)")
@@ -134,12 +278,22 @@ class ObsController:
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
         return self._act(file_rel + ("(循环)" if loop else ""), do)
 
+    def _stop_and_forget(self, ws):
+        """停媒体源并清空其文件。OBS 媒体源只要存着文件，随场景激活就会
+        自动播（没有「启动不自动播放」开关），忘掉文件才能根治下次启动
+        自动续播上次的视频。"""
+        name = self.cfg.get("mediaInput", "舞台视频")
+        ws.request("SetInputSettings", {
+            "inputName": name,
+            "inputSettings": {"local_file": "", "is_local_file": True},
+            "overlay": True})
+        ws.request("TriggerMediaInputAction", {
+            "inputName": name,
+            "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"})
+
     def stop_media(self):
-        """熄屏：停止媒体源（源区域显示空/黑）。"""
-        return self._act("熄屏", lambda ws: ws.request(
-            "TriggerMediaInputAction", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
-                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"}))
+        """熄屏：停掉媒体源并忘掉文件（显示空/黑，OBS 下次启动不续播）。"""
+        return self._act("熄屏", self._stop_and_forget)
 
     def pause_media(self):
         """暂停媒体源（画面定格在当前位置）。"""
@@ -154,6 +308,24 @@ class ObsController:
             "TriggerMediaInputAction", {
                 "inputName": self.cfg.get("mediaInput", "舞台视频"),
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY"}))
+
+    def _set_mute(self, ws):
+        """勾选=静音播放：输入静音+关监听；不勾=取消静音+开监听（监视器并
+        输出，声音进 OBS「设置→音频→高级→监视输出设备」，默认=系统默认
+        播放设备）。媒体源默认监听是关的——声音只进混音器/录制，不进任何
+        播放设备，所以听不听得到由监听决定，两者一起按勾选状态同步。"""
+        name = self.cfg.get("mediaInput", "舞台视频")
+        mute = bool(self.cfg.get("vjMute"))
+        ws.request("SetInputMute", {"inputName": name, "inputMuted": mute})
+        ws.request("SetInputAudioMonitorType", {
+            "inputName": name,
+            "monitorType": "OBS_MONITORING_TYPE_NONE" if mute
+            else "OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT"})
+
+    def apply_mute(self):
+        """按 cfg['vjMute'] 同步媒体源静音/监听（设置页勾选即时生效；连接
+        时也会同步一次）。"""
+        return self._act("VJ静音", self._set_mute)
 
     def file_exists(self, file_rel):
         """预加载核对：cue 里的文件名/路径能否落到真实文件。"""
@@ -203,6 +375,60 @@ class ObsController:
             except (ObsError, OSError):
                 return None
 
+    def apply_projector(self):
+        """按 cfg['projectorMonitor']（本机屏名，空=无）把节目画面全屏投影
+        过去；先关掉旧投影（换屏不留双份）。屏名对 OBS 侧先按名匹配，取不到
+        再按 (y,x) 排名兜底；配置的屏本机都不在了只报错不动手。"""
+        val = self.cfg.get("projectorMonitor", "")
+        if isinstance(val, int):        # 旧版语义（OBS 索引）：-1=无
+            if val < 0:
+                return self.close_projector()
+            return self._act("投影", lambda ws: ws.request(
+                "OpenVideoMixProjector", {
+                    "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
+                    "monitorIndex": val}))
+        name = (val or "").strip()
+        if not name or name == "无":
+            return self.close_projector()
+        wins = list_screens()
+        me = next((m for m in wins if m[0] == name), None)
+        if me is None:
+            self.last_error = "配置的显示器「%s」当前不在线" % name
+            return False
+        rank = wins.index(me)           # 屏名对不上 OBS 命名时按整序排名兜底
+        same_rank = [m for m in wins if m[0] == name].index(me)
+
+        def do(ws):
+            obss = ws.request("GetMonitorList")["monitors"]
+            obss.sort(key=lambda m: (m["monitorPositionY"],
+                                     m["monitorPositionX"]))
+            hits = [m for m in obss if _screen_match(m["monitorName"], name)]
+            if len(hits) == 1:
+                idx = hits[0]["monitorIndex"]
+            elif hits:                  # 同型号多屏：命中子集内按序号对应
+                hits.sort(key=lambda m: (m["monitorPositionY"],
+                                         m["monitorPositionX"]))
+                idx = hits[min(same_rank, len(hits) - 1)]["monitorIndex"]
+            elif rank < len(obss):
+                idx = obss[rank]["monitorIndex"]
+            else:
+                raise ObsError("OBS 只见到 %d 块屏" % len(obss))
+            ws.request("OpenVideoMixProjector", {
+                "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
+                "monitorIndex": idx})
+
+        close_obs_projectors()          # PostMessage 异步，残留窗口片刻即消
+        return self._act("投影", do)
+
+    def close_projector(self):
+        """关掉全部 OBS 投影窗口（协议无关闭请求，走 WM_CLOSE）。永不抛。"""
+        try:
+            close_obs_projectors()
+            return True
+        except Exception as e:          # EnumWindows/消息异常不进主线程
+            self.last_error = "关闭投影窗口失败：%s" % e
+            return False
+
     def _act(self, label, fn):
         with self._lock:
             if not self._ws:
@@ -250,12 +476,21 @@ class ObsController:
                 time.sleep(1)
                 continue
             try:
-                self._ensure_obs_running()
+                fresh = self._ensure_obs_running()
                 ws = ObsWs(self.cfg.get("host", "127.0.0.1"),
                            int(self.cfg.get("port", 4455)),
                            self.cfg.get("password", ""), timeout=5)
                 ws.request("GetVersion")  # 探活
                 self._ensure_media_input(ws)  # 缺「舞台视频」源就在活动场景补建
+                if fresh:                 # 本次拉起的 OBS：掐掉上次退出时
+                    try:                  # 残留文件的自动续播
+                        self._stop_and_forget(ws)
+                    except (ObsError, OSError):
+                        pass
+                try:                      # 静音偏好随每次连接同步
+                    self._set_mute(ws)
+                except (ObsError, OSError):
+                    pass
                 with self._lock:
                     self._ws = ws
                     self.connected_at = time.time()
@@ -296,8 +531,9 @@ class ObsController:
                 self._stop.wait(self.cfg.get("retrySec", 5))
 
     def _ensure_obs_running(self):
+        """OBS 没跑就拉起并等端口就绪；返回是否由本次拉起（True=冷启动）。"""
         if find_processes_by_prefix("obs64"):
-            return
+            return False
         exe = self.cfg.get("obsExe") or autodetect_obs()
         if not exe or not os.path.exists(exe):
             raise ObsError("找不到 obs64.exe，请在 config.json obs.obsExe 指定")
@@ -313,7 +549,7 @@ class ObsController:
                 with socket.create_connection(
                         (self.cfg.get("host", "127.0.0.1"),
                          int(self.cfg.get("port", 4455))), timeout=1):
-                    return
+                    return True
             except OSError:
                 time.sleep(1)
         raise ObsError("OBS 已启动但 30 秒内 4455 端口没就绪"
