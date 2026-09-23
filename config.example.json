@@ -1,0 +1,39 @@
+{
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": "在 OBS 的 WebSocket 服务器设置里查看",
+    "obsExe": "",
+    "autoStart": true,
+    "mediaInput": "舞台视频",
+    "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
+    "retrySec": 5
+  },
+  "cubase": {
+    "cubaseExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
+    "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects",
+    "autoSave": true
+  },
+  "juno": {
+    "inHint": "JUNO",
+    "outHint": "JUNO",
+    "patchCh": 1,
+    "perfCh": 16,
+    "deviceId": 16
+  },
+  "ax09": {
+    "inHint": "AX-09",
+    "outHint": "AX-09",
+    "ch": 1
+  },
+  "pedal": {
+    "deviceHint": "",
+    "bindings": {}
+  },
+  "autoAdvance": false,
+  "autoPlay": false,
+  "topMost": true,
+  "switchConfirm": true,
+  "vjPortHint": "loopMIDI Port",
+  "kbPortHint": "Keyboard Automation"
+}
