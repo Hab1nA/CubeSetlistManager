@@ -209,9 +209,10 @@ def test_kbd_auto():
         == "loopMIDI Port"
 
     # 模式推断（官方 Bank Map：85=Performance→PERFORM，87=Patch→PATCH，GM→GM1）
+    # Sound Mode 官方地址表：2=GM2、3=GM1（Roland Clan 帖记反，2026-09-25 真机实锤）
     assert kbd_auto.mode_for_msb(85) == 1
     assert kbd_auto.mode_for_msb(87) == 0
-    assert kbd_auto.mode_for_msb(121) == 2
+    assert kbd_auto.mode_for_msb(121) == 3
     assert kbd_auto.mode_for_msb(None) is None
 
     # 模式 SysEx：F0 41 dev 00 00 3A 12 01 00 00 00 mode ck F7（校验和实测值）
@@ -234,13 +235,15 @@ def test_kbd_auto():
     mpc = kbd_auto.switch_msgs({"pc": 7}, cfg)                  # 纯 PC：无 SysEx
     assert len(mpc) == 1 and mpc[0][1] == 0xC0 | 7 << 8
 
-    # 捕获配对：BS 先到、首个 PC 定格；纯 PC 也可
+    # 捕获配对：BS 先到；PC 持续覆盖（持续录制语义），停止时保存最后一个
     cap = kbd_auto.SlotCapture()
     cap.feed(0xB0, 0, 85)
     cap.feed(0xB0, 32, 64)
-    assert not cap.done
+    assert cap.slot is None
     cap.feed(0xC0, 40, 0)
-    assert cap.done and cap.slot == {"pc": 40, "msb": 85, "lsb": 64}
+    assert cap.slot == {"pc": 40, "msb": 85, "lsb": 64}
+    cap.feed(0xC0, 41, 0)               # 类别内滚动：覆盖为最新
+    assert cap.slot == {"pc": 41, "msb": 85, "lsb": 64}
     cap2 = kbd_auto.SlotCapture()
     cap2.feed(0x90, 60, 100)            # 音符不收
     cap2.feed(0xB1, 7, 100)             # 无关 CC 不收
@@ -259,8 +262,10 @@ def test_kbd_auto():
         assert "keyboard_automation.json" in os.listdir(d)
 
     # 展示
-    assert "Performance" in kbd_auto.describe_slot(
-        {"msb": 85, "lsb": 64, "pc": 3})
+    assert kbd_auto.describe_slot({"msb": 85, "lsb": 64, "pc": 3}) == \
+        "PERF PRST:004"
+    assert kbd_auto.describe_slot({"msb": 93, "pc": 4}) == "EXP:0005"
+    assert kbd_auto.describe_slot({"msb": 0, "pc": 0}) == "GM:0001"
     assert kbd_auto.describe_slot(None) == "未设置"
     assert kbd_auto.note_name(60) == "C3" and kbd_auto.note_name(69) == "A3"
 
