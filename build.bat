@@ -12,12 +12,23 @@ if exist "dist\Cube Setlist Manager\config.json" (
   copy /y playlist.json dist\_playlist.bak >nul
 )
 pyinstaller "Cube Setlist Manager.spec" --noconfirm || goto :err
-pyinstaller "VJ Automator.spec" --noconfirm || goto :err
 copy /y dist\_config.bak "dist\Cube Setlist Manager\config.json" >nul
 copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul
-copy /y dist\_config.bak "dist\VJ Automator\config.json" >nul
 del dist\_config.bak dist\_playlist.bak >nul
 echo 打包完成，配置已放回
+
+rem 安装包：版本取最近 git tag（去 v 前缀），未安装 Inno Setup 则跳过
+set "APPVER=0.0.0"
+for /f %%v in ('git describe --tags --abbrev^=0 2^>nul') do set "APPVER=%%v"
+set "APPVER=%APPVER:v=%"
+set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=%LocalAppData%\Programs\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" (
+  echo 未安装 Inno Setup 6，跳过安装包（winget install JRSoftware.InnoSetup^）
+  exit /b 0
+)
+"%ISCC%" /DAppVer=%APPVER% installer.iss || goto :err
+echo 安装包完成：dist\CubeSetlistManager-Setup-%APPVER%.exe
 exit /b 0
 :err
 echo 打包失败（数据备份保留在 dist\_config.bak / _playlist.bak）

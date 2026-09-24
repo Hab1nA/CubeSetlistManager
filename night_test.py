@@ -356,19 +356,6 @@ def p_off():
     except obs_ws.ObsError:
         record(PH, "帧不完整抛 ObsError", True)
 
-    # midi_bridge_gui 初始化 bug 复现（打桩 _startup 保持离线无副作用）
-    import tkinter as tk
-    import midi_bridge_gui as g
-    g.App._startup = lambda self: None
-    r = tk.Tk()
-    r.withdraw()
-    app = g.App(r)
-    record(PH, "midi_bridge_gui 初始化完整（q/port/_tick 就绪）",
-           hasattr(app, "q") and hasattr(app, "port"),
-           "hasattr(q)=%s hasattr(port)=%s——False 即服务永不启动"
-           % (hasattr(app, "q"), hasattr(app, "port")))
-    r.destroy()
-
     # obs_ctrl 视频扫描（真实 StageVideos 目录）
     vids = obs_ctrl.scan_videos(r"C:\Users\XKZ\Videos\StageVideos")
     record(PH, "StageVideos 扫描到编号视频",
