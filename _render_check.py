@@ -12,7 +12,6 @@ import setlist_gui as sg
 sg.dpi.enable()          # 与真机一致：DPI 感染后按钮 bg 才按主题渲染
 import pedal
 import kbd_auto
-import midi_bridge_gui as mbg
 
 d = pathlib.Path(tempfile.mkdtemp(prefix="render_"))
 sg._HERE = d
@@ -401,7 +400,6 @@ except Exception as e:
 
 
 # --- 截图 ---
-broot = None
 WINDOWS = [root]
 
 
@@ -564,21 +562,10 @@ check("设置窗主次按钮等大",
       sbtns["保存并应用"].winfo_width() == sbtns["取消"].winfo_width()
       and sbtns["保存并应用"].winfo_height() == sbtns["取消"].winfo_height())
 
-# --- VJ Automator（不起服务）---
-mbg.App._startup = lambda self: None
-broot = tk.Tk()
-broot.attributes("-topmost", True)  # 与主窗同：防控制台遮入截图
-bapp = mbg.App(broot)
-broot.update_idletasks(); broot.update()
-check("VJ Automator标题无箭头", "→" not in broot.title())
-check("VJ Automator深色底", broot.cget("bg") == sg.dpi.BG)
-check("VJ Automator OBS 状态行", "OBS 状态" in bapp.rows)
-
 try:
     shot(sw, "settings")
     shot(pw, "pedal")
     shot(kw, "kbd")
-    shot(broot, "bridge")
 except Exception as e:
     print("截图跳过：%r" % e)
 
@@ -589,4 +576,3 @@ for w in (sw, pw, kw):
     except Exception:
         pass
 root.destroy()
-broot.destroy()

@@ -3,6 +3,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循语义化版本。版本由 git tag（`v0.9.x`）承载，代码内不嵌版本字符串。
 
+## [0.9.6] - 2026-09-24
+
+### 新增
+
+- **Windows 标准安装程序**：`build.bat` 末尾自动编译
+  `dist\CubeSetlistManager-Setup-<版本>.exe`（Inno Setup 6，版本取最近 git tag）。
+  按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager`（免管理员），含
+  开始菜单/桌面快捷方式与卸载器；升级重装保留 exe 目录已有配置。安装包只含
+  程序本体 + `config.example.json` + README，不含 config.json/playlist.json/
+  crash.log 等运行时真实数据。Release 资产改为安装程序，不再发 zip。
+
+### 移除
+
+- **VJ Automator 独立程序**：删除 `midi_bridge_gui.py`、`VJ Automator.spec`
+  及 dist/build 产物，Cube Setlist Manager 成为唯一产品；`midi_bridge.py`
+  （主程序内嵌 VJ 联动的核心）保留。夜测/渲染自检的相关用例同步清理
+  （GUI 回归 56→55 项）。
+
 ## [0.9.5] - 2026-09-24
 
 ### 更改

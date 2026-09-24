@@ -19,12 +19,15 @@
 
 ## 程序组成
 
+**安装版（推荐）**：Release 下载 `CubeSetlistManager-Setup-x.y.z.exe` 双击安装——
+按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager`（免管理员），自动创建
+开始菜单/桌面快捷方式，自带卸载器；升级直接装新版，`config.json` 等数据保留。
+
 | 程序 | 定位 |
 |---|---|
-| `dist\Cube Setlist Manager\Cube Setlist Manager.exe` | **演出主程序**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
-| `dist\VJ Automator\VJ Automator.exe` | 独立 VJ Automator（只做 MIDI 音符→OBS 视频），不需要歌单管理时单用 |
+| `Cube Setlist Manager\Cube Setlist Manager.exe` | **演出主程序**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
 
-两个 exe 的 `config.json`、`playlist.json` 都放各自 exe 同目录（onedir 版本文件夹内）。
+`config.json`、`playlist.json` 放 exe 同目录（安装目录的版本文件夹内）。
 
 ## 环境要求
 
@@ -125,21 +128,21 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 ```
 ├─ setlist_gui.py        主程序（Cube Setlist Manager）
-├─ midi_bridge.py / midi_bridge_gui.py   VJ Automator 核心 / 其 GUI（独立 exe）
+├─ midi_bridge.py        MIDI 音符→OBS 视频桥（主程序内嵌 VJ 联动）
 ├─ cubase_ctrl.py        Cubase 切歌/走带/进程（先关后开 + 键注入 + 优雅退出）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
 ├─ advance.py            自动推进看门狗（两段式）
 ├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
 ├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
 ├─ cpr_meta.py           .cpr 时长解析
-├─ Cube Setlist Manager.spec / VJ Automator.spec / build.bat   打包
+├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包
 ├─ test_bridge.py        桥自检（离线，无 OBS/loopMIDI）
-├─ night_test.py         夜测编排器（gui 离线 56 项等分阶段）
-├─ _render_check.py      离线渲染断言 + 五窗截图（落 _render\，可删可再生）
+├─ night_test.py         夜测编排器（gui 离线 55 项等分阶段）
+├─ _render_check.py      离线渲染断言 + 四窗截图（落 _render\，可删可再生）
 ├─ e2e_test.py / probe_kb_pipeline.py / _probe_projector.py    真机分阶段 E2E / 键盘链路 / 投影屏名探针
 ├─ config.json / playlist.json   dist 同源恢复副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
-├─ dist\                 打包产物（exe 同目录放运行时真实数据，不入库）
+├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
 └─ docs\                 设计审查报告 / 夜测报告 / M0 赛前验证清单
 ```
 
@@ -147,10 +150,13 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 - 直接运行：`python setlist_gui.py`。
 - 验证链：`python test_bridge.py`（离线自检）→ `python night_test.py gui`
-  （离线 GUI 回归 56 项）→ `python _render_check.py`（版式断言+截图落
+  （离线 GUI 回归 55 项）→ `python _render_check.py`（版式断言+截图落
   `_render\`）；真机分阶段：`python e2e_test.py`。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
-  先备份 exe 目录两份 json → 双 spec 打包 → 数据原样放回，失败保留 .bak。
+  先备份 exe 目录两份 json → 打包 → 数据原样放回 → 编译安装包
+  `dist\CubeSetlistManager-Setup-<版本>.exe`（版本取最近 git tag；未装
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) 时跳过安装包只出绿色版），
+  失败保留 .bak。
   **勿裸跑 `pyinstaller --noconfirm`**：它会先清空版本文件夹，dist 里是
   运行时真实数据（歌单/时长/设置），历史上因此丢过数据。杀毒偶发锁
   `_internal` 里的 DLL：等几秒删掉版本文件夹重跑即可。

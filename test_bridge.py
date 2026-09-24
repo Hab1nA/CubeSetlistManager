@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""VJ Automator + Cube Setlist Manager 自检：python test_bridge.py。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
+"""Cube Setlist Manager 自检：python test_bridge.py。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
 import os
 import pathlib
 import struct
@@ -197,7 +197,7 @@ def test_project_title():
         "Cubase Pro 工程 - アイドル") == "アイドル"
     assert cubase_ctrl.project_name_from_title(
         "Cubase Version 13.0.40 工程 - TAIDADA") == "TAIDADA"
-    assert cubase_ctrl.project_name_from_title("VJ Automator") is None
+    assert cubase_ctrl.project_name_from_title("记事本") is None
     assert cubase_ctrl.project_name_from_title("") is None
     assert cubase_ctrl.project_windows.__doc__  # 冒烟：识别函数可用
 
