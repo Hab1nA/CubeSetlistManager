@@ -9,8 +9,8 @@ jobs:
   offline-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
       - name: 语法检查（全部源码模块）
