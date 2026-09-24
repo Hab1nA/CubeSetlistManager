@@ -46,6 +46,7 @@ SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围
 PEDAL_NOTES = {40: "juno", 45: "ax"}        # 延音踏板键：E2→JUNO、A2→AX-09
                                             # （41-44 留给以后 AX-09 音高移动）
 PEDAL_DESC = {40: "按住踩下延音，松开抬起", 45: "按住踩下延音，松开抬起"}
+PAGE_NAMES = ("JUNO DS-88", "AX-09 Lucina")     # 配置窗口的乐器分页
 NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2", 40: "E2",
               45: "A2",
               60: "C3", 61: "C#3", 62: "D3", 63: "D#3", 64: "E3",
@@ -387,83 +388,121 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.ax_slots = {}          # AX-09 映射（音符 72-77）
         self._cap = None            # (note, SlotCapture, RawMidiIn, deadline)
         self.title("键盘自动化")
-        self.geometry(dpi.scale(self, 560, 820))
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         tk.Label(self, text="录制：在琴上选好该音色；"
                             "触发：发送到琴上验证。").pack(
             anchor="w", padx=pad, pady=(pad, 4))
-        grid = tk.Frame(self)
-        grid.pack(fill="both", expand=True, padx=pad)
-        for c, t in enumerate(("音符", "音色映射", "操作")):
-            tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
-                row=0, column=c, sticky="w", pady=(0, 2),
-                padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
+        # 乐器分页：下拉切换，窗口只显示一台琴的内容
+        self._sel = tk.StringVar(value=PAGE_NAMES[0])
+        top = tk.Frame(self)
+        top.pack(fill="x", padx=pad, pady=(0, 4))
+        tk.Label(top, text="乐器", anchor="w").pack(side="left")
+        self._menu = tk.OptionMenu(top, self._sel, *PAGE_NAMES,
+                                   command=self._show_page)
+        self._menu.config(anchor="w")
+        self._menu.pack(side="left", padx=8)
         self._slot_lbl = {}
         self._rec_btn = {}
-        row = 1
-        for title, notes in (("── JUNO DS-88（C3 起 10 键）──", SLOT_NOTES),
-                             ("── JUNO 全局移调（C2 起 4 键）──",
-                              list(SHIFT_NOTES)),
-                             ("── JUNO 延音踏板 ──", [40]),
-                             ("── AX-09 Lucina（C4 起 6 键）──", AX_NOTES),
-                             ("── AX-09 延音踏板 ──", [45])):
-            tk.Label(grid, text=title, anchor="w", fg=dpi.MUT).grid(
-                row=row, column=0, columnspan=3, sticky="w", pady=(8, 2))
-            row += 1
-            for note in notes:
-                tk.Label(grid, text="%s（%d）" % (note_name(note), note),
-                         anchor="w").grid(row=row, column=0, sticky="w",
-                                          pady=2)
-                desc = SHIFT_DESC.get(note) or PEDAL_DESC.get(note)
-                if desc:                    # 固定功能行：只显示，无录制/触发
-                    tk.Label(grid, text=desc, anchor="w",
-                             fg=dpi.MUT).grid(row=row, column=1, sticky="we",
-                                              padx=(8, 8), pady=2)
-                    row += 1
-                    continue
-                lbl = tk.Label(grid, text="未设置", anchor="w", fg=dpi.MUT)
-                lbl.grid(row=row, column=1, sticky="we", padx=(8, 8), pady=2)
-                grid.columnconfigure(1, weight=1)
-                cell = tk.Frame(grid)
-                cell.grid(row=row, column=2, sticky="w", pady=2)
-                self._rec_btn[note] = tk.Button(
-                    cell, text="录制", width=8,
-                    command=lambda n=note: self._toggle_record(n))
-                self._rec_btn[note].pack(side="left", padx=2)
-                tk.Button(cell, text="触发", width=8,
-                          command=lambda n=note: self._trigger(n)).pack(
-                    side="left", padx=2)
-                tk.Button(cell, text="清除", width=8,
-                          command=lambda n=note: self._clear(n)).pack(
-                    side="left", padx=2)
-                self._slot_lbl[note] = lbl
+        self._pages = {}
+        for key, groups in (
+                ("juno", (("── 音色槽（C3 起 10 键）──", SLOT_NOTES),
+                          ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)),
+                          ("── 延音踏板 ──", [40]))),
+                ("ax", (("── 音色槽（C4 起 6 键）──", AX_NOTES),
+                        ("── 延音踏板 ──", [45])))):
+            page = tk.Frame(self)
+            grid = tk.Frame(page)
+            grid.pack(fill="both", expand=True)
+            for c, t in enumerate(("音符", "音色映射", "操作")):
+                tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
+                    row=0, column=c, sticky="w", pady=(0, 2),
+                    padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
+            row = 1
+            for title, notes in groups:
+                tk.Label(grid, text=title, anchor="w", fg=dpi.MUT).grid(
+                    row=row, column=0, columnspan=3, sticky="w", pady=(8, 2))
                 row += 1
+                for note in notes:
+                    tk.Label(grid, text="%s（%d）" % (note_name(note), note),
+                             anchor="w").grid(row=row, column=0, sticky="w",
+                                              pady=2)
+                    desc = SHIFT_DESC.get(note) or PEDAL_DESC.get(note)
+                    if desc:        # 固定功能行：只显示，无录制/触发
+                        tk.Label(grid, text=desc, anchor="w",
+                                 fg=dpi.MUT).grid(row=row, column=1,
+                                                  sticky="we",
+                                                  padx=(8, 8), pady=2)
+                        row += 1
+                        continue
+                    lbl = tk.Label(grid, text="未设置", anchor="w", fg=dpi.MUT)
+                    lbl.grid(row=row, column=1, sticky="we",
+                             padx=(8, 8), pady=2)
+                    grid.columnconfigure(1, weight=1)
+                    cell = tk.Frame(grid)
+                    cell.grid(row=row, column=2, sticky="w", pady=2)
+                    self._rec_btn[note] = tk.Button(
+                        cell, text="录制", width=8,
+                        command=lambda n=note: self._toggle_record(n))
+                    self._rec_btn[note].pack(side="left", padx=2)
+                    tk.Button(cell, text="触发", width=8,
+                              command=lambda n=note: self._trigger(n)).pack(
+                        side="left", padx=2)
+                    tk.Button(cell, text="清除", width=8,
+                              command=lambda n=note: self._clear(n)).pack(
+                        side="left", padx=2)
+                    self._slot_lbl[note] = lbl
+                    row += 1
+            self._pages[key] = page
         # 动作状态行：无消息时整行隐藏，不占位
         self.status = tk.Label(self, text="", anchor="w", fg=dpi.MUT)
-        # 端口状态固定两行（JUNO/AX-09；联动端口主界面已显示，不重复），
-        # 与上方动作消息分栏互不覆盖
+        # 端口状态行：每琴一行，只显示当前乐器页那行（_show_page 接管）；
+        # 文案不带设备前缀——页已经表意
         self._port_lbl = {}
-        for i, (key, text) in enumerate((("juno", "JUNO：…"),
-                                         ("ax", "AX-09：…"))):
+        for key, text in (("juno", "…"), ("ax", "…")):
             lbl = tk.Label(self, text=text, anchor="w", fg=dpi.MUT)
-            lbl.pack(fill="x", padx=pad,
-                     pady=(0, dpi.scale(self, 8) if i == 1 else 0))
             self._port_lbl[key] = lbl
+        self._port_lbl["juno"].pack(fill="x", padx=pad,
+                                    pady=(0, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.darkify(self)
         dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
-        # 尺寸适配：最小=「含动作状态行」的内容需求（状态行动态出现时
-        # 不会裁掉底部端口行）；初始不低于规划值与需求值
+        m = self._menu          # 下拉不在 darkify 覆盖范围，仿设置页套同族色
+        m.config(bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
+                 activeforeground=dpi.FG, relief="flat", bd=0,
+                 highlightthickness=1, highlightbackground=dpi.BORDER,
+                 highlightcolor=dpi.C_OK, padx=8, pady=3)
+        m["menu"].config(bg=dpi.FIELD, fg=dpi.FG,
+                         activebackground=dpi.SELECT, activeforeground=dpi.FG)
+        # 尺寸适配：按当前页内容定高（状态行动态出现也不会裁掉底部端口行）
         self.status.pack(fill="x", padx=pad, pady=(6, 0),
                          before=self._port_lbl["juno"])
-        self.update_idletasks()
-        w = max(dpi.scale(self, 560), self.winfo_reqwidth())
-        h = max(dpi.scale(self, 820), self.winfo_reqheight())
-        self.geometry("%dx%d" % (w, h))
-        self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
+        self._show_page(PAGE_NAMES[0])
         self.status.pack_forget()
         self.after(300, self._tick)
+
+    def _show_page(self, name):
+        """乐器分页切换；窗口尺寸随页内容重定，minsize 同步允许缩小。
+        页与端口行先全部 pack_forget 再按序落尾——不用 before= 引用：
+        目标行可能正被 forget（Tcl 报 isn't packed）。"""
+        key = "juno" if name.startswith("JUNO") else "ax"
+        self._page_key = key
+        self._sel.set(name)
+        for p in self._pages.values():
+            p.pack_forget()
+        for lbl in self._port_lbl.values():
+            lbl.pack_forget()
+        self._pages[key].pack(fill="both", expand=True,
+                              padx=dpi.scale(self, 12))
+        self._port_lbl[key].pack(fill="x", padx=dpi.scale(self, 12),
+                                 pady=(0, dpi.scale(self, 8)))
+        self.update_idletasks()
+        # 先降 minsize 再改尺寸——顺序反了会被上一页的 minsize 钳住缩不回去
+        self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
+        w = max(dpi.scale(self, 560), self.winfo_reqwidth())
+        h = max(dpi.scale(self, 480),
+                self.winfo_reqheight() + dpi.scale(self, 12))
+        self.geometry("%dx%d" % (w, h))
 
     def _store(self, note):
         """音符归属的映射表：72 起归 AX-09，其余归 JUNO。"""
@@ -481,10 +520,6 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.ax_slots = load_slots(song["path"], "ax") if song else {}
         for note in SLOT_NOTES + AX_NOTES:
             self._refresh(note)
-        self.title("键盘自动化 - %s" % song["name"] if song
-                   else "键盘自动化")
-        if song:
-            self.set_status("配置目标：%s" % song["name"])
 
     def _refresh(self, note):
         slot = self._store(note).get(note)
@@ -497,7 +532,8 @@ class KeyboardAutoWindow(tk.Toplevel):
             return
         self.status.config(text=text, fg=color)
         self.status.pack(fill="x", padx=dpi.scale(self, 12), pady=(6, 0),
-                         before=self._port_lbl["juno"])
+                         before=self._port_lbl[getattr(self, "_page_key",
+                                                       "juno")])
 
     # ---- 录制 ----
 
@@ -640,9 +676,9 @@ class KeyboardAutoWindow(tk.Toplevel):
             ), ok_in and ok_out
 
         text, ok = io_line(self.app.jcfg["inHint"], "juno")
-        self._port_row("juno", "JUNO：%s" % text, ok)
+        self._port_row("juno", text, ok)
         text, ok = io_line(self.app.axcfg["inHint"], "ax09")
-        self._port_row("ax", "AX-09：%s" % text, ok)
+        self._port_row("ax", text, ok)
 
     def _port_row(self, key, text, ok):
         self._port_lbl[key].config(text=text,

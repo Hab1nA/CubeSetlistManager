@@ -541,12 +541,13 @@ class App:
         self.root.destroy()
 
     def _close_controlled(self):
-        """关闭被控软件，顺序敏感：Cubase 先退（它还挂着 loopMIDI 端口），
-        OBS 次之（上面 stop_media 已把视频文件从源里清掉，场景配置存的是
-        空文件，下次启动不会自动续播），loopMIDI 最后。"""
+        """三个被控软件**同时**发出关闭请求（先前是串行等待，Cubase 退出
+        本身要几十秒，OBS/loopMIDI 白等）。Cubase 的保存弹窗仍由本线程
+        照看到退完；OBS/loopMIDI 在子线程各自等待/兜底（loopMIDI 只缩
+        托盘时到点终止）。"""
+        for fn in (close_obs_app, close_loopmidi):
+            threading.Thread(target=fn, daemon=True).start()
         cubase_ctrl.close_app(log=lambda *_: None)
-        close_obs_app()
-        close_loopmidi()
 
     # ---- 后台线程：起服务 + 扫素材库 + 探时长 ----
 

@@ -476,13 +476,15 @@ check("两窗操作按钮同宽",
 check("键盘窗文字不裁剪", all(fits(b) for b in kbtns.values()))
 check("键盘窗提示语无 BS/PC", "BS/PC" not in kw.winfo_children()[0]["text"])
 port_texts = [l["text"] for l in kw._port_lbl.values()]
-check("键盘窗底部两行端口",
+check("键盘窗端口行无设备前缀",
       len(kw._port_lbl) == 2
-      and port_texts[0].startswith("JUNO：")
-      and port_texts[1].startswith("AX-09："))
-check("键盘窗状态行随消息显隐",
-      kw.status.winfo_ismapped()
-      and kw.status["text"] == "配置目标：SongA")
+      and all(t.startswith("输入") for t in port_texts))
+check("键盘窗只显示当前乐器端口行",
+      kw._port_lbl["juno"].winfo_ismapped()
+      and not kw._port_lbl["ax"].winfo_ismapped())
+check("键盘窗绑定后状态行隐藏",
+      not kw.status.winfo_ismapped()
+      and kw.title() == "键盘自动化")
 
 # --- 两窗第二列表头与数据列文字左缘对齐（数据列有 padx=(8,8) 左缩进） ---
 kb_hdr = kw._slot_lbl[kbd_auto.SLOT_NOTES[0]].master.grid_slaves(
