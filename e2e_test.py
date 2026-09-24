@@ -7,8 +7,9 @@
   obs        OBS 联动：连接→播 1.mp4→查状态→熄屏
   switch     Cubase 切歌全流程（未运行则冷启动；在运行则先关后开）并转储窗口
   transport  走带按键 E2E：时钟监听验证 播放/停止 真生效
-  advance    自动推进全周期：播完 intro→自动切下一首（需项目时钟，约 3 分钟）
+  advance    自动推进全周期：播完最短歌→自动切下一首（需项目时钟，约 3 分钟）
 不带参数 = 顺序跑 preflight ports obs switch transport kb（advance 单独跑）。"""
+import glob
 import os
 import sys
 import time
@@ -21,9 +22,29 @@ import midi_bridge as mb
 import obs_ctrl
 from obs_ctrl import ObsController, find_processes_by_prefix
 
-ROOT = r"C:\Users\XKZ\Documents\Cubase Projects"
-SONG_A = os.path.join(ROOT, "霓虹折叠", "intro", "intro.cpr")        # 134s 最短
-SONG_B = os.path.join(ROOT, "Others", "TAIDADA", "TAIDADA.cpr")     # 240s
+# 库根：默认本机路径，换机用环境变量 CUBE_PROJECTS_ROOT 覆盖
+ROOT = os.environ.get("CUBE_PROJECTS_ROOT") or r"C:\Users\XKZ\Documents\Cubase Projects"
+
+
+def _pick_songs(root):
+    """扫 <root>/<队伍>/<歌>/<歌>.cpr，按时长升序取最短两首当 SONG_A/SONG_B
+    （advance 阶段依赖最短歌跑全周期；时长未知的歌排最后）。"""
+    songs = []
+    for p in glob.glob(os.path.join(root, "*", "*", "*.cpr")):
+        if os.path.splitext(os.path.basename(p))[0] != os.path.basename(os.path.dirname(p)):
+            continue    # 只认 <歌>/<歌>.cpr 命名（与素材库扫描同规则）
+        try:
+            dur = cpr_meta.read_duration(p)
+        except Exception:
+            dur = None
+        songs.append((dur if dur is not None else 1 << 30, p))
+    songs.sort()
+    if len(songs) < 2:
+        sys.exit("工程库 %s 下可用歌不足两首（<队伍>/<歌>/<歌>.cpr）" % root)
+    return songs[0][1], songs[1][1]
+
+
+SONG_A, SONG_B = _pick_songs(ROOT)
 
 
 def log(msg):

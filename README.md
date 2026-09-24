@@ -37,6 +37,17 @@
 - Steinberg Cubase（实测 Cubase 15 / Pro 13.0.40 窗口标题均兼容）；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、MIDI 踩钉。
 
+### 开发 / 构建
+
+- Python **3.14.x**（实测版本；零第三方运行时依赖是刻意设计——python-rtmidi
+  在 3.14 下 import 即崩，故 MIDI/OBS 协议均为标准库手写）；
+- 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
+  Inno Setup 6 会顺带出按用户安装包，版本取最近 git tag）；
+- 离线自检：`py test_bridge.py`，或 `py -m pytest test_bridge.py`（CI 每次
+  push 自动跑）；
+- 真机 E2E：`py -u e2e_test.py <phase>`（库根默认本机路径，换机设环境变量
+  `CUBE_PROJECTS_ROOT` 覆盖）。
+
 ## 快速开始
 
 1. **首次配置**：把 `config.example.json` 复制为 exe 同目录的 `config.json`，

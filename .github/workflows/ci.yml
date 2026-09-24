@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: 语法检查（全部源码模块）
+        run: python -m compileall -q advance.py cpr_meta.py cubase_ctrl.py dpi.py kbd_auto.py midi_bridge.py obs_ctrl.py obs_ws.py pedal.py setlist_gui.py
+      - name: 离线自检（test_bridge.py，无需 OBS/loopMIDI/Cubase 在场）
+        run: |
+          python -m pip install pytest -q
+          python -m pytest test_bridge.py -v

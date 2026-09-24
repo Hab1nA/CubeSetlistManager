@@ -18,6 +18,7 @@ import json
 import os
 import pathlib
 import queue
+import re
 import sys
 import threading
 import time
@@ -37,7 +38,33 @@ from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
 
 FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
 LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
-DEFAULT_CUBASE_EXE = r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"
+
+
+def _find_cubase_exe():
+    r"""扫 Program Files\Steinberg 各版本目录，取版本号最高的 Cubase<N>.exe
+    （N 取自 exe 文件名，兼容「Cubase Pro 13」式目录名；升级 Cubase 无需改路径）。"""
+    base = r"C:\Program Files\Steinberg"
+    try:
+        dirs = os.listdir(base)
+    except OSError:
+        return None
+    best = None
+    for d in dirs:
+        if "cubase" not in d.lower():
+            continue
+        try:
+            exes = os.listdir(os.path.join(base, d))
+        except OSError:
+            continue
+        for e in exes:
+            m = re.fullmatch(r"Cubase(\d+)\.exe", e)
+            if m and (best is None or int(m.group(1)) > best[0]):
+                best = (int(m.group(1)), os.path.join(base, d, e))
+    return best[1] if best else None
+
+
+DEFAULT_CUBASE_EXE = (_find_cubase_exe()
+                      or r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe")
 DEFAULT_PROJECTS_ROOT = r"C:\Users\XKZ\Documents\Cubase Projects"
 
 if getattr(sys, "frozen", False):   # PyInstaller exe：数据文件放 exe 同目录
@@ -251,6 +278,9 @@ class App:
         self.ccfg = dict(projectsRoot=DEFAULT_PROJECTS_ROOT,
                          cubaseExe=DEFAULT_CUBASE_EXE, autoSave=True)
         self.ccfg.update(cfg.get("cubase") or {})
+        if self.ccfg["cubaseExe"] and not os.path.exists(self.ccfg["cubaseExe"]):
+            # 配置钉的路径已不存在（升级 Cubase/换机）→ 回退自动探测，防静默失效
+            self.ccfg["cubaseExe"] = DEFAULT_CUBASE_EXE
         self.auto_advance = bool(cfg.get("autoAdvance", False))
         self.cont_play = bool(cfg.get("autoPlay", False))  # 连续播放：切完自动起播
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台

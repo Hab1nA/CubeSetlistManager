@@ -5,6 +5,17 @@
 
 ## [未发布]
 
+### 新增
+
+- **Cubase 路径自动探测**：不再钉死 Cubase 15 安装路径——启动时扫
+  `Program Files\Steinberg` 各版本目录取版本号最高的 `Cubase<N>.exe`；
+  `config.json` 钉的路径已不存在（升级 Cubase/换机）也自动回退探测值，
+  不再静默失效（显式留空仍表示不自动拉起）。
+- **开发工程化**：补 MIT LICENSE；新增 GitHub Actions CI（每次 push 跑全部
+  源码语法检查 + `test_bridge.py` 离线自检）；README 增补「开发 / 构建」
+  环境说明；e2e_test.py 改为动态扫描工程库取最短两首（不再写死本机歌名与
+  路径，换机设环境变量 `CUBE_PROJECTS_ROOT` 覆盖库根）。
+
 ### 修复
 
 - **启动时长全量重探**：启动时长探测此前只补「从未测过」的歌，在 Cubase 里
