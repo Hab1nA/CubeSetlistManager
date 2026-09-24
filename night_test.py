@@ -303,10 +303,16 @@ def p_off():
     now[0] += 5.0
     w.poll()
     record(PH, "AdvanceWatch 时长未知（0）不推进", not fired and not w._fired)
-    record(PH, "pedal.EXCLUDE 排除 JUNO/loopMIDI",
+    import midi_bridge as mb
+    _lmp = mb.loopmidi_ports
+    mb.loopmidi_ports = lambda: {"自定义口名"}
+    _virt = (pedal._is_virtual("自定义口名")       # 注册表名单命中（改名口也覆盖）
+             and not pedal._is_virtual("Rubix USB"))
+    mb.loopmidi_ports = _lmp
+    record(PH, "pedal 学习排除硬件琴+全部 loopMIDI 虚拟口",
            any("JUNO" in e for e in pedal.EXCLUDE)
-           and any("loopMIDI" in e for e in pedal.EXCLUDE),
-           str(pedal.EXCLUDE))
+           and pedal._is_virtual("loopMIDI Port") and _virt,
+           "%s | 虚拟口=%s" % (str(pedal.EXCLUDE), sorted(mb.loopmidi_ports())))
 
     # obs_ws 协议（RFC 6455 标准 accept 向量自校验 + 全流程假服务端）
     import base64

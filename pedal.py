@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """CC 踩钉快捷键：踩钉（USB 直连或经声卡 MIDI IN，两者都是 winmm 输入设备）
 发 CC 控制软件功能。触发=上升沿（值上穿 64）+100ms 级去抖——瞬时踩/开关踩
-通吃，踩钉无需改任何设置。绑定来自「学习」：监听所有空闲 MIDI 输入口，
-踩一下捕获 设备名+CC 号，写 config.json 的 pedal 段（GUI 侧持久化）。
-热插拔：未连接时由 GUI 轮询 try_open() 重连。"""
+通吃，踩钉无需改任何设置。绑定来自「学习」：监听硬件 MIDI 输入口（排除
+loopMIDI 虚拟口与两台琴），踩一下捕获 设备名+CC 号，写 config.json 的
+pedal 段（GUI 侧持久化）。热插拔：未连接时由 GUI 轮询 try_open() 重连。"""
 import threading
 import time
 import tkinter as tk
@@ -16,7 +16,20 @@ ACTIONS = (("play", "开始"), ("stop", "停止"), ("rewind", "回零"),
            ("next", "下一首"), ("panic", "全停"), ("auto", "自动切换"))
 RISE = 64               # 上升沿阈值
 DEBOUNCE = 0.15         # 两次触发最小间隔（秒）
-EXCLUDE = ("loopMIDI", "JUNO", "AX-09", "Lucina")  # 软件虚拟口/两台琴的 MIDI 口，学习时不当踩钉候选
+EXCLUDE = ("JUNO", "AX-09", "Lucina")   # 已知硬件琴的 MIDI 口，学习时不当踩钉候选
+
+
+def _is_virtual(name):
+    """软件虚拟口判定：loopMIDI 注册表名单里的端口（改名/新增自动覆盖）
+    或名字含 loopMIDI（名单读不到时的兜底）。虚拟口是软件间通路，上面
+    只会有 Cubase 发的触发/时钟，学成踩钉就是误绑。"""
+    return name in mb.loopmidi_ports() or "loopMIDI" in name
+
+
+def learning_candidates():
+    """学习阶段的踩钉候选输入口：排除已知硬件琴与全部 loopMIDI 虚拟口。"""
+    return [(i, n) for i, n in mb._in_devices()
+            if not any(x in n for x in EXCLUDE) and not _is_virtual(n)]
 
 
 def fire(state, cc, val, now):
@@ -98,12 +111,10 @@ class CCLearner:
     def __init__(self, hint=""):
         self.cc = None                 # (设备名, cc 号)
         self.ports = []
-        devs = mb._in_devices()
         if hint:
-            cands = [(i, n) for i, n in devs if hint in n]
+            cands = [(i, n) for i, n in mb._in_devices() if hint in n]
         else:
-            cands = [(i, n) for i, n in devs
-                     if not any(x in n for x in EXCLUDE)]
+            cands = learning_candidates()
         for _idx, name in cands:
             try:
                 self.ports.append(RawMidiIn(name, self._make(name)))
@@ -266,3 +277,18 @@ class PedalWindow(tk.Toplevel):
     def _close(self):
         self._cancel_learn("")
         self.destroy()
+
+
+if __name__ == "__main__":
+    # 本机诊断：学习阶段实际会监听哪些口（演出日排查用）
+    print("本机 loopMIDI 端口:", sorted(mb.loopmidi_ports()))
+    print("本机学习候选口:", learning_candidates())
+    # 纯逻辑自检（假数据，不依赖本机设备在不在场）
+    mb.loopmidi_ports = lambda: {"Keyboard Automation", "loopMIDI Port"}
+    assert _is_virtual("Keyboard Automation")      # 注册表名单命中（改名口）
+    assert _is_virtual("loopMIDI Port 2")          # 名字兜底命中
+    assert not _is_virtual("Rubix USB")            # 硬件口不误伤
+    mb._in_devices = lambda: [(0, "Keyboard Automation"), (1, "loopMIDI Port"),
+                              (2, "JUNO-DS88"), (3, "Rubix USB"), (4, "踩钉")]
+    assert learning_candidates() == [(3, "Rubix USB"), (4, "踩钉")]
+    print("pedal self-check OK")

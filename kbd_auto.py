@@ -204,8 +204,10 @@ def save_slots(cpr_path, slots, key="slots"):
         data = {}
     data[key] = {str(k): slots[k] for k in sorted(slots)}
     data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                 encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")      # 先写临时再替换：断电不截断原文件
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    os.replace(str(tmp), str(p))
 
 
 # ---- MIDI 收发（winmm；输入只收短消息，输出支持 SysEx 长消息） ----

@@ -8,7 +8,7 @@
 退出靠右。
 切歌=CubaseController.switch_to（关闭当前工程[自动保存]→打开下一个），
 只认播放列表里的歌；自动推进=AdvanceWatch 累计走带活跃时长≥工程时长×95%
-且时钟断流。工程时长：启动时后台全量探测（66 首/66MB 实测 0.14s）+
+且时钟断流。工程时长：启动时后台全量重探（自动来源；手动设定不覆盖）+
 打开工程时重测，持久化在 playlist.json，未设定位条的用「写入时长」手填。
 直接 `python setlist_gui.py` 运行，或 PyInstaller 打包 exe（config.json、
 playlist.json 与 exe 同目录）。"""
@@ -36,6 +36,7 @@ from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
 
 FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
+LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
 DEFAULT_CUBASE_EXE = r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"
 DEFAULT_PROJECTS_ROOT = r"C:\Users\XKZ\Documents\Cubase Projects"
 
@@ -134,6 +135,19 @@ def scan_library(root):
             if path.exists():
                 out.append({"key": "%s/%s" % (team, name), "team": team,
                             "name": name, "path": str(path)})
+    return out
+
+
+def _reprobe(songs, durations, dur_src):
+    """自动来源的工程时长全量重读 .cpr → {key: 新秒}（只收值有变化的）。
+    手动设定不参与（「写入时长」受保护，要回工程内原值用「重新识别」）。"""
+    out = {}
+    for s in songs:
+        if dur_src.get(s["key"]) == "manual":
+            continue
+        d = cpr_meta.read_duration(s["path"]) or 0.0
+        if d != durations.get(s["key"]):
+            out[s["key"]] = d
     return out
 
 
@@ -273,6 +287,7 @@ class App:
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
         self.q = queue.Queue()          # 日志/事件
         self.calls = queue.Queue()      # 跨线程 GUI 调用
+        self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
@@ -527,18 +542,23 @@ class App:
                 closer()
             except Exception:
                 pass
+        # 非守护线程：窗口先关、进程等收尾做完——网络动作不占主线程，
+        # 不会出现点退出后窗口长时间"未响应"；先趁 OBS 在线熄屏清文件，
+        # 再按需关被控软件（顺序反了熄屏会随 OBS 退出而发不出去）
+        threading.Thread(target=self._exit_worker, daemon=False).start()
+        self.root.destroy()
+
+    def _exit_worker(self):
+        """退出收尾（窗口已关）。熄屏并清媒体源文件，OBS 下次启动不续播。"""
         try:
             if self.ctl is not None:
-                self.ctl.stop_media()   # 熄屏并清文件，OBS 下次启动不续播
+                self.ctl.stop_media()
                 self.ctl.enabled = False
                 self.ctl.shutdown()
         except Exception:
             pass
         if self.exit_close_apps:
-            # 非守护线程：窗口先关，后台把被控软件关完进程才退
-            threading.Thread(target=self._close_controlled,
-                             daemon=False).start()
-        self.root.destroy()
+            self._close_controlled()
 
     def _close_controlled(self):
         """三个被控软件**同时**发出关闭请求（先前是串行等待，Cubase 退出
@@ -560,23 +580,42 @@ class App:
 
     def _ensure_cubase(self):
         """启动自检：Cubase 未运行就自动拉起（冷启动到 Hub 约 30 秒，之后
-        切歌才能单实例转交）。尽力而为，失败只记日志不阻断启动。"""
+        切歌才能单实例转交）。进程在而界面全无=正在退出的空壳（上一局
+        「退出关闭被控软件」的尾巴），等它退净再拉起，不算「已在运行」。
+        尽力而为，失败只记日志不阻断启动。"""
         try:
             if find_processes_by_prefix("cubase"):
-                self.q.put("Cubase 已在运行")
+                if cubase_ctrl.ui_alive():
+                    self.q.put("Cubase 已在运行")
+                    return
+                self.q.put("Cubase 正在退出（界面已无），退净后自动启动…")
+
+                def launch():
+                    if not cubase_ctrl.wait_exit():
+                        # 等待期间窗口出来了（如正处冷启动）：不算失败
+                        self.q.put("Cubase 已在运行" if cubase_ctrl.ui_alive()
+                                   else "Cubase 无界面进程迟迟未退净，"
+                                        "未自动启动")
+                        return
+                    self._launch_cubase("Cubase 已退净，已自动启动"
+                                        "（冷启动约 30 秒）")
+                threading.Thread(target=launch, daemon=True).start()
                 return
-            exe = self.ccfg.get("cubaseExe") or ""
-            if not exe or not os.path.exists(exe):
-                self.q.put("Cubase 未运行，但 cubaseExe 路径不存在，"
-                           "无法自动拉起")
-                return
-            r = launch_detached(exe)
-            if r > 32:
-                self.q.put("Cubase 未运行，已自动启动（冷启动约 30 秒）")
-            else:
-                self.q.put("Cubase 自动启动失败（ShellExecute 代码 %s）" % r)
+            self._launch_cubase("Cubase 未运行，已自动启动（冷启动约 30 秒）")
         except Exception as e:
             self.q.put("Cubase 自检失败：%s" % _err(e))
+
+    def _launch_cubase(self, ok_msg):
+        """拉起 Cubase 本体（路径无效/启动失败只记日志，不抛出）。"""
+        exe = self.ccfg.get("cubaseExe") or ""
+        if not exe or not os.path.exists(exe):
+            self.q.put("cubaseExe 路径不存在，无法自动拉起")
+            return
+        r = launch_detached(exe)
+        if r > 32:
+            self.q.put(ok_msg)
+        else:
+            self.q.put("Cubase 自动启动失败（ShellExecute 代码 %s）" % r)
 
     def _startup(self):
         """后台启动：按依赖分组逐项降级——一组失败只废该组功能并记红字，
@@ -727,17 +766,18 @@ class App:
                    % (len(songs), len(self.pl_keys), root))
 
     def _probe_durations(self, songs):
-        """全量探测缺失的工程时长并持久化（后台线程；实测 66 首/66MB 约 0.15s）。
-        已缓存的直接跳过——正常重启一条都不用探，安静返回。"""
-        fresh = [s for s in songs if s["key"] not in self.durations]
+        """全量重探自动来源的工程时长并持久化（后台线程；65 首/66MB 实测
+        约 0.15s）：在 Cubase 里改过定位条的歌，重启即跟上。手动设定不被
+        覆盖；值全没变就不落盘，安静返回。"""
+        fresh = _reprobe(songs, self.durations, self.dur_src)
         if not fresh:
             return
-        for s in fresh:
-            self.durations[s["key"]] = cpr_meta.read_duration(s["path"]) or 0.0
+        self.durations.update(fresh)
         self._persist()
-        self.q.put("已探测 %d 首工程时长（%d 首未知，需手填）"
+        self.q.put("已重探工程时长：%d 首有更新（%d 首未知，需手填）"
                    % (len(fresh),
-                      sum(1 for s in fresh if not self.durations[s["key"]])))
+                      sum(1 for s in songs
+                          if not self.durations.get(s["key"]))))
 
     def _on_lib_sel(self, _e=None):
         """双列表唯一选中：选素材库即清播放列表的标蓝。"""
@@ -1198,10 +1238,12 @@ class App:
                        % song["name"])
 
     def _persist(self):
-        try:
-            save_playlist(self.pl_keys, self.durations, self.dur_src)
-        except (ValueError, OSError, RuntimeError) as e:
-            self.q.put("播放列表保存失败：%s" % e)
+        # 串行化：并发写会踩同一个临时文件（Windows 上报错或写出交错内容）
+        with self._persist_lock:
+            try:
+                save_playlist(self.pl_keys, self.durations, self.dur_src)
+            except (ValueError, OSError, RuntimeError) as e:
+                self.q.put("播放列表保存失败：%s" % e)
 
     def _next(self):
         self._switch(0 if self.cur is None else self.cur + 1, "手动")
@@ -1487,6 +1529,8 @@ class App:
             if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
                 self.log.itemconfigure(self.log.size() - 1,
                                        foreground=dpi.C_ERR)
+        if self.log.size() > LOG_MAX:      # 先裁剪再回底：删头部后 see 才准
+            self.log.delete(0, self.log.size() - LOG_MAX)
         if follow:
             self.log.see("end")
 
@@ -1740,8 +1784,9 @@ class SettingsWindow(tk.Toplevel):
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj
-        if rescan:
-            app._load_songs()
+        if rescan:      # 后台重扫：目录在网络盘时主线程扫描会卡界面数秒
+            app.q.put("工程库已变更，后台重扫…")
+            threading.Thread(target=app._load_songs, daemon=True).start()
         # 端口：热切换
         ports_changed = (vj != app.vj_hint) or (kb != app.kb_hint)
         app.vj_hint, app.kb_hint = vj, kb
@@ -1771,9 +1816,26 @@ class SettingsWindow(tk.Toplevel):
         self.destroy()
 
 
+_MUTEX = None
+
+
+def _acquire_single_instance():
+    """命名互斥体防双开：双开会双份发走带键/双份监听 MIDI，行为错乱。
+    句柄存全局防 GC（句柄关闭=互斥体销毁）；进程退出内核自动释放。"""
+    global _MUTEX
+    k32 = ctypes.windll.kernel32
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    _MUTEX = k32.CreateMutexW(None, False, "Local\\CubeSetlistManager")
+    return k32.GetLastError() != 183        # ERROR_ALREADY_EXISTS
+
+
 def main():
     global _CRASH_LOG
     dpi.enable()
+    if not _acquire_single_instance():
+        ctypes.windll.user32.MessageBoxW(
+            0, "Cube Setlist Manager 已在运行", "Cube Setlist Manager", 0x30)
+        return
     try:                        # noconsole exe 无 stderr：崩溃栈落 crash.log
         _cl = _HERE / "crash.log"
         if _cl.exists() and _cl.stat().st_size > 512 * 1024:   # 轮转防无限增长

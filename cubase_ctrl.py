@@ -143,6 +143,21 @@ def current_project():
     return ws[0] if ws else None
 
 
+def ui_alive():
+    """Cubase 是否有可见界面（工程/Hub/主框架/弹窗任一自绘窗）。
+    进程在而界面全无 = 正在退出的空壳（或冷启动窗口尚未出现）。"""
+    return any(c.startswith(WIN_CLASS_PREFIX) and t
+               for _h, t, c in _windows())
+
+
+def wait_exit(timeout=45):
+    """等 Cubase 进程退净（消亡尾巴）；超时返回 False。"""
+    deadline = time.time() + timeout
+    while find_processes_by_prefix(PROC_PREFIX) and time.time() < deadline:
+        time.sleep(0.5)
+    return not find_processes_by_prefix(PROC_PREFIX)
+
+
 def focus(hwnd, tries=6):
     """置前台（transport 走带键需要）。后台进程被前台锁拦：空敲 ALT +
     AttachThreadInput 附加前台线程 + 最小化先恢复，SwitchToThisWindow 兜底。"""
@@ -301,9 +316,7 @@ class CubaseController:
             if hub is None and frame is not None:
                 self._log("Cubase 空闲无工程：退出后重新启动…")
                 _user32.PostMessageW(frame, WM_CLOSE, 0, 0)
-                deadline = time.time() + 45
-                while self.running() and time.time() < deadline:
-                    time.sleep(0.5)
+                wait_exit(45)
         self._log("启动打开工程（单实例转交/冷启动）…")
         r = launch_detached(self.exe, '"%s"' % path)   # 参数必须带引号
         if r <= 32:

@@ -21,6 +21,7 @@ Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port�
 import ctypes
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -188,25 +189,40 @@ class TransportSync:
 
 
 def note_handler(ctl, sync, report=print):
-    """音符→OBS 动作的标准处理器；report 输出事件行（print 或 GUI 日志）。"""
+    """音符→OBS 动作的标准处理器；report 输出事件行（print 或 GUI 日志）。
+    winmm 回调线程只记带入队，OBS 网络动作由内部串行工作线程执行——
+    回调里做网络会拖住同一端口的时钟投递（winmm 按序回调），时钟停
+    超 CLOCK_TIMEOUT 就误判暂停；连发积压时只执行最新的一个触发。"""
+    q = queue.Queue()
+
     def on_note(note, vel):
-        target = NOTE_MAP.get(note)
-        if note not in NOTE_MAP:
-            return
-        sync.note_seen()
-        if target is None:
-            ok = ctl.stop_media()
-            if ok:
-                sync.set_state("stopped")
-                sync.current_video = None
-        else:
-            ok = ctl.set_media(target, False)
-            if ok:
-                sync.set_state("playing")
-                sync.current_video = target
-        report("音符 %d → %s%s" % (
-            note, "熄屏" if target is None else target,
-            "" if ok else " 失败：%s" % ctl.last_error))
+        if note in NOTE_MAP:
+            sync.note_seen()
+            q.put(note)
+
+    def worker():
+        while True:
+            note = q.get()
+            while True:                 # 倒掉积压：切换归最新音符管
+                try:
+                    note = q.get_nowait()
+                except queue.Empty:
+                    break
+            target = NOTE_MAP[note]
+            if target is None:
+                ok = ctl.stop_media()
+                if ok:
+                    sync.set_state("stopped")
+                    sync.current_video = None
+            else:
+                ok = ctl.set_media(target, False)
+                if ok:
+                    sync.set_state("playing")
+                    sync.current_video = target
+            report("音符 %d → %s%s" % (
+                note, "熄屏" if target is None else target,
+                "" if ok else " 失败：%s" % ctl.last_error))
+    threading.Thread(target=worker, daemon=True).start()
     return on_note
 
 
@@ -246,6 +262,26 @@ def _loopmidi_exe():
         if os.path.exists(p):
             return p
     return None
+
+
+def loopmidi_ports():
+    """loopMIDI 已配置的全部虚拟端口名（读它自己的注册表名单，建口/改名
+    即时反映；loopMIDI 未装或名单读不到返回空集）。名单是 Ports 键下的
+    值（值名=端口名），不是子键。"""
+    names = set()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Tobias Erichsen\loopMIDI\Ports") as k:
+            i = 0
+            while True:
+                try:
+                    names.add(winreg.EnumValue(k, i)[0])
+                    i += 1
+                except OSError:
+                    break
+    except OSError:
+        pass
+    return names
 
 
 def ensure_loopmidi(hint=PORT_HINT):

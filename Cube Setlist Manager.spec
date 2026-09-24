@@ -25,7 +25,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,      # UPX 压缩 DLL 会拖慢杀软扫描/冷启动，且偶发误报损坏
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -38,7 +38,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='Cube Setlist Manager',
 )
