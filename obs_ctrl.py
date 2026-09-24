@@ -119,15 +119,14 @@ def close_obs_app():
 
 
 def close_loopmidi():
-    """关 loopMIDI：先 WM_CLOSE（托盘程序可能只缩不退），仍活着再终止——
-    虚拟 MIDI 口无用户数据，可安全终止。返回是否已退出。"""
-    close_process_windows("loopmidi")
-    if not wait_process_gone("loopmidi", 6):
-        for pid, _ in find_processes_by_prefix("loopmidi"):
-            h = _kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
-            if h:
-                _kernel32.TerminateProcess(h, 0)
-                _kernel32.CloseHandle(h)
+    """直接终止 loopMIDI——真机实测（2026-09-24，用户确认）：WM_CLOSE 它
+    只缩托盘不退出，优雅关闭无意义；虚拟 MIDI 口无用户数据，可安全强杀。
+    返回是否已退出。"""
+    for pid, _ in find_processes_by_prefix("loopmidi"):
+        h = _kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+        if h:
+            _kernel32.TerminateProcess(h, 0)
+            _kernel32.CloseHandle(h)
     return wait_process_gone("loopmidi", 5)
 
 
