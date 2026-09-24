@@ -7,6 +7,16 @@
 
 ### 新增
 
+- **移动端遥控与翻谱自动化**（`web_remote.py` + `hotspot.py`）：电脑开
+  Windows 热点（PowerShell/WinRT，免管理员），平板连热点后浏览器访问
+  `http://<热点IP>:8765` 遥控走带/切歌/全停（与桌面同权，切歌确认在网页内，
+  1 秒轮询+连接徽标+回前台全量刷新）；Cubase 经专用 loopMIDI 翻谱端口发
+  音符（C2/C#2=上一/下一页 + C3–A3 选设备），归并窗口判组合后逐设备并行
+  HTTP POST 到平板 Tasker（AutoInput 左/右半区单击/双击翻页），推送只收
+  私网目标且不经浏览器（网页被冻结翻谱照常）；设置页新增总开关/翻谱端口/
+  端口配置/热点状态行；平板网页面板认领设备、改翻页方式、试翻、下载
+  Tasker 任务 XML（首次配置见 `docs/Tasker配置说明.md`）。全链路离线自检
+  进 `test_bridge.py`（HTTP API/组合判定/归并窗口/推送收口/热点状态机）。
 - **Cubase 路径自动探测**：不再钉死 Cubase 15 安装路径——启动时扫
   `Program Files\Steinberg` 各版本目录取版本号最高的 `Cubase<N>.exe`；
   `config.json` 钉的路径已不存在（升级 Cubase/换机）也自动回退探测值，

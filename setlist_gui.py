@@ -30,9 +30,11 @@ import advance
 import cubase_ctrl
 import cpr_meta
 import dpi
+import hotspot
 import kbd_auto
 import midi_bridge as mb
 import pedal
+import web_remote
 from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
 
@@ -298,6 +300,11 @@ class App:
         self.axcfg.update(cfg.get("ax09") or {})
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
         self._pedal_retry = 0.0
+        # 移动端遥控（webRemote 段；web 实例在 _startup 里起）
+        self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
+        self.web_cfg.update(cfg.get("webRemote") or {})
+        self.web = None
+        self._web_snap = {}     # /state 快照（_tick_banner 每 400ms 重建）
         pl = _load_playlist()
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
         self.durations = pl["durations"]
@@ -579,7 +586,14 @@ class App:
         self.root.destroy()
 
     def _exit_worker(self):
-        """退出收尾（窗口已关）。熄屏并清媒体源文件，OBS 下次启动不续播。"""
+        """退出收尾（窗口已关）。先停网页遥控栈（服务/翻谱口，热点按所有权
+        决定关不关——热点停止放在 daemon 线程：PS 调用卡住不拖住退出），
+        熄屏并清媒体源文件，OBS 下次启动不续播。"""
+        if self.web is not None:
+            # 限时等待：热点 PS 调用一般 1–3 秒；卡死时最多等 8 秒就放行退出
+            t = threading.Thread(target=self._web_shutdown, daemon=True)
+            t.start()
+            t.join(8)
         try:
             if self.ctl is not None:
                 self.ctl.stop_media()
@@ -752,6 +766,12 @@ class App:
                                % self.pedal_hint)
             except Exception as e:
                 self.q.put("踩钉监听未启动：%s" % _err(e))
+            # 移动端遥控 + 翻谱推送（整组独立降级：总开关关=只报停用）
+            try:
+                self.web = web_remote.WebRemote(self, self.web_cfg)
+                self.web.startup()      # 内部按总开关决定起不起（热点要数秒）
+            except Exception as e:
+                self.q.put("移动端遥控未启动：%s" % _err(e))
             try:
                 self._load_songs()
             except Exception as e:
@@ -1419,6 +1439,46 @@ class App:
         except (ValueError, OSError, RuntimeError) as e:
             self.q.put("配置保存失败：%s" % e)
 
+    # ---- 移动端遥控 ----
+
+    def _web_config_payload(self, **fields):
+        """webRemote 持久化载荷：设备表永远取注册表现值（网页认领随时在改，
+        不能被设置页的旧快照覆盖），其余字段取调用方给的最新值。"""
+        cfg = dict(self.web_cfg)
+        cfg.update(fields)
+        if self.web is not None:
+            cfg["devices"] = self.web.registry.snapshot()
+        return cfg
+
+    def _persist_web_remote(self):
+        # 注册表 on_change 经 calls 队列到主线程；设置页保存也走这里合流
+        self._persist_config(webRemote=self._web_config_payload())
+
+    def _apply_web(self):
+        """设置页改了遥控配置后热应用（热点 PS 调用要数秒，后台线程跑）。"""
+        if self.web is None:
+            self.q.put("移动端遥控模块未就绪：重启程序后生效")
+            return
+        wc = self.web_cfg
+
+        def run():
+            try:
+                self.web.apply(enabled=bool(wc.get("enabled")),
+                               serverPort=wc.get("serverPort"),
+                               taskerPort=wc.get("taskerPort"),
+                               midiIn=str(wc.get("midiIn") or ""))
+            except Exception as e:
+                self.q.put("移动端遥控应用失败：%s" % _err(e))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _web_shutdown(self):
+        try:
+            if self.web is not None:
+                self.web.shutdown()
+        except Exception:
+            pass
+
     def _open_kbd(self):
         t = self._sel_target()
         song = self.by_key.get(t[2]) if t else None
@@ -1569,12 +1629,15 @@ class App:
         右侧与歌名行对齐常显「已播 | 剩余」；暂停保持已播值，未知显黄字。"""
         now, color, remain, nxt = "…", dpi.MUT, "", ""
         frac = None                         # None=不显示进度条
+        has_proj = False                    # 同步给网页 /state 快照
         if self.ctrl is None:
             now, color = "启动中…", dpi.C_ERR
         elif self.ctrl.busy:
             now, color = "切换中…", dpi.C_WARN
+            has_proj = True
         else:
             ws = cubase_ctrl.current_project()
+            has_proj = bool(ws)
             if not ws:
                 now, color = "（无打开的工程）", dpi.MUT
             else:
@@ -1605,6 +1668,7 @@ class App:
                                          rem // 60, rem % 60))
         self._banner(now, color, nxt, remain)
         self._progress(frac)
+        self._web_snap = web_remote.build_snapshot(self, has_proj)
 
     def _progress(self, frac):
         """NOW 下方 4px 进度条：None=隐藏（grid_remove 记住原位）。
@@ -1706,6 +1770,23 @@ class SettingsWindow(tk.Toplevel):
         self.kb_var = port_var(app.kb_hint)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
+        # 移动端遥控：总开关 + 翻谱端口 + 服务/Tasker 端口 + 热点状态行
+        wcfg = app.web_cfg
+        tk.Label(body, text="移动端遥控",
+                 anchor="w").pack(fill="x", pady=(pad, 3))
+        self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
+        tk.Checkbutton(body, text="启用移动端遥控（热点+网页控制+翻谱推送）",
+                       variable=self.web_var).pack(anchor="w", pady=1)
+        self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
+        menu_row("翻谱端口名称", self.pg_var, ins)
+        self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
+        self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
+        row("网页端口", self.srv_var)
+        row("Tasker 端口", self.tsk_var)
+        self.web_status = tk.Label(body, text="热点状态：查询中…", anchor="w",
+                                   justify="left", fg=dpi.MUT)
+        self.web_status.pack(anchor="w", pady=1)
+        threading.Thread(target=self._load_web_status, daemon=True).start()
         tk.Label(body, text="自动播放", anchor="w").pack(
             fill="x", pady=(pad, 3))
         self.auto_var = tk.BooleanVar(value=app.auto_var.get())
@@ -1767,6 +1848,32 @@ class SettingsWindow(tk.Toplevel):
         if self.cont_var.get():
             self.auto_var.set(True)
 
+    def _load_web_status(self):
+        """热点状态行：PS 子进程要数秒，后台线程查完回主线程刷新。"""
+        st = hotspot.state()
+
+        def apply():
+            try:
+                if not self.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            if not st.get("ok"):
+                txt, fg = "热点状态：不可用（%s）" % st.get("err", ""), dpi.C_ERR
+            elif st.get("on"):
+                txt = "热点已开：%s  密码 %s  本机 %s" % (
+                    st.get("ssid") or "无 SSID", st.get("key") or "无密码",
+                    st.get("ip") or "IP 未取到")
+                fg = dpi.C_OK
+            else:
+                txt, fg = "热点未开（启用遥控保存后自动开启）", dpi.MUT
+            self.web_status.config(text=txt, fg=fg)
+
+        try:
+            self.after(0, apply)
+        except tk.TclError:     # 窗口已关：结果作废
+            pass
+
     def _save(self):
         app = self.app
 
@@ -1780,6 +1887,26 @@ class SettingsWindow(tk.Toplevel):
         kb = raw(self.kb_var.get())
         vj = "" if vj == "无" else (vj or mb.PORT_HINT)
         kb = "" if kb == "无" else (kb or kbd_auto.KB_PORT_HINT)
+        # 移动端遥控：端口数值解析（非法回退默认并提示）
+        try:
+            srv = int(self.srv_var.get().strip())
+            assert srv > 0
+        except (ValueError, AssertionError):
+            srv = 8765
+            app.q.put("网页端口非法，按 8765 处理")
+        try:
+            tsk = int(self.tsk_var.get().strip())
+            assert tsk > 0
+        except (ValueError, AssertionError):
+            tsk = 8766
+            app.q.put("Tasker 端口非法，按 8766 处理")
+        pg = raw(self.pg_var.get())
+        pg = "" if pg == "无" else pg
+        web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
+                      "taskerPort": tsk, "midiIn": pg}
+        web_changed = any(app.web_cfg.get(k) != v
+                          for k, v in web_fields.items())
+        app.web_cfg.update(web_fields)
         cont = self.cont_var.get()
         auto = self.auto_var.get() or cont
         top = self.top_var.get()
@@ -1837,11 +1964,14 @@ class SettingsWindow(tk.Toplevel):
             if proj:
                 cub["projectsRoot"] = proj
             cfg["cubase"] = cub
+            cfg["webRemote"] = app._web_config_payload()
             _save_config(cfg)
         except (ValueError, OSError) as e:
             app.q.put("配置保存失败：%s" % e)
         if ports_changed:
             app._apply_ports()
+        if web_changed:
+            app._apply_web()
         app.q.put("设置已保存")
         self.destroy()
 

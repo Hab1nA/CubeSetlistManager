@@ -8,7 +8,8 @@
   switch     Cubase 切歌全流程（未运行则冷启动；在运行则先关后开）并转储窗口
   transport  走带按键 E2E：时钟监听验证 播放/停止 真生效
   advance    自动推进全周期：播完最短歌→自动切下一首（需项目时钟，约 3 分钟）
-不带参数 = 顺序跑 preflight ports obs switch transport kb（advance 单独跑）。"""
+  web        网页遥控/翻谱推送真机链路：MIDI 组合→推送 + /cmd→真切歌（回环）
+不带参数 = 顺序跑 preflight ports obs switch transport kb（advance/web 单独跑）。"""
 import glob
 import os
 import sys
@@ -247,8 +248,136 @@ def p_advance():
     log("自动推进全周期 ✓")
 
 
+class _WebShim:
+    """p_web 专用：WebServer 需要的 App 侧最小接口，切歌走真 CubaseController。"""
+
+    def __init__(self):
+        import queue as _q
+        self.calls = _q.Queue()
+        self.q = _q.Queue()
+        self.switch_confirm = True
+        self.cur = None
+        self.ctrl = None
+        self.watch = None
+        self.pl_keys = [os.path.splitext(os.path.basename(p))[0]
+                        for p in (SONG_A, SONG_B)]
+        self.by_key = {k: {"name": k} for k in self.pl_keys}
+        self.durations = {}
+        self._map = dict(zip(self.pl_keys, (SONG_A, SONG_B)))
+        self._web_snap = {}
+
+    def _refresh(self):
+        self._web_snap = web_remote.build_snapshot(
+            self, bool(cubase_ctrl.project_windows()))
+
+    def _switch(self, i, via, play_after=False):
+        if not 0 <= i < len(self.pl_keys):
+            log("网页切换越界：%s" % i)
+            return
+        log("网页命令：切到 %s（%s）" % (self.pl_keys[i], via))
+        self.ctrl.switch_to(self._map[self.pl_keys[i]],
+                            on_done=lambda n: log("切歌完成：%s" % n))
+        self.cur = i
+        self._refresh()
+
+    def _transport(self, a):
+        log("网页命令：transport %s（p_web 不验走带）" % a)
+
+    def _next(self):
+        self._switch(min((self.cur if self.cur is not None else -1) + 1,
+                         len(self.pl_keys) - 1), "手动")
+
+    def _prev(self):
+        self._switch(max(0, (self.cur or 0) - 1), "手动")
+
+    def _panic(self):
+        self.ctrl.panic()
+
+    def _persist_web_remote(self):
+        pass
+
+
+def p_web():
+    """网页遥控/翻谱推送真机链路：MIDI 组合→HTTP 推送 + /cmd→真切歌。
+    服务与假平板 Tasker 都在 127.0.0.1 回环；翻谱注入口默认 loopMIDI Port
+    （其音符 36/48 不在 VJ NOTE_MAP 内，GUI 同时在跑也不会误触发），换口设
+    环境变量 CUBE_E2E_TURN_PORT。需要 Cubase 在场（切歌部分）。"""
+    import http.client
+    import json
+    import threading
+    import web_remote
+    from http.server import BaseHTTPRequestHandler
+
+    hits = []
+
+    class _Tasker(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            hits.append(json.loads(self.rfile.read(n)))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    tsrv = web_remote.ThreadingHTTPServer(("127.0.0.1", 0), _Tasker)
+    threading.Thread(target=tsrv.serve_forever,
+                     kwargs={"poll_interval": 0.05}, daemon=True).start()
+
+    app = _WebShim()
+    app.ctrl = make_ctrl()
+    reg = web_remote.DeviceRegistry(
+        [{"slot": 1, "name": "E2E谱台", "ip": "127.0.0.1",
+          "method": "single", "enabled": True,
+          "screen": {"w": 1280, "h": 800}}], log)
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, reg,
+                               lambda: tsrv.server_address[1])
+    wport = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.05}, daemon=True).start()
+    log("网页遥控服务（回环）:%d" % wport)
+    try:
+        # 链路一：真 winmm 回调 → 归并窗口 → 组合判定 → HTTP 推送
+        turn_hint = os.environ.get("CUBE_E2E_TURN_PORT") or "loopMIDI Port"
+        hub = web_remote.ScoreTurnHub(reg, lambda: tsrv.server_address[1], log)
+        pin = kbd_auto.RawMidiIn(turn_hint, lambda s, d1, d2:
+                                 hub.submit(d1)
+                                 if s & 0xF0 == 0x90 and d2 > 0 else None)
+        time.sleep(0.3)
+        assert not midi_out_by_name(turn_hint, 36)
+        time.sleep(0.05)
+        assert not midi_out_by_name(turn_hint, 48)
+        ok = wait_until(lambda: hits, 5, "翻谱推送到达")
+        pin.close()
+        hub.close()
+        assert ok and hits and hits[0] == {"x": 960, "y": 400, "count": 1}, hits
+        log("MIDI 组合→推送 ✓ %s" % hits[0])
+
+        # 链路二：网页 /cmd → 真实 Cubase 切歌
+        conn = http.client.HTTPConnection("127.0.0.1", wport, timeout=3)
+        conn.request("POST", "/cmd",
+                     json.dumps({"action": "switch", "index": 0}),
+                     {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        body = r.read()
+        conn.close()
+        assert r.status == 200, body
+        assert wait_until(lambda: not app.ctrl.busy, 200, "切歌完成")
+        ws = cubase_ctrl.project_windows()
+        want = os.path.splitext(os.path.basename(SONG_A))[0]
+        assert ws and want in (ws[0][1] or ""), ws
+        log("网页 /cmd → Cubase 切歌 ✓（%s）" % want)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        tsrv.shutdown()
+        tsrv.server_close()
+
+
 PHASES = dict(preflight=p_preflight, ports=p_ports, obs=p_obs,
-              switch=p_switch, transport=p_transport, advance=p_advance)
+              switch=p_switch, transport=p_transport, advance=p_advance,
+              web=p_web)
 
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else None
