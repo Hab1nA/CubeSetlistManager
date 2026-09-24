@@ -52,7 +52,6 @@ NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2", 40: "E2",
               60: "C3", 61: "C#3", 62: "D3", 63: "D#3", 64: "E3",
               65: "F3", 66: "F#3", 67: "G3", 68: "G#3", 69: "A3",
               72: "C4", 73: "C#4", 74: "D4", 75: "D#4", 76: "E4", 77: "F4"}
-CAPTURE_TIMEOUT = 10.0                      # 录制等待上限（秒）
 MSG_GAP = 0.05                              # BS→PC 间隔
 SYSEX_GAP = 0.1                             # 模式 SysEx→BS 间隔
 SLOT_FILE = "keyboard_automation.json"      # 存在工程（歌）文件夹里
@@ -67,8 +66,9 @@ DEFAULT_AX = dict(inHint="AX-09", outHint="AX-09", ch=1, ax=True)
 AX_GROUPS = ("SYNTH/PAD", "PIANO/KEYBOARD", "ORGAN/ACCORDION",
              "STRINGS/CHOIR", "BRASS/WINDS", "GUITAR/BASS")
 
-# MSB → (组名, {LSB: 子库名}, 声音模式 0=PATCH 1=PERFORM 2=GM1)
-# 组表来自官方 MIDI Implementation 的 Bank Map（PC 列 1 基，显示时 +1）
+# MSB → (组名, {LSB: 子库名}, 声音模式 0=PATCH 1=PERFORM 2=GM2 3=GM1)
+# 组表来自官方 MIDI Implementation 的 Bank Map（PC 列 1 基，显示时 +1）；
+# Sound Mode 取值官方地址表实锤：2=GM2、3=GM1（Roland Clan 帖记反了）
 BANK_MAP = {
     85: ("Performance", {0: "用户", 64: "预置"}, 1),
     86: ("鼓组", {0: "用户", 64: "预置", 65: "DS"}, 0),
@@ -77,8 +77,8 @@ BANK_MAP = {
                    72: "PRST", 73: "DS", 74: "DS"}, 0),
     92: ("EXP 鼓组", {}, 0),
     93: ("EXP Patch", {}, 0),
-    0: ("GM", {}, 2), 63: ("GM", {}, 2), 121: ("GM", {}, 2),
-    120: ("GM 鼓", {}, 2),
+    0: ("GM", {}, 3), 63: ("GM", {}, 3), 121: ("GM", {}, 3),
+    120: ("GM 鼓", {}, 3),
 }
 
 
@@ -149,12 +149,58 @@ def slot_raw(slot):
         slot.get("pc"))
 
 
+def _juno_patch_desc(lsb, pc):
+    """JUNO-DS Patch 的琴显编号（官方 PC Map，MSB=87）：USER 0501-0756、
+    PRST 0001-1088、DS 0001-0184，四位零填充与琴面板一致。"""
+    if lsb == 0:
+        return "USER:%04d" % (501 + pc)
+    if lsb == 1:
+        return "USER:%04d" % (629 + pc)
+    if 64 <= lsb <= 71:
+        return "PRST:%04d" % (128 * (lsb - 64) + 1 + pc)
+    if lsb == 72:
+        return "PRST:%04d" % (1025 + pc)
+    if lsb == 73:
+        return "DS:%04d" % (1 + pc)
+    if lsb == 74:
+        return "DS:%04d" % (129 + pc)
+    return None
+
+
 def describe_slot(slot):
-    """人话描述：'Performance·预置 #4'；未设置→'未设置'。
-    原始字节只在录制结果状态里出现一次，不进映射列。"""
+    """人话描述：Patch 用琴显编号（如 USER:0521），Performance 用组名；
+    未设置→'未设置'。原始字节只在录制结果状态里出现一次，不进映射列。"""
     if not slot:
         return "未设置"
     msb, lsb, pc = slot.get("msb"), slot.get("lsb"), slot.get("pc")
+    if msb == 87:
+        desc = _juno_patch_desc(lsb, pc)
+        if desc:
+            return desc
+    if msb == 85:
+        # Performance：面板显示如「USER 065」（用户 001-128/预置 001-064）
+        sub = {0: "USER", 64: "PRST"}.get(lsb)
+        if sub:
+            return "PERF %s:%03d" % (sub, pc + 1)
+    if msb in (0, 63, 121, 120):
+        # GM 真机实测（2026-09-25）：MSB 0/121=标准组 0001-0128（PC0→Piano 1），
+        # MSB 63=扩展组 0129-0256（PC0→European Pf）、120=鼓组（PC0→GM2
+        # STANDARD 套鼓）。已知差异：面板 GM 模式只显示模板 Performance
+        # 界面（无 GM 编号），此处编号为程序内区分，与面板对不上属预期
+        if msb == 63:
+            return "GM:%04d" % (129 + pc)
+        if msb == 120:
+            return "GM Drum:%04d" % (1 + pc)
+        return "GM:%04d" % (1 + pc)
+    if msb == 93:
+        return "EXP:%04d" % (pc + 1)
+    if msb == 92:
+        return "EXP Drum:%04d" % (pc + 1)
+    if msb == 86:
+        # 鼓组编号按 +500 用户/1 基预置推断（未真机验证，捕获后以触发为准）
+        sub = {0: ("USER", 501), 64: ("PRST", 1), 65: ("DS", 1)}.get(lsb)
+        if sub:
+            return "DRUM %s:%04d" % (sub[0], sub[1] + pc)
     if msb in BANK_MAP:
         gname, subs, _ = BANK_MAP[msb]
         sub = subs.get(lsb)
@@ -163,14 +209,14 @@ def describe_slot(slot):
 
 
 def describe_ax(slot):
-    """AX-09 人话描述：'SYNTH/PAD #5'，#号=面板音色号。
+    """AX-09 人话描述：'SYNTH/PAD #5'，#号=组内第几个（1-24，与面板一致）。
     纯 PC 捕获（未开 Bn）按 LSB=0 理解，仅覆盖 1-128 号音色。"""
     if not slot:
         return "未设置"
     pc = slot.get("pc")
     lsb = slot.get("lsb") or 0
     n = pc + 1 + (128 if lsb == 1 else 0)
-    return ("%s #%d" % (AX_GROUPS[(n - 1) // 24], n)
+    return ("%s #%d" % (AX_GROUPS[(n - 1) // 24], (n - 1) % 24 + 1)
             if 1 <= n <= 144 else "PC #%d" % (pc + 1))
 
 
@@ -349,15 +395,14 @@ class ToneSwitcher:
 
 
 class SlotCapture:
-    """录制：收集 CC0/CC32，首个 Program Change 完成配对（BS 可能缺失）。"""
+    """录制：持续跟踪最近一次音色选择——每次 Program Change 都覆盖
+    （配上最近收到的 CC0/CC32，BS 可能缺失）；停止录制时保存最后一个。"""
 
     def __init__(self):
         self.msb = self.lsb = None
         self.slot = None
 
     def feed(self, status, d1, d2):
-        if self.slot is not None:
-            return
         st = status & 0xF0
         if st == 0xB0:
             if d1 == 0:
@@ -370,10 +415,6 @@ class SlotCapture:
                 self.slot["msb"] = self.msb
             if self.lsb is not None:
                 self.slot["lsb"] = self.lsb
-
-    @property
-    def done(self):
-        return self.slot is not None
 
 
 # ---- 配置窗口 ----
@@ -545,10 +586,9 @@ class KeyboardAutoWindow(tk.Toplevel):
             return
         if self._cap is not None:
             if self._cap["note"] == note:
-                self._cancel_capture()
-                self.set_status("录制已取消")
+                self._finish_capture()      # 再按一次=停止并保存最后音色
             else:
-                self.set_status("正在录制 %s，请先完成或再按一次取消" %
+                self.set_status("正在录制 %s，请先按其「停止」" %
                                 note_name(self._cap["note"]), dpi.C_ERR)
             return
         cap = SlotCapture()
@@ -559,14 +599,13 @@ class KeyboardAutoWindow(tk.Toplevel):
         except PortNotFound as e:
             self.set_status(str(e), dpi.C_ERR)
             return
-        self._cap = dict(note=note, cap=cap, port=port,
-                         deadline=time.time() + CAPTURE_TIMEOUT)
-        self._rec_btn[note].config(text="录制中…", fg=dpi.C_ERR)
+        self._cap = dict(note=note, cap=cap, port=port)
+        self._rec_btn[note].config(text="停止", fg=dpi.C_ERR)
         ask = ("请在 AX-09 上选中该槽位对应的音色（MIDI 设置 Bn 需已开启）"
                if ax else
                "请在 JUNO-DS 上调用该槽位对应的 Favorite")
-        self.set_status("录制 %s：%s（%d 秒内）"
-                        % (note_name(note), ask, CAPTURE_TIMEOUT), dpi.C_ERR)
+        self.set_status("录制 %s：%s（选好后按「停止」保存当前音色）"
+                        % (note_name(note), ask), dpi.C_ERR)
 
     def _reset_rec_btn(self, note):
         self._rec_btn[note].config(text="录制", fg=dpi.FG)
@@ -583,13 +622,17 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._reset_rec_btn(note)
 
     def _finish_capture(self):
-        note, cap, port, _ = self._cap
+        note = self._cap["note"]
+        cap, port = self._cap["cap"], self._cap["port"]
         try:
             port.close()
         except OSError:
             pass
         self._cap = None
         self._reset_rec_btn(note)
+        if cap.slot is None:
+            self.set_status("%s 没收到音色信息" % note_name(note), dpi.C_ERR)
+            return
         store = self._store(note)
         store[note] = cap.slot
         try:
@@ -637,33 +680,31 @@ class KeyboardAutoWindow(tk.Toplevel):
 
     def _tick(self):
         try:
-            if self.winfo_exists():
-                self._poll_capture()
-                self._poll_ports()
-                self.after(300, self._tick)
+            if not self.winfo_exists():
+                return
+            self._poll_capture()
+            self._poll_ports()
         except tk.TclError:
-            pass
+            return
+        except Exception as e:              # 轮询失败不得炸断 after 链
+            self.set_status("轮询异常：%s" % e, dpi.C_ERR)
+        self.after(300, self._tick)
 
     def _poll_capture(self):
         if self._cap is None:
             return
-        left = self._cap["deadline"] - time.time()
-        if self._cap["cap"].done:
-            self._finish_capture()
-        elif left <= 0:
-            note = self._cap["note"]
-            self._cancel_capture()
-            if note in AX_NOTES:
-                why = ("AX-09 上没收到音色信息：请在琴上开启 MIDI 设置 Bn"
-                       "（SHIFT+V-LINK 连按 5 次后 SHIFT+WRITE 保存）再重选音色")
-            else:
-                why = ("琴上没收到音色信息。请确认 V2 固件的"
-                       " Favorite TX 已开启（System→MIDI→Tx 设置）")
-            self.set_status("%s 录制超时：%s" % (note_name(note), why),
-                            dpi.C_ERR)
+        note = self._cap["note"]
+        cap = self._cap["cap"]
+        if cap.slot is not None:
+            desc = (describe_ax(cap.slot) if note in AX_NOTES
+                    else describe_slot(cap.slot))
+            self.set_status("录制 %s 中（当前 %s，选好后按「停止」）"
+                            % (note_name(note), desc), dpi.C_ERR)
         else:
-            self.set_status("录制 %s 中（剩 %.0f 秒）"
-                            % (note_name(self._cap["note"]), left), dpi.C_ERR)
+            hint = ("AX-09 上选中音色（Bn 需开启）" if note in AX_NOTES
+                    else "JUNO 上调用 Favorite")
+            self.set_status("录制 %s 中（等待：%s）" % (note_name(note), hint),
+                            dpi.C_ERR)
 
     def _poll_ports(self):
         ins = [n for _, n in mb._in_devices()]
