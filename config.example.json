@@ -32,6 +32,13 @@
     "deviceHint": "",
     "bindings": {}
   },
+  "webRemote": {
+    "enabled": false,
+    "serverPort": 8765,
+    "taskerPort": 8766,
+    "midiIn": "",
+    "devices": []
+  },
   "autoAdvance": false,
   "autoPlay": false,
   "topMost": true,

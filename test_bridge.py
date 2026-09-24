@@ -1,18 +1,25 @@
 # -*- coding: utf-8 -*-
 """Cube Setlist Manager 自检：python test_bridge.py。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
+import http.client
+import json
 import os
 import pathlib
+import queue
 import struct
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler
 
 import advance
 import cpr_meta
 import cubase_ctrl
+import hotspot
 import kbd_auto
 import midi_bridge as mb
 import obs_ctrl
 import pedal
+import web_remote
 from obs_ctrl import ObsController, natural_key
 
 mb.CLOCK_TIMEOUT = 0.08
@@ -295,6 +302,335 @@ def test_pedal():
     assert hits == ["next"]
 
 
+def test_hotspot_logic():
+    """ensure_on 状态机：未开→start→was_on=False；已开→只查→was_on=True。"""
+    fake = {"ok": True, "on": False, "ssid": "X", "key": "K", "ip": None}
+    calls = []
+
+    def fake_run(mode, timeout):
+        calls.append(mode)
+        if mode == "start":
+            fake["on"] = True
+            fake["ip"] = "192.168.137.1"
+        return dict(fake)       # state：返回当前 fake（start 后即 on）
+
+    orig = hotspot._run
+    hotspot._run = fake_run
+    try:
+        st = hotspot.ensure_on()
+        assert st["ok"] and st["on"] and st["was_on"] is False and st["ip"]
+        calls.clear()
+        st = hotspot.ensure_on()
+        assert st["was_on"] is True and calls == ["state"]
+    finally:
+        hotspot._run = orig
+
+    # 结构化失败透传
+    hotspot._run = lambda mode, timeout: {"ok": False, "err": "无网卡"}
+    try:
+        assert hotspot.ensure_on().get("err") == "无网卡"
+    finally:
+        hotspot._run = orig
+
+
+def test_hotspot_script():
+    """PS 脚本语法可编译（CI/本机都跑）；state 查询只读，失败也须结构化。"""
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
+                                     encoding="utf-8-sig") as f:
+        f.write(hotspot._PS)
+        path = f.name
+    try:
+        import subprocess
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "[void][scriptblock]::Create((Get-Content -Raw -LiteralPath "
+             "'%s')); 'SYNTAX_OK'" % path],
+            capture_output=True, timeout=90)
+        assert b"SYNTAX_OK" in p.stdout, p.stderr.decode("utf-8", "replace")
+    finally:
+        os.unlink(path)
+    r = hotspot._run("state", timeout=60)
+    assert isinstance(r, dict) and isinstance(r.get("ok"), bool), r
+
+
+class _FakeWebApp:
+    """web_remote 需要的 App 侧接口：calls/q 队列 + 状态属性 + 控制方法。"""
+
+    def __init__(self):
+        self.calls = queue.Queue()
+        self.q = queue.Queue()
+        self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
+        self.switch_confirm = True
+        self.cur = None
+        self.ctrl = None
+        self.watch = None
+        self.pl_keys = ["A队/歌一", "B队/歌二"]
+        self.by_key = {"A队/歌一": {"name": "歌一"},
+                       "B队/歌二": {"name": "歌二"}}
+        self.durations = {"A队/歌一": 213.0}
+        self._web_snap = {}
+        self.done = []
+
+    def _transport(self, a):
+        self.done.append(("transport", a))
+
+    def _next(self):
+        self.done.append("next")
+
+    def _prev(self):
+        self.done.append("prev")
+
+    def _panic(self):
+        self.done.append("panic")
+
+    def _switch(self, i, via, play_after=False):
+        self.done.append(("switch", i, via))
+
+    def _persist_web_remote(self):
+        pass                        # 测试里绝不写真 config.json
+
+
+class _FakeTasker(BaseHTTPRequestHandler):
+    """假平板 Tasker：收 /turn 推送并记录 body。"""
+    hits = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        _FakeTasker.hits.append(json.loads(self.rfile.read(n)))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+_LOOPBACK = "127.0.0.1"     # 测试请求只打本机回环：主机名钉死，端口/路径显式校验
+
+
+def _http_req(method, port, path, body=None):
+    """测试专用请求：主机字面量钉死回环，端口/路径显式校验后直连。"""
+    assert isinstance(port, int) and 0 < port < 65536
+    assert isinstance(path, str) and path.startswith("/")
+    conn = http.client.HTTPConnection(_LOOPBACK, port, timeout=3)
+    try:
+        conn.request(method, path, body=body,
+                     headers={"Content-Type": "application/json"}
+                     if body else {})
+        r = conn.getresponse()
+        data = r.read().decode("utf-8")
+        try:
+            return r.status, json.loads(data)
+        except ValueError:
+            return r.status, {"raw": data}
+    finally:
+        conn.close()
+
+
+def _http_get(port, path):
+    return _http_req("GET", port, path)
+
+
+def _http_post(port, path, obj=None, raw=None):
+    return _http_req("POST", port, path,
+                     raw if raw is not None else json.dumps(obj or {}))
+
+
+def _start_tasker():
+    srv = web_remote.ThreadingHTTPServer((_LOOPBACK, 0), _FakeTasker)
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.05}, daemon=True).start()
+    return srv, srv.server_address[1]
+
+
+def test_web_api():
+    """HTTP API 全链路（离线）：state/cmd/claim/update/test + 假 Tasker 收包。"""
+    app = _FakeWebApp()
+    app._web_snap = web_remote.build_snapshot(app, True)
+    thsrv = _start_tasker()         # 假平板 Tasker（回环随机端口）
+    reg = web_remote.DeviceRegistry([], app.q.put)
+    srv = web_remote.WebServer((_LOOPBACK, 0), app, reg, lambda: thsrv[1])
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        # 页面/任务 XML 可取，未知路径 404
+        assert _http_get(port, "/")[0] == 200
+        assert _http_get(port, "/tasker.xml")[0] == 200
+        assert _http_get(port, "/nope")[0] == 404
+        # /state 快照
+        code, snap = _http_get(port, "/state")
+        assert code == 200 and snap["open"] and snap["confirm"]
+        assert snap["songs"][0]["name"] == "歌一"
+        assert snap["songs"][0]["dur"] == "3:33"
+        # /cmd：入队后在"主线程"执行
+        assert _http_post(port, "/cmd", {"action": "next"})[1]["ok"]
+        app.calls.get_nowait()()
+        assert app.done == ["next"]
+        assert _http_post(port, "/cmd",
+                          {"action": "switch", "index": 1})[0] == 200
+        app.calls.get_nowait()()
+        assert app.done == ["next", ("switch", 1, "手动")]
+        # 非法输入
+        assert _http_post(port, "/cmd",
+                          {"action": "switch", "index": 9})[0] == 400
+        assert _http_post(port, "/cmd",
+                          {"action": "switch", "index": True})[0] == 400
+        assert _http_post(port, "/cmd", {"action": "wat"})[0] == 400
+        assert _http_post(port, "/cmd", raw=b"not json")[0] == 400
+        # 切换中：普通动作 409，全停放行
+        app._web_snap = dict(app._web_snap, busy=True)
+        assert _http_post(port, "/cmd", {"action": "play"})[0] == 409
+        assert _http_post(port, "/cmd", {"action": "panic"})[0] == 200
+        app.calls.get_nowait()()
+        assert app.done[-1] == "panic"
+        app._web_snap = dict(app._web_snap, busy=False)
+        # 设备认领：自动槽位 + IP 来自连接 + 幂等
+        code, j = _http_post(port, "/device/claim",
+                             {"name": "主谱台", "screen": {"w": 1280, "h": 800}})
+        assert code == 200 and j["device"]["slot"] == 1
+        assert j["device"]["ip"] == _LOOPBACK
+        assert len(reg.snapshot()) == 1
+        code, j = _http_post(port, "/device/claim", {"name": "主谱台2"})
+        assert len(reg.snapshot()) == 1 and j["device"]["name"] == "主谱台2"
+        # 改方法 + 测试推送（假 Tasker 收包；1280*0.75=960，800*0.5=400）
+        assert _http_post(port, "/device/update", {"method": "double"})[0] == 200
+        assert reg.snapshot()[0]["method"] == "double"
+        _FakeTasker.hits = []
+        assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
+        time.sleep(0.5)
+        assert _FakeTasker.hits == [{"x": 960, "y": 400, "count": 2}]
+        assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
+        # 未认领设备不能改
+        reg2 = web_remote.DeviceRegistry([], app.q.put)
+        srv2 = web_remote.WebServer((_LOOPBACK, 0), app, reg2,
+                                    lambda: thsrv[1])
+        port2 = srv2.server_address[1]
+        threading.Thread(target=srv2.serve_forever,
+                         kwargs={"poll_interval": 0.05}, daemon=True).start()
+        try:
+            assert _http_post(port2, "/device/update",
+                              {"method": "single"})[0] == 400
+        finally:
+            srv2.shutdown()
+            srv2.server_close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thsrv[0].shutdown()
+        thsrv[0].server_close()
+
+
+def test_webremote_lifecycle():
+    """总开关生命周期：开=起服务；关=服务停；热点按所有权关。
+    hotspot 打桩，服务绑 127.0.0.1，翻谱端口未配=优雅降级。"""
+    st = {"was_on": False, "stops": []}
+
+    def fake_ensure():
+        return {"ok": True, "on": True, "was_on": st["was_on"],
+                "ssid": "S", "key": "K", "ip": _LOOPBACK}
+
+    def fake_stop():
+        st["stops"].append(1)
+        return {"ok": True}
+
+    orig = (hotspot.ensure_on, hotspot.stop)
+    hotspot.ensure_on, hotspot.stop = fake_ensure, fake_stop
+    app = _FakeWebApp()
+    try:
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "serverPort": 0, "taskerPort": 8766,
+                  "midiIn": "", "devices": []})
+        wr.apply()                      # was_on=False → 热点是我们开的
+        assert wr.server is not None and wr.hotspot_owner
+        assert _http_get(wr.server.server_address[1], "/state")[0] == 200
+        # 总开关关：服务停、热点按所有权关闭
+        wr.apply(enabled=False)
+        assert wr.server is None and wr.hotspot_owner is False
+        assert st["stops"] == [1]
+        # 热点开不出来：整组降级且不崩
+        hotspot.ensure_on = lambda: {"ok": False, "err": "无网卡"}
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "serverPort": 0, "taskerPort": 8766,
+                  "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.server is None
+        assert any("无网卡" in str(m) for m in list(app.q.queue))
+    finally:
+        hotspot.ensure_on, hotspot.stop = orig
+
+
+def test_score_combo():
+    """判定矩阵（设计第五节）：恰一命令+≥1设备=合法；其余非法。"""
+    f = web_remote.combo_evaluate
+    assert f({36, 48}) == (36, [48])
+    assert f({37, 50, 57}) == (37, [50, 57])
+    assert f({36, 48, 49, 57}) == (36, [48, 49, 57])   # 窗口内多设备
+    for bad in ({36}, {48, 57}, {36, 37, 48}, {37, 60}):
+        try:
+            f(bad)
+            raise AssertionError("应判非法：%r" % bad)
+        except ValueError:
+            pass
+
+
+def test_score_push_ip():
+    """推送收口：只认私网/环回点分 IPv4，公网/链路本地/主机名全拒。"""
+    ok = web_remote.valid_push_ip
+    assert ok("192.168.137.2") and ok("10.0.0.5") and ok("127.0.0.1")
+    assert ok("172.16.1.1") and ok("172.31.255.255")
+    for bad in ("8.8.8.8", "169.254.169.254", "172.32.0.1",
+                "abc", "", None, "300.1.1.1", "192.168.1", "pad.local"):
+        assert not ok(bad), bad
+
+
+def test_score_window():
+    """归并窗口：同窗归并去重、跨窗成新组合、非法组合只报不推。"""
+    now = [0.0]
+    pushed, reports = [], []
+    reg = web_remote.DeviceRegistry(
+        [{"slot": 1, "name": "A", "ip": "192.168.137.2",
+          "method": "single", "enabled": True, "screen": {"w": 1000, "h": 500}},
+         {"slot": 2, "name": "B", "ip": "192.168.137.3",
+          "enabled": False, "screen": {"w": 800, "h": 600}}],
+        reports.append)
+    hub = web_remote.ScoreTurnHub(reg, lambda: 8766, reports.append,
+                                  clock=lambda: now[0])
+    orig = web_remote.push_async
+    web_remote.push_async = lambda dev, d, port, rep: pushed.append(
+        (dev["name"], d))
+    try:
+        # 同窗 36+48+49 → A 上一页；B（音符49/槽位2）停用跳过
+        hub.submit(36)
+        time.sleep(0.04)
+        now[0] = 0.05
+        hub.submit(48)
+        hub.submit(49)
+        time.sleep(0.25)
+        assert pushed == [("A", "prev")], pushed
+        assert any("停用" in m for m in reports)
+        # 窗口外重复命令 = 新组合；37 → 下一页
+        now[0] = 0.5
+        hub.submit(37)
+        hub.submit(48)              # 去重：同窗重复设备音符只发一次
+        hub.submit(48)
+        time.sleep(0.25)
+        assert pushed == [("A", "prev"), ("A", "next")], pushed
+        # 非法：仅设备音符 / 36+37 同发
+        now[0] = 1.0
+        hub.submit(48)
+        time.sleep(0.25)
+        now[0] = 1.5
+        hub.submit(36)
+        hub.submit(37)
+        time.sleep(0.25)
+        assert pushed == [("A", "prev"), ("A", "next")]
+        assert sum("非法" in m for m in reports) >= 2
+    finally:
+        web_remote.push_async = orig
+        hub.close()
+
+
 if __name__ == "__main__":
     test_transport_sync()
     test_numbered_match()
@@ -304,4 +640,11 @@ if __name__ == "__main__":
     test_project_title()
     test_kbd_auto()
     test_pedal()
+    test_score_combo()
+    test_score_push_ip()
+    test_score_window()
+    test_hotspot_logic()
+    test_web_api()
+    test_webremote_lifecycle()
+    test_hotspot_script()
     print("test_bridge：全部通过")

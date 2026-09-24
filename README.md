@@ -11,6 +11,9 @@
 - **自动推进**：工程播完自动停止并切下一首（Cubase 播到头不会自己停）；
 - **音色自动切换**：Cubase 发音符 → JUNO-DS / AX-09 Lucina 按工程映射切音色；
 - **踩钉快捷键**：MIDI 踩钉 CC 绑定切歌/走带等动作，支持热插拔；
+- **移动端遥控**：电脑开 Windows 热点，平板连热点后浏览器遥控走带/切歌/全停
+  （与桌面同权）；Cubase 发翻谱音符 → 平板 Tasker+AutoInput 自动翻页。
+  全程本地通信不经互联网，翻谱链路不经浏览器（网页被冻结翻谱照常）；
 - **VJ 视频联动**：走带跟随自动播/停 OBS 视频，熄屏一键黑场；
 - **节目投影**：把 OBS 节目画面全屏投影到指定显示器（设置页选择，重连自动恢复）；
 - **VJ 静音播放**：视频静音 + 关监听，或开「监视器并输出」出声，设置页切换；
@@ -104,7 +107,14 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 保存即应用，写 `config.json` 持久化：
 
-- **联动端口**：VJ / 键盘自动化的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——Cubase 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
+- **联动端口**：VJ / 键盘自动化 / 翻谱信号的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——Cubase 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
+- **移动端遥控**：总开关（开=自动开热点→起网页服务→开翻谱端口，关=全停；
+  热点是本程序开的退出时自动关掉）、网页端口（默认 8765）、Tasker 端口
+  （默认 8766）、热点状态行（开/关、SSID、密码、本机 IP）。平板连热点后
+  访问 `http://<状态行IP>:8765`：网页遥控走带/切歌/全停，「翻谱设置」面板
+  认领本机为翻谱设备（自动上报分辨率）、选单击/双击、试翻一页、下载
+  Tasker 任务 XML（首次配置见 `docs/Tasker配置说明.md`）。首次监听 Windows
+  会弹防火墙放行，允许一次即可；
 - **VJ显示位置**：列本机显示器（Windows 枚举，不依赖 OBS 在线），选中即把
   OBS 节目画面全屏投影过去（换屏先关旧投影不留双份；屏名对不上 OBS 命名时按
   屏幕排列排名兜底；OBS 重连后自动恢复）；选「无」关闭投影；
@@ -130,6 +140,8 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 | juno | inHint / outHint / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道 |
 | ax09 | inHint / outHint / ch | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改） |
 | pedal | deviceHint / bindings | 踩钉设备名提示、动作→CC 号 |
+| webRemote | enabled / serverPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（默认 8765）、平板 Tasker 端口（默认 8766） |
+| webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/单击双击/启停/分辨率——由平板网页认领自动维护，勿手改） |
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化 |
 | autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
@@ -144,6 +156,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
 ├─ advance.py            自动推进看门狗（两段式）
 ├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
+├─ web_remote.py / hotspot.py   移动端遥控（网页服务+翻谱推送+设备表）/ Windows 热点（WinRT）
 ├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
 ├─ cpr_meta.py           .cpr 时长解析
 ├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包
@@ -192,6 +205,10 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 - Cubase 窗口标题版本名随工程最后保存版本变（`Cubase Pro 工程 - 名` / `Cubase Version 13.0.40 工程 - 名`），
   匹配只认固定标记 `" 工程 - "`+后缀全等
 - 无 console 的 exe 崩溃栈落 exe 同目录 `crash.log`（faulthandler）
+- WinRT 热点 API 实名（PS 5.1 投影实测）：能力查询=`GetTetheringCapabilityFromConnectionProfile`
+  （不是文档里的 `TetheringCapability`，那个在投影类型上不存在）；热点需本机有
+  已连接的网络作共享来源；热点空闲一段时间会被 Windows 自动关闭；HTTP 服务
+  首次监听会弹防火墙放行（一次即可）
 
 ## 版本历史
 
