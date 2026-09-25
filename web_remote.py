@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """移动端遥控与翻谱推送：内嵌 HTTP 服务（只绑热点网卡 IP）+ 翻谱 MIDI 组合
-判定 + 逐设备 HTTP POST 到平板 Tasker（AutoInput 点击翻页）。
+判定 + 逐设备 HTTP POST 到平板 MacroDroid（Gesture 动作点击翻页）。
 翻谱链路全程不经过浏览器——网页被冻结/杀掉翻谱照常（设计第八节架构前提）。
 推送安全收口（设计第七节）：目标仅限已配对设备的 私网IPv4:固定端口 固定路径，
 不收网页传来的任意 URL；协议/路径常量化、禁跟重定向（防 302 借道）。
@@ -24,7 +24,7 @@ DEV_NOTES = tuple(range(48, 58))   # C3–A3 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 0.5           # 逐设备推送短超时：失败只记日志不拖累别的设备
-TURN_PATH = "/turn"          # Tasker 固定接收路径（与 Tasker 任务说明一致）
+TURN_PATH = "/turn"          # 翻谱设备固定接收路径（与配置说明一致）
 
 DEFAULT_WEB_REMOTE = {
     "enabled": False,
@@ -66,7 +66,7 @@ def combo_evaluate(notes):
 
 def valid_push_ip(ip):
     """推送目标只认点分 IPv4 的私网段（热点网段=RFC1918）与环回（本机自测
-    假 Tasker 用）；公网与链路本地（169.254，含云元数据地址）一律拒发。"""
+    假翻谱设备用）；公网与链路本地（169.254，含云元数据地址）一律拒发。"""
     parts = str(ip or "").split(".")
     if len(parts) != 4:
         return False
@@ -93,7 +93,7 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 def push_turn(dev, dir_, tasker_port):
     """同步向单台设备推一页。返回 (ok, 日志行)。
-    到达即算成功——Tasker 的应答状态码不归我们管（HTTPError≠链路失败）。"""
+    到达即算成功——翻谱设备的应答状态码不归我们管（HTTPError≠链路失败）。"""
     name = dev.get("name") or "设备%d" % dev.get("slot")
     ip = dev.get("ip")
     if not valid_push_ip(ip):
@@ -134,7 +134,7 @@ class ScoreTurnHub:
 
     def __init__(self, registry, tasker_port, report, clock=None):
         self.registry = registry
-        self._tasker_port = tasker_port        # 函数：取当前 Tasker 端口
+        self._tasker_port = tasker_port        # 函数：取当前翻谱接收端口
         self._report = report
         self._clock = clock or time.monotonic
         self.q = queue.Queue()
@@ -502,16 +502,13 @@ body.switching .busy{display:inline-block}
       <div id="dev-all" style="margin-top:6px"></div>
     </div>
     <div class="grp">
-      <div class="sub">Tasker 配置（首次使用）</div>
-      <div class="btns" style="margin-top:8px">
-        <a class="btn" href="/tasker.xml" download="turn-page-task.xml">下载任务 XML</a>
-      </div>
+      <div class="sub">MacroDroid 配置（首次使用）</div>
       <div class="sub" style="margin-top:10px">
-        ① 装 Tasker 与 AutoInput，AutoInput 授权无障碍<br>
-        ② 导入上面下载的任务 XML（Tasker → 任务 → 导入）<br>
-        ③ 新建配置：事件「HTTP Request Received」端口 8766 → 执行任务「翻谱」<br>
-        ④ 系统设置里给 Tasker 与 AutoInput 关闭电池优化<br>
-        详细的按版本差异处理见电脑上的《Tasker配置说明.md》</div>
+        ① 平板装 MacroDroid，系统设置里给 MacroDroid 开启无障碍<br>
+        ② 新建宏：触发器「HTTP 服务器请求」端口 8766（请求体存入变量），
+          动作「手势」点按坐标取自请求体 x/y，count=2 时加第二次点按<br>
+        ③ 系统设置里给 MacroDroid 关闭电池优化<br>
+        分步说明见电脑上的《MacroDroid配置说明.md》</div>
     </div>
     <div class="btns">
       <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
@@ -704,39 +701,6 @@ function renderDev(d){
 </html>
 """
 
-# Tasker 任务 XML（Tasker 6.x）。首测以「Tasker配置说明.md」手工步骤为准；
-# 真机跑通后用 Tasker 导出 XML 回填本常量与 docs 存档（变量名随版本有差异）。
-TASKER_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<!-- Cube Setlist Manager 翻谱任务（Tasker 6.x 草案）。
-     导入：Tasker → 任务 标签页 → ⋮ → 导入 → 选择本文件。
-     导入失败/变量名不符时，按《Tasker配置说明.md》手工建任务（步骤一致）。 -->
-<TaskerData sr="" dvi="1" dv="Tasker 6.3">
-	<Task sr="task_turn">
-		<cdate>1729800000000</cdate>
-		<edate>1729800000000</edate>
-		<id>860</id>
-		<nme>翻谱</nme>
-		<pri>10</pri>
-		<Action sr="act0" ve="7">
-			<code>548</code>
-			<Str sr="arg0" ve="3">翻谱收到：%http_body</Str>
-		</Action>
-		<Action sr="act1" ve="7">
-			<code>129</code>
-			<Str sr="arg0" ve="3">var o=JSON.parse(local("%http_body"));
-var x=o.x; var y=o.y; var n=o.count;</Str>
-			<Int sr="arg1" ve="3">
-				<val>0</val>
-			</Int>
-		</Action>
-		<!-- act2/act3：AutoInput 点击 (x,y)，count=2 时再点一次（双击间隔约 100ms）。
-		     AutoInput 属插件动作，XML 结构随 AutoInput 版本差异较大，
-		     请优先按《Tasker配置说明.md》在 Tasker 里添加「AutoInput → 手势」，
-		     起点坐标 %x1/%y1；配置跑通后可从 Tasker 导出 XML 回填。 -->
-	</Task>
-</TaskerData>
-"""
-
 # ---- HTTP 服务 ----
 
 class WebServer(ThreadingHTTPServer):
@@ -746,9 +710,8 @@ class WebServer(ThreadingHTTPServer):
     def __init__(self, addr, app, registry, tasker_port):
         self.app = app
         self.registry = registry
-        self.tasker_port = tasker_port      # 函数：取当前 Tasker 端口
+        self.tasker_port = tasker_port      # 函数：取当前翻谱接收端口
         self.page = PAGE_HTML
-        self.tasker_xml = TASKER_XML
         super().__init__(addr, _Handler)
 
     def handle_error(self, request, client_address):
@@ -798,10 +761,6 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/devices":
             self._json(200, {"devices": self.server.registry.snapshot(),
                              "you": self.client_address[0]})
-        elif path == "/tasker.xml":
-            self._send(200, "application/xml; charset=utf-8",
-                       self.server.tasker_xml.encode("utf-8"),
-                       dispo="attachment; filename=turn-page-task.xml")
         else:
             self._json(404, {"error": "未知路径"})
 

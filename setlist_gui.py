@@ -1770,7 +1770,7 @@ class SettingsWindow(tk.Toplevel):
         self.kb_var = port_var(app.kb_hint)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
-        # 移动端遥控：总开关 + 翻谱端口 + 服务/Tasker 端口 + 热点状态行
+        # 移动端遥控：总开关 + 翻谱端口 + 服务/翻谱接收端口 + 热点状态行
         wcfg = app.web_cfg
         tk.Label(body, text="移动端遥控",
                  anchor="w").pack(fill="x", pady=(pad, 3))
@@ -1782,7 +1782,7 @@ class SettingsWindow(tk.Toplevel):
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
         self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
         row("网页端口", self.srv_var)
-        row("Tasker 端口", self.tsk_var)
+        row("翻谱接收端口", self.tsk_var)
         self.web_status = tk.Label(body, text="热点状态：查询中…", anchor="w",
                                    justify="left", fg=dpi.MUT)
         self.web_status.pack(anchor="w", pady=1)
@@ -1899,7 +1899,7 @@ class SettingsWindow(tk.Toplevel):
             assert tsk > 0
         except (ValueError, AssertionError):
             tsk = 8766
-            app.q.put("Tasker 端口非法，按 8766 处理")
+            app.q.put("翻谱接收端口非法，按 8766 处理")
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
         web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
