@@ -17,6 +17,7 @@ import faulthandler
 import json
 import os
 import pathlib
+import socket
 import queue
 import re
 import sys
@@ -1785,8 +1786,10 @@ class SettingsWindow(tk.Toplevel):
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
+        self.app_var = tk.StringVar(value=str(wcfg.get("appPort") or 8767))
         self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
-        # 网页地址行：名字栏与其它行同宽，IP 前缀+端口框拼出完整地址
+        # 网页地址行：名字栏与其它行同宽，IP 前缀+端口框拼出完整地址，
+        # 右侧指示器=本机端口是否监听中
         wf2 = tk.Frame(body)
         wf2.pack(fill="x", pady=2)
         tk.Label(wf2, text="网页地址", width=15, anchor="w").pack(side="left")
@@ -1794,15 +1797,26 @@ class SettingsWindow(tk.Toplevel):
                                    anchor="w")
         self.web_prefix.pack(side="left")
         tk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
-        row("翻谱接收端口", self.tsk_var)
-        # APP 地址行：与网页地址行同款对齐
+        self.web_ok = tk.Label(wf2, text="…", fg=dpi.MUT)
+        self.web_ok.pack(side="right")
+        # APP 连接地址行：APP 版页面（WebView 内），端口可配置
         wf3 = tk.Frame(body)
         wf3.pack(fill="x", pady=2)
-        tk.Label(wf3, text="APP 地址", width=15, anchor="w").pack(side="left")
-        self.app_addr = tk.Label(
-            wf3, text="http://%s:%d" % (self.web_ip, web_remote.APP_PORT),
-            anchor="w", fg=dpi.MUT)
-        self.app_addr.pack(side="left")
+        tk.Label(wf3, text="APP 连接地址", width=15, anchor="w").pack(side="left")
+        self.app_prefix = tk.Label(wf3, text="http://%s:" % self.web_ip,
+                                   anchor="w")
+        self.app_prefix.pack(side="left")
+        tk.Entry(wf3, textvariable=self.app_var, width=6).pack(side="left")
+        self.app_ok = tk.Label(wf3, text="…", fg=dpi.MUT)
+        self.app_ok.pack(side="right")
+        # APP 翻译地址行：设备 IP 各异 → XXX 占位；端口全局统一
+        wf4 = tk.Frame(body)
+        wf4.pack(fill="x", pady=2)
+        tk.Label(wf4, text="APP 翻译地址", width=15, anchor="w").pack(side="left")
+        tk.Label(wf4, text="http://XXX.XXX.XXX.XXX:", anchor="w",
+                 fg=dpi.MUT).pack(side="left")
+        tk.Entry(wf4, textvariable=self.tsk_var, width=6).pack(side="left")
+        threading.Thread(target=self._load_web_status, daemon=True).start()
         threading.Thread(target=self._load_web_status, daemon=True).start()
         tk.Label(body, text="自动播放", anchor="w").pack(
             fill="x", pady=(pad, 3))
@@ -1884,8 +1898,43 @@ class SettingsWindow(tk.Toplevel):
                 txt, fg = "热点未开（启用后自动开）", dpi.MUT
             self.web_status.config(text=txt, fg=fg)
             ip = st.get("ip") or self.web_ip
+            self.web_ip = ip
             self.web_prefix.config(text="http://%s:" % ip)
-            self.app_addr.config(text="http://%s:%d" % (ip, web_remote.APP_PORT))
+            self.app_prefix.config(text="http://%s:" % ip)
+            self._refresh_port_status()
+
+    def _refresh_port_status(self):
+        """网页/APP 两个本机端口的指示器：connect 探测（服务绑热点 IP）。
+        打开设置页与保存后各刷一次；探测在后台线程。"""
+        def probe(port, lbl):
+            try:
+                s = socket.create_connection((self.web_ip, port), timeout=1.5)
+                s.close()
+                ok = True
+            except OSError:
+                ok = False
+
+            def apply():
+                try:
+                    if not self.winfo_exists():
+                        return
+                except tk.TclError:
+                    return
+                lbl.config(text="端口可用" if ok else "未监听",
+                           fg=dpi.C_OK if ok else dpi.C_ERR)
+            try:
+                self.after(0, apply)
+            except tk.TclError:
+                pass
+        for var, lbl in ((self.srv_var, self.web_ok),
+                         (self.app_var, self.app_ok)):
+            try:
+                p = int(var.get())
+            except ValueError:
+                p = 0
+            if 0 < p < 65536:
+                threading.Thread(target=lambda p=p, l=lbl: probe(p, l),
+                                 daemon=True).start()
 
         try:
             self.after(0, apply)
@@ -1917,11 +1966,17 @@ class SettingsWindow(tk.Toplevel):
             assert tsk > 0
         except (ValueError, AssertionError):
             tsk = 8766
-            app.q.put("翻谱接收端口非法，按 8766 处理")
+            app.q.put("APP 翻译地址端口非法，按 8766 处理")
+        try:
+            app_p = int(self.app_var.get().strip())
+            assert app_p > 0
+        except (ValueError, AssertionError):
+            app_p = 8767
+            app.q.put("APP 连接地址端口非法，按 8767 处理")
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
         web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
-                      "taskerPort": tsk, "midiIn": pg}
+                      "appPort": app_p, "taskerPort": tsk, "midiIn": pg}
         web_changed = any(app.web_cfg.get(k) != v
                           for k, v in web_fields.items())
         app.web_cfg.update(web_fields)
@@ -1989,7 +2044,7 @@ class SettingsWindow(tk.Toplevel):
         if ports_changed:
             app._apply_ports()
         if web_changed:
-            app._apply_web()
+            app._apply_web()      # 服务重建；端口状态在下次打开设置页时刷新
         app.q.put("设置已保存")
         self.destroy()
 

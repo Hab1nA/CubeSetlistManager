@@ -2,6 +2,7 @@ package com.cubemanager.turnpage
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -61,6 +62,7 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             setBackgroundColor(0xFF14161A.toInt())
+            addJavascriptInterface(Bridge(), "CubeApp")
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView?, errorCode: Int,
                                              description: String?, failingUrl: String?) {
@@ -259,6 +261,57 @@ class MainActivity : Activity() {
             connect(url)
         }
         dlg.show()
+    }
+
+    /** JS 桥：设置面板的「连接设置」与「翻谱地址」落到原生层。
+     *  方法在 JS 桥线程执行；弹确认框切主线程并阻塞等用户选择。 */
+    private inner class Bridge {
+
+        @android.webkit.JavascriptInterface
+        fun requestAddressChange(url: String): String {
+            val clean = url.trim()
+            val host = android.net.Uri.parse(
+                if ("://" in clean) clean else "http://$clean").host
+            if (host == null || !PRIVATE_HOST.matches(host)) return "invalid"
+            val prefs = prefs()
+            val old = prefs.getString("addr", "") ?: ""
+            if (clean == old) return "same"
+            prefs.edit().putString("addr", clean).apply()
+            val confirmed = booleanArrayOf(false)
+            val latch = java.util.concurrent.CountDownLatch(1)
+            runOnUiThread {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("需要重启")
+                    .setMessage("地址修改后需重启本 APP 生效。\n确定重启？取消则回滚地址。")
+                    .setPositiveButton("重启") { _, _ ->
+                        confirmed[0] = true; latch.countDown() }
+                    .setNegativeButton("取消") { _, _ -> latch.countDown() }
+                    .setOnCancelListener { latch.countDown() }
+                    .show()
+            }
+            latch.await(120, java.util.concurrent.TimeUnit.SECONDS)
+            return if (confirmed[0]) {
+                runOnUiThread { finishAffinity() }
+                val i = packageManager.getLaunchIntentForPackage(packageName)
+                i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(i)
+                Runtime.getRuntime().exit(0)
+                "restart"                       // exit 后不会真正返回
+            } else {
+                prefs.edit().putString("addr", old).apply()   // 回滚
+                "cancel"
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun turnPort(): String =
+            if (TurnService.listening) TurnService.port.toString() else ""
+
+        @android.webkit.JavascriptInterface
+        fun setTurnPort(p: String): Boolean =
+            p.toIntOrNull()?.let { TurnService.restartOn(this@MainActivity, it) }
+                ?: false
     }
 
     override fun onBackPressed() {
