@@ -58,6 +58,12 @@ class AdvanceWatch:
         with self._lock:
             return self._live and self._t() - self._last <= self.clock_timeout
 
+    def ever_live(self):
+        """本工程是否收到过走带时钟（区分「未播放/已暂停」：
+        收过但断流=暂停；从未收到=未播放，未发时钟工程无从判断）。"""
+        with self._lock:
+            return self._live
+
     def active(self):
         """已累计的走带活跃秒数（GUI 显示剩余用，不摸私有字段）。"""
         with self._lock:

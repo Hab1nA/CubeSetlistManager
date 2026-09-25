@@ -489,6 +489,9 @@ class App:
                    lambda _e: left_sp.config(width=right.winfo_reqwidth()))
         mid = tk.Frame(ctl)
         mid.grid(row=0, column=1)
+        # 播放状态指示：锚底与同排按钮对齐；颜色每 tick 跟走带状态切
+        self.state_lbl = tk.Label(mid, text="当前状态：未在播放")
+        self.state_lbl.pack(side="left", anchor="s", padx=(10, 14), pady=(0, 6))
         g1 = tk.LabelFrame(mid, text="编排")
         g1.pack(side="left", padx=(0, 8))
         self.btn_add = tk.Button(g1, text="加入", width=5,
@@ -1629,6 +1632,16 @@ class App:
         if follow:
             self.log.see("end")
 
+    def _transport_state(self):
+        """走带三态：playing=时钟活跃；paused=收过时钟但已断流；
+        stopped=从未收到（未发时钟工程无从判断，按未播放）。"""
+        w = self.watch
+        if w is None or self.ctrl is None:
+            return "stopped"
+        if w.is_transport_live():
+            return "playing"
+        return "paused" if w.ever_live() else "stopped"
+
     def _tick_banner(self):
         """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（真实状态，切错红警），
         右侧与歌名行对齐常显「已播 | 剩余」；暂停保持已播值，未知显黄字。"""
@@ -1674,6 +1687,17 @@ class App:
                                          rem // 60, rem % 60))
         self._banner(now, color, nxt, remain)
         self._progress(frac)
+        # 播放状态指示（移动端 /state 的 tstate 与此同源同语义）
+        if self.ctrl is None:
+            st_t, st_c = "启动中…", dpi.C_ERR
+        elif self.ctrl.busy:
+            st_t, st_c = "切换中…", dpi.C_WARN
+        else:
+            st_t, st_c = {"playing": ("播放中", dpi.C_OK),
+                          "paused": ("已暂停", dpi.C_WARN),
+                          "stopped": ("未在播放", dpi.MUT)}[
+                self._transport_state()]
+        self.state_lbl.config(text="当前状态：" + st_t, fg=st_c)
         self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
 
     def _progress(self, frac):

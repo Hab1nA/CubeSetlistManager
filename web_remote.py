@@ -394,7 +394,8 @@ def build_snapshot(app, has_project, proj_name=None):
     """攒 /state 快照纯字典：整体引用替换，HTTP 线程整读（GIL 原子），
     不碰 Tk、不做 win32 枚举（has_project/proj_name 由 _tick_banner 顺路
     带出：open=有打开的工程，projName=工程标题里的真实名字，工程不一定
-    在播放列表里——网页 NOW 与确认弹窗「从」名都要用它对齐 PC 横幅）。"""
+    在播放列表里——网页 NOW 与确认弹窗「从」名都要用它对齐 PC 横幅）。
+    tstate/pos/dur：走带三态与当前工程进度（移动端状态行+进度条）。"""
     songs = []
     for key in app.pl_keys:
         s = app.by_key.get(key)
@@ -402,14 +403,30 @@ def build_snapshot(app, has_project, proj_name=None):
             songs.append({"name": key.split("/")[-1], "dur": ""})
             continue
         songs.append({"name": s["name"], "dur": _fmt_dur(app.durations.get(key))})
+    cur = app.cur
+    w = getattr(app, "watch", None)
+    ctrl = getattr(app, "ctrl", None)
+    if w is None or ctrl is None:
+        tstate = "stopped"
+    elif w.is_transport_live():
+        tstate = "playing"
+    else:
+        tstate = "paused" if w.ever_live() else "stopped"
+    key = (app.pl_keys[cur]
+           if isinstance(cur, int) and 0 <= cur < len(app.pl_keys) else None)
+    dur = float(app.durations.get(key) or 0.0) if key else 0.0
+    pos = min(dur, max(0.0, w.active())) if (w is not None and dur > 0) else 0.0
     return {
-        "ready": app.ctrl is not None,
-        "busy": bool(app.ctrl is not None and app.ctrl.busy),
+        "ready": ctrl is not None,
+        "busy": bool(ctrl is not None and ctrl.busy),
         "open": bool(has_project),
         "projName": proj_name,
         "confirm": bool(app.switch_confirm),
         "live": bool(app.watch is not None and app.watch.is_transport_live()),
-        "cur": app.cur,
+        "tstate": tstate,
+        "pos": round(pos, 1),
+        "dur": round(dur, 1),
+        "cur": cur,
         "songs": songs,
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
         "appPort": getattr(getattr(app, "web", None), "app_port", None),
@@ -448,8 +465,19 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 
 .hero{padding:18px 20px 8px}
 .lbl{font-size:11px;letter-spacing:.18em;color:var(--mut);font-weight:700}
+.strow{display:flex;align-items:baseline;justify-content:space-between}
+.tstate{font-size:12px;font-weight:700}
+.tstate.playing{color:var(--ok)}
+.tstate.paused{color:var(--warn)}
+.tstate.stopped{color:var(--mut)}
 .now{font-size:30px;font-weight:800;line-height:1.25;margin:4px 0 10px;
   word-break:break-all}
+.prow{display:flex;align-items:center;gap:10px;margin:-4px 0 10px}
+.pbar{flex:1;height:4px;background:var(--panel2);border-radius:2px;
+  overflow:hidden}
+.pbar i{display:block;height:100%;width:0;background:var(--acc)}
+.ptime{flex:none;font-size:12px;color:var(--mut);
+  font-variant-numeric:tabular-nums}
 .nextrow{display:flex;align-items:baseline;gap:10px;font-size:16px;min-height:24px}
 .next{color:var(--mut);word-break:break-all}
 .busy{display:none;margin-left:auto;flex:none;font-size:12px;color:var(--warn);
@@ -476,13 +504,15 @@ body.switching .busy{display:inline-block}
   border-top:1px solid var(--line);
   padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
 .bar .row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.bar .row.row3{grid-template-columns:repeat(3,1fr)}
 .bar .row+.row{margin-top:8px}
 .tbtn{height:52px;border-radius:12px;background:var(--panel2);
   border:1px solid var(--line);font-size:15px;font-weight:600}
 .tbtn:active{background:#333845}
 .tbtn[disabled]{opacity:.35}
 .tbtn.panic{color:var(--err);border-color:rgba(248,113,113,.45)}
-.tbtn.live{border-color:var(--acc);color:var(--acc)}
+.tbtn.go{background:var(--acc);border-color:var(--acc);color:#10130f}
+.tbtn.go:active{background:#8ff0a2}
 
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
   align-items:flex-end;z-index:20}
@@ -545,8 +575,12 @@ body.switching .busy{display:inline-block}
 <div class="notice" id="env-notice" data-page="__PAGE_TYPE__" hidden></div>
 
 <section class="hero">
-  <div class="lbl">NOW</div>
+  <div class="strow"><span class="lbl">NOW</span>
+    <span class="tstate stopped" id="tstate">未在播放</span></div>
   <div class="now" id="now">—</div>
+  <div class="prow" id="prow" hidden>
+    <div class="pbar"><i id="pfill"></i></div>
+    <span class="ptime" id="ptime"></span></div>
   <div class="nextrow"><span class="lbl">NEXT</span>
     <span class="next" id="next">—</span>
     <span class="busy" id="busy">切换中…</span></div>
@@ -556,11 +590,10 @@ body.switching .busy{display:inline-block}
 <div class="empty" id="empty" hidden>播放列表为空</div>
 
 <footer class="bar">
-  <div class="row">
-    <button class="tbtn" data-cmd="play">▶ 播放</button>
+  <div class="row row3">
+    <button class="tbtn go" data-cmd="play">▶ 开始</button>
     <button class="tbtn" data-cmd="pause" id="b-pause">⏸ 暂停</button>
-    <button class="tbtn" data-cmd="resume">⏵ 继续</button>
-    <button class="tbtn" data-cmd="stop">⏹ 停止</button>
+    <button class="tbtn" data-cmd="resume">▷ 继续</button>
   </div>
   <div class="row">
     <button class="tbtn" data-cmd="prev">⏮ 上一首</button>
@@ -623,7 +656,6 @@ function render(){
       (st.ready?"（无打开的工程）":"主程序启动中…"));
   var n=st.songs?st.songs[cur+1]:null;
   $("next").textContent=n?n.name:(s?"（末尾）":"—");
-  $("b-pause").classList.toggle("live",!!st.live);
   var L=$("list");L.textContent="";
   for(var i=0;i<(st.songs||[]).length;i++){
     var li=el("li");if(i===cur)li.className="cur";
@@ -638,6 +670,28 @@ function render(){
   for(var k=0;k<bs.length;k++){var b=bs[k];
     b.disabled=!!st.busy&&b.dataset.cmd!=="panic";
     if(!st.ready&&b.dataset.cmd!=="panic")b.disabled=true;}
+}
+
+function fmtT(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+":"+
+  ("0"+(s%60)).slice(-2)}
+
+/* 播放状态行 + 进度条：pos 每 tick 都变，独立于 render 的大 sig 门
+   （render 会重建整个列表 DOM，跟着 pos 刷会一秒两抖），只动这几个节点 */
+function renderLive(){
+  if(!st)return;
+  var ts=st.busy?"busy":(st.tstate||"stopped");
+  var te=$("tstate");
+  te.textContent={playing:"播放中",paused:"已暂停",stopped:"未在播放",
+    busy:"切换中…"}[ts];
+  te.className="tstate "+(ts==="busy"?"paused":ts);
+  var prow=$("prow");
+  var cur=typeof st.cur==="number"?st.cur:-1;
+  var d=typeof st.dur==="number"?st.dur:0;
+  if(cur<0||!d){prow.hidden=true;return}
+  prow.hidden=false;
+  var pos=typeof st.pos==="number"?st.pos:0;
+  $("pfill").style.width=Math.min(100,pos/d*100)+"%";
+  $("ptime").textContent=fmtT(pos)+" | "+fmtT(d-pos);
 }
 
 function onRow(i){
@@ -672,7 +726,7 @@ function cmd(action,index){
 
 function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
-    .then(function(j){st=j;setConn(true);render()},
+    .then(function(j){st=j;setConn(true);render();renderLive()},
           function(e){setConn(false);
             try{toast("刷新失败:"+e)}catch(_){}});
   try{if(window.updateAcc)updateAcc()}catch(e){}
