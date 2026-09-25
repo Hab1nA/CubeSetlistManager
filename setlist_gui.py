@@ -1770,22 +1770,35 @@ class SettingsWindow(tk.Toplevel):
         self.kb_var = port_var(app.kb_hint)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
-        # 移动端遥控：总开关 + 翻谱端口 + 服务/翻谱接收端口 + 热点状态行
+        # 移动端遥控：总开关（右侧热点状态）+ 翻谱端口 + 拼好的网页地址
         wcfg = app.web_cfg
         tk.Label(body, text="移动端遥控",
                  anchor="w").pack(fill="x", pady=(pad, 3))
+        wf = tk.Frame(body)
+        wf.pack(fill="x", pady=1)
         self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
-        tk.Checkbutton(body, text="启用移动端遥控（热点+网页控制+翻谱推送）",
-                       variable=self.web_var).pack(anchor="w", pady=1)
+        tk.Checkbutton(wf, text="启用移动端遥控（热点+网页控制+翻谱推送）",
+                       variable=self.web_var).pack(side="left")
+        self.web_status = tk.Label(wf, text="热点查询中…", fg=dpi.MUT)
+        self.web_status.pack(side="right")
+        self.web_ip = "192.168.137.1"    # 热点查询后更新（state().ip）
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
         self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
-        row("网页端口", self.srv_var)
+        # 网页地址 = IP 前缀（不可编辑文字）+ 端口框，拼出完整地址
+        wf2 = tk.Frame(body)
+        wf2.pack(fill="x", pady=2)
+        self.web_prefix = tk.Label(
+            wf2, text="网页地址 http://%s:" % self.web_ip, anchor="w")
+        self.web_prefix.pack(side="left")
+        tk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
         row("翻谱接收端口", self.tsk_var)
-        self.web_status = tk.Label(body, text="热点状态：查询中…", anchor="w",
-                                   justify="left", fg=dpi.MUT)
-        self.web_status.pack(anchor="w", pady=1)
+        self.app_addr = tk.Label(
+            body, text="APP 网页地址 http://%s:%d（APP 内输入）"
+                       % (self.web_ip, web_remote.APP_PORT),
+            anchor="w", fg=dpi.MUT)
+        self.app_addr.pack(anchor="w", pady=1)
         threading.Thread(target=self._load_web_status, daemon=True).start()
         tk.Label(body, text="自动播放", anchor="w").pack(
             fill="x", pady=(pad, 3))
@@ -1849,7 +1862,8 @@ class SettingsWindow(tk.Toplevel):
             self.auto_var.set(True)
 
     def _load_web_status(self):
-        """热点状态行：PS 子进程要数秒，后台线程查完回主线程刷新。"""
+        """勾选行右侧的热点状态 + 网页地址前缀的 IP：PS 子进程要数秒，
+        后台线程查完回主线程刷新。"""
         st = hotspot.state()
 
         def apply():
@@ -1859,15 +1873,16 @@ class SettingsWindow(tk.Toplevel):
             except tk.TclError:
                 return
             if not st.get("ok"):
-                txt, fg = "热点状态：不可用（%s）" % st.get("err", ""), dpi.C_ERR
+                txt, fg = "热点不可用", dpi.C_ERR
             elif st.get("on"):
-                txt = "热点已开：%s  密码 %s  本机 %s" % (
-                    st.get("ssid") or "无 SSID", st.get("key") or "无密码",
-                    st.get("ip") or "IP 未取到")
-                fg = dpi.C_OK
+                txt, fg = "热点已开", dpi.C_OK
             else:
-                txt, fg = "热点未开（启用遥控保存后自动开启）", dpi.MUT
+                txt, fg = "热点未开（启用后自动开）", dpi.MUT
             self.web_status.config(text=txt, fg=fg)
+            ip = st.get("ip") or self.web_ip
+            self.web_prefix.config(text="网页地址 http://%s:" % ip)
+            self.app_addr.config(text="APP 网页地址 http://%s:%d（APP 内输入）"
+                                       % (ip, web_remote.APP_PORT))
 
         try:
             self.after(0, apply)
