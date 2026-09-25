@@ -469,6 +469,11 @@ def test_web_api():
         finally:
             web_remote._apk_file = real_apk
         assert _http_get(port, "/nope")[0] == 404
+        # 双版页面：浏览器版无翻谱面板、APP 版承载翻谱设置
+        assert "/app.apk" in web_remote.PAGE_BROWSER
+        assert "翻谱设置" not in web_remote.PAGE_BROWSER
+        assert "翻谱设置" in web_remote.PAGE_APP
+        assert "取消登记" in web_remote.PAGE_APP
         # /state 快照
         code, snap = _http_get(port, "/state")
         assert code == 200 and snap["open"] and snap["confirm"]
@@ -504,29 +509,35 @@ def test_web_api():
         assert len(reg.snapshot()) == 1
         code, j = _http_post(port, "/device/claim", {"name": "主谱台2"})
         assert len(reg.snapshot()) == 1 and j["device"]["name"] == "主谱台2"
-        # 改方法 + 测试推送（假设备收包；1280*0.75=960，800*0.5=400）
+        # 改方法 + 测试推送（假设备收包；1280*0.75=960，800*0.5=400；
+        # /device/test 来源是测试按钮 → body 带 test:1，APP 端先切后台）
         assert _http_post(port, "/device/update", {"method": "double"})[0] == 200
         assert reg.snapshot()[0]["method"] == "double"
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
         time.sleep(0.5)
         assert _FakeDevice.hits == [
-            {"x": 960, "y": 400, "count": 2, "mode": "tap"}]
+            {"x": 960, "y": 400, "count": 2, "mode": "tap", "test": 1}]
         # swipe：prev=向右滑 0.25w→0.75w，带终点 x2
         assert _http_post(port, "/device/update", {"method": "swipe"})[0] == 200
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "prev"})[0] == 200
         time.sleep(0.5)
         assert _FakeDevice.hits == [
-            {"x": 320, "y": 400, "x2": 960, "count": 1, "mode": "swipeR"}]
+            {"x": 320, "y": 400, "x2": 960, "count": 1, "mode": "swipeR",
+             "test": 1}]
         # media：坐标仍按左右半区，APP 按 x<0.5w 选 MEDIA_PREVIOUS/NEXT
         assert _http_post(port, "/device/update", {"method": "media"})[0] == 200
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
         time.sleep(0.5)
         assert _FakeDevice.hits == [
-            {"x": 960, "y": 400, "count": 1, "mode": "media"}]
+            {"x": 960, "y": 400, "count": 1, "mode": "media", "test": 1}]
         assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
+        # 取消登记：记录删除、幂等二次 400
+        assert _http_post(port, "/device/unregister", {})[0] == 200
+        assert len(reg.snapshot()) == 0
+        assert _http_post(port, "/device/unregister", {})[0] == 400
         # 未认领设备不能改
         reg2 = web_remote.DeviceRegistry([], app.q.put)
         srv2 = web_remote.WebServer((_LOOPBACK, 0), app, reg2,
