@@ -223,14 +223,18 @@ class MainActivity : Activity() {
     }
 
     private fun doConnect() {
-        val addr = addrInput.text.toString().trim()
-        if (addr.isEmpty()) {
-            showStatus("请输入电脑地址", true)
-            return
+        try {
+            val addr = addrInput.text.toString().trim()
+            if (addr.isEmpty()) {
+                showStatus("请输入电脑地址", true)
+                return
+            }
+            val url = if ("://" in addr) addr else "http://$addr"
+            prefs().edit().putString("addr", url).apply()
+            connect(url)
+        } catch (e: Exception) {
+            showStatus("连接异常：${e.message}", true)
         }
-        val url = if ("://" in addr) addr else "http://$addr"
-        prefs().edit().putString("addr", url).apply()
-        connect(url)
     }
 
     override fun onBackPressed() {
@@ -245,7 +249,7 @@ class MainActivity : Activity() {
 
     /** JS 桥：设置面板的「连接设置」落到原生层（改地址需重启 APP）。
      *  方法在 JS 桥线程执行；弹确认框切主线程并阻塞等用户选择。 */
-    private inner class Bridge {
+    inner class Bridge {
 
         @android.webkit.JavascriptInterface
         fun requestAddressChange(url: String): String {
