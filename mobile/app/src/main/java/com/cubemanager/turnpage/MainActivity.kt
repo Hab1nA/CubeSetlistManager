@@ -127,7 +127,9 @@ class MainActivity : Activity() {
             addView(addrInput, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(bigButton("连 接"), LinearLayout.LayoutParams(
+            addView(bigButton("连 接").apply {
+                setOnClickListener { doConnect() }
+            }, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(16) })
@@ -196,10 +198,14 @@ class MainActivity : Activity() {
             textSize = 16f
             minHeight = dp(48)
             setTextColor(Color.BLACK)
-            background = GradientDrawable().apply {
+            // ripple 按压反馈：自定义背景后系统默认按压态会消失
+            val shape = GradientDrawable().apply {
                 setColor(0xFF7fe896.toInt())
                 cornerRadius = dp(12).toFloat()
             }
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x33000000),
+                shape, shape)
             setPadding(dp(40), 0, dp(40), 0)
         }
 
