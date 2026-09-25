@@ -728,7 +728,6 @@ DEV_PANEL_APP = """
           <div class="sub" style="margin-top:8px">电脑端向乐队所有设备推送翻谱信号
             统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
         </div>
-        <div class="sub" style="margin-top:14px">APP 版本 <span id="app-ver"></span></div>
       </div>
       <!-- 右列：所有设备（等高，宽度显著小于左列） -->
       <div style="width:30%;flex:none;display:flex;flex-direction:column">
@@ -738,6 +737,7 @@ DEV_PANEL_APP = """
         </div>
       </div>
     </div>
+    <div class="sub" style="margin-top:14px;text-align:center">APP 版本 <span id="app-ver"></span></div>
   </div>
 </div>
 
