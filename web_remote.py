@@ -93,7 +93,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+# 推送强制直连：目标恒为私网设备（valid_push_ip 已限），系统代理（Clash 等）
+# 的例外名单不含热点网段时，默认 opener 会把私网推送交给代理导致超时
+_OPENER = urllib.request.build_opener(
+    _NoRedirect, urllib.request.ProxyHandler({}))
 
 
 def push_turn(dev, dir_, tasker_port, test=False):
@@ -684,7 +687,13 @@ DEV_PANEL_APP = """
         统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
     </div>
     <div class="grp">
-      <div class="sub">翻页测试会自动把本 APP 切到后台执行——请先打开谱面 App</div>
+      <div class="sub">翻页测试会自动切回上一个前台应用（谱面 App）并执行
+        手势。</div>
+      <div class="sub" id="usage-tip" style="margin-top:8px;color:var(--warn)"
+        >未授权「使用情况访问」——无法自动切回谱面 App，将退回切到桌面。</div>
+      <div class="btns" id="usage-btns" style="margin-top:8px">
+        <button class="btn" id="usage-grant">去授权使用情况访问</button>
+      </div>
     </div>
     <div class="grp">
       <div class="sub">所有设备</div>
@@ -706,6 +715,14 @@ function updateAcc(){
   i.textContent=ok?"无障碍开":"无障碍关";
   i.className="ind"+(ok?" ok":" bad");
 }
+function refreshUsageTip(){
+  if(!window.CubeApp)return;
+  var tip=$("usage-tip"),btns=$("usage-btns");if(!tip)return;
+  if(CubeApp.usageAccess()===true){tip.style.display="none";btns.style.display="none"}
+  else{tip.style.display="block";btns.style.display="flex"}
+}
+$("usage-grant").addEventListener("click",function(){
+  if(window.CubeApp)CubeApp.openUsageAccess()});
 if(!window.CubeApp){
   var nb=$("no-bridge");if(nb)nb.hidden=false;
 }
@@ -719,6 +736,7 @@ function openDev(){
   $("m-dev").classList.add("show");
   $("c-addr").value=location.href;
   refreshInd();
+  refreshUsageTip();
   fetch("/devices",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(d){renderDev(d);
       $("t-ip").textContent="http://"+d.you+":";},
