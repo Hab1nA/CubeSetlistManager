@@ -379,12 +379,12 @@ def _fmt_dur(d):
 
 
 def _apk_file():
-    """翻谱 APP 的 APK（程序目录下 CubeTurn.apk，构建后由 build.bat 拷入）。
+    """翻谱 APP 的 APK（程序目录下 CubeRemote.apk，构建后由 build.bat 拷入）。
     返回字节或 None。"""
     base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
             else os.getcwd())
     try:
-        with open(os.path.join(base, "CubeTurn.apk"), "rb") as f:
+        with open(os.path.join(base, "CubeRemote.apk"), "rb") as f:
             return f.read()
     except OSError:
         return None
@@ -793,7 +793,7 @@ function refreshEnv(){
   var inApp=!!window.CubeApp;         // 桥存在=运行在 APP 的 WebView 内
   var msg=null;
   if(page==="app"&&!inApp)
-    msg="本页在浏览器中打开——翻谱功能请在 Cube 翻谱 APP 内使用";
+    msg="本页在浏览器中打开——翻谱功能请在 Cube Remote 内使用";
   if(page==="browser"&&inApp){
     var ap=(st&&typeof st.appPort==="number")?st.appPort:null;
     msg=ap===null?"正在获取 APP 连接端口…"
@@ -1188,7 +1188,7 @@ class _Handler(BaseHTTPRequestHandler):
                                           "gradlew assembleDebug 并拷贝）"})
                 return
             self._send(200, "application/vnd.android.package-archive", apk,
-                       dispo="attachment; filename=CubeTurn.apk")
+                       dispo="attachment; filename=CubeRemote.apk")
         else:
             self._json(404, {"error": "未知路径"})
 

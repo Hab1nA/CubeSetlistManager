@@ -117,7 +117,7 @@ class MainActivity : Activity() {
             setPadding(dp(32), 0, dp(32), 0)
             setBackgroundColor(0xFF14161A.toInt())
             addView(TextView(this@MainActivity).apply {
-                text = "Cube 翻谱"
+                text = "Cube Remote"
                 textSize = 34f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(0xFF7fe896.toInt())

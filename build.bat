@@ -19,7 +19,7 @@ del dist\_config.bak dist\_playlist.bak >nul
 rem APK for /app.apk download endpoint
 if exist "mobile\app\build\outputs\apk\debug\app-debug.apk" (
   copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^
-    "dist\Cube Setlist Manager\CubeTurn.apk" >nul
+    "dist\Cube Setlist Manager\CubeRemote.apk" >nul
   echo APK included
 ) else (
   echo no APK found: run "cd mobile ^&^& gradlew assembleDebug" first

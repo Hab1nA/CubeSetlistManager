@@ -21,7 +21,7 @@
     </queries>
 
     <application
-        android:label="Cube 翻谱"
+        android:label="Cube Remote"
         android:icon="@drawable/ic_launcher"
         android:theme="@style/AppTheme"
         android:networkSecurityConfig="@xml/network_security_config"
