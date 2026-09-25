@@ -32,7 +32,8 @@ APP_PORT = 8767              # APP 版页面端口（浏览器版=serverPort 876
 DEFAULT_WEB_REMOTE = {
     "enabled": False,
     "serverPort": 8765,
-    "taskerPort": 8766,
+    "appPort": 8767,           # APP 版页面端口（WebView 专用，浏览器不提供）
+    "taskerPort": 8766,        # 翻谱接收端口：所有设备统一，APP 内可改需两端同步
     "midiIn": "",              # 翻谱信号 loopMIDI 端口名（设置页下拉选择）
     "devices": [],             # {slot,name,ip,method,enabled,screen:{w,h}}
 }
@@ -480,6 +481,11 @@ body.switching .busy{display:inline-block}
 .dv .no{color:var(--mut);font-size:12px;width:34px;flex:none}
 .dv .st{margin-left:auto;font-size:12px;color:var(--mut);flex:none}
 .dv .st.on{color:var(--ok)}
+.ind{flex:none;font-size:12px;padding:4px 10px;border-radius:99px;
+  border:1px solid var(--line);color:var(--mut)}
+.ind.ok{color:var(--ok);border-color:rgba(74,222,128,.45)}
+.ind.bad{color:var(--err);border-color:rgba(248,113,113,.45)}
+.mono{color:var(--fg);font-variant-numeric:tabular-nums}
 .dlg{margin:auto;width:min(92vw,380px);background:var(--panel);
   border:1px solid var(--line);border-radius:16px;padding:18px}
 .dlg p{font-size:15px;line-height:1.7;margin:8px 0 4px}
@@ -640,15 +646,36 @@ __DEV_JS__
 BTN_BROWSER = """<a class="ghost" href="/app.apk" style="color:var(--acc);
   text-decoration:none">下载 APP</a><!-- __RIGHT_BTN2__ 预留：苹果端按钮 -->"""
 
-BTN_APP = """<button class="ghost" id="b-dev">翻谱设置</button>"""
+BTN_APP = """<button class="ghost" id="b-dev">设置</button>"""
 
 DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
-    <h2>翻谱设置</h2>
-    <div class="sub">认领本机并按谱面 App 支持选翻页方法。无障碍未开启时
-      点按/滑动不可用（仅媒体键可用）。</div>
-    <div id="dev-own"></div>
+    <h2>设置</h2>
+    <div class="grp">
+      <div class="sub">连接设置</div>
+      <div class="fld" style="margin-top:12px"><label>地址</label>
+        <input type="text" id="c-addr"></div>
+      <div class="btns" style="margin-top:12px">
+        <button class="btn pri" id="c-save" style="flex:1;text-align:center">保存并重启</button>
+      </div>
+      <div class="sub" style="margin-top:10px">修改地址后需重启本 APP 生效；
+        取消则保持原地址不变。</div>
+    </div>
+    <div class="grp">
+      <div class="sub">翻谱设置</div>
+      <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持选翻页
+        方法。无障碍未开启时点按/滑动不可用（仅媒体键可用）。</div>
+      <div id="dev-own" style="margin-top:10px"></div>
+      <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
+        <span id="t-ip" class="mono"></span><input type="text" id="t-port"
+          style="width:70px;flex:none;margin-left:8px">
+        <span class="ind" id="t-ind">…</span>
+        <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
+      </div>
+      <div class="sub" style="margin-top:8px">电脑端按此端口向本机推送翻谱
+        命令——修改后请同步电脑端「APP 翻译地址」的端口。</div>
+    </div>
     <div class="grp">
       <div class="sub">翻页测试会自动把本 APP 切到后台执行——请先打开谱面 App</div>
     </div>
@@ -664,16 +691,51 @@ DEV_PANEL_APP = """
 """
 
 DEV_JS_APP = """
-/* ---- 翻谱设置面板（仅 APP 版页面） ---- */
+/* ---- 设置面板（仅 APP 版页面）：连接设置 + 翻谱设置 ---- */
 $("b-dev").addEventListener("click",openDev);
 $("dev-close").addEventListener("click",function(){
   $("m-dev").classList.remove("show")});
 
 function openDev(){
   $("m-dev").classList.add("show");
+  $("c-addr").value=location.href;
+  refreshInd();
   fetch("/devices",{cache:"no-store"}).then(function(r){return r.json()})
-    .then(renderDev,function(){toast("取设备列表失败")});
+    .then(function(d){renderDev(d);
+      $("t-ip").textContent="http://"+d.you+":";},
+      function(){toast("取设备列表失败")});
 }
+
+function setInd(ok,text){var i=$("t-ind");i.textContent=text;
+  i.className="ind"+(ok?" ok":" bad")}
+
+function refreshInd(){
+  if(!window.CubeApp)return;
+  var p=CubeApp.turnPort();
+  $("t-port").value=p;
+  setInd(!!p,p?p+" 端口监听中":"未监听");
+}
+
+$("t-apply").addEventListener("click",function(){
+  if(!window.CubeApp)return;
+  var p=$("t-port").value.trim();
+  if(!/^[0-9]{2,5}$/.test(p)||parseInt(p,10)<1024||parseInt(p,10)>65535){
+    setInd(false,"端口非法");return}
+  var ok=CubeApp.setTurnPort(p);
+  setInd(ok,ok?p+" 端口监听中":"端口不可用");
+  toast(ok?"端口已应用：请同步电脑端「APP 翻译地址」":"端口被占用或无法监听");
+});
+
+$("c-save").addEventListener("click",function(){
+  if(!window.CubeApp){toast("桥未就绪");return}
+  var url=$("c-addr").value.trim();
+  if(!url){toast("地址不能为空");return}
+  var r=CubeApp.requestAddressChange(url);
+  if(r==="restart"){toast("地址已保存，重启中…")}
+  else if(r==="same"){toast("地址未变化");$("c-addr").value=location.href}
+  else{toast("已取消：地址保持原值");$("c-addr").value=location.href}
+});
+
 function dpr(){return window.devicePixelRatio||1}
 function phys(){return{w:Math.round(screen.width*dpr()),
   h:Math.round(screen.height*dpr())}}
@@ -958,6 +1020,7 @@ class _Handler(BaseHTTPRequestHandler):
 # ---- 生命周期管理（App 持有一个实例） ----
 
 _ATTR = {"enabled": "enabled", "serverPort": "server_port",
+         "appPort": "app_port",
          "taskerPort": "tasker_port", "midiIn": "midi_hint"}
 
 
@@ -970,6 +1033,7 @@ class WebRemote:
         self.app = app
         self.enabled = bool(cfg.get("enabled"))
         self.server_port = _port(cfg.get("serverPort"), 8765)
+        self.app_port = _port(cfg.get("appPort"), 8767)
         self.tasker_port = _port(cfg.get("taskerPort"), 8766)
         self.midi_hint = str(cfg.get("midiIn") or "")
         self.registry = DeviceRegistry(cfg.get("devices") or [], app.q.put)
@@ -1053,21 +1117,21 @@ class WebRemote:
                          daemon=True).start()
         self._report("网页遥控已就绪：http://%s:%d/（平板连热点后访问）"
                      % (ip, self.server_port))
-        # APP 版页面（8767）：承载翻谱设置；浏览器版（8765）无翻谱功能
+        # APP 版页面（appPort）：承载翻谱设置；浏览器版（serverPort）无翻谱功能
         try:
-            self.app_server = WebServer((ip, APP_PORT), self.app,
+            self.app_server = WebServer((ip, self.app_port), self.app,
                                         self.registry,
                                         lambda: self.tasker_port,
                                         page=PAGE_APP)
         except OSError as e:
             self._report("APP 页面服务启动失败（%s:%d）：%s"
-                         % (ip, APP_PORT, _err(e)))
+                         % (ip, self.app_port, _err(e)))
             return
         threading.Thread(target=self.app_server.serve_forever,
                          kwargs={"poll_interval": 0.5},
                          daemon=True).start()
         self._report("APP 页面已就绪：http://%s:%d/（在翻谱 APP 内访问）"
-                     % (ip, APP_PORT))
+                     % (ip, self.app_port))
 
     def _stop_server(self):
         for attr in ("server", "app_server"):
