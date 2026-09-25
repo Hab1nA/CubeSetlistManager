@@ -136,13 +136,15 @@ def _parse(out):
 
 
 def _run(mode, timeout):
-    """跑 PS 脚本，返回脚本输出的 JSON dict；无输出/超时=结构化失败。"""
+    """跑 PS 脚本，返回脚本输出的 JSON dict；无输出/超时=结构化失败。
+    CREATE_NO_WINDOW：本程序是 GUI，任何 PS 调用都不许弹前台控制台。"""
     enc = base64.b64encode(_PS.encode("utf-16-le")).decode("ascii")
     try:
         p = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
             capture_output=True, timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             env=dict(os.environ, CUBE_HS_MODE=mode))
     except subprocess.TimeoutExpired:
         return {"ok": False, "err": "PowerShell 调用超时（%ds）" % timeout}
