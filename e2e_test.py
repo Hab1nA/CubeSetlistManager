@@ -369,7 +369,7 @@ def p_web():
         ok = wait_until(lambda: hits, 5, "翻谱推送到达")
         pin.close()
         hub.close()
-        assert ok and hits and hits[0] == {"x": 320, "y": 400, "count": 1}, hits
+        assert ok and hits and hits[0] == {"dir": "prev"}, hits
         log("MIDI 组合→推送 ✓ %s" % hits[0])
 
         # 链路二：网页 /cmd → 真实 Cubase 切歌

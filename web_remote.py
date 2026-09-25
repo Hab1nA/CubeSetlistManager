@@ -12,6 +12,7 @@ import queue
 import sys
 import threading
 import time
+import http.client
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,8 +26,8 @@ CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
 DEV_NOTES = tuple(range(48, 58))   # C3–A3 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
-PUSH_TIMEOUT = 1.5           # 逐设备推送短超时：实测热点 WiFi 握手可达 0.3s+，
-                             # 0.5s 会在正常网络下误杀；失败只记日志不拖累别的设备
+PUSH_TIMEOUT = 1.5           # 推送短超时：连接池省掉了握手，但平板 Wi-Fi
+                             # 省电唤醒仍可达秒级；失败只记日志不拖累别的设备
 TURN_PATH = "/turn"          # 翻谱设备固定接收路径（与配置说明一致）
 APP_PORT = 8767              # APP 版页面端口（浏览器版=serverPort 8765）
 
@@ -36,7 +37,7 @@ DEFAULT_WEB_REMOTE = {
     "appPort": 8767,           # APP 版页面端口（WebView 专用，浏览器不提供）
     "taskerPort": 8766,        # 翻谱接收端口：所有设备统一，APP 内可改需两端同步
     "midiIn": "",              # 翻谱信号 loopMIDI 端口名（设置页下拉选择）
-    "devices": [],             # {slot,name,ip,method,enabled,screen:{w,h}}
+    "devices": [],             # {slot,name,ip,enabled,screen:{w,h}（仅诊断）}
 }
 
 
@@ -86,60 +87,73 @@ def valid_push_ip(ip):
             or (a == 172 and 16 <= b <= 31) or a == 127)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """推送应答的 3xx 一律不跟随（防被劫持的设备 302 借道打内网/外网）。"""
+# ---- 翻谱推送：语义指令 + 持久连接 ----
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+# 推送连接池：PC→APP 持久 HTTP 连接，每次翻页省一次 TCP 握手（热点上这是
+# 往返耗时的大头）。http.client 原生不走系统代理（私网直连，urllib 会被
+# Clash 等代理劫持），目标又受 valid_push_ip 限定。任何异常弃旧连接、新
+# 连接重试一次——NanoHTTPD 空闲断开或 keep-alive 退化时自动落到每请求
+# 新连接，正确性不受影响；新连接即失败说明设备不可达，不重试（翻页要快）。
+_push_pool = {}                  # (ip, port) → [threading.Lock(), 连接或 None]
 
 
-# 推送强制直连：目标恒为私网设备（valid_push_ip 已限），系统代理（Clash 等）
-# 的例外名单不含热点网段时，默认 opener 会把私网推送交给代理导致超时
-_OPENER = urllib.request.build_opener(
-    _NoRedirect, urllib.request.ProxyHandler({}))
+def _push_post(ip, port, body):
+    """POST /turn 并读完应答（不读完无法复用连接）。返回错误文本或 None。"""
+    key = (ip, port)
+    entry = _push_pool.setdefault(key, [threading.Lock(), None])
+
+    def once(conn):
+        conn.request("POST", TURN_PATH, body=body,
+                     headers={"Content-Type": "application/json"})
+        conn.getresponse().read()
+
+    with entry[0]:
+        conn = entry[1]
+        reused = conn is not None
+        if conn is None:
+            conn = http.client.HTTPConnection(ip, port, timeout=PUSH_TIMEOUT)
+        try:
+            once(conn)
+            entry[1] = conn
+            return None
+        except Exception as e:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            entry[1] = None
+            if not reused:
+                return _err(e)
+        try:
+            conn = http.client.HTTPConnection(ip, port, timeout=PUSH_TIMEOUT)
+            once(conn)
+            entry[1] = conn
+            return None
+        except Exception as e:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            entry[1] = None
+            return _err(e)
 
 
 def push_turn(dev, dir_, tasker_port, test=False):
-    """同步向单台设备推一页。返回 (ok, 日志行)。
-    到达即算成功——翻谱设备的应答状态码不归我们管（HTTPError≠链路失败）。
+    """同步向单台设备推一页（语义协议：dir=next/prev；翻页方法与坐标
+    组装在 APP 端按其本机设置执行，PC 不再关心方法与分辨率）。
+    返回 (ok, 日志行)。到达即算成功——应答状态码不归链路管。
     test=True：APP 端先切后台再执行手势（测试按钮在前台是 APP 自身）。"""
     name = dev.get("name") or "设备%d" % dev.get("slot")
     ip = dev.get("ip")
     if not valid_push_ip(ip):
         return False, "翻谱推送失败（%s）：目标 IP 非法（仅限热点私网地址）" % name
-    screen = dev.get("screen") or {}
-    w, h = int(screen.get("w") or 0), int(screen.get("h") or 0)
-    if w <= 0 or h <= 0:
-        return False, "翻谱推送失败（%s）：分辨率未知，请在设备上重新认领" % name
-    x = int(w * (0.25 if dir_ == "prev" else 0.75))
-    y = int(h * 0.5)
-    method = dev.get("method") or "single"
-    body = {"x": x, "y": y, "count": 1, "mode": "tap"}
-    if method == "double":
-        body["count"] = 2
-    elif method == "swipe":
-        # next=向左滑（0.75w→0.25w，翻书方向），prev=向右滑；x=起笔、x2=收笔
-        x2 = int(w * (0.75 if dir_ == "prev" else 0.25))
-        body = {"x": x, "y": y, "x2": x2, "count": 1,
-                "mode": "swipeL" if dir_ == "next" else "swipeR"}
-    elif method == "media":
-        body["mode"] = "media"          # x 的左右位置即 MEDIA_PREVIOUS/NEXT
-    if test:
-        body["test"] = 1
-    mode = body["mode"]
-    body = json.dumps(body)
-    url = "http://%s:%s%s" % (ip, tasker_port, TURN_PATH)
-    req = urllib.request.Request(url, data=body.encode("utf-8"),
-                                 headers={"Content-Type": "application/json"})
-    try:
-        _OPENER.open(req, timeout=PUSH_TIMEOUT).close()
-    except urllib.error.HTTPError:
-        pass
-    except Exception as e:
-        return False, "翻谱推送失败（%s %s → %s）：%s" % (name, dir_,
-                                                    ip, _err(e))
-    return True, "翻谱已推送（%s %s x=%d y=%d mode=%s）" % (name, dir_, x, y,
-                                                            mode)
+    body = json.dumps({"dir": dir_, **({"test": 1} if test else {})})
+    t0 = time.monotonic()
+    err = _push_post(ip, tasker_port, body)
+    if err:
+        return False, "翻谱推送失败（%s %s → %s）：%s" % (name, dir_, ip, err)
+    return True, "翻谱已推送（%s %s %dms）" % (
+        name, dir_, int((time.monotonic() - t0) * 1000))
 
 
 def push_async(dev, dir_, tasker_port, report, test=False):
@@ -216,7 +230,6 @@ def _clean_dev(d):
     if not 1 <= dev["slot"] <= 10:
         raise ValueError("slot")
     dev.setdefault("name", "设备%d" % dev["slot"])
-    dev.setdefault("method", "single")
     dev.setdefault("enabled", True)
     if dev.get("ip"):
         dev["ip"] = str(dev["ip"])
@@ -315,7 +328,6 @@ class DeviceRegistry:
             if name:
                 dev["name"] = str(name)[:20]
             dev.setdefault("name", "设备%d" % dev["slot"])
-            dev.setdefault("method", "single")
             dev.setdefault("enabled", True)
             if screen:
                 dev["screen"] = screen
@@ -329,18 +341,15 @@ class DeviceRegistry:
                      % (out["slot"], out["name"], ip))
         return out, None
 
-    def update(self, ip, name=None, method=None, enabled=None):
-        """本机（按 IP 识别）改名字/翻页方法/启停。返回 (device, err)。"""
+    def update(self, ip, name=None, enabled=None):
+        """本机（按 IP 识别）改名字/启停。返回 (device, err)。
+        翻页方法归 APP 端本机设置（语义协议，PC 不再管）。"""
         with self._lock:
             dev = next((d for d in self._devices if d.get("ip") == ip), None)
             if dev is None:
                 return None, "本机尚未认领设备"
             if name:
                 dev["name"] = str(name)[:20]
-            if method is not None:
-                if method not in ("single", "double", "swipe", "media"):
-                    return None, "翻页方法只能是 single/double/swipe/media"
-                dev["method"] = method
             if enabled is not None:
                 dev["enabled"] = bool(enabled)
             out = dict(dev)
@@ -481,6 +490,8 @@ body.switching .busy{display:inline-block}
   padding:10px 14px;font-size:14px;font-weight:600;color:inherit;
   text-decoration:none}
 .btn.pri{background:var(--acc);color:#10130f;border-color:var(--acc)}
+.btn.on{background:var(--acc);color:#10130f;border-color:var(--acc);
+  font-weight:700}
 .btn:active{filter:brightness(1.12)}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .dlg .btn,.dlg .btns .btn{flex:1;text-align:center}
@@ -713,12 +724,25 @@ DEV_PANEL_APP = """
         </div>
         <div class="grp">
           <div class="sub">翻谱设置</div>
-          <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持选翻页
-            方法。无障碍未开启时点按/滑动不可用（仅媒体键可用）。</div>
+      <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持情况
+        选择翻页方法（存在本机，立即生效）。无障碍未开启时点按/滑动不可用
+        （仅媒体键可用）。</div>
           <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
             「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
-          <div id="dev-own" style="margin-top:10px"></div>
-          <div class="fld" style="margin-top:10px"><label>谱面 App</label>
+      <div id="dev-own" style="margin-top:10px"></div>
+      <div class="fld" style="margin-top:10px"><label>翻页方法</label>
+        <div id="m-method" class="btns" style="flex:1;margin-top:0;gap:6px">
+          <button class="btn m-opt" data-v="tap"
+            style="flex:1;text-align:center;padding:9px 0">点按</button>
+          <button class="btn m-opt" data-v="double"
+            style="flex:1;text-align:center;padding:9px 0">双击</button>
+          <button class="btn m-opt" data-v="swipe"
+            style="flex:1;text-align:center;padding:9px 0">滑动</button>
+          <button class="btn m-opt" data-v="media"
+            style="flex:1;text-align:center;padding:9px 0">媒体键</button>
+        </div>
+      </div>
+      <div class="fld" style="margin-top:10px"><label>谱面 App</label>
             <span id="t-target" class="mono">自动检测</span>
             <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
           </div>
@@ -813,6 +837,23 @@ $("usage-grant").addEventListener("click",function(){
 $("b-acc").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openAccSettings()});
 $("b-dev").addEventListener("click",openDev);
+/* 翻页方法：四选一分段按钮，选中态存 APP 本机（语义协议由 APP 组装动作） */
+function renderMethod(){
+  if(!window.CubeApp)return;
+  var cur=null;try{cur=CubeApp.turnMethod()}catch(e){}
+  var bs=document.querySelectorAll(".m-opt");
+  for(var i=0;i<bs.length;i++)
+    bs[i].classList.toggle("on",bs[i].getAttribute("data-v")===cur);
+}
+var _mbs=document.querySelectorAll(".m-opt");
+for(var _mi=0;_mi<_mbs.length;_mi++)(function(b){
+  b.addEventListener("click",function(){
+    if(!window.CubeApp)return;
+    if(CubeApp.setTurnMethod(b.getAttribute("data-v"))){
+      renderMethod();toast("翻页方法："+b.textContent);
+    }else toast("设置失败");
+  });
+})(_mbs[_mi]);
 // 触摸遮罩（面板区域以外）关闭：移动端标准交互
 $("m-dev").addEventListener("click",function(e){
   if(e.target===this)$("m-dev").classList.remove("show")});
@@ -825,6 +866,7 @@ function openDev(){
   refreshInd();
   refreshUsageTip();
   refreshTarget();
+  renderMethod();
   try{$("app-ver").textContent=CubeApp?CubeApp.version():"?"}catch(e){}
   fetch("/devices",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(d){renderDev(d);
@@ -886,19 +928,11 @@ function renderDev(d){
     sel.appendChild(new Option("自动",""));
     for(var s=1;s<=10;s++)sel.appendChild(new Option(String(s),String(s)));
     f2.appendChild(sel);g.appendChild(f2);
-    var f3=el("div","fld");f3.appendChild(el("label",null,"翻页"));
-    var sel2=el("select");sel2.id="d-method";
-    sel2.appendChild(new Option("单击","single"));
-    sel2.appendChild(new Option("双击","double"));
-    sel2.appendChild(new Option("滑动","swipe"));
-    sel2.appendChild(new Option("媒体键","media"));
-    f3.appendChild(sel2);g.appendChild(f3);
-    var bts=el("div","btns");
-    var bb=el("button","btn pri","认领本机");
-    bb.addEventListener("click",function(){
-      var body={name:$("d-name").value.trim()||"谱台",screen:phys(),
-        method:$("d-method").value};
-      var sv=$("d-slot").value;if(sv)body.slot=parseInt(sv,10);
+  var bts=el("div","btns");
+  var bb=el("button","btn pri","认领本机");
+  bb.addEventListener("click",function(){
+    var body={name:$("d-name").value.trim()||"谱台",screen:phys()};
+    var sv=$("d-slot").value;if(sv)body.slot=parseInt(sv,10);
       post("/device/claim",body).then(function(r){
         if(r.j&&r.j.ok){toast("已认领槽位 "+r.j.device.slot);openDev();}
         else toast((r.j&&r.j.error)||"认领失败");
@@ -911,28 +945,15 @@ function renderDev(d){
     var f1=el("div","fld");f1.appendChild(el("label",null,"名字"));
     var inp=el("input");inp.type="text";inp.value=own.name;inp.id="d-name";
     f1.appendChild(inp);g.appendChild(f1);
-    var f2=el("div","fld");f2.appendChild(el("label",null,"翻页"));
-    var sel=el("select");sel.id="d-method";
-    sel.appendChild(new Option("单击","single"));
-    sel.appendChild(new Option("双击","double"));
-    sel.appendChild(new Option("滑动","swipe"));
-    sel.appendChild(new Option("媒体键","media"));
-    sel.value=own.method||"single";
-    sel.addEventListener("change",function(){
-      post("/device/update",{method:sel.value}).then(function(r){
-        toast(r.j&&r.j.ok?"翻页方法已切换":((r.j&&r.j.error)||"切换失败"));
-      },function(){toast("切换失败")});
-    });
-    f2.appendChild(sel);g.appendChild(f2);
-    var f3=el("div","fld");f3.appendChild(el("label",null,"启用"));
+    var f2=el("div","fld");f2.appendChild(el("label",null,"启用"));
     var ck=el("input");ck.type="checkbox";ck.id="d-en";
     ck.checked=own.enabled!==false;
-    f3.appendChild(ck);g.appendChild(f3);
+    f2.appendChild(ck);g.appendChild(f2);
     var bts=el("div","btns");
     var b1=el("button","btn","保存修改");
     b1.addEventListener("click",function(){
       post("/device/update",{name:$("d-name").value.trim(),
-        method:$("d-method").value,enabled:$("d-en").checked})
+        enabled:$("d-en").checked})
         .then(function(r){toast(r.j&&r.j.ok?"已保存":
           ((r.j&&r.j.error)||"保存失败"));if(r.j&&r.j.ok)openDev();},
           function(){toast("保存失败")});
@@ -1127,8 +1148,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _h_update(self, body, ip):
         dev, err = self.server.registry.update(
-            ip, name=body.get("name"), method=body.get("method"),
-            enabled=body.get("enabled"))
+            ip, name=body.get("name"), enabled=body.get("enabled"))
         if err:
             self._json(400, {"error": err})
             return

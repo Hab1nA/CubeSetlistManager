@@ -33,13 +33,14 @@ class TurnAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
-    /** 点按；count>=2 为双击（两次间隔约 100ms，与电脑端语义一致）。 */
+    /** 点按；count>=2 为双击（两次间隔约 100ms，与电脑端语义一致）。
+     *  done=整串手势完成（或被系统取消）时回调，供耗时埋点。 */
     fun tap(x: Int, y: Int, count: Int, done: (Boolean) -> Unit = {}) {
         val once = { cb: (Boolean) -> Unit ->
             val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
             val gesture = GestureDescription.Builder().addStroke(
                 GestureDescription.StrokeDescription(path, 0, 60)).build()
-            cb(dispatchGesture(gesture, null, null))
+            dispatchGesture(gesture, resultCb(cb), null)
         }
         if (count >= 2) {
             once { ok1 ->
@@ -58,6 +59,12 @@ class TurnAccessibilityService : AccessibilityService() {
         }
         val gesture = GestureDescription.Builder().addStroke(
             GestureDescription.StrokeDescription(path, 0, 220)).build()
-        done(dispatchGesture(gesture, null, null))
+        dispatchGesture(gesture, resultCb(done), null)
     }
+
+    private fun resultCb(done: (Boolean) -> Unit): GestureResultCallback =
+        object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) = done(true)
+            override fun onCancelled(g: GestureDescription?) = done(false)
+        }
 }

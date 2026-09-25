@@ -12,12 +12,14 @@ import android.view.KeyEvent
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 
-/** 前台服务：内嵌 HTTP 服务器收电脑的 /turn 推送（协议见 web_remote.push_turn），
- *  按 mode 分发：tap→无障碍点按、swipeL/R→无障碍滑动、media→媒体键
- *  （dispatchMediaKeyEvent 不走无障碍，兼容支持蓝牙踏板翻页的谱面 App）。 */
+/** 前台服务：内嵌 HTTP 服务器收电脑的 /turn 语义推送（dir=next/prev，
+ *  协议见 web_remote.push_turn），按本机设定的翻页方法分发：点按/双击/滑动
+ *  →无障碍手势、媒体键→dispatchMediaKeyEvent（不走无障碍，兼容支持蓝牙
+ *  踏板翻页的谱面 App）。Wi-Fi 高性能锁保推送低时延。 */
 class TurnService : Service() {
 
     private var server: Http? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     inner class Http(port: Int) : NanoHTTPD("0.0.0.0", port) {
         override fun serve(session: IHTTPSession): Response {
@@ -46,28 +48,19 @@ class TurnService : Service() {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private fun handle(j: JSONObject) {
-        val mode = j.optString("mode", "tap")
-        val x = j.optInt("x")
-        val y = j.optInt("y")
-        val count = j.optInt("count", 1)
-        reportDiag("收到推送 mode=$mode x=$x y=$y count=$count test=${j.optInt("test")}")
-        val fire = {
-            when (mode) {
-                "media" -> {
-                    val next = x >= resources.displayMetrics.widthPixels / 2
-                    val code = if (next) KeyEvent.KEYCODE_MEDIA_NEXT
-                    else KeyEvent.KEYCODE_MEDIA_PREVIOUS
-                    val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-                    audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-                    audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
-                }
-                "swipeL", "swipeR" -> {
-                    val x2 = j.optInt("x2", x)
-                    TurnAccessibilityService.instance?.swipe(x, y, x2, y)
-                }
-                else -> TurnAccessibilityService.instance?.tap(x, y, count)
-            }
+        val tRecv = android.os.SystemClock.elapsedRealtime()
+        // 语义协议：dir=next/prev，翻页方法与坐标按本机设置在 APP 端组装。
+        // 旧版 PC 推 mode+x：按旧字段派生 dir，防两端版本错配把翻页弄死。
+        val dir = j.optString("dir").ifEmpty {
+            if (j.optString("mode") == "swipeR" ||
+                j.optInt("x") in 1 until resources.displayMetrics.widthPixels / 2
+            ) "prev" else "next"
         }
+        val next = dir == "next"
+        val method = getSharedPreferences("cube", MODE_PRIVATE)
+            .getString("turnMethod", "tap") ?: "tap"
+        reportDiag("收到推送 dir=$dir method=$method test=${j.optInt("test")}")
+        val fire = { dispatchTurn(method, next, tRecv) }
         if (j.optInt("test") == 1) {
             // 测试按钮在前台是本 APP：自动切回谱面 App（手动指定优先，
             // 其次按使用记录自动检测最近使用的第三方应用）再执行手势。
@@ -97,6 +90,39 @@ class TurnService : Service() {
                 mainHandler.postDelayed({ fire() }, 800)
             }
         } else fire()
+    }
+
+    /** 按本机翻页方法组装并执行（坐标按屏幕尺寸换算成像素）。
+     *  完成即回传耗时行：recv→disp=收包到派发，disp→done=手势执行耗时。 */
+    private fun dispatchTurn(method: String, next: Boolean, tRecv: Long) {
+        val tDisp = android.os.SystemClock.elapsedRealtime()
+        val tag = "turn dir=${if (next) "next" else "prev"} method=$method"
+        val acc = TurnAccessibilityService.instance
+        if (method != "media" && acc == null) {
+            reportDiag("$tag 无障碍未开启，点按/滑动不可用")
+            return
+        }
+        val done = { ok: Boolean ->
+            val tDone = android.os.SystemClock.elapsedRealtime()
+            reportDiag("$tag recv→disp=${tDisp - tRecv}ms " +
+                "disp→done=${tDone - tDisp}ms" + if (ok) "" else "（手势被取消）")
+        }
+        val dm = resources.displayMetrics
+        val x = (dm.widthPixels * (if (next) 0.75 else 0.25)).toInt()
+        val y = dm.heightPixels / 2
+        when (method) {
+            "media" -> {
+                val code = if (next) KeyEvent.KEYCODE_MEDIA_NEXT
+                    else KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+                done(true)
+            }
+            "swipe" -> acc?.swipe(x, y, dm.widthPixels - x, y, done)
+            "double" -> acc?.tap(x, y, 2, done)
+            else -> acc?.tap(x, y, 1, done)
+        }
     }
 
     private fun usageGranted(): Boolean {
@@ -170,6 +196,7 @@ class TurnService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFY_ID, buildNotification())
+        acquireWifiLock()
         if (server == null) startReceiverOn(desiredPort(this))
         return START_STICKY
     }
@@ -177,8 +204,28 @@ class TurnService : Service() {
     override fun onDestroy() {
         server?.stop()
         server = null
+        try {
+            wifiLock?.release()
+        } catch (_: Exception) {
+        }
+        wifiLock = null
         instance = null
         super.onDestroy()
+    }
+
+    /** Wi-Fi 高性能锁：阻止平板 Wi-Fi 进入省电轮询——两首歌之间连接闲置，
+     *  第一页推送会被唤醒延迟拖到秒级；持有期间耗电略增（前台服务可接受）。 */
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        val wm = applicationContext.getSystemService(WIFI_SERVICE)
+            as android.net.wifi.WifiManager
+        val mode = if (android.os.Build.VERSION.SDK_INT >= 29)
+            android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        wifiLock = wm.createWifiLock(mode, "cube:turn").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
     }
 
     /** 在指定端口（重）启接收器；端口被占等失败返回 false。 */
