@@ -655,6 +655,8 @@ DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
     <h2>设置</h2>
+    <div class="sub" id="no-bridge" style="color:var(--warn)">检测到本页
+      运行在浏览器中——翻谱功能请在 Cube 翻谱 APP 内使用。</div>
     <div class="grp">
       <div class="sub">连接设置</div>
       <div class="fld" style="margin-top:12px"><label>地址</label>
@@ -703,6 +705,9 @@ function updateAcc(){
   var ok=CubeApp.accEnabled()===true;
   i.textContent=ok?"无障碍开":"无障碍关";
   i.className="ind"+(ok?" ok":" bad");
+}
+if(!window.CubeApp){
+  var nb=$("no-bridge");if(nb)nb.hidden=false;
 }
 $("b-acc").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openAccSettings()});
