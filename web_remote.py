@@ -708,6 +708,7 @@ DEV_PANEL_APP = """
     <div class="btns">
       <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
     </div>
+    <div class="sub" style="text-align:center">APP 版本 <span id="app-ver"></span></div>
   </div>
 </div>
 
@@ -784,6 +785,8 @@ function openDev(){
   $("c-addr").value=location.href;
   refreshInd();
   refreshUsageTip();
+  refreshTarget();
+  try{$("app-ver").textContent=CubeApp?CubeApp.version():"?"}catch(e){}
   fetch("/devices",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(d){renderDev(d);
       $("t-ip").textContent="http://"+d.you+":";},
@@ -876,6 +879,11 @@ function renderDev(d){
     sel.appendChild(new Option("滑动","swipe"));
     sel.appendChild(new Option("媒体键","media"));
     sel.value=own.method||"single";
+    sel.addEventListener("change",function(){
+      post("/device/update",{method:sel.value}).then(function(r){
+        toast(r.j&&r.j.ok?"翻页方法已切换":((r.j&&r.j.error)||"切换失败"));
+      },function(){toast("切换失败")});
+    });
     f2.appendChild(sel);g.appendChild(f2);
     var f3=el("div","fld");f3.appendChild(el("label",null,"启用"));
     var ck=el("input");ck.type="checkbox";ck.id="d-en";
@@ -1021,7 +1029,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_claim, "/device/claim"),
                           (self._h_update, "/device/update"),
                           (self._h_unregister, "/device/unregister"),
-                          (self._h_test, "/device/test")):
+                          (self._h_test, "/device/test"),
+                          (self._h_diag, "/diag")):
                 if path == p:
                     fn(body, ip)
                     return
@@ -1090,6 +1099,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": err})
             return
         self._ok(device=dev)
+
+    def _h_diag(self, body, ip):
+        """APP 侧诊断回传：把翻谱推送处理时的内部状态直接打进电脑日志。"""
+        msg = str(body.get("msg") or "")[:500]
+        if msg:
+            self.server.app.q.put("APP 诊断：%s" % msg)
+        self._ok()
 
     def _h_test(self, body, ip):
         dir_ = body.get("dir")
