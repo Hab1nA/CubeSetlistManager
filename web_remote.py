@@ -181,7 +181,7 @@ class ScoreTurnHub:
             return
         dir_ = "prev" if cmd == CMD_PREV else "next"
         for dev in self.registry.targets(devs):
-            push_async(dev, dir_, self._tasker_port, self._report)
+            push_async(dev, dir_, self._tasker_port(), self._report)
 
 
 # ---- 翻谱设备表（槽位 1–10） ----
