@@ -485,7 +485,7 @@ body.switching .busy{display:inline-block}
 .dv .no{color:var(--mut);font-size:12px;width:34px;flex:none}
 .dv .st{margin-left:auto;font-size:12px;color:var(--mut);flex:none}
 .dv .st.on{color:var(--ok)}
-.notice{padding:10px 16px;font-size:13px;color:var(--warn);
+.notice{margin-top:12px;margin-bottom:2px;padding:10px 16px;font-size:13px;color:var(--warn);
   background:rgba(251,191,36,.10);border-bottom:1px solid var(--line)}
 .ind{flex:none;font-size:12px;padding:4px 10px;border-radius:99px;
   border:1px solid var(--line);color:var(--mut)}
