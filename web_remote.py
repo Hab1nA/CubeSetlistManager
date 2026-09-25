@@ -485,6 +485,8 @@ body.switching .busy{display:inline-block}
 .dv .no{color:var(--mut);font-size:12px;width:34px;flex:none}
 .dv .st{margin-left:auto;font-size:12px;color:var(--mut);flex:none}
 .dv .st.on{color:var(--ok)}
+.notice{padding:10px 16px;font-size:13px;color:var(--warn);
+  background:rgba(251,191,36,.10);border-bottom:1px solid var(--line)}
 .ind{flex:none;font-size:12px;padding:4px 10px;border-radius:99px;
   border:1px solid var(--line);color:var(--mut)}
 .ind.ok{color:var(--ok);border-color:rgba(74,222,128,.45)}
@@ -508,6 +510,8 @@ body.switching .busy{display:inline-block}
   __ACC_IND__
   __RIGHT_BTN__
 </header>
+
+<div class="notice" id="env-notice" data-page="__PAGE_TYPE__" hidden></div>
 
 <section class="hero">
   <div class="lbl">NOW</div>
@@ -633,10 +637,25 @@ function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(j){st=j;setConn(true);render()},
           function(){setConn(false)});
-  if(window.updateAcc)try{updateAcc()}catch(e){}
-  if(window.refreshUsageTip)try{refreshUsageTip()}catch(e){}
-  if(window.refreshTarget)try{refreshTarget()}catch(e){}
+  try{if(window.updateAcc)updateAcc()}catch(e){}
+  try{if(window.refreshUsageTip)refreshUsageTip()}catch(e){}
+  try{if(window.refreshTarget)refreshTarget()}catch(e){}
+  try{refreshEnv()}catch(e){}
 }
+
+function refreshEnv(){
+  var n=$("env-notice");if(!n)return;
+  var page=n.getAttribute("data-page");
+  var inApp=!!window.CubeApp;         // 桥存在=运行在 APP 的 WebView 内
+  var msg=null;
+  if(page==="app"&&!inApp)
+    msg="本页在浏览器中打开——翻谱功能请在 Cube 翻谱 APP 内使用";
+  if(page==="browser"&&inApp)
+    msg="当前为网页版页面——翻谱功能请连接 APP 连接地址端口（在电脑设置页查看）";
+  if(msg){n.hidden=false;n.textContent=msg}
+  else n.hidden=true;
+}
+try{refreshEnv()}catch(e){}
 
 __DEV_JS__
 setInterval(refresh,1000);
@@ -660,8 +679,6 @@ DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
     <h2>设置</h2>
-    <div class="sub" id="no-bridge" style="color:var(--warn)">检测到本页
-      运行在浏览器中——翻谱功能请在 Cube 翻谱 APP 内使用。</div>
     <div class="grp">
       <div class="sub">连接设置</div>
       <div class="fld" style="margin-top:12px"><label>地址</label>
@@ -771,9 +788,6 @@ $("apps-close").addEventListener("click",function(){
   $("m-apps").classList.remove("show")});
 $("usage-grant").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openUsageAccess()});
-if(!window.CubeApp){
-  var nb=$("no-bridge");if(nb)nb.hidden=false;
-}
 $("b-acc").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openAccSettings()});
 $("b-dev").addEventListener("click",openDev);
@@ -928,11 +942,13 @@ function renderDev(d){
 """
 
 PAGE_BROWSER = (PAGE_COMMON
+                .replace("__PAGE_TYPE__", "browser")
                 .replace("__RIGHT_BTN__", BTN_BROWSER)
                 .replace("__ACC_IND__", "")
                 .replace("__DEV_PANEL__", "")
                 .replace("__DEV_JS__", ""))
 PAGE_APP = (PAGE_COMMON
+            .replace("__PAGE_TYPE__", "app")
             .replace("__RIGHT_BTN__", BTN_APP)
             .replace("__ACC_IND__",
                      '<span class="ind" id="acc-ind">无障碍…</span>\n'
