@@ -550,6 +550,27 @@ def test_web_api():
         thsrv[0].server_close()
 
 
+def test_bind_retry():
+    """热点 IP 未就位（bind 报 WinError 10049）应限期重试而非放弃。"""
+    real = web_remote.WebServer
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(10049, "在其上下文中，该请求的地址无效")
+        return real(*a, **k)
+
+    web_remote.WebServer = flaky
+    try:
+        srv = web_remote._bind_web(None, None, lambda: 0, _LOOPBACK, 0,
+                                   web_remote.PAGE_BROWSER)
+        srv.server_close()
+        assert len(calls) == 2, calls
+    finally:
+        web_remote.WebServer = real
+
+
 def test_webremote_lifecycle():
     """总开关生命周期：开=起服务；关=服务停；热点按所有权关。
     hotspot 打桩，服务绑 127.0.0.1，翻谱端口未配=优雅降级。"""
@@ -674,6 +695,7 @@ if __name__ == "__main__":
     test_score_window()
     test_hotspot_logic()
     test_web_api()
+    test_bind_retry()
     test_webremote_lifecycle()
     test_hotspot_script()
     print("test_bridge：全部通过")

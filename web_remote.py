@@ -156,6 +156,21 @@ def push_turn(dev, dir_, tasker_port, test=False):
         name, dir_, int((time.monotonic() - t0) * 1000))
 
 
+def _bind_web(app, registry, tport, ip, port, page, report=None):
+    """热点刚（重）开时适配器 IPv4 可能尚未就位（PowerShell 拿到 IP 早于
+    系统把地址配到网卡），立刻 bind 报 WinError 10049：限期重试兜底。"""
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            return WebServer((ip, port), app, registry, tport, page=page)
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                raise
+            if report:
+                report("绑定 %s:%d 未就绪（%s），重试…" % (ip, port, _err(e)))
+            time.sleep(1.0)
+
+
 def push_async(dev, dir_, tasker_port, report, test=False):
     """单设备推送放独立线程：一台离线不吃 0.5s 超时拖累其余设备。
     test=True 来自「测试上一页/下一页」按钮——APP 收到后先切后台再执行。"""
@@ -1270,9 +1285,10 @@ class WebRemote:
 
     def _start_server(self, ip):
         try:
-            self.server = WebServer((ip, self.server_port), self.app,
-                                    self.registry, lambda: self.tasker_port,
-                                    page=PAGE_BROWSER)
+            self.server = _bind_web(self.app, self.registry,
+                                    lambda: self.tasker_port, ip,
+                                    self.server_port, PAGE_BROWSER,
+                                    self._report)
         except OSError as e:
             self._report("网页服务启动失败（%s:%d）：%s"
                          % (ip, self.server_port, _err(e)))
@@ -1284,10 +1300,9 @@ class WebRemote:
                      % (ip, self.server_port))
         # APP 版页面（appPort）：承载翻谱设置；浏览器版（serverPort）无翻谱功能
         try:
-            self.app_server = WebServer((ip, self.app_port), self.app,
-                                        self.registry,
-                                        lambda: self.tasker_port,
-                                        page=PAGE_APP)
+            self.app_server = _bind_web(self.app, self.registry,
+                                        lambda: self.tasker_port, ip,
+                                        self.app_port, PAGE_APP, self._report)
         except OSError as e:
             self._report("APP 页面服务启动失败（%s:%d）：%s"
                          % (ip, self.app_port, _err(e)))
