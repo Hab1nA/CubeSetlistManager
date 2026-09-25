@@ -1786,19 +1786,23 @@ class SettingsWindow(tk.Toplevel):
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
         self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
-        # 网页地址 = IP 前缀（不可编辑文字）+ 端口框，拼出完整地址
+        # 网页地址行：名字栏与其它行同宽，IP 前缀+端口框拼出完整地址
         wf2 = tk.Frame(body)
         wf2.pack(fill="x", pady=2)
-        self.web_prefix = tk.Label(
-            wf2, text="网页地址 http://%s:" % self.web_ip, anchor="w")
+        tk.Label(wf2, text="网页地址", width=15, anchor="w").pack(side="left")
+        self.web_prefix = tk.Label(wf2, text="http://%s:" % self.web_ip,
+                                   anchor="w")
         self.web_prefix.pack(side="left")
         tk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
         row("翻谱接收端口", self.tsk_var)
+        # APP 地址行：与网页地址行同款对齐
+        wf3 = tk.Frame(body)
+        wf3.pack(fill="x", pady=2)
+        tk.Label(wf3, text="APP 地址", width=15, anchor="w").pack(side="left")
         self.app_addr = tk.Label(
-            body, text="APP 网页地址 http://%s:%d（APP 内输入）"
-                       % (self.web_ip, web_remote.APP_PORT),
+            wf3, text="http://%s:%d" % (self.web_ip, web_remote.APP_PORT),
             anchor="w", fg=dpi.MUT)
-        self.app_addr.pack(anchor="w", pady=1)
+        self.app_addr.pack(side="left")
         threading.Thread(target=self._load_web_status, daemon=True).start()
         tk.Label(body, text="自动播放", anchor="w").pack(
             fill="x", pady=(pad, 3))
@@ -1880,9 +1884,8 @@ class SettingsWindow(tk.Toplevel):
                 txt, fg = "热点未开（启用后自动开）", dpi.MUT
             self.web_status.config(text=txt, fg=fg)
             ip = st.get("ip") or self.web_ip
-            self.web_prefix.config(text="网页地址 http://%s:" % ip)
-            self.app_addr.config(text="APP 网页地址 http://%s:%d（APP 内输入）"
-                                       % (ip, web_remote.APP_PORT))
+            self.web_prefix.config(text="http://%s:" % ip)
+            self.app_addr.config(text="http://%s:%d" % (ip, web_remote.APP_PORT))
 
         try:
             self.after(0, apply)
