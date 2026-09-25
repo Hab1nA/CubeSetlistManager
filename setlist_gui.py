@@ -1656,8 +1656,14 @@ class App:
         if self.ctrl is None:
             now, color = "启动中…", dpi.C_ERR
         elif self.ctrl.busy:
-            now, color = "切换中…", dpi.C_WARN
+            # NOW/NEXT/进度保持切歌前的画面不闪「切换中…」（当前状态标签
+            # 已提示，横幅不再重复）；首次启动即忙没有可保持的，才显示提示
             has_proj = True
+            keep = getattr(self, "_banner_keep", None)
+            if keep is not None:
+                now, color, nxt, remain, frac = keep
+            else:
+                now, color = "切换中…", dpi.C_WARN
         else:
             ws = cubase_ctrl.current_project()
             has_proj = bool(ws)
@@ -1689,6 +1695,8 @@ class App:
                             remain = ("%d:%02d | %d:%02d"
                                       % (int(played) // 60, int(played) % 60,
                                          rem // 60, rem % 60))
+        if self.ctrl is not None and not self.ctrl.busy:
+            self._banner_keep = (now, color, nxt, remain, frac)
         self._banner(now, color, nxt, remain)
         self._progress(frac)
         # 播放状态指示（移动端 /state 的 tstate 与此同源同语义）
