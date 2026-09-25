@@ -500,8 +500,8 @@ body.switching .busy{display:inline-block}
 <header>
   <span class="badge" id="badge"><span class="dot"></span>
     <span id="bt">连接中</span></span>
-  __ACC_IND__
   <span class="spacer"></span>
+  __ACC_IND__
   __RIGHT_BTN__
 </header>
 
@@ -668,6 +668,8 @@ DEV_PANEL_APP = """
       <div class="sub">翻谱设置</div>
       <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持选翻页
         方法。无障碍未开启时点按/滑动不可用（仅媒体键可用）。</div>
+      <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
+        「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
       <div id="dev-own" style="margin-top:10px"></div>
       <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
         <span id="t-ip" class="mono"></span><input type="text" id="t-port"
