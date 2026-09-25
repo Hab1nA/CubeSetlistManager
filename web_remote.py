@@ -470,6 +470,21 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .tstate.playing{color:var(--ok)}
 .tstate.paused{color:var(--warn)}
 .tstate.stopped{color:var(--mut)}
+.nowrow{display:flex;align-items:baseline;gap:12px}
+.nowrow .now{flex:1;min-width:0}
+.tstate-big{font-size:30px;font-weight:800;flex:none}
+/* 设备适配断点（CSS px）：手机竖屏 360–480、平板 ≥600，取 640 分界。
+   手机：状态用小字（NOW 标签行右端，tstate-mini）、设置面板单列；
+   平板：状态升为 NOW 歌名同规格同行（tstate-big）、面板保持两列 */
+.tstate-mini{display:inline-block}
+@media (max-width:640px){
+  .tstate-big{display:none}
+  .devcols{display:block}
+  .devcols-r{width:auto;margin-top:12px}
+}
+@media (min-width:641px){
+  .tstate-mini{display:none}
+}
 .now{font-size:30px;font-weight:800;line-height:1.25;margin:4px 0 10px;
   word-break:break-all}
 .prow{display:flex;align-items:center;gap:10px;margin:-4px 0 10px}
@@ -480,9 +495,6 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
   font-variant-numeric:tabular-nums}
 .nextrow{display:flex;align-items:baseline;gap:10px;font-size:16px;min-height:24px}
 .next{color:var(--mut);word-break:break-all}
-.busy{display:none;margin-left:auto;flex:none;font-size:12px;color:var(--warn);
-  border:1px solid var(--warn);border-radius:99px;padding:3px 10px}
-body.switching .busy{display:inline-block}
 
 .list{list-style:none;margin:14px 12px 0;border:1px solid var(--line);
   border-radius:14px;overflow:hidden;background:var(--panel)}
@@ -576,14 +588,14 @@ body.switching .busy{display:inline-block}
 
 <section class="hero">
   <div class="strow"><span class="lbl">NOW</span>
-    <span class="tstate stopped" id="tstate">未在播放</span></div>
-  <div class="now" id="now">—</div>
+    <span class="tstate stopped tstate-mini" id="tstate">未在播放</span></div>
+  <div class="nowrow"><span class="now" id="now">—</span>
+    <span class="tstate stopped tstate-big">未在播放</span></div>
   <div class="prow" id="prow" hidden>
     <div class="pbar"><i id="pfill"></i></div>
     <span class="ptime" id="ptime"></span></div>
   <div class="nextrow"><span class="lbl">NEXT</span>
-    <span class="next" id="next">—</span>
-    <span class="busy" id="busy">切换中…</span></div>
+    <span class="next" id="next">—</span></div>
 </section>
 
 <ol class="list" id="list"></ol>
@@ -645,9 +657,7 @@ function render(){
   var sig=[st.busy,st.ready,st.live,cur,st.projName,
     JSON.stringify(st.songs)].join("|");
   if(sig===lastSig)return;      // 无变化不动 DOM：切歌期间每次重绘都是
-  lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白），
-  // 状态类绝不能叫 busy：会命中徽标自身的 .busy{display:none} 把整页藏掉
-  document.body.classList.toggle("switching",!!st.busy);
+  lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白）
   var s=st.songs?st.songs[cur]:null;
   // NOW 对齐 PC 横幅：显示真实打开的工程名（工程可能不在播放列表里，
   // cur 为空时按歌名索引查不到）；无工程时与 PC 同文案
@@ -676,14 +686,19 @@ function fmtT(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+":"+
   ("0"+(s%60)).slice(-2)}
 
 /* 播放状态行 + 进度条：pos 每 tick 都变，独立于 render 的大 sig 门
-   （render 会重建整个列表 DOM，跟着 pos 刷会一秒两抖），只动这几个节点 */
+   （render 会重建整个列表 DOM，跟着 pos 刷会一秒两抖），只动这几个节点。
+   状态两副本（手机小字/平板大字，断点显隐），一并更新 */
 function renderLive(){
   if(!st)return;
   var ts=st.busy?"busy":(st.tstate||"stopped");
-  var te=$("tstate");
-  te.textContent={playing:"播放中",paused:"已暂停",stopped:"未在播放",
+  var txt={playing:"播放中",paused:"已暂停",stopped:"未在播放",
     busy:"切换中…"}[ts];
-  te.className="tstate "+(ts==="busy"?"paused":ts);
+  var cls="tstate "+(ts==="busy"?"paused":ts);
+  var tes=document.querySelectorAll(".tstate");
+  for(var i=0;i<tes.length;i++){
+    tes[i].textContent=txt;
+    tes[i].className=cls+" "+(tes[i].getAttribute("data-sz")||"");
+  }
   var prow=$("prow");
   var cur=typeof st.cur==="number"?st.cur:-1;
   var d=typeof st.dur==="number"?st.dur:0;
@@ -778,9 +793,9 @@ DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
     <h2>设置</h2>
-    <div style="display:flex;gap:14px;align-items:stretch">
-      <!-- 左列：连接设置 + 翻谱设置 -->
-      <div style="flex:1;min-width:0">
+    <div class="devcols">
+      <!-- 左列：连接设置 + 翻谱设置（手机断点下 devcols 变单列） -->
+      <div class="devcols-l">
         <div class="grp">
           <div class="sub">连接设置</div>
           <div class="fld" style="margin-top:12px"><label>地址</label>
@@ -832,8 +847,8 @@ DEV_PANEL_APP = """
             统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
         </div>
       </div>
-      <!-- 右列：所有设备（等高，宽度显著小于左列） -->
-      <div style="width:30%;flex:none;display:flex;flex-direction:column">
+      <!-- 右列：所有设备（等高，宽度显著小于左列；手机断点堆叠在下方） -->
+      <div class="devcols-r">
         <div class="grp" style="flex:1">
           <div class="sub">所有设备</div>
           <div id="dev-all" style="margin-top:6px"></div>
