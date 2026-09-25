@@ -66,6 +66,13 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
             setBackgroundColor(0xFF14161A.toInt())
             addJavascriptInterface(Bridge(), "CubeApp")
+            // 网页里的「下载 APP」在 APP 内点击时交给系统浏览器下载
+            setDownloadListener { url, _, _, _, _ ->
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                } catch (e: Exception) {
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView?, errorCode: Int,
                                              description: String?, failingUrl: String?) {
