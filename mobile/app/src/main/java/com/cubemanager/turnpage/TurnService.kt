@@ -70,21 +70,62 @@ class TurnService : Service() {
         if (j.optInt("test") == 1) {
             // 测试按钮在前台是本 APP：自动切回谱面 App（手动指定优先，
             // 其次按使用记录自动检测最近使用的第三方应用）再执行手势。
+            // 决策链全文回传电脑端日志（/diag），跳转失败可远程定位。
             val prefs = getSharedPreferences("cube", MODE_PRIVATE)
-            val target = prefs.getString("turnTargetPkg", null)
-                ?: lastUsedNonSelfPackage()
+            val usage = usageGranted()
+            val manual = prefs.getString("turnTargetPkg", null)
+            val auto = if (manual == null) lastUsedNonSelfPackage() else null
+            val target = manual ?: auto
             val intent = target?.let { packageManager.getLaunchIntentForPackage(it) }
+            reportDiag("usage=$usage manual=${manual ?: "null"} " +
+                "auto=${auto ?: "null"} intent=${intent != null} " +
+                "acc=${TurnAccessibilityService.instance != null}")
             if (intent != null) {
                 intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
+                reportDiag("startActivity 已发起 → $target")
                 mainHandler.postDelayed({ fire() }, 1200)
             } else {
+                reportDiag("无可用启动意图：回退切桌面")
                 mainHandler.post {
                     MainActivity.instance?.moveTaskToBack(true)
                 }
                 mainHandler.postDelayed({ fire() }, 800)
             }
         } else fire()
+    }
+
+    private fun usageGranted(): Boolean {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        return appOps.checkOpNoThrow(
+            android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+            android.os.Process.myUid(), packageName) ==
+            android.app.AppOpsManager.MODE_ALLOWED
+    }
+
+    /** 诊断回传：POST 到电脑端 /diag（复用 APP 已知地址）。 */
+    private fun reportDiag(msg: String) {
+        Thread {
+            try {
+                val addr = getSharedPreferences("cube", MODE_PRIVATE)
+                    .getString("addr", "") ?: return@Thread
+                val uri = android.net.Uri.parse(addr)
+                val host = uri.host ?: return@Thread
+                val port = if (uri.port > 0) uri.port else 80
+                val conn = java.net.URL("http://$host:$port/diag").openConnection()
+                    as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.write(
+                    """{"msg":${org.json.JSONObject.quote(msg)}}""".toByteArray())
+                conn.outputStream.close()
+                conn.responseCode
+            } catch (e: Exception) {
+            }
+        }.start()
     }
 
     /** 最近 7 天实际使用时间最新的非本 APP 应用（需「使用情况访问」授权；
