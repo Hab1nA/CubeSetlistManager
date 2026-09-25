@@ -478,6 +478,8 @@ def test_web_api():
         code, snap = _http_get(port, "/state")
         assert code == 200 and snap["open"] and snap["confirm"]
         assert snap["projName"] == "歌一"
+        assert snap["tstate"] == "stopped"   # 假 app 无 watch → 未在播放
+        assert snap["pos"] == 0 and snap["dur"] == 0
         assert snap["songs"][0]["name"] == "歌一"
         assert snap["songs"][0]["dur"] == "3:33"
         # NOW/弹窗「从」名用真实工程名（对齐 PC 横幅），不再按 cur 查《？》
