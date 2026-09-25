@@ -684,13 +684,15 @@ function render(){
   if(sig===lastSig)return;      // 无变化不动 DOM：切歌期间每次重绘都是
   lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白）
   var s=st.songs?st.songs[cur]:null;
-  // NOW 对齐 PC 横幅：显示真实打开的工程名（工程可能不在播放列表里，
-  // cur 为空时按歌名索引查不到）；无工程时与 PC 同文案
-  $("now").textContent=st.busy?"切换中…":
-    (st.projName?st.projName:
-      (st.ready?"（无打开的工程）":"主程序启动中…"));
-  var n=st.songs?st.songs[cur+1]:null;
-  $("next").textContent=n?n.name:(s?"（末尾）":"—");
+  // NOW/NEXT 对齐 PC 横幅：显示真实打开的工程名（工程可能不在播放列表
+  // 里，cur 为空时按歌名索引查不到）。切歌期间保持切歌前的歌名不动
+  // （当前状态行已提示「切换中…」，这里不再重复），切完刷成新值
+  if(!st.busy){
+    $("now").textContent=st.projName?st.projName:
+      (st.ready?"（无打开的工程）":"主程序启动中…");
+    var n=st.songs?st.songs[cur+1]:null;
+    $("next").textContent=n?n.name:(s?"（末尾）":"—");
+  }
   var L=$("list");L.textContent="";
   for(var i=0;i<(st.songs||[]).length;i++){
     var li=el("li");if(i===cur)li.className="cur";
