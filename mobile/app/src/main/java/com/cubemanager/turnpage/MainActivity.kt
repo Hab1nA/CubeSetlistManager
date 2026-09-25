@@ -134,6 +134,17 @@ class MainActivity : Activity() {
             PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        // 电池优化豁免：防 ROM 杀后台/解绑无障碍——标准弹窗确认一次永久生效
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                startActivity(Intent(
+                    android.provider.Settings
+                        .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    android.net.Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+            }
+        }
         startForegroundService(Intent(this, TurnService::class.java))
         // 旧版默认端口 8765 现在是浏览器版页面：自动迁移到 APP 版 8767
         val saved = prefs().getString("addr", null)?.let {
@@ -314,13 +325,47 @@ class MainActivity : Activity() {
                 ?: false
 
         @android.webkit.JavascriptInterface
-        fun accEnabled(): Boolean = TurnAccessibilityService.instance != null
+        fun accEnabled(): Boolean {
+            // 读系统真实启用状态：进程内绑定会因切后台/ROM 省电短暂解绑，
+            // 若据此显示会误报「关」
+            val am = getSystemService(ACCESSIBILITY_SERVICE) as
+                android.view.accessibility.AccessibilityManager
+            if (!am.isEnabled) return false
+            return am.getEnabledAccessibilityServiceList(
+                android.accessibilityservice.AccessibilityServiceInfo
+                    .FEEDBACK_ALL_MASK
+            ).any { svc ->
+                svc.id?.contains(packageName) == true &&
+                    svc.id.contains("TurnAccessibilityService")
+            }
+        }
 
         @android.webkit.JavascriptInterface
         fun openAccSettings() {
             runOnUiThread {
                 startActivity(
                     Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun batteryWhitelisted(): Boolean {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            return pm.isIgnoringBatteryOptimizations(packageName)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun requestBatteryWhitelist() {
+            runOnUiThread {
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings
+                            .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:$packageName")))
+                } catch (e: Exception) {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
             }
         }
     }
