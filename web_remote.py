@@ -25,7 +25,8 @@ CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
 DEV_NOTES = tuple(range(48, 58))   # C3–A3 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
-PUSH_TIMEOUT = 0.5           # 逐设备推送短超时：失败只记日志不拖累别的设备
+PUSH_TIMEOUT = 1.5           # 逐设备推送短超时：实测热点 WiFi 握手可达 0.3s+，
+                             # 0.5s 会在正常网络下误杀；失败只记日志不拖累别的设备
 TURN_PATH = "/turn"          # 翻谱设备固定接收路径（与配置说明一致）
 APP_PORT = 8767              # APP 版页面端口（浏览器版=serverPort 8765）
 
