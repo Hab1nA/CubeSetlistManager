@@ -466,21 +466,32 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .hero{padding:18px 20px 8px}
 .lbl{font-size:11px;letter-spacing:.18em;color:var(--mut);font-weight:700}
 .strow{display:flex;align-items:baseline;justify-content:space-between}
-.tstate{font-size:12px;font-weight:700}
+.tstate{font-weight:700}
 .tstate.playing{color:var(--ok)}
 .tstate.paused{color:var(--warn)}
 .tstate.stopped{color:var(--mut)}
 .nowrow{display:flex;align-items:baseline;gap:12px}
 .nowrow .now{flex:1;min-width:0}
-.tstate-big{font-size:30px;font-weight:800;flex:none}
+/* 尺寸壳在外（断点显隐）、状态字在内（JS 只改状态类）——字号走
+   「壳→字」继承，JS 重建内层类名也不会把尺寸抹掉 */
+.tstate-mini .tstate{font-size:12px}
+.tstate-big .tstate{font-size:30px;font-weight:800}
 /* 设备适配断点（CSS px）：手机竖屏 360–480、平板 ≥600，取 640 分界。
    手机：状态用小字（NOW 标签行右端，tstate-mini）、设置面板单列；
    平板：状态升为 NOW 歌名同规格同行（tstate-big）、面板保持两列 */
 .tstate-mini{display:inline-block}
+/* 翻谱地址行：平板与原版同构（addr-ctl=display:contents，子元素直接
+   参与父行 flex）；手机竖屏一行摆不下 → addr-ctl 整体折为第二行
+   （缩进 68px=label 60+间距 8，与 IP 值列对齐） */
+.addr-ctl{display:contents}
 @media (max-width:640px){
   .tstate-big{display:none}
   .devcols{display:block}
   .devcols-r{width:auto;margin-top:12px}
+  .fld-addr{flex-wrap:wrap}
+  .fld-addr .addr-ctl{display:flex;flex:1 1 100%;align-items:center;gap:8px}
+  .fld-addr #t-ip{white-space:nowrap}
+  .fld-addr #t-port{margin-left:68px}
 }
 @media (min-width:641px){
   .tstate-mini{display:none}
@@ -588,9 +599,9 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 
 <section class="hero">
   <div class="strow"><span class="lbl">NOW</span>
-    <span class="tstate stopped tstate-mini" id="tstate">未在播放</span></div>
+    <span class="tstate-mini"><span class="tstate stopped" id="tstate">未在播放</span></span></div>
   <div class="nowrow"><span class="now" id="now">—</span>
-    <span class="tstate stopped tstate-big">未在播放</span></div>
+    <span class="tstate-big"><span class="tstate stopped">未在播放</span></span></div>
   <div class="prow" id="prow" hidden>
     <div class="pbar"><i id="pfill"></i></div>
     <span class="ptime" id="ptime"></span></div>
@@ -697,7 +708,7 @@ function renderLive(){
   var tes=document.querySelectorAll(".tstate");
   for(var i=0;i<tes.length;i++){
     tes[i].textContent=txt;
-    tes[i].className=cls+" "+(tes[i].getAttribute("data-sz")||"");
+    tes[i].className=cls;
   }
   var prow=$("prow");
   var cur=typeof st.cur==="number"?st.cur:-1;
@@ -837,11 +848,13 @@ DEV_PANEL_APP = """
           <div class="btns" id="usage-btns" style="margin-top:8px">
             <button class="btn" id="usage-grant">去授权使用情况访问</button>
           </div>
-          <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
-            <span id="t-ip" class="mono"></span><input type="text" id="t-port"
-              style="width:70px;flex:none;margin-left:8px">
-            <span class="ind" id="t-ind" style="margin-left:auto;flex:none">…</span>
-            <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
+          <div class="fld fld-addr" style="margin-top:10px"><label>翻谱地址</label>
+            <span id="t-ip" class="mono"></span>
+            <span class="addr-ctl">
+              <input type="text" id="t-port" style="width:70px;flex:none">
+              <span class="ind" id="t-ind" style="margin-left:auto;flex:none">…</span>
+              <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
+            </span>
           </div>
           <div class="sub" style="margin-top:8px">电脑端向乐队所有设备推送翻谱信号
             统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
