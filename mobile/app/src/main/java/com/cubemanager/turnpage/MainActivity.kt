@@ -309,6 +309,19 @@ class MainActivity : Activity() {
                 ?: false
 
         @android.webkit.JavascriptInterface
+        fun turnMethod(): String =
+            getSharedPreferences("cube", MODE_PRIVATE)
+                .getString("turnMethod", "tap") ?: "tap"
+
+        @android.webkit.JavascriptInterface
+        fun setTurnMethod(m: String): Boolean {
+            if (m !in setOf("tap", "double", "swipe", "media")) return false
+            getSharedPreferences("cube", MODE_PRIVATE)
+                .edit().putString("turnMethod", m).apply()
+            return true
+        }
+
+        @android.webkit.JavascriptInterface
         fun accEnabled(): Boolean {
             // 读系统真实启用状态：进程内绑定会因切后台/ROM 省电短暂解绑，
             // 若据此显示会误报「关」

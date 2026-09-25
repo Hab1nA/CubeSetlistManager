@@ -512,30 +512,19 @@ def test_web_api():
         assert len(reg.snapshot()) == 1
         code, j = _http_post(port, "/device/claim", {"name": "主谱台2"})
         assert len(reg.snapshot()) == 1 and j["device"]["name"] == "主谱台2"
-        # 改方法 + 测试推送（假设备收包；1280*0.75=960，800*0.5=400；
-        # /device/test 来源是测试按钮 → body 带 test:1，APP 端先切后台）
-        assert _http_post(port, "/device/update", {"method": "double"})[0] == 200
-        assert reg.snapshot()[0]["method"] == "double"
+        # 改名字 + 测试推送（假设备收包）：语义协议 body 只有 dir+test，
+        # 翻页方法与坐标组装在 APP 端本机设置里（/device/test 是测试按钮
+        # → test:1，APP 端先切后台再执行）
+        assert _http_post(port, "/device/update", {"name": "主谱台X"})[0] == 200
+        assert reg.snapshot()[0]["name"] == "主谱台X"
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
         time.sleep(0.5)
-        assert _FakeDevice.hits == [
-            {"x": 960, "y": 400, "count": 2, "mode": "tap", "test": 1}]
-        # swipe：prev=向右滑 0.25w→0.75w，带终点 x2
-        assert _http_post(port, "/device/update", {"method": "swipe"})[0] == 200
+        assert _FakeDevice.hits == [{"dir": "next", "test": 1}]
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "prev"})[0] == 200
         time.sleep(0.5)
-        assert _FakeDevice.hits == [
-            {"x": 320, "y": 400, "x2": 960, "count": 1, "mode": "swipeR",
-             "test": 1}]
-        # media：坐标仍按左右半区，APP 按 x<0.5w 选 MEDIA_PREVIOUS/NEXT
-        assert _http_post(port, "/device/update", {"method": "media"})[0] == 200
-        _FakeDevice.hits = []
-        assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
-        time.sleep(0.5)
-        assert _FakeDevice.hits == [
-            {"x": 960, "y": 400, "count": 1, "mode": "media", "test": 1}]
+        assert _FakeDevice.hits == [{"dir": "prev", "test": 1}]
         assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
         # 取消登记：记录删除、幂等二次 400
         assert _http_post(port, "/device/unregister", {})[0] == 200
@@ -550,7 +539,7 @@ def test_web_api():
                          kwargs={"poll_interval": 0.05}, daemon=True).start()
         try:
             assert _http_post(port2, "/device/update",
-                              {"method": "single"})[0] == 400
+                              {"name": "x"})[0] == 400
         finally:
             srv2.shutdown()
             srv2.server_close()
