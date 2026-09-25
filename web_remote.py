@@ -653,6 +653,20 @@ function toast(m){var t=$("toast");t.textContent=m;t.classList.add("show");
   clearTimeout(toastT);toastT=setTimeout(function(){
     t.classList.remove("show")},1800)}
 
+/* 安卓返回手势/返回键经桥调 uiBack：关闭最上层浮层（.mask.show，
+ * DOM 靠后=视觉在上，倒序找第一个）——设置面板、「选择谱面 App」及
+ * 未来新增的二级/三级页面只要用 .mask 结构就自动被覆盖；
+ * 无浮层可关返回 false，原生侧走默认行为 */
+function uiBack(){
+  var ms=document.querySelectorAll(".mask");
+  for(var i=ms.length-1;i>=0;i--)
+    if(ms[i].classList.contains("show")){
+      ms[i].classList.remove("show");
+      return "true";
+    }
+  return "false";
+}
+
 function post(path,body){return fetch(path,{method:"POST",
   headers:{"Content-Type":"application/json"},
   body:JSON.stringify(body||{})}).then(function(r){
