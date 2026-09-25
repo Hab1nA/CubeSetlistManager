@@ -421,5 +421,26 @@ class MainActivity : Activity() {
                 }
             }
         }
+
+        /** APP 误连网页端口时的自动纠正：改存地址并加载正确端口（同主机）。 */
+        @android.webkit.JavascriptInterface
+        fun switchToAppPort(port: String) {
+            val p = port.toIntOrNull() ?: return
+            if (p < 1024 || p > 65535) return
+            val cur = prefs().getString("addr", "") ?: return
+            val host = android.net.Uri.parse(cur).host ?: return
+            val url = "http://$host:$p"
+            if (url == cur) return
+            runOnUiThread {
+                prefs().edit().putString("addr", url).apply()
+                addrInput.setText(url.removePrefix("http://"))
+                webView.stopLoading()
+                hadError = false
+                loaded = false
+                showStatus("已自动切换到 APP 端口 $p …", false)
+                welcome.visibility = ViewGroup.VISIBLE
+                webView.loadUrl(url)
+            }
+        }
     }
 }

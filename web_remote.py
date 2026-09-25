@@ -384,6 +384,8 @@ def build_snapshot(app, has_project):
         "live": bool(app.watch is not None and app.watch.is_transport_live()),
         "cur": app.cur,
         "songs": songs,
+        # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
+        "appPort": getattr(getattr(app, "web", None), "app_port", None),
     }
 
 
@@ -641,6 +643,10 @@ function refresh(){
   try{if(window.refreshUsageTip)refreshUsageTip()}catch(e){}
   try{if(window.refreshTarget)refreshTarget()}catch(e){}
   try{refreshEnv()}catch(e){}
+  // APP 内误连网页端口时自动纠正（端口从 /state 动态获取，不写死）
+  try{if(window.CubeApp&&st&&typeof st.appPort==="number"&&st.appPort>0
+      &&(location.port||"80")!==String(st.appPort))
+    CubeApp.switchToAppPort(String(st.appPort))}catch(e){}
 }
 
 function refreshEnv(){
@@ -650,8 +656,11 @@ function refreshEnv(){
   var msg=null;
   if(page==="app"&&!inApp)
     msg="本页在浏览器中打开——翻谱功能请在 Cube 翻谱 APP 内使用";
-  if(page==="browser"&&inApp)
-    msg="当前为网页版页面——翻谱功能请连接 APP 连接地址端口（在电脑设置页查看）";
+  if(page==="browser"&&inApp){
+    var ap=(st&&typeof st.appPort==="number")?st.appPort:null;
+    msg=ap===null?"正在获取 APP 连接端口…"
+      :"检测到 APP 连接端口为 "+ap+"——正在自动切换…";
+  }
   if(msg){n.hidden=false;n.textContent=msg}
   else n.hidden=true;
 }
