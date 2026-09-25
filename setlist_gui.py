@@ -25,7 +25,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 
 import advance
 import cubase_ctrl
@@ -1755,12 +1755,22 @@ class SettingsWindow(tk.Toplevel):
         body.pack(fill="both", expand=True, padx=pad,
                   pady=(pad, dpi.scale(self, 8)))
 
-        def row(label, var):
+        def row(label, var, browse=False):
             f = tk.Frame(body)
             f.pack(fill="x", pady=2)
             tk.Label(f, text=label, width=15, anchor="w").pack(side="left")
             tk.Entry(f, textvariable=var).pack(
                 side="left", fill="x", expand=True)
+            if browse:
+                def pick():
+                    d = filedialog.askdirectory(
+                        initialdir=var.get() or "/", parent=self,
+                        title="选择文件夹")
+                    if d:       # 取消返回空串不动原值；分隔符统一成反斜杠
+                        var.set(d.replace("/", "\\"))
+
+                tk.Button(f, text="浏览…", width=6,
+                          command=pick).pack(side="left", padx=(6, 0))
 
         self._menus = []    # 下拉不在 darkify 覆盖范围，建完统一在 darkify 后套色
 
@@ -1878,8 +1888,8 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(body, text="目录", anchor="w").pack(fill="x", pady=(pad, 3))
         self.proj_var = tk.StringVar(value=app.ccfg.get("projectsRoot", ""))
         self.vid_var = tk.StringVar(value=obs_cfg.get("videoRoot", ""))
-        row("Cubase 工程库", self.proj_var)
-        row("VJ 视频目录", self.vid_var)
+        row("Cubase 工程库", self.proj_var, browse=True)
+        row("VJ 视频目录", self.vid_var, browse=True)
         self.closeapps_var = tk.BooleanVar(value=app.exit_close_apps)
         tk.Checkbutton(body, text="退出时关闭被控软件（Cubase/OBS/loopMIDI）",
                        variable=self.closeapps_var).pack(anchor="w",
