@@ -491,7 +491,7 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
   .fld-addr{flex-wrap:wrap}
   .fld-addr .addr-ctl{display:flex;flex:1 1 100%;align-items:center;gap:8px}
   .fld-addr #t-ip{white-space:nowrap}
-  .fld-addr #t-port{margin-left:68px}
+  /* 第二行：端口贴左，指示器 margin-left:auto 把它与「应用」推到贴右 */
 }
 @media (min-width:641px){
   .tstate-mini{display:none}
