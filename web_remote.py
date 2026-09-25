@@ -523,7 +523,7 @@ body.busy .busy{display:inline-block}
 
 <script>
 "use strict";
-var st=null,conn=null,pend=-1,toastT=null;
+var st=null,conn=null,pend=-1,toastT=null,lastSig=null;
 
 function $(id){return document.getElementById(id)}
 function el(tag,cls,txt){var e=document.createElement(tag);
@@ -544,8 +544,11 @@ function setConn(on){if(on===conn)return;conn=on;
 
 function render(){
   if(!st)return;
-  document.body.classList.toggle("busy",!!st.busy);
   var cur=typeof st.cur==="number"?st.cur:-1;
+  var sig=[st.busy,st.ready,st.live,cur,JSON.stringify(st.songs)].join("|");
+  if(sig===lastSig)return;      // 无变化不动 DOM：切歌期间每次重绘都是
+  lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白），
+  document.body.classList.toggle("busy",!!st.busy);
   var s=st.songs?st.songs[cur]:null;
   $("now").textContent=st.busy?"切换中…":
     (s?s.name:(st.ready?"（未开始）":"主程序启动中…"));
