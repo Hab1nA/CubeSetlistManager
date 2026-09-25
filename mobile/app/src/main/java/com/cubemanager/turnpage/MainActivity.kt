@@ -30,7 +30,17 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            webViewClient = WebViewClient()
+            setBackgroundColor(0xFF14161A.toInt())
+            webViewClient = object : WebViewClient() {
+                override fun onReceivedError(view: WebView?, errorCode: Int,
+                                             description: String?, failingUrl: String?) {
+                    showStatus("加载失败（$errorCode）：$description", err = true)
+                }
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (url != null && !url.startsWith("about:"))
+                        showStatus("已连接 $url", err = false)
+                }
+            }
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -50,7 +60,15 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         startForegroundService(Intent(this, TurnService::class.java))
-        load(prefs().getString("addr", null))
+        val saved = prefs().getString("addr", null)
+        if (saved.isNullOrEmpty()) {
+            // 对话框不能在 onCreate 弹（窗口未就绪）；等首帧之后
+            status.text = "未连接：点「电脑地址」输入电脑的网页地址"
+            window.decorView.post { promptAddress() }
+        } else {
+            webView.loadUrl(saved)
+            refreshStatus()
+        }
     }
 
     override fun onBackPressed() {
@@ -64,14 +82,16 @@ class MainActivity : Activity() {
 
     private fun prefs() = getSharedPreferences("cube", MODE_PRIVATE)
 
-    private fun load(addr: String?) {
-        if (addr.isNullOrEmpty()) promptAddress() else webView.loadUrl(addr)
+    private fun showStatus(text: String, err: Boolean) {
+        status.text = text
+        status.setTextColor(if (err) 0xFFB00020.toInt() else 0xFF2E7D32.toInt())
     }
 
     private fun promptAddress() {
         val input = EditText(this).apply {
             hint = "192.168.137.1:8765"
-            setText(prefs().getString("addr", "")?.replace(Regex("^https?://"), ""))
+            // 热点 IP 固定，预填默认值（hint 不是值，别让用户误以为已填）
+            setText("192.168.137.1:8765")
             setSingleLine(true)
         }
         AlertDialog.Builder(this)
@@ -80,11 +100,13 @@ class MainActivity : Activity() {
             .setView(input)
             .setPositiveButton("连接") { _, _ ->
                 val addr = input.text.toString().trim()
-                if (addr.isNotEmpty()) {
-                    val url = if ("://" in addr) addr else "http://$addr"
-                    prefs().edit().putString("addr", url).apply()
-                    webView.loadUrl(url)
+                if (addr.isEmpty()) {
+                    showStatus("未输入地址，未连接", err = true)
+                    return@setPositiveButton
                 }
+                val url = if ("://" in addr) addr else "http://$addr"
+                prefs().edit().putString("addr", url).apply()
+                webView.loadUrl(url)
             }
             .setNegativeButton("取消", null)
             .show()
@@ -92,8 +114,9 @@ class MainActivity : Activity() {
 
     private fun refreshStatus() {
         val svcOn = TurnAccessibilityService.instance != null
-        status.text = if (svcOn) "手势就绪 · 电脑推送可用"
-                      else "无障碍未开启：点按/滑动不可用（设置→无障碍→Cube 翻谱）"
+        val gesture = if (svcOn) "手势就绪" else "无障碍未开启（仅媒体键可用）"
+        val addr = prefs().getString("addr", "") ?: ""
+        status.text = "$gesture · $addr"
         status.setTextColor(if (svcOn) 0xFF2E7D32.toInt() else 0xFFB00020.toInt())
     }
 }
