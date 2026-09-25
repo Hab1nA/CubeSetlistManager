@@ -809,8 +809,6 @@ $("m-dev").addEventListener("click",function(e){
   if(e.target===this)$("m-dev").classList.remove("show")});
 $("m-apps").addEventListener("click",function(e){
   if(e.target===this)$("m-apps").classList.remove("show")});
-$("dev-close").addEventListener("click",function(){
-  $("m-dev").classList.remove("show")});
 
 function openDev(){
   $("m-dev").classList.add("show");
