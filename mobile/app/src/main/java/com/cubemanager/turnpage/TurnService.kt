@@ -50,6 +50,7 @@ class TurnService : Service() {
         val x = j.optInt("x")
         val y = j.optInt("y")
         val count = j.optInt("count", 1)
+        reportDiag("收到推送 mode=$mode x=$x y=$y count=$count test=${j.optInt("test")}")
         val fire = {
             when (mode) {
                 "media" -> {
