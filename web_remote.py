@@ -674,7 +674,7 @@ DEV_PANEL_APP = """
         <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
       </div>
       <div class="sub" style="margin-top:8px">电脑端按此端口向本机推送翻谱
-        命令——修改后请同步电脑端「APP 翻译地址」的端口。</div>
+        命令——修改后请同步电脑端「APP 翻谱地址」的端口。</div>
     </div>
     <div class="grp">
       <div class="sub">翻页测试会自动把本 APP 切到后台执行——请先打开谱面 App</div>
@@ -723,7 +723,7 @@ $("t-apply").addEventListener("click",function(){
     setInd(false,"端口非法");return}
   var ok=CubeApp.setTurnPort(p);
   setInd(ok,ok?p+" 端口监听中":"端口不可用");
-  toast(ok?"端口已应用：请同步电脑端「APP 翻译地址」":"端口被占用或无法监听");
+  toast(ok?"端口已应用：请同步电脑端「APP 翻谱地址」":"端口被占用或无法监听");
 });
 
 $("c-save").addEventListener("click",function(){

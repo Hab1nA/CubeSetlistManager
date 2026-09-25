@@ -1793,8 +1793,9 @@ class SettingsWindow(tk.Toplevel):
         wf2 = tk.Frame(body)
         wf2.pack(fill="x", pady=2)
         tk.Label(wf2, text="网页地址", width=15, anchor="w").pack(side="left")
+        # 三行地址的 IP 前缀统一定宽（=最长占位行 23 字符），端口框对齐
         self.web_prefix = tk.Label(wf2, text="http://%s:" % self.web_ip,
-                                   anchor="w")
+                                   width=23, anchor="w")
         self.web_prefix.pack(side="left")
         tk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
         self.web_ok = tk.Label(wf2, text="…", fg=dpi.MUT)
@@ -1804,16 +1805,16 @@ class SettingsWindow(tk.Toplevel):
         wf3.pack(fill="x", pady=2)
         tk.Label(wf3, text="APP 连接地址", width=15, anchor="w").pack(side="left")
         self.app_prefix = tk.Label(wf3, text="http://%s:" % self.web_ip,
-                                   anchor="w")
+                                   width=23, anchor="w")
         self.app_prefix.pack(side="left")
         tk.Entry(wf3, textvariable=self.app_var, width=6).pack(side="left")
         self.app_ok = tk.Label(wf3, text="…", fg=dpi.MUT)
         self.app_ok.pack(side="right")
-        # APP 翻译地址行：设备 IP 各异 → XXX 占位；端口全局统一
+        # APP 翻谱地址行：设备 IP 各异 → XXX 占位；端口全局统一
         wf4 = tk.Frame(body)
         wf4.pack(fill="x", pady=2)
-        tk.Label(wf4, text="APP 翻译地址", width=15, anchor="w").pack(side="left")
-        tk.Label(wf4, text="http://XXX.XXX.XXX.XXX:", anchor="w",
+        tk.Label(wf4, text="APP 翻谱地址", width=15, anchor="w").pack(side="left")
+        tk.Label(wf4, text="http://XXX.XXX.XXX.XXX:", width=23, anchor="w",
                  fg=dpi.MUT).pack(side="left")
         tk.Entry(wf4, textvariable=self.tsk_var, width=6).pack(side="left")
         threading.Thread(target=self._load_web_status, daemon=True).start()
@@ -1966,7 +1967,7 @@ class SettingsWindow(tk.Toplevel):
             assert tsk > 0
         except (ValueError, AssertionError):
             tsk = 8766
-            app.q.put("APP 翻译地址端口非法，按 8766 处理")
+            app.q.put("APP 翻谱地址端口非法，按 8766 处理")
         try:
             app_p = int(self.app_var.get().strip())
             assert app_p > 0
