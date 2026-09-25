@@ -701,6 +701,8 @@ function updateAcc(){
   i.textContent=ok?"无障碍开":"无障碍关";
   i.className="ind"+(ok?" ok":" bad");
 }
+$("b-acc").addEventListener("click",function(){
+  if(window.CubeApp)CubeApp.openAccSettings()});
 $("b-dev").addEventListener("click",openDev);
 $("dev-close").addEventListener("click",function(){
   $("m-dev").classList.remove("show")});
@@ -852,7 +854,8 @@ PAGE_BROWSER = (PAGE_COMMON
 PAGE_APP = (PAGE_COMMON
             .replace("__RIGHT_BTN__", BTN_APP)
             .replace("__ACC_IND__",
-                     '<span class="ind" id="acc-ind">无障碍…</span>')
+                     '<span class="ind" id="acc-ind">无障碍…</span>\n'
+                     '  <button class="ghost" id="b-acc" style="margin-left:8px">无障碍</button>')
             .replace("__DEV_PANEL__", DEV_PANEL_APP)
             .replace("__DEV_JS__", DEV_JS_APP))
 

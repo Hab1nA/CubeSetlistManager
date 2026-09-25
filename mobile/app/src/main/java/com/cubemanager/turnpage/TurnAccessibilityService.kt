@@ -21,10 +21,12 @@ class TurnAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        TurnService.instance?.refreshNotification()
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         instance = null
+        TurnService.instance?.refreshNotification()
         return super.onUnbind(intent)
     }
 

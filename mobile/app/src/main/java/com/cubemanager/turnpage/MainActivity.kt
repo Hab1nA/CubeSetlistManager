@@ -315,6 +315,14 @@ class MainActivity : Activity() {
 
         @android.webkit.JavascriptInterface
         fun accEnabled(): Boolean = TurnAccessibilityService.instance != null
+
+        @android.webkit.JavascriptInterface
+        fun openAccSettings() {
+            runOnUiThread {
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        }
     }
 
     override fun onBackPressed() {
