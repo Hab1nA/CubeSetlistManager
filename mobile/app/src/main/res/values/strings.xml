@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="acc_desc">接收电脑推送在屏幕指定位置执行点按或滑动，实现自动翻谱。</string>
+</resources>

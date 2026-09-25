@@ -454,8 +454,20 @@ def test_web_api():
     threading.Thread(target=srv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
     try:
-        # 页面/任务 XML 可取，未知路径 404
+        # 页面可取、APK 下载桩验证、未知路径 404
         assert _http_get(port, "/")[0] == 200
+        real_apk = web_remote._apk_file
+        web_remote._apk_file = lambda: b"PKxx"
+        try:
+            code, j = _http_get(port, "/app.apk")
+            assert code == 200 and j["raw"].startswith("PK")
+        finally:
+            web_remote._apk_file = real_apk
+        web_remote._apk_file = lambda: None
+        try:
+            assert _http_get(port, "/app.apk")[0] == 404
+        finally:
+            web_remote._apk_file = real_apk
         assert _http_get(port, "/nope")[0] == 404
         # /state 快照
         code, snap = _http_get(port, "/state")
@@ -498,7 +510,22 @@ def test_web_api():
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
         time.sleep(0.5)
-        assert _FakeDevice.hits == [{"x": 960, "y": 400, "count": 2}]
+        assert _FakeDevice.hits == [
+            {"x": 960, "y": 400, "count": 2, "mode": "tap"}]
+        # swipe：prev=向右滑 0.25w→0.75w，带终点 x2
+        assert _http_post(port, "/device/update", {"method": "swipe"})[0] == 200
+        _FakeDevice.hits = []
+        assert _http_post(port, "/device/test", {"dir": "prev"})[0] == 200
+        time.sleep(0.5)
+        assert _FakeDevice.hits == [
+            {"x": 320, "y": 400, "x2": 960, "count": 1, "mode": "swipeR"}]
+        # media：坐标仍按左右半区，APP 按 x<0.5w 选 MEDIA_PREVIOUS/NEXT
+        assert _http_post(port, "/device/update", {"method": "media"})[0] == 200
+        _FakeDevice.hits = []
+        assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
+        time.sleep(0.5)
+        assert _FakeDevice.hits == [
+            {"x": 960, "y": 400, "count": 1, "mode": "media"}]
         assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
         # 未认领设备不能改
         reg2 = web_remote.DeviceRegistry([], app.q.put)

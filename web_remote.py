@@ -7,7 +7,9 @@
 配置在 config.json「webRemote」段（DEFAULT_WEB_REMOTE）。
 所有控制动作经 app.calls 队列回 Tk 主线程执行，HTTP 线程不碰 Tk。"""
 import json
+import os
 import queue
+import sys
 import threading
 import time
 import urllib.error
@@ -104,8 +106,19 @@ def push_turn(dev, dir_, tasker_port):
         return False, "翻谱推送失败（%s）：分辨率未知，请在设备上重新认领" % name
     x = int(w * (0.25 if dir_ == "prev" else 0.75))
     y = int(h * 0.5)
-    count = 2 if dev.get("method") == "double" else 1
-    body = json.dumps({"x": x, "y": y, "count": count})
+    method = dev.get("method") or "single"
+    body = {"x": x, "y": y, "count": 1, "mode": "tap"}
+    if method == "double":
+        body["count"] = 2
+    elif method == "swipe":
+        # next=向左滑（0.75w→0.25w，翻书方向），prev=向右滑；x=起笔、x2=收笔
+        x2 = int(w * (0.75 if dir_ == "prev" else 0.25))
+        body = {"x": x, "y": y, "x2": x2, "count": 1,
+                "mode": "swipeL" if dir_ == "next" else "swipeR"}
+    elif method == "media":
+        body["mode"] = "media"          # x 的左右位置即 MEDIA_PREVIOUS/NEXT
+    mode = body["mode"]
+    body = json.dumps(body)
     url = "http://%s:%s%s" % (ip, tasker_port, TURN_PATH)
     req = urllib.request.Request(url, data=body.encode("utf-8"),
                                  headers={"Content-Type": "application/json"})
@@ -116,8 +129,8 @@ def push_turn(dev, dir_, tasker_port):
     except Exception as e:
         return False, "翻谱推送失败（%s %s → %s）：%s" % (name, dir_,
                                                     ip, _err(e))
-    return True, "翻谱已推送（%s %s x=%d y=%d count=%d）" % (name, dir_, x, y,
-                                                            count)
+    return True, "翻谱已推送（%s %s x=%d y=%d mode=%s）" % (name, dir_, x, y,
+                                                            mode)
 
 
 def push_async(dev, dir_, tasker_port, report):
@@ -302,8 +315,8 @@ class DeviceRegistry:
             if name:
                 dev["name"] = str(name)[:20]
             if method is not None:
-                if method not in ("single", "double"):
-                    return None, "翻页方法只能是 single 或 double"
+                if method not in ("single", "double", "swipe", "media"):
+                    return None, "翻页方法只能是 single/double/swipe/media"
                 dev["method"] = method
             if enabled is not None:
                 dev["enabled"] = bool(enabled)
@@ -316,6 +329,18 @@ class DeviceRegistry:
 
 def _fmt_dur(d):
     return cpr_meta.fmt_mmss(d) if d else ""
+
+
+def _apk_file():
+    """翻谱 APP 的 APK（程序目录下 CubeTurn.apk，构建后由 build.bat 拷入）。
+    返回字节或 None。"""
+    base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+            else os.getcwd())
+    try:
+        with open(os.path.join(base, "CubeTurn.apk"), "rb") as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def build_snapshot(app, has_project):
@@ -502,13 +527,13 @@ body.switching .busy{display:inline-block}
       <div id="dev-all" style="margin-top:6px"></div>
     </div>
     <div class="grp">
-      <div class="sub">MacroDroid 配置（首次使用）</div>
+      <div class="sub">翻谱 APP（首次使用）</div>
       <div class="sub" style="margin-top:10px">
-        ① 平板装 MacroDroid，系统设置里给 MacroDroid 开启无障碍<br>
-        ② 新建宏：触发器「HTTP 服务器请求」端口 8766（请求体存入变量），
-          动作「手势」点按坐标取自请求体 x/y，count=2 时加第二次点按<br>
-        ③ 系统设置里给 MacroDroid 关闭电池优化<br>
-        分步说明见电脑上的《MacroDroid配置说明.md》</div>
+        ① <a href="/app.apk" style="color:var(--acc)">下载翻谱 APP</a> 安装
+          （允许未知来源；APK 未就绪会提示 404）<br>
+        ② 打开 APP 按提示开启无障碍服务，输入电脑地址进入本页<br>
+        ③ 在本面板认领并选翻页方法：单击/双击/滑动/媒体键<br>
+        分步说明见电脑上的《移动端APP.md》</div>
     </div>
     <div class="btns">
       <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
@@ -662,6 +687,8 @@ function renderDev(d){
     var sel=el("select");sel.id="d-method";
     sel.appendChild(new Option("单击","single"));
     sel.appendChild(new Option("双击","double"));
+    sel.appendChild(new Option("滑动","swipe"));
+    sel.appendChild(new Option("媒体键","media"));
     sel.value=own.method||"single";
     f2.appendChild(sel);g.appendChild(f2);
     var f3=el("div","fld");f3.appendChild(el("label",null,"启用"));
@@ -761,6 +788,14 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/devices":
             self._json(200, {"devices": self.server.registry.snapshot(),
                              "you": self.client_address[0]})
+        elif path == "/app.apk":
+            apk = _apk_file()
+            if apk is None:
+                self._json(404, {"error": "APK 未找到（先在 mobile/ 跑 "
+                                          "gradlew assembleDebug 并拷贝）"})
+                return
+            self._send(200, "application/vnd.android.package-archive", apk,
+                       dispo="attachment; filename=CubeTurn.apk")
         else:
             self._json(404, {"error": "未知路径"})
 

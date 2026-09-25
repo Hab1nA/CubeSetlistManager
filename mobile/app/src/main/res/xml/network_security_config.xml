@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 电脑端控制页走热点局域网明文 http（无敏感数据，出网段即无对端） -->
+    <base-config cleartextTrafficPermitted="true"/>
+</network-security-config>
