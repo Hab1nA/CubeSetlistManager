@@ -388,6 +388,13 @@ class MainActivity : Activity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun version(): String = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (e: Exception) {
+            "?"
+        }
+
+        @android.webkit.JavascriptInterface
         fun batteryWhitelisted(): Boolean {
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
             return pm.isIgnoringBatteryOptimizations(packageName)
