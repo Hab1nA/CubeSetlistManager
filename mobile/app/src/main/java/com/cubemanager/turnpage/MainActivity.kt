@@ -177,12 +177,9 @@ class MainActivity : Activity() {
             }
         }
         startForegroundService(Intent(this, TurnService::class.java))
-        // 旧版默认端口 8765 现在是浏览器版页面：自动迁移到 APP 版 8767
-        val saved = prefs().getString("addr", null)?.let {
-            if (":8765" in it) it.replace(":8765", ":8767").also { up ->
-                prefs().edit().putString("addr", up).apply()
-            } else it
-        }
+        // 尊重用户设定：连接哪个端口就先连哪个；端口不对时页面加载后
+        // 会经 /state 的 appPort 自动纠正（无需在此改写用户地址）
+        val saved = prefs().getString("addr", null)
         if (saved.isNullOrEmpty()) {
             status.visibility = ViewGroup.GONE
             addrInput.setText(DEFAULT_ADDR)
