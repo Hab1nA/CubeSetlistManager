@@ -1859,7 +1859,6 @@ class SettingsWindow(tk.Toplevel):
                  fg=dpi.MUT).pack(side="left")
         tk.Entry(wf4, textvariable=self.tsk_var, width=6).pack(side="left")
         threading.Thread(target=self._load_web_status, daemon=True).start()
-        threading.Thread(target=self._load_web_status, daemon=True).start()
         tk.Label(body, text="自动播放", anchor="w").pack(
             fill="x", pady=(pad, 3))
         self.auto_var = tk.BooleanVar(value=app.auto_var.get())
@@ -1923,7 +1922,8 @@ class SettingsWindow(tk.Toplevel):
 
     def _load_web_status(self):
         """勾选行右侧的热点状态 + 网页地址前缀的 IP：PS 子进程要数秒，
-        后台线程查完回主线程刷新。"""
+        后台线程查完回主线程刷新（此前 apply 定义后从未被调度，状态/IP/
+        端口指示器整条链路停在初值——热点查询中…/…）。"""
         st = hotspot.state()
 
         def apply():
@@ -1944,11 +1944,16 @@ class SettingsWindow(tk.Toplevel):
             self.web_prefix.config(text="http://%s:" % ip)
             self.app_prefix.config(text="http://%s:" % ip)
             self._refresh_port_status()
+        try:
+            self.after(0, apply)       # UI 更新回主线程
+        except tk.TclError:
+            pass
 
-    def _refresh_port_status(self):
+    def _refresh_port_status(self, retries=3):
         """网页/APP 两个本机端口的指示器：connect 探测（服务绑热点 IP）。
-        打开设置页与保存后各刷一次；探测在后台线程。"""
-        def probe(port, lbl):
+        探测在后台线程；失败按 1.2s 间隔复探 retries 次——保存后服务在
+        后台重建要数秒，单次探测会把重启中的端口误报成未监听。"""
+        def probe(port, lbl, left):
             try:
                 s = socket.create_connection((self.web_ip, port), timeout=1.5)
                 s.close()
@@ -1961,6 +1966,10 @@ class SettingsWindow(tk.Toplevel):
                     if not self.winfo_exists():
                         return
                 except tk.TclError:
+                    return
+                if not ok and left > 0:     # 可能正在重建服务：稍后复探
+                    lbl.config(text="探测中…", fg=dpi.MUT)
+                    self.after(1200, lambda: probe(port, lbl, left - 1))
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
                            fg=dpi.C_OK if ok else dpi.C_ERR)
@@ -1975,13 +1984,8 @@ class SettingsWindow(tk.Toplevel):
             except ValueError:
                 p = 0
             if 0 < p < 65536:
-                threading.Thread(target=lambda p=p, l=lbl: probe(p, l),
+                threading.Thread(target=lambda p=p, l=lbl: probe(p, l, retries),
                                  daemon=True).start()
-
-        try:
-            self.after(0, apply)
-        except tk.TclError:     # 窗口已关：结果作废
-            pass
 
     def _save(self):
         app = self.app
