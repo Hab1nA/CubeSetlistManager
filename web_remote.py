@@ -27,6 +27,7 @@ _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 0.5           # 逐设备推送短超时：失败只记日志不拖累别的设备
 TURN_PATH = "/turn"          # 翻谱设备固定接收路径（与配置说明一致）
+APP_PORT = 8767              # APP 版页面端口（浏览器版=serverPort 8765）
 
 DEFAULT_WEB_REMOTE = {
     "enabled": False,
@@ -93,9 +94,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def push_turn(dev, dir_, tasker_port):
+def push_turn(dev, dir_, tasker_port, test=False):
     """同步向单台设备推一页。返回 (ok, 日志行)。
-    到达即算成功——翻谱设备的应答状态码不归我们管（HTTPError≠链路失败）。"""
+    到达即算成功——翻谱设备的应答状态码不归我们管（HTTPError≠链路失败）。
+    test=True：APP 端先切后台再执行手势（测试按钮在前台是 APP 自身）。"""
     name = dev.get("name") or "设备%d" % dev.get("slot")
     ip = dev.get("ip")
     if not valid_push_ip(ip):
@@ -117,6 +119,8 @@ def push_turn(dev, dir_, tasker_port):
                 "mode": "swipeL" if dir_ == "next" else "swipeR"}
     elif method == "media":
         body["mode"] = "media"          # x 的左右位置即 MEDIA_PREVIOUS/NEXT
+    if test:
+        body["test"] = 1
     mode = body["mode"]
     body = json.dumps(body)
     url = "http://%s:%s%s" % (ip, tasker_port, TURN_PATH)
@@ -133,10 +137,12 @@ def push_turn(dev, dir_, tasker_port):
                                                             mode)
 
 
-def push_async(dev, dir_, tasker_port, report):
-    """单设备推送放独立线程：一台离线不吃 0.5s 超时拖累其余设备。"""
-    threading.Thread(target=lambda: report(push_turn(dev, dir_, tasker_port)[1]),
-                     daemon=True).start()
+def push_async(dev, dir_, tasker_port, report, test=False):
+    """单设备推送放独立线程：一台离线不吃 0.5s 超时拖累其余设备。
+    test=True 来自「测试上一页/下一页」按钮——APP 收到后先切后台再执行。"""
+    threading.Thread(target=lambda: report(
+        push_turn(dev, dir_, tasker_port, test=test)[1]),
+        daemon=True).start()
 
 
 # ---- 翻谱 MIDI：回调入队 → worker 归并窗口判组合 → 并行推送 ----
@@ -243,6 +249,18 @@ class DeviceRegistry:
         with self._lock:
             return next((dict(d) for d in self._devices
                          if d.get("ip") == ip), None)
+
+    def unregister(self, ip):
+        """本机（按 IP 识别）取消登记：从设备表删除。返回 (device, err)。"""
+        with self._lock:
+            dev = next((d for d in self._devices if d.get("ip") == ip), None)
+            if dev is None:
+                return None, "本机尚未认领设备"
+            self._devices.remove(dev)
+            self._changed()
+            self._report("设备取消登记：槽位 %d「%s」"
+                         % (dev["slot"], dev["name"]))
+            return dev, None
 
     def targets(self, notes):
         """设备音符 → 已配对且启用的设备列表；未配对/停用跳过并报告（不算
@@ -366,7 +384,7 @@ def build_snapshot(app, has_project):
 
 # ---- 网页（单文件内嵌；ReaSetlistManager 范式：轮询+大按钮+断线徽标） ----
 
-PAGE_HTML = """<!DOCTYPE html>
+PAGE_COMMON = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -477,7 +495,7 @@ body.switching .busy{display:inline-block}
   <span class="badge" id="badge"><span class="dot"></span>
     <span id="bt">连接中</span></span>
   <span class="spacer"></span>
-  <button class="ghost" id="b-dev">翻谱设置</button>
+  __RIGHT_BTN__
 </header>
 
 <section class="hero">
@@ -517,29 +535,7 @@ body.switching .busy{display:inline-block}
   </div>
 </div>
 
-<div class="mask" id="m-dev">
-  <div class="sheet">
-    <h2>翻谱设置</h2>
-    <div class="sub">把本机登记为翻谱设备后，Cubase 发翻谱音符就会在本机翻页</div>
-    <div id="dev-own"></div>
-    <div class="grp">
-      <div class="sub">所有设备</div>
-      <div id="dev-all" style="margin-top:6px"></div>
-    </div>
-    <div class="grp">
-      <div class="sub">翻谱 APP（首次使用）</div>
-      <div class="sub" style="margin-top:10px">
-        ① <a href="/app.apk" style="color:var(--acc)">下载翻谱 APP</a> 安装
-          （允许未知来源；APK 未就绪会提示 404）<br>
-        ② 打开 APP 按提示开启无障碍服务，输入电脑地址进入本页<br>
-        ③ 在本面板认领并选翻页方法：单击/双击/滑动/媒体键<br>
-        分步说明见电脑上的《移动端APP.md》</div>
-    </div>
-    <div class="btns">
-      <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
-    </div>
-  </div>
-</div>
+__DEV_PANEL__
 
 <div id="toast"></div>
 
@@ -632,7 +628,43 @@ document.addEventListener("visibilitychange",function(){
   if(!document.hidden)refresh()});
 refresh();
 
-/* ---- 翻谱设置面板 ---- */
+__DEV_JS__
+</script>
+</body>
+</html>
+"""
+
+# ---- 双版页面：浏览器端无翻谱功能（右上角下载 APP，留苹果端占位）；
+# APP 端（8767）承载全部翻谱设置 ----
+
+BTN_BROWSER = """<a class="ghost" href="/app.apk" style="color:var(--acc);
+  text-decoration:none">下载 APP</a><!-- __RIGHT_BTN2__ 预留：苹果端按钮 -->"""
+
+BTN_APP = """<button class="ghost" id="b-dev">翻谱设置</button>"""
+
+DEV_PANEL_APP = """
+<div class="mask" id="m-dev">
+  <div class="sheet">
+    <h2>翻谱设置</h2>
+    <div class="sub">认领本机并按谱面 App 支持选翻页方法。无障碍未开启时
+      点按/滑动不可用（仅媒体键可用）。</div>
+    <div id="dev-own"></div>
+    <div class="grp">
+      <div class="sub">翻页测试会自动把本 APP 切到后台执行——请先打开谱面 App</div>
+    </div>
+    <div class="grp">
+      <div class="sub">所有设备</div>
+      <div id="dev-all" style="margin-top:6px"></div>
+    </div>
+    <div class="btns">
+      <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
+    </div>
+  </div>
+</div>
+"""
+
+DEV_JS_APP = """
+/* ---- 翻谱设置面板（仅 APP 版页面） ---- */
 $("b-dev").addEventListener("click",openDev);
 $("dev-close").addEventListener("click",function(){
   $("m-dev").classList.remove("show")});
@@ -648,7 +680,7 @@ function phys(){return{w:Math.round(screen.width*dpr()),
 
 function devTest(dir){
   post("/device/test",{dir:dir}).then(function(r){
-    toast(r.j&&r.j.ok?"测试已发送":((r.j&&r.j.error)||"发送失败"));
+    toast(r.j&&r.j.ok?"测试已发送：已切到后台":((r.j&&r.j.error)||"发送失败"));
   },function(){toast("发送失败")});
 }
 
@@ -666,10 +698,18 @@ function renderDev(d){
     sel.appendChild(new Option("自动",""));
     for(var s=1;s<=10;s++)sel.appendChild(new Option(String(s),String(s)));
     f2.appendChild(sel);g.appendChild(f2);
+    var f3=el("div","fld");f3.appendChild(el("label",null,"翻页"));
+    var sel2=el("select");sel2.id="d-method";
+    sel2.appendChild(new Option("单击","single"));
+    sel2.appendChild(new Option("双击","double"));
+    sel2.appendChild(new Option("滑动","swipe"));
+    sel2.appendChild(new Option("媒体键","media"));
+    f3.appendChild(sel2);g.appendChild(f3);
     var bts=el("div","btns");
     var bb=el("button","btn pri","认领本机");
     bb.addEventListener("click",function(){
-      var body={name:$("d-name").value.trim()||"谱台",screen:phys()};
+      var body={name:$("d-name").value.trim()||"谱台",screen:phys(),
+        method:$("d-method").value};
       var sv=$("d-slot").value;if(sv)body.slot=parseInt(sv,10);
       post("/device/claim",body).then(function(r){
         if(r.j&&r.j.ok){toast("已认领槽位 "+r.j.device.slot);openDev();}
@@ -704,11 +744,19 @@ function renderDev(d){
           ((r.j&&r.j.error)||"保存失败"));if(r.j&&r.j.ok)openDev();},
           function(){toast("保存失败")});
     });
+    var b0=el("button","btn","取消登记");
+    b0.addEventListener("click",function(){
+      post("/device/unregister",{}).then(function(r){
+        toast(r.j&&r.j.ok?"已取消登记":((r.j&&r.j.error)||"操作失败"));
+        if(r.j&&r.j.ok)openDev();
+      },function(){toast("操作失败")});
+    });
     var b2=el("button","btn","测试上一页");
     b2.addEventListener("click",function(){devTest("prev")});
     var b3=el("button","btn","测试下一页");
     b3.addEventListener("click",function(){devTest("next")});
-    bts.appendChild(b1);bts.appendChild(b2);bts.appendChild(b3);
+    bts.appendChild(b1);bts.appendChild(b0);
+    bts.appendChild(b2);bts.appendChild(b3);
     g.appendChild(bts);
   }
   var box=$("dev-own");box.textContent="";box.appendChild(g);
@@ -723,10 +771,16 @@ function renderDev(d){
     allbox.appendChild(row);
   }
 }
-</script>
-</body>
-</html>
 """
+
+PAGE_BROWSER = (PAGE_COMMON
+                .replace("__RIGHT_BTN__", BTN_BROWSER)
+                .replace("__DEV_PANEL__", "")
+                .replace("__DEV_JS__", ""))
+PAGE_APP = (PAGE_COMMON
+            .replace("__RIGHT_BTN__", BTN_APP)
+            .replace("__DEV_PANEL__", DEV_PANEL_APP)
+            .replace("__DEV_JS__", DEV_JS_APP))
 
 # ---- HTTP 服务 ----
 
@@ -734,11 +788,11 @@ class WebServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, app, registry, tasker_port):
+    def __init__(self, addr, app, registry, tasker_port, page=PAGE_BROWSER):
         self.app = app
         self.registry = registry
         self.tasker_port = tasker_port      # 函数：取当前翻谱接收端口
-        self.page = PAGE_HTML
+        self.page = page
         super().__init__(addr, _Handler)
 
     def handle_error(self, request, client_address):
@@ -816,6 +870,7 @@ class _Handler(BaseHTTPRequestHandler):
             for fn, p in ((self._h_cmd, "/cmd"),
                           (self._h_claim, "/device/claim"),
                           (self._h_update, "/device/update"),
+                          (self._h_unregister, "/device/unregister"),
                           (self._h_test, "/device/test")):
                 if path == p:
                     fn(body, ip)
@@ -879,6 +934,13 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._ok(device=dev)
 
+    def _h_unregister(self, body, ip):
+        dev, err = self.server.registry.unregister(ip)
+        if err:
+            self._json(400, {"error": err})
+            return
+        self._ok(device=dev)
+
     def _h_test(self, body, ip):
         dir_ = body.get("dir")
         if dir_ not in ("prev", "next"):
@@ -889,7 +951,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "本机尚未认领设备"})
             return
         push_async(dev, dir_, self.server.tasker_port(),
-                   self.server.app.q.put)
+                   self.server.app.q.put, test=True)
         self._ok()
 
 
@@ -913,6 +975,7 @@ class WebRemote:
         self.registry = DeviceRegistry(cfg.get("devices") or [], app.q.put)
         self.registry.on_change = self._persist
         self.server = None
+        self.app_server = None
         self.midi_port = None
         self.hub = None
         self.hotspot_owner = False       # 热点是否本程序开的（退出时决定关不关）
@@ -979,7 +1042,8 @@ class WebRemote:
     def _start_server(self, ip):
         try:
             self.server = WebServer((ip, self.server_port), self.app,
-                                    self.registry, lambda: self.tasker_port)
+                                    self.registry, lambda: self.tasker_port,
+                                    page=PAGE_BROWSER)
         except OSError as e:
             self._report("网页服务启动失败（%s:%d）：%s"
                          % (ip, self.server_port, _err(e)))
@@ -989,19 +1053,36 @@ class WebRemote:
                          daemon=True).start()
         self._report("网页遥控已就绪：http://%s:%d/（平板连热点后访问）"
                      % (ip, self.server_port))
+        # APP 版页面（8767）：承载翻谱设置；浏览器版（8765）无翻谱功能
+        try:
+            self.app_server = WebServer((ip, APP_PORT), self.app,
+                                        self.registry,
+                                        lambda: self.tasker_port,
+                                        page=PAGE_APP)
+        except OSError as e:
+            self._report("APP 页面服务启动失败（%s:%d）：%s"
+                         % (ip, APP_PORT, _err(e)))
+            return
+        threading.Thread(target=self.app_server.serve_forever,
+                         kwargs={"poll_interval": 0.5},
+                         daemon=True).start()
+        self._report("APP 页面已就绪：http://%s:%d/（在翻谱 APP 内访问）"
+                     % (ip, APP_PORT))
 
     def _stop_server(self):
-        if self.server is None:
-            return
-        try:
-            self.server.shutdown()          # serve_forever 循环退出
-        except Exception:
-            pass
-        try:
-            self.server.server_close()
-        except Exception:
-            pass
-        self.server = None
+        for attr in ("server", "app_server"):
+            srv = getattr(self, attr, None)
+            if srv is None:
+                continue
+            try:
+                srv.shutdown()          # serve_forever 循环退出
+            except Exception:
+                pass
+            try:
+                srv.server_close()
+            except Exception:
+                pass
+            setattr(self, attr, None)
 
     def _start_midi(self):
         if not self.midi_hint:

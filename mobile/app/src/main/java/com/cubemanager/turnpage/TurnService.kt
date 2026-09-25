@@ -42,26 +42,38 @@ class TurnService : Service() {
         }
     }
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun handle(j: JSONObject) {
         val mode = j.optString("mode", "tap")
         val x = j.optInt("x")
         val y = j.optInt("y")
         val count = j.optInt("count", 1)
-        when (mode) {
-            "media" -> {
-                val next = x >= resources.displayMetrics.widthPixels / 2
-                val code = if (next) KeyEvent.KEYCODE_MEDIA_NEXT
-                else KeyEvent.KEYCODE_MEDIA_PREVIOUS
-                val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        val fire = {
+            when (mode) {
+                "media" -> {
+                    val next = x >= resources.displayMetrics.widthPixels / 2
+                    val code = if (next) KeyEvent.KEYCODE_MEDIA_NEXT
+                    else KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                    val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                    audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                    audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+                }
+                "swipeL", "swipeR" -> {
+                    val x2 = j.optInt("x2", x)
+                    TurnAccessibilityService.instance?.swipe(x, y, x2, y)
+                }
+                else -> TurnAccessibilityService.instance?.tap(x, y, count)
             }
-            "swipeL", "swipeR" -> {
-                val x2 = j.optInt("x2", x)
-                TurnAccessibilityService.instance?.swipe(x, y, x2, y)
-            }
-            else -> TurnAccessibilityService.instance?.tap(x, y, count)
         }
+        if (j.optInt("test") == 1) {
+            // 测试按钮在前台是本 APP：先切到后台（回到上一个任务=谱面 App），
+            // 待其显示后再执行手势
+            mainHandler.post {
+                MainActivity.instance?.moveTaskToBack(true)
+            }
+            mainHandler.postDelayed({ fire() }, 800)
+        } else fire()
     }
 
     override fun onCreate() {

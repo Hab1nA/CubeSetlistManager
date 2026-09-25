@@ -2,31 +2,50 @@ package com.cubemanager.turnpage
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** WebView 壳：加载电脑端现有控制页（http://<ip>:8765/），页面代码零改动。
- *  顶部状态条显示手势/无障碍状态；电脑地址记忆在 SharedPreferences。 */
+/** WebView 壳：加载电脑端 APP 版控制页（http://<ip>:8767/），页面代码零改动。
+ *  未连接/失败时显示品牌连接页；地址记忆在 SharedPreferences。
+ *  instance 供 TurnService 执行测试推送时的「切后台」动作。 */
 class MainActivity : Activity() {
 
     private lateinit var status: TextView
+    private lateinit var welcome: LinearLayout
     private lateinit var webView: WebView
+    private var hadError = false
+
+    companion object {
+        @Volatile
+        var instance: MainActivity? = null
+            private set
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        status = TextView(this).apply { setPadding(24, 14, 24, 14) }
+        status = TextView(this).apply {
+            setPadding(48, 20, 48, 20)
+            setTextColor(0xFF9aa0aa.toInt())
+        }
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -34,23 +53,42 @@ class MainActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView?, errorCode: Int,
                                              description: String?, failingUrl: String?) {
-                    showStatus("加载失败（$errorCode）：$description", err = true)
+                    hadError = true
+                    showWelcome("加载失败（$errorCode）")
                 }
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    if (url != null && !url.startsWith("about:"))
-                        showStatus("已连接 $url", err = false)
+                    if (!hadError && url != null && !url.startsWith("about:"))
+                        welcome.visibility = ViewGroup.GONE
                 }
             }
         }
-        val root = LinearLayout(this).apply {
+        val connBtn = bigButton("连接电脑")
+        connBtn.setOnClickListener { promptAddress() }
+        welcome = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(Button(this@MainActivity).apply {
-                text = "电脑地址"
-                setOnClickListener { promptAddress() }
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xFF14161A.toInt())
+            addView(TextView(this@MainActivity).apply {
+                text = "Cube 翻谱"
+                textSize = 34f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFF7fe896.toInt())
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "连接电脑端 Cube Setlist Manager"
+                setTextColor(0xFF9aa0aa.toInt())
+                setPadding(0, 24, 0, 48)
             })
             addView(status)
-            addView(webView, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0).apply { weight = 1f })
+            addView(connBtn)
+        }
+        val root = FrameLayout(this).apply {
+            addView(webView, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(welcome, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT))
         }
         setContentView(root)
 
@@ -61,18 +99,7 @@ class MainActivity : Activity() {
         }
         startForegroundService(Intent(this, TurnService::class.java))
         val saved = prefs().getString("addr", null)
-        if (saved.isNullOrEmpty()) {
-            // 对话框不能在 onCreate 弹（窗口未就绪）；等首帧之后
-            status.text = "未连接：点「电脑地址」输入电脑的网页地址"
-            window.decorView.post { promptAddress() }
-        } else {
-            webView.loadUrl(saved)
-            refreshStatus()
-        }
-    }
-
-    override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (saved.isNullOrEmpty()) showWelcome() else webView.loadUrl(saved)
     }
 
     override fun onResume() {
@@ -82,41 +109,107 @@ class MainActivity : Activity() {
 
     private fun prefs() = getSharedPreferences("cube", MODE_PRIVATE)
 
-    private fun showStatus(text: String, err: Boolean) {
-        status.text = text
-        status.setTextColor(if (err) 0xFFB00020.toInt() else 0xFF2E7D32.toInt())
-    }
+    private fun dp(v: Int) = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
-    private fun promptAddress() {
-        val input = EditText(this).apply {
-            hint = "192.168.137.1:8765"
-            // 热点 IP 固定，预填默认值（hint 不是值，别让用户误以为已填）
-            setText("192.168.137.1:8765")
-            setSingleLine(true)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("电脑地址")
-            .setMessage("电脑端设置页「热点状态」里显示的网页地址")
-            .setView(input)
-            .setPositiveButton("连接") { _, _ ->
-                val addr = input.text.toString().trim()
-                if (addr.isEmpty()) {
-                    showStatus("未输入地址，未连接", err = true)
-                    return@setPositiveButton
-                }
-                val url = if ("://" in addr) addr else "http://$addr"
-                prefs().edit().putString("addr", url).apply()
-                webView.loadUrl(url)
+    private fun bigButton(text: String): Button =
+        Button(this).apply {
+            this.text = text
+            textSize = 16f
+            setTextColor(Color.BLACK)
+            background = GradientDrawable().apply {
+                setColor(0xFF7fe896.toInt())
+                cornerRadius = dp(12).toFloat()
             }
-            .setNegativeButton("取消", null)
-            .show()
+            setPadding(dp(40), dp(14), dp(40), dp(14))
+        }
+
+    private fun showWelcome(err: String? = null) {
+        hadError = err != null
+        status.text = when {
+            err != null -> "$err\n点「连接电脑」重试"
+            else -> "未连接：输入电脑端设置页显示的网页地址"
+        }
+        status.setTextColor(if (err != null) 0xFFB00020.toInt()
+                            else 0xFF9aa0aa.toInt())
+        welcome.visibility = ViewGroup.VISIBLE
     }
 
     private fun refreshStatus() {
         val svcOn = TurnAccessibilityService.instance != null
-        val gesture = if (svcOn) "手势就绪" else "无障碍未开启（仅媒体键可用）"
-        val addr = prefs().getString("addr", "") ?: ""
-        status.text = "$gesture · $addr"
-        status.setTextColor(if (svcOn) 0xFF2E7D32.toInt() else 0xFFB00020.toInt())
+        if (welcome.visibility == ViewGroup.VISIBLE && !hadError &&
+            prefs().getString("addr", null) != null)
+            showWelcome(if (svcOn) null else null)   // 回前台时保持品牌页文案
+    }
+
+    private fun promptAddress() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0xFF1e2127.toInt())
+                cornerRadius = dp(18).toFloat()
+            }
+            setPadding(dp(24), dp(24), dp(24), dp(20))
+            addView(TextView(this@MainActivity).apply {
+                text = "连接电脑"
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(0xFFe9ebef.toInt())
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "电脑端设置页「热点状态」里显示的地址"
+                textSize = 13f
+                setTextColor(0xFF8b909a.toInt())
+                setPadding(0, dp(6), 0, dp(16))
+            })
+        }
+        val input = EditText(this).apply {
+            hint = "192.168.137.1:8767"
+            // 热点 IP 固定，预填默认值（hint 不是值，别让用户误以为已填）
+            setText("192.168.137.1:8767")
+            setSingleLine(true)
+            setTextColor(0xFFe9ebef.toInt())
+            setHintTextColor(0xFF565b64.toInt())
+            background = GradientDrawable().apply {
+                setColor(0xFF262a32.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        box.addView(input)
+        val btn = bigButton("连 接")
+        box.addView(btn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(18) })
+
+        val dlg = Dialog(this)
+        dlg.setContentView(box)
+        dlg.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.86).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        dlg.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        btn.setOnClickListener {
+            val addr = input.text.toString().trim()
+            if (addr.isEmpty()) {
+                status.text = "未输入地址"
+                return@setOnClickListener
+            }
+            val url = if ("://" in addr) addr else "http://$addr"
+            prefs().edit().putString("addr", url).apply()
+            hadError = false
+            showWelcome("连接中 $url …")
+            webView.loadUrl(url)
+            dlg.dismiss()
+        }
+        dlg.show()
+    }
+
+    override fun onBackPressed() {
+        if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
     }
 }
