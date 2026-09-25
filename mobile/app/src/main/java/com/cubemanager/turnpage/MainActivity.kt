@@ -248,8 +248,18 @@ class MainActivity : Activity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
+        // 返回手势/返回键优先关页面浮层（设置面板、谱面 App 选择等，
+        // uiBack 关最上层 .mask.show）；没关掉任何浮层才走默认行为。
+        // evaluateJavascript 异步回调在主线程，按结果补默认动作
+        webView.evaluateJavascript(
+            "(typeof uiBack==='function')&&uiBack()==='true'") { hit ->
+            if (hit != "true") {
+                if (webView.canGoBack()) webView.goBack()
+                else moveTaskToBack(true)
+            }
+        }
     }
 
     override fun onDestroy() {
