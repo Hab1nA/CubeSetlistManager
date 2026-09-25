@@ -23,6 +23,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONObject
 
 /** WebView 壳：加载电脑端 APP 版控制页（http://<ip>:8767/），页面代码零改动。
  *  首次连接的地址输入内嵌在欢迎页（不弹窗）；地址记忆在 SharedPreferences
@@ -336,6 +337,43 @@ class MainActivity : Activity() {
                 android.app.AppOpsManager.MODE_ALLOWED
         } catch (e: Exception) {
             false
+        }
+
+        @android.webkit.JavascriptInterface
+        fun turnTarget(): String =
+            prefs().getString("turnTargetName", "") ?: ""
+
+        @android.webkit.JavascriptInterface
+        fun setTurnTarget(pkg: String, name: String) {
+            prefs().edit()
+                .putString("turnTargetPkg", pkg)
+                .putString("turnTargetName", name).apply()
+        }
+
+        @android.webkit.JavascriptInterface
+        fun clearTurnTarget() {
+            prefs().edit()
+                .remove("turnTargetPkg").remove("turnTargetName").apply()
+        }
+
+        @android.webkit.JavascriptInterface
+        fun listApps(): String {
+            val intent = Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+            val out = StringBuilder("[")
+            val list = packageManager.queryIntentActivities(intent, 0)
+                .filter { it.activityInfo.packageName != packageName }
+                .sortedBy { it.loadLabel(packageManager).toString() }
+            list.forEachIndexed { idx, info ->
+                if (idx > 0) out.append(',')
+                out.append("{\"pkg\":")
+                    .append(JSONObject.quote(info.activityInfo.packageName))
+                    .append(",\"name\":")
+                    .append(JSONObject.quote(info.loadLabel(packageManager).toString()))
+                    .append('}')
+            }
+            out.append(']')
+            return out.toString()
         }
 
         @android.webkit.JavascriptInterface

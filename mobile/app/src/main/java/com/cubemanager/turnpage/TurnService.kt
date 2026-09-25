@@ -68,15 +68,15 @@ class TurnService : Service() {
             }
         }
         if (j.optInt("test") == 1) {
-            // 测试按钮在前台是本 APP：自动切回「上一个前台应用」（谱面 App）
-            // 再执行手势；拿不到（未授权/无记录）时退回切后台行为。
-            val prev = prevForegroundPackage()
-            if (prev != null) {
-                val i = packageManager.getLaunchIntentForPackage(prev)
-                if (i != null) {
-                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(i)
-                }
+            // 测试按钮在前台是本 APP：自动切回谱面 App（手动指定优先，
+            // 其次按使用记录自动检测最近使用的第三方应用）再执行手势。
+            val prefs = getSharedPreferences("cube", MODE_PRIVATE)
+            val target = prefs.getString("turnTargetPkg", null)
+                ?: lastUsedNonSelfPackage()
+            val intent = target?.let { packageManager.getLaunchIntentForPackage(it) }
+            if (intent != null) {
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
                 mainHandler.postDelayed({ fire() }, 1200)
             } else {
                 mainHandler.post {
@@ -87,8 +87,9 @@ class TurnService : Service() {
         } else fire()
     }
 
-    /** 最近 30 秒内最后一个非本 APP 的前台应用包名（需「使用情况访问」授权）。 */
-    private fun prevForegroundPackage(): String? {
+    /** 最近 7 天实际使用时间最新的非本 APP 应用（需「使用情况访问」授权；
+     *  排除桌面，避免切换路径经过桌面时抓错目标）。 */
+    private fun lastUsedNonSelfPackage(): String? {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
         val mode = appOps.checkOpNoThrow(
             android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
@@ -97,15 +98,20 @@ class TurnService : Service() {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE)
             as android.app.usage.UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = usm.queryEvents(now - 30_000, now)
-        var last: String? = null
-        val e = android.app.usage.UsageEvents.Event()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(e)
-            if (e.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED &&
-                e.packageName != packageName) last = e.packageName
+        val stats = usm.queryUsageStats(
+            android.app.usage.UsageStatsManager.INTERVAL_BEST,
+            now - 7L * 24 * 3600 * 1000, now)
+        var best: String? = null
+        var bestT = 0L
+        for (s in stats) {
+            val p = s.packageName ?: continue
+            if (p == packageName || p.contains("launcher")) continue
+            if (s.lastTimeUsed > bestT) {
+                bestT = s.lastTimeUsed
+                best = p
+            }
         }
-        return last
+        return best
     }
 
     override fun onCreate() {
