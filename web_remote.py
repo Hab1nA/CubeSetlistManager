@@ -633,14 +633,16 @@ function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(j){st=j;setConn(true);render()},
           function(){setConn(false)});
-  if(window.updateAcc)updateAcc();
+  if(window.updateAcc)try{updateAcc()}catch(e){}
+  if(window.refreshUsageTip)try{refreshUsageTip()}catch(e){}
+  if(window.refreshTarget)try{refreshTarget()}catch(e){}
 }
+
+__DEV_JS__
 setInterval(refresh,1000);
 document.addEventListener("visibilitychange",function(){
   if(!document.hidden)refresh()});
 refresh();
-
-__DEV_JS__
 </script>
 </body>
 </html>
@@ -677,6 +679,10 @@ DEV_PANEL_APP = """
       <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
         「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
       <div id="dev-own" style="margin-top:10px"></div>
+      <div class="fld" style="margin-top:10px"><label>谱面 App</label>
+        <span id="t-target" class="mono">自动检测</span>
+        <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
+      </div>
       <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
         <span id="t-ip" class="mono"></span><input type="text" id="t-port"
           style="width:70px;flex:none;margin-left:8px">
@@ -704,6 +710,18 @@ DEV_PANEL_APP = """
     </div>
   </div>
 </div>
+
+<div class="mask" id="m-apps">
+  <div class="sheet">
+    <h2>选择谱面 App</h2>
+    <div class="sub">测试翻页与自动切回的目标应用</div>
+    <div id="apps-list" style="margin-top:10px;max-height:50vh;overflow-y:auto"></div>
+    <div class="btns" style="margin-top:12px">
+      <button class="btn" id="apps-clear">清除（自动检测）</button>
+      <button class="btn" id="apps-close" style="flex:1;text-align:center">关闭</button>
+    </div>
+  </div>
+</div>
 """
 
 DEV_JS_APP = """
@@ -721,6 +739,35 @@ function refreshUsageTip(){
   if(CubeApp.usageAccess()===true){tip.style.display="none";btns.style.display="none"}
   else{tip.style.display="block";btns.style.display="flex"}
 }
+function refreshTarget(){
+  if(!window.CubeApp)return;
+  var t=$("t-target");if(!t)return;
+  var name=CubeApp.turnTarget();
+  t.textContent=name||"自动检测（最近使用的第三方应用）";
+}
+$("t-pick").addEventListener("click",function(){
+  if(!window.CubeApp)return;
+  var apps=JSON.parse(CubeApp.listApps());
+  var box=$("apps-list");box.textContent="";
+  for(var i=0;i<apps.length;i++){(function(app){
+    var row=el("div","dv");row.style.cursor="pointer";
+    row.appendChild(el("span",null,app.name));
+    row.addEventListener("click",function(){
+      CubeApp.setTurnTarget(app.pkg,app.name);
+      $("m-apps").classList.remove("show");
+      refreshTarget();toast("谱面 App："+app.name);
+    });
+    box.appendChild(row);
+  })(apps[i])}
+  $("m-apps").classList.add("show");
+});
+$("apps-clear").addEventListener("click",function(){
+  if(window.CubeApp)CubeApp.clearTurnTarget();
+  $("m-apps").classList.remove("show");
+  refreshTarget();toast("已清除，使用自动检测");
+});
+$("apps-close").addEventListener("click",function(){
+  $("m-apps").classList.remove("show")});
 $("usage-grant").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openUsageAccess()});
 if(!window.CubeApp){
