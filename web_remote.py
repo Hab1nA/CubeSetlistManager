@@ -480,9 +480,15 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
    手机：状态用小字（NOW 标签行右端，tstate-mini）、设置面板单列；
    平板：状态升为 NOW 歌名同规格同行（tstate-big）、面板保持两列 */
 .tstate-mini{display:inline-block}
+/* 设置面板双列：左列（连接/翻谱两组设置）自适应、右列（所有设备）固定
+   30% 等高；手机断点下 devcols 退化单列。此前只写了断点覆盖规则漏了
+   这组基础规则，所有设备都退化成了单列 */
+.devcols{display:flex;gap:14px;align-items:stretch}
+.devcols-l{flex:1;min-width:0}
+.devcols-r{width:30%;flex:none;display:flex;flex-direction:column}
 /* 翻谱地址行：平板与原版同构（addr-ctl=display:contents，子元素直接
    参与父行 flex）；手机竖屏一行摆不下 → addr-ctl 整体折为第二行
-   （缩进 68px=label 60+间距 8，与 IP 值列对齐） */
+   （第二行端口贴左、指示器 margin-left:auto 与「应用」贴右） */
 .addr-ctl{display:contents}
 @media (max-width:640px){
   .tstate-big{display:none}
