@@ -500,6 +500,7 @@ body.switching .busy{display:inline-block}
 <header>
   <span class="badge" id="badge"><span class="dot"></span>
     <span id="bt">连接中</span></span>
+  __ACC_IND__
   <span class="spacer"></span>
   __RIGHT_BTN__
 </header>
@@ -628,6 +629,7 @@ function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(j){st=j;setConn(true);render()},
           function(){setConn(false)});
+  if(window.updateAcc)updateAcc();
 }
 setInterval(refresh,1000);
 document.addEventListener("visibilitychange",function(){
@@ -670,11 +672,11 @@ DEV_PANEL_APP = """
       <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
         <span id="t-ip" class="mono"></span><input type="text" id="t-port"
           style="width:70px;flex:none;margin-left:8px">
-        <span class="ind" id="t-ind">…</span>
         <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
+        <span class="ind" id="t-ind" style="margin-left:auto">…</span>
       </div>
-      <div class="sub" style="margin-top:8px">电脑端按此端口向本机推送翻谱
-        命令——修改后请同步电脑端「APP 翻谱地址」的端口。</div>
+      <div class="sub" style="margin-top:8px">电脑端向乐队所有设备推送翻谱信号
+        统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
     </div>
     <div class="grp">
       <div class="sub">翻页测试会自动把本 APP 切到后台执行——请先打开谱面 App</div>
@@ -692,6 +694,13 @@ DEV_PANEL_APP = """
 
 DEV_JS_APP = """
 /* ---- 设置面板（仅 APP 版页面）：连接设置 + 翻谱设置 ---- */
+function updateAcc(){
+  if(!window.CubeApp)return;
+  var i=$("acc-ind");if(!i)return;
+  var ok=CubeApp.accEnabled()===true;
+  i.textContent=ok?"无障碍开":"无障碍关";
+  i.className="ind"+(ok?" ok":" bad");
+}
 $("b-dev").addEventListener("click",openDev);
 $("dev-close").addEventListener("click",function(){
   $("m-dev").classList.remove("show")});
@@ -837,10 +846,13 @@ function renderDev(d){
 
 PAGE_BROWSER = (PAGE_COMMON
                 .replace("__RIGHT_BTN__", BTN_BROWSER)
+                .replace("__ACC_IND__", "")
                 .replace("__DEV_PANEL__", "")
                 .replace("__DEV_JS__", ""))
 PAGE_APP = (PAGE_COMMON
             .replace("__RIGHT_BTN__", BTN_APP)
+            .replace("__ACC_IND__",
+                     '<span class="ind" id="acc-ind">无障碍…</span>')
             .replace("__DEV_PANEL__", DEV_PANEL_APP)
             .replace("__DEV_JS__", DEV_JS_APP))
 

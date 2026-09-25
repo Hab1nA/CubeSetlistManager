@@ -312,6 +312,9 @@ class MainActivity : Activity() {
         fun setTurnPort(p: String): Boolean =
             p.toIntOrNull()?.let { TurnService.restartOn(this@MainActivity, it) }
                 ?: false
+
+        @android.webkit.JavascriptInterface
+        fun accEnabled(): Boolean = TurnAccessibilityService.instance != null
     }
 
     override fun onBackPressed() {
