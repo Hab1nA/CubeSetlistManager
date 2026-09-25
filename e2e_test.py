@@ -21,6 +21,7 @@ import cubase_ctrl
 import kbd_auto
 import midi_bridge as mb
 import obs_ctrl
+import web_remote
 from obs_ctrl import ObsController, find_processes_by_prefix
 
 # 库根：默认本机路径，换机用环境变量 CUBE_PROJECTS_ROOT 覆盖
@@ -336,6 +337,23 @@ def p_web():
     wport = srv.server_address[1]
     threading.Thread(target=srv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
+    # /cmd 经 calls 队列异步投递（主程序由 Tk 主循环消费）；shim 无主循环，
+    # 交给守护线程串行消费——没有它切歌命令永远不执行（02310ee 假阳性根源）
+    def _drain():
+        while True:
+            fn = app.calls.get()
+            try:
+                fn()
+            except Exception as e:
+                log("calls 执行异常：%r" % e)
+    threading.Thread(target=_drain, daemon=True).start()
+
+    def _ticker():
+        # 模拟主程序 _tick_banner 的快照刷新（409 判定与 /state 都读 _web_snap）
+        while True:
+            app._refresh()
+            time.sleep(0.2)
+    threading.Thread(target=_ticker, daemon=True).start()
     log("网页遥控服务（回环）:%d" % wport)
     try:
         # 链路一：真 winmm 回调 → 归并窗口 → 组合判定 → HTTP 推送
@@ -363,6 +381,10 @@ def p_web():
         body = r.read()
         conn.close()
         assert r.status == 200, body
+        # 两段等待：busy 置位（消费者线程接力有延迟）→ busy 结束；
+        # 只等 not busy 会在置位前瞬间假通过（02310ee 教训）
+        assert wait_until(lambda: app.ctrl.busy, 5, "busy 置位"), \
+            "切歌命令未被执行（calls 未消费）"
         assert wait_until(lambda: not app.ctrl.busy, 200, "切歌完成")
         ws = cubase_ctrl.project_windows()
         want = os.path.splitext(os.path.basename(SONG_A))[0]
