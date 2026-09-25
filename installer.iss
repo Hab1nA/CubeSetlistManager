@@ -41,7 +41,7 @@ Source: "dist\{#AppName}\_internal\*"; \
 Source: "config.example.json"; DestDir: "{app}\{#AppName}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
-Source: "dist\{#AppName}\CubeTurn.apk"; DestDir: "{app}\{#AppName}"; \
+Source: "dist\{#AppName}\CubeRemote.apk"; DestDir: "{app}\{#AppName}"; \
     Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
