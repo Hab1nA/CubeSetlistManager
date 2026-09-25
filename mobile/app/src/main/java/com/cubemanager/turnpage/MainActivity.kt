@@ -328,6 +328,28 @@ class MainActivity : Activity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun usageAccess(): Boolean = try {
+            val appOps = getSystemService(APP_OPS_SERVICE) as android.app.AppOpsManager
+            appOps.checkOpNoThrow(
+                android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(), packageName) ==
+                android.app.AppOpsManager.MODE_ALLOWED
+        } catch (e: Exception) {
+            false
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openUsageAccess() {
+            runOnUiThread {
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                } catch (e: Exception) {
+                }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
         fun batteryWhitelisted(): Boolean {
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
             return pm.isIgnoringBatteryOptimizations(packageName)

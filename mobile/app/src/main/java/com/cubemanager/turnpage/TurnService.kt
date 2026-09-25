@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.IBinder
@@ -67,13 +68,44 @@ class TurnService : Service() {
             }
         }
         if (j.optInt("test") == 1) {
-            // 测试按钮在前台是本 APP：先切到后台（回到上一个任务=谱面 App），
-            // 待其显示后再执行手势
-            mainHandler.post {
-                MainActivity.instance?.moveTaskToBack(true)
+            // 测试按钮在前台是本 APP：自动切回「上一个前台应用」（谱面 App）
+            // 再执行手势；拿不到（未授权/无记录）时退回切后台行为。
+            val prev = prevForegroundPackage()
+            if (prev != null) {
+                val i = packageManager.getLaunchIntentForPackage(prev)
+                if (i != null) {
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(i)
+                }
+                mainHandler.postDelayed({ fire() }, 1200)
+            } else {
+                mainHandler.post {
+                    MainActivity.instance?.moveTaskToBack(true)
+                }
+                mainHandler.postDelayed({ fire() }, 800)
             }
-            mainHandler.postDelayed({ fire() }, 800)
         } else fire()
+    }
+
+    /** 最近 30 秒内最后一个非本 APP 的前台应用包名（需「使用情况访问」授权）。 */
+    private fun prevForegroundPackage(): String? {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+            android.os.Process.myUid(), packageName)
+        if (mode != android.app.AppOpsManager.MODE_ALLOWED) return null
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE)
+            as android.app.usage.UsageStatsManager
+        val now = System.currentTimeMillis()
+        val events = usm.queryEvents(now - 30_000, now)
+        var last: String? = null
+        val e = android.app.usage.UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            if (e.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED &&
+                e.packageName != packageName) last = e.packageName
+        }
+        return last
     }
 
     override fun onCreate() {
