@@ -1,6 +1,9 @@
 @echo off
 chcp 65001 >nul
 cd /d %~dp0
+rem 运行时真实数据快照：每次打包前把 config/playlist 追加快照到 _bak_dist
+rem （带时间戳永不覆盖——运行时数据一旦丢失无法重建，这是唯一可靠的恢复源）
+py -c "import os,shutil,time; ts=time.strftime('%%Y%%m%%d_%%H%%M%%S'); src=os.path.join('dist','Cube Setlist Manager'); os.makedirs('_bak_dist',exist_ok=True); [shutil.copy2(os.path.join(src,f), os.path.join('_bak_dist',ts+'_'+f)) for f in ('config.json','playlist.json') if os.path.exists(os.path.join(src,f))]" || goto :err
 rem 打包会清空 dist 子目录；exe 目录里的 config/playlist 是运行时真实数据，
 rem 先备份（dist 根的副本可能过期，不作依据；缺失时才用根目录兜底）
 if exist "dist\Cube Setlist Manager\config.json" (
