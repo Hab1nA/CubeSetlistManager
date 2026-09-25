@@ -377,7 +377,7 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .next{color:var(--mut);word-break:break-all}
 .busy{display:none;margin-left:auto;flex:none;font-size:12px;color:var(--warn);
   border:1px solid var(--warn);border-radius:99px;padding:3px 10px}
-body.busy .busy{display:inline-block}
+body.switching .busy{display:inline-block}
 
 .list{list-style:none;margin:14px 12px 0;border:1px solid var(--line);
   border-radius:14px;overflow:hidden;background:var(--panel)}
@@ -548,7 +548,8 @@ function render(){
   var sig=[st.busy,st.ready,st.live,cur,JSON.stringify(st.songs)].join("|");
   if(sig===lastSig)return;      // 无变化不动 DOM：切歌期间每次重绘都是
   lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白），
-  document.body.classList.toggle("busy",!!st.busy);
+  // 状态类绝不能叫 busy：会命中徽标自身的 .busy{display:none} 把整页藏掉
+  document.body.classList.toggle("switching",!!st.busy);
   var s=st.songs?st.songs[cur]:null;
   $("now").textContent=st.busy?"切换中…":
     (s?s.name:(st.ready?"（未开始）":"主程序启动中…"));
