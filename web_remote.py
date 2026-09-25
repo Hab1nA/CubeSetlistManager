@@ -688,53 +688,59 @@ DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
     <h2>设置</h2>
-    <div class="grp">
-      <div class="sub">连接设置</div>
-      <div class="fld" style="margin-top:12px"><label>地址</label>
-        <input type="text" id="c-addr"></div>
-      <div class="btns" style="margin-top:12px">
-        <button class="btn pri" id="c-save" style="flex:1;text-align:center">保存并重启</button>
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <!-- 左列：连接设置 + 翻谱设置 -->
+      <div style="flex:1;min-width:0">
+        <div class="grp">
+          <div class="sub">连接设置</div>
+          <div class="fld" style="margin-top:12px"><label>地址</label>
+            <input type="text" id="c-addr"></div>
+          <div class="btns" style="margin-top:12px">
+            <button class="btn pri" id="c-save" style="flex:1;text-align:center">保存并重启</button>
+          </div>
+          <div class="sub" style="margin-top:10px">修改地址后需重启本 APP 生效；
+            取消则保持原地址不变。</div>
+        </div>
+        <div class="grp">
+          <div class="sub">翻谱设置</div>
+          <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持选翻页
+            方法。无障碍未开启时点按/滑动不可用（仅媒体键可用）。</div>
+          <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
+            「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
+          <div id="dev-own" style="margin-top:10px"></div>
+          <div class="fld" style="margin-top:10px"><label>谱面 App</label>
+            <span id="t-target" class="mono">自动检测</span>
+            <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
+          </div>
+          <div class="sub" style="margin-top:8px">翻页测试会自动切回指定的谱面
+            APP，并执行翻页手势。</div>
+          <div class="sub" id="usage-tip" style="margin-top:6px;color:var(--warn)"
+            >未授权「使用情况访问」——无法自动切回谱面 App，将退回切到桌面。</div>
+          <div class="btns" id="usage-btns" style="margin-top:8px">
+            <button class="btn" id="usage-grant">去授权使用情况访问</button>
+          </div>
+          <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
+            <span id="t-ip" class="mono"></span><input type="text" id="t-port"
+              style="width:70px;flex:none;margin-left:8px">
+            <span class="ind" id="t-ind" style="margin-left:auto;flex:none">…</span>
+            <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
+          </div>
+          <div class="sub" style="margin-top:8px">电脑端向乐队所有设备推送翻谱信号
+            统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
+        </div>
+        <div class="sub" style="margin-top:14px">APP 版本 <span id="app-ver"></span></div>
       </div>
-      <div class="sub" style="margin-top:10px">修改地址后需重启本 APP 生效；
-        取消则保持原地址不变。</div>
-    </div>
-    <div class="grp">
-      <div class="sub">翻谱设置</div>
-      <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持选翻页
-        方法。无障碍未开启时点按/滑动不可用（仅媒体键可用）。</div>
-      <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
-        「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
-      <div id="dev-own" style="margin-top:10px"></div>
-      <div class="fld" style="margin-top:10px"><label>谱面 App</label>
-        <span id="t-target" class="mono">自动检测</span>
-        <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
-      </div>
-      <div class="fld" style="margin-top:10px"><label>翻谱地址</label>
-        <span id="t-ip" class="mono"></span><input type="text" id="t-port"
-          style="width:70px;flex:none;margin-left:8px">
-        <button class="btn" id="t-apply" style="flex:none;padding:9px 12px">应用</button>
-        <span class="ind" id="t-ind" style="margin-left:auto">…</span>
-      </div>
-      <div class="sub" style="margin-top:8px">电脑端向乐队所有设备推送翻谱信号
-        统一使用此端口——请确保电脑端与所有移动设备的此端口设置一致。</div>
-    </div>
-    <div class="grp">
-      <div class="sub">翻页测试会自动切回上一个前台应用（谱面 App）并执行
-        手势。</div>
-      <div class="sub" id="usage-tip" style="margin-top:8px;color:var(--warn)"
-        >未授权「使用情况访问」——无法自动切回谱面 App，将退回切到桌面。</div>
-      <div class="btns" id="usage-btns" style="margin-top:8px">
-        <button class="btn" id="usage-grant">去授权使用情况访问</button>
+      <!-- 右列：所有设备（宽度显著小于左列） -->
+      <div style="width:30%;flex:none">
+        <div class="grp">
+          <div class="sub">所有设备</div>
+          <div id="dev-all" style="margin-top:6px"></div>
+        </div>
+        <div class="btns" style="margin-top:12px">
+          <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
+        </div>
       </div>
     </div>
-    <div class="grp">
-      <div class="sub">所有设备</div>
-      <div id="dev-all" style="margin-top:6px"></div>
-    </div>
-    <div class="btns">
-      <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
-    </div>
-    <div class="sub" style="text-align:center">APP 版本 <span id="app-ver"></span></div>
   </div>
 </div>
 
