@@ -366,9 +366,11 @@ def _apk_file():
         return None
 
 
-def build_snapshot(app, has_project):
+def build_snapshot(app, has_project, proj_name=None):
     """攒 /state 快照纯字典：整体引用替换，HTTP 线程整读（GIL 原子），
-    不碰 Tk、不做 win32 枚举（has_project 由 _tick_banner 顺路带出）。"""
+    不碰 Tk、不做 win32 枚举（has_project/proj_name 由 _tick_banner 顺路
+    带出：open=有打开的工程，projName=工程标题里的真实名字，工程不一定
+    在播放列表里——网页 NOW 与确认弹窗「从」名都要用它对齐 PC 横幅）。"""
     songs = []
     for key in app.pl_keys:
         s = app.by_key.get(key)
@@ -380,6 +382,7 @@ def build_snapshot(app, has_project):
         "ready": app.ctrl is not None,
         "busy": bool(app.ctrl is not None and app.ctrl.busy),
         "open": bool(has_project),
+        "projName": proj_name,
         "confirm": bool(app.switch_confirm),
         "live": bool(app.watch is not None and app.watch.is_transport_live()),
         "cur": app.cur,
@@ -580,14 +583,18 @@ function setConn(on){if(on===conn)return;conn=on;
 function render(){
   if(!st)return;
   var cur=typeof st.cur==="number"?st.cur:-1;
-  var sig=[st.busy,st.ready,st.live,cur,JSON.stringify(st.songs)].join("|");
+  var sig=[st.busy,st.ready,st.live,cur,st.projName,
+    JSON.stringify(st.songs)].join("|");
   if(sig===lastSig)return;      // 无变化不动 DOM：切歌期间每次重绘都是
   lastSig=sig;                  // 一次帧提交（Chromium 合成过渡会闪白），
   // 状态类绝不能叫 busy：会命中徽标自身的 .busy{display:none} 把整页藏掉
   document.body.classList.toggle("switching",!!st.busy);
   var s=st.songs?st.songs[cur]:null;
+  // NOW 对齐 PC 横幅：显示真实打开的工程名（工程可能不在播放列表里，
+  // cur 为空时按歌名索引查不到）；无工程时与 PC 同文案
   $("now").textContent=st.busy?"切换中…":
-    (s?s.name:(st.ready?"（未开始）":"主程序启动中…"));
+    (st.projName?st.projName:
+      (st.ready?"（无打开的工程）":"主程序启动中…"));
   var n=st.songs?st.songs[cur+1]:null;
   $("next").textContent=n?n.name:(s?"（末尾）":"—");
   $("b-pause").classList.toggle("live",!!st.live);
@@ -611,8 +618,10 @@ function onRow(i){
   if(!st||st.busy||!st.ready)return;
   if(st.confirm&&st.open&&i!==st.cur){
     pend=i;
-    var a=st.songs[st.cur],b=st.songs[i];
-    $("c-text").textContent="从《"+(a?a.name:"？")+"》切换到《"+
+    // 「从」名与 PC 弹窗同源：真实工程名优先（cur 为空也拿得到）
+    var a=st.projName||(st.songs[st.cur]&&st.songs[st.cur].name),
+        b=st.songs[i];
+    $("c-text").textContent="从《"+(a||"？")+"》切换到《"+
       b.name+"》？当前工程将被关闭（自动保存）。";
     $("m-confirm").classList.add("show");
   }else cmd("switch",i);

@@ -446,7 +446,7 @@ def _start_fake_device():
 def test_web_api():
     """HTTP API 全链路（离线）：state/cmd/claim/update/test + 假设备收包。"""
     app = _FakeWebApp()
-    app._web_snap = web_remote.build_snapshot(app, True)
+    app._web_snap = web_remote.build_snapshot(app, True, "歌一")
     thsrv = _start_fake_device()         # 假翻谱设备（回环随机端口）
     reg = web_remote.DeviceRegistry([], app.q.put)
     srv = web_remote.WebServer((_LOOPBACK, 0), app, reg, lambda: thsrv[1])
@@ -477,8 +477,11 @@ def test_web_api():
         # /state 快照
         code, snap = _http_get(port, "/state")
         assert code == 200 and snap["open"] and snap["confirm"]
+        assert snap["projName"] == "歌一"
         assert snap["songs"][0]["name"] == "歌一"
         assert snap["songs"][0]["dur"] == "3:33"
+        # NOW/弹窗「从」名用真实工程名（对齐 PC 横幅），不再按 cur 查《？》
+        assert "st.projName" in web_remote.PAGE_COMMON
         # /cmd：入队后在"主线程"执行
         assert _http_post(port, "/cmd", {"action": "next"})[1]["ok"]
         app.calls.get_nowait()()

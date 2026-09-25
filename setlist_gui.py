@@ -1073,14 +1073,18 @@ class App:
         if not sel:
             return
         i = sel[0]
+        ws = cubase_ctrl.current_project()
         if (self.switch_confirm and 0 <= i < len(self.pl_keys)
-                and i != self.cur
-                and cubase_ctrl.current_project()):
+                and i != self.cur and ws):
             # 双击是最易误触的手势、切歌会关掉当前工程：有工程在开时默认
             # 确认（覆盖无时钟工程——那种工程"在不在播"无从判断）；
-            # 无打开工程时双击=直接打开，没有可被关掉的东西，不弹确认
-            cur = (self.by_key.get(self.pl_keys[self.cur], {}).get("name", "？")
-                   if self.cur is not None else "？")
+            # 无打开工程时双击=直接打开，没有可被关掉的东西，不弹确认。
+            # 「从」名取工程标题里的真实名字：当前工程可能不在播放列表里
+            # （cur 为 None 按歌名查不到，会显示成《？》误导）
+            cur = cubase_ctrl.project_name_from_title(ws[1])
+            if not cur and self.cur is not None:
+                cur = self.by_key.get(self.pl_keys[self.cur], {}).get(
+                    "name", "？")
             dst = self.by_key.get(self.pl_keys[i], {}).get("name", "？")
             if not messagebox.askyesno(
                     "切换工程", "确定从《%s》切换到《%s》？\n"
@@ -1631,6 +1635,7 @@ class App:
         now, color, remain, nxt = "…", dpi.MUT, "", ""
         frac = None                         # None=不显示进度条
         has_proj = False                    # 同步给网页 /state 快照
+        proj_name = None                    # 工程真实名（网页 NOW/弹窗用）
         if self.ctrl is None:
             now, color = "启动中…", dpi.C_ERR
         elif self.ctrl.busy:
@@ -1642,7 +1647,7 @@ class App:
             if not ws:
                 now, color = "（无打开的工程）", dpi.MUT
             else:
-                name = cubase_ctrl.project_name_from_title(ws[1])
+                name = proj_name = cubase_ctrl.project_name_from_title(ws[1])
                 want = (self.by_key.get(self.pl_keys[self.cur], {}).get("name")
                         if self.cur is not None and self.cur < len(self.pl_keys)
                         else None)
@@ -1669,7 +1674,7 @@ class App:
                                          rem // 60, rem % 60))
         self._banner(now, color, nxt, remain)
         self._progress(frac)
-        self._web_snap = web_remote.build_snapshot(self, has_proj)
+        self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
 
     def _progress(self, frac):
         """NOW 下方 4px 进度条：None=隐藏（grid_remove 记住原位）。
