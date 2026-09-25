@@ -15,6 +15,14 @@ pyinstaller "Cube Setlist Manager.spec" --noconfirm || goto :err
 copy /y dist\_config.bak "dist\Cube Setlist Manager\config.json" >nul
 copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul
 del dist\_config.bak dist\_playlist.bak >nul
+rem 翻谱 APP 的 APK 进 exe 目录（网页 /app.apk 下载端点的来源）
+if exist "mobile\app\build\outputs\apk\debug\app-debug.apk" (
+  copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^
+    "dist\Cube Setlist Manager\CubeTurn.apk" >nul
+  echo 已带上翻谱 APK
+) else (
+  echo 提示：mobile\ 下没有 APK（cd mobile ^&^& gradlew assembleDebug），/app.apk 将 404
+)
 echo 打包完成，配置已放回
 
 rem 安装包：版本取最近 git tag（去 v 前缀），未安装 Inno Setup 则跳过

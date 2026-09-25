@@ -22,3 +22,9 @@ _render/
 .mimosa/
 .zcode/
 debug.log
+
+# 安卓工程（gradle 可重建；local.properties 是本机 SDK 路径）
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/local.properties
