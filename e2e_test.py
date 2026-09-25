@@ -300,7 +300,7 @@ class _WebShim:
 
 def p_web():
     """网页遥控/翻谱推送真机链路：MIDI 组合→HTTP 推送 + /cmd→真切歌。
-    服务与假平板 Tasker 都在 127.0.0.1 回环；翻谱注入口默认 loopMIDI Port
+    服务与假翻谱设备都在 127.0.0.1 回环；翻谱注入口默认 loopMIDI Port
     （其音符 36/48 不在 VJ NOTE_MAP 内，GUI 同时在跑也不会误触发），换口设
     环境变量 CUBE_E2E_TURN_PORT。需要 Cubase 在场（切歌部分）。"""
     import http.client
@@ -311,7 +311,7 @@ def p_web():
 
     hits = []
 
-    class _Tasker(BaseHTTPRequestHandler):
+    class _FakeDevice(BaseHTTPRequestHandler):
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
             hits.append(json.loads(self.rfile.read(n)))
@@ -322,7 +322,7 @@ def p_web():
         def log_message(self, *a):
             pass
 
-    tsrv = web_remote.ThreadingHTTPServer(("127.0.0.1", 0), _Tasker)
+    tsrv = web_remote.ThreadingHTTPServer(("127.0.0.1", 0), _FakeDevice)
     threading.Thread(target=tsrv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
 

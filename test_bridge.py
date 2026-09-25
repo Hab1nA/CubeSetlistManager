@@ -390,13 +390,13 @@ class _FakeWebApp:
         pass                        # 测试里绝不写真 config.json
 
 
-class _FakeTasker(BaseHTTPRequestHandler):
-    """假平板 Tasker：收 /turn 推送并记录 body。"""
+class _FakeDevice(BaseHTTPRequestHandler):
+    """假翻谱设备：收 /turn 推送并记录 body。"""
     hits = []
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        _FakeTasker.hits.append(json.loads(self.rfile.read(n)))
+        _FakeDevice.hits.append(json.loads(self.rfile.read(n)))
         self.send_response(200)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -436,18 +436,18 @@ def _http_post(port, path, obj=None, raw=None):
                      raw if raw is not None else json.dumps(obj or {}))
 
 
-def _start_tasker():
-    srv = web_remote.ThreadingHTTPServer((_LOOPBACK, 0), _FakeTasker)
+def _start_fake_device():
+    srv = web_remote.ThreadingHTTPServer((_LOOPBACK, 0), _FakeDevice)
     threading.Thread(target=srv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
     return srv, srv.server_address[1]
 
 
 def test_web_api():
-    """HTTP API 全链路（离线）：state/cmd/claim/update/test + 假 Tasker 收包。"""
+    """HTTP API 全链路（离线）：state/cmd/claim/update/test + 假设备收包。"""
     app = _FakeWebApp()
     app._web_snap = web_remote.build_snapshot(app, True)
-    thsrv = _start_tasker()         # 假平板 Tasker（回环随机端口）
+    thsrv = _start_fake_device()         # 假翻谱设备（回环随机端口）
     reg = web_remote.DeviceRegistry([], app.q.put)
     srv = web_remote.WebServer((_LOOPBACK, 0), app, reg, lambda: thsrv[1])
     port = srv.server_address[1]
@@ -456,7 +456,6 @@ def test_web_api():
     try:
         # 页面/任务 XML 可取，未知路径 404
         assert _http_get(port, "/")[0] == 200
-        assert _http_get(port, "/tasker.xml")[0] == 200
         assert _http_get(port, "/nope")[0] == 404
         # /state 快照
         code, snap = _http_get(port, "/state")
@@ -493,13 +492,13 @@ def test_web_api():
         assert len(reg.snapshot()) == 1
         code, j = _http_post(port, "/device/claim", {"name": "主谱台2"})
         assert len(reg.snapshot()) == 1 and j["device"]["name"] == "主谱台2"
-        # 改方法 + 测试推送（假 Tasker 收包；1280*0.75=960，800*0.5=400）
+        # 改方法 + 测试推送（假设备收包；1280*0.75=960，800*0.5=400）
         assert _http_post(port, "/device/update", {"method": "double"})[0] == 200
         assert reg.snapshot()[0]["method"] == "double"
-        _FakeTasker.hits = []
+        _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
         time.sleep(0.5)
-        assert _FakeTasker.hits == [{"x": 960, "y": 400, "count": 2}]
+        assert _FakeDevice.hits == [{"x": 960, "y": 400, "count": 2}]
         assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
         # 未认领设备不能改
         reg2 = web_remote.DeviceRegistry([], app.q.put)
