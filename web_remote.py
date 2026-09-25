@@ -688,7 +688,7 @@ DEV_PANEL_APP = """
 <div class="mask" id="m-dev">
   <div class="sheet">
     <h2>设置</h2>
-    <div style="display:flex;gap:14px;align-items:flex-start">
+    <div style="display:flex;gap:14px;align-items:stretch">
       <!-- 左列：连接设置 + 翻谱设置 -->
       <div style="flex:1;min-width:0">
         <div class="grp">
@@ -730,14 +730,11 @@ DEV_PANEL_APP = """
         </div>
         <div class="sub" style="margin-top:14px">APP 版本 <span id="app-ver"></span></div>
       </div>
-      <!-- 右列：所有设备（宽度显著小于左列） -->
-      <div style="width:30%;flex:none">
-        <div class="grp">
+      <!-- 右列：所有设备（等高，宽度显著小于左列） -->
+      <div style="width:30%;flex:none;display:flex;flex-direction:column">
+        <div class="grp" style="flex:1">
           <div class="sub">所有设备</div>
           <div id="dev-all" style="margin-top:6px"></div>
-        </div>
-        <div class="btns" style="margin-top:12px">
-          <button class="btn" id="dev-close" style="flex:1;text-align:center">关闭</button>
         </div>
       </div>
     </div>
@@ -806,6 +803,11 @@ $("usage-grant").addEventListener("click",function(){
 $("b-acc").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openAccSettings()});
 $("b-dev").addEventListener("click",openDev);
+// 触摸遮罩（面板区域以外）关闭：移动端标准交互
+$("m-dev").addEventListener("click",function(e){
+  if(e.target===this)$("m-dev").classList.remove("show")});
+$("m-apps").addEventListener("click",function(e){
+  if(e.target===this)$("m-apps").classList.remove("show")});
 $("dev-close").addEventListener("click",function(){
   $("m-dev").classList.remove("show")});
 
