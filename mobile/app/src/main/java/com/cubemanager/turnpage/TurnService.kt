@@ -81,7 +81,10 @@ class TurnService : Service() {
                 "auto=${auto ?: "null"} intent=${intent != null} " +
                 "acc=${TurnAccessibilityService.instance != null}")
             if (intent != null) {
-                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                // NEW_TASK+NEW_TASK 缺 SINGLE_TOP 时 standard 模式会新建实例
+                // （表现为「重新打开」丢阅读状态）；SINGLE_TOP 复用已有实例
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 startActivity(intent)
                 reportDiag("startActivity 已发起 → $target")
                 mainHandler.postDelayed({ fire() }, 1200)
