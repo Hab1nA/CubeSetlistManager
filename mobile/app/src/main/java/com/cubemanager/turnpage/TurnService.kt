@@ -118,6 +118,12 @@ class TurnService : Service() {
         }
     }
 
+    /** 通知随无障碍开关即时刷新（id 相同覆盖更新）。 */
+    fun refreshNotification() {
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFY_ID, buildNotification())
+    }
+
     private fun buildNotification(): Notification {
         val svcOn = TurnAccessibilityService.instance != null
         return Notification.Builder(this, CHANNEL_ID)
