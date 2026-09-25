@@ -472,26 +472,30 @@ class App:
                   command=self._open_settings).pack(side="left", padx=(4, 6))
         ctl = tk.Frame(self.root)
         ctl.pack(fill="x", padx=12, pady=(4, 10))
-        ctl.columnconfigure(0, weight=1)
-        ctl.columnconfigure(2, weight=1)
+        ctl.columnconfigure(1, weight=1)
+        ctl.columnconfigure(3, weight=1)
+        # 播放状态指示：控件栏最左（独立列，不与按钮组挨着）；14 号粗体
+        # 与顶部「已播|剩余」同规格；grid 默认垂直居中=与同排按钮对齐；
+        # 颜色每 tick 跟走带状态切
+        self.state_lbl = tk.Label(ctl, text="当前状态：未在播放",
+                                  font=("Microsoft YaHei UI", 14, "bold"))
+        self.state_lbl.grid(row=0, column=0, sticky="w", padx=(12, 10))
         left_sp = tk.Frame(ctl)
-        left_sp.grid(row=0, column=0, sticky="e")
+        left_sp.grid(row=0, column=1, sticky="e")
         right = tk.Frame(ctl)
-        right.grid(row=0, column=2, sticky="ens")   # 纵向拉满、贴右
+        right.grid(row=0, column=3, sticky="ens")   # 纵向拉满、贴右
         # 退出=底栏动作按钮：宽度与编排/播放组一致（5字符），底边与各组
         # 按钮同一基线（pady=3，不再整格垂直居中），右边距与上方「设置」
         # 按钮一致（距容器内右缘 6px）
         tk.Button(right, text="退出", width=5,
                   command=self._on_exit).pack(side="bottom", padx=(0, 6),
                                               pady=3)
-        # 左占位与右列（退出）等宽同步 → 两侧列自然宽相等，mid 严格居中
+        # 左占位与右列（退出）等宽同步 + 两侧列等权重 → mid 居中
+        # （状态标签占去 col0 后，居中基准是状态右侧的全部剩余空间）
         right.bind("<Configure>",
                    lambda _e: left_sp.config(width=right.winfo_reqwidth()))
         mid = tk.Frame(ctl)
-        mid.grid(row=0, column=1)
-        # 播放状态指示：锚底与同排按钮对齐；颜色每 tick 跟走带状态切
-        self.state_lbl = tk.Label(mid, text="当前状态：未在播放")
-        self.state_lbl.pack(side="left", anchor="s", padx=(10, 14), pady=(0, 6))
+        mid.grid(row=0, column=2)
         g1 = tk.LabelFrame(mid, text="编排")
         g1.pack(side="left", padx=(0, 8))
         self.btn_add = tk.Button(g1, text="加入", width=5,
