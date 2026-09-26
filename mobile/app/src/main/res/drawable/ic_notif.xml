@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标（单色，系统自动着色）：出门框 + 向右箭头，呼应翻谱出口小人 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <!-- 门框：左立柱 + 上楣 + 下槛 -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M3,2h11v2.4H5.4v15.2H14V22H3z"/>
+    <!-- 箭头穿门而出 -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M11.6,10.6h5.2V8.2L21.4,12l-4.6,3.8v-2.4h-5.2z"/>
+</vector>
