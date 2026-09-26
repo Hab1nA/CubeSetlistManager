@@ -257,7 +257,7 @@ class TurnService : Service() {
     private fun buildNotification(): Notification {
         val svcOn = TurnAccessibilityService.instance != null
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notif)
             .setContentTitle("翻谱接收中")
             .setContentText(if (svcOn) "端口 $port · 手势就绪"
                             else "端口 $port · 仅媒体键（无障碍未开启）")
