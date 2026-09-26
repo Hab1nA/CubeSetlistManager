@@ -284,16 +284,18 @@ class App:
         if self.ccfg["cubaseExe"] and not os.path.exists(self.ccfg["cubaseExe"]):
             # 配置钉的路径已不存在（升级 Cubase/换机）→ 回退自动探测，防静默失效
             self.ccfg["cubaseExe"] = DEFAULT_CUBASE_EXE
-        self.auto_advance = bool(cfg.get("autoAdvance", False))
+        # 全新配置（无文件/掉配置）的默认值：端口联动一律停用（名称不再
+        # 预设旧硬编码，用户在设置页按实际在线端口选）；勾选项按演出
+        # 习惯给安全默认
+        self.auto_advance = bool(cfg.get("autoAdvance", True))
         self.cont_play = bool(cfg.get("autoPlay", False))  # 连续播放：切完自动起播
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
-        # 端口提示名：空串=停用该联动（设置页下拉「无」）；缺键才回默认
-        self.vj_hint = (mb.PORT_HINT if cfg.get("vjPortHint") is None
-                        else str(cfg["vjPortHint"]))
-        self.kb_hint = (kbd_auto.KB_PORT_HINT if cfg.get("kbPortHint") is None
-                        else str(cfg["kbPortHint"]))
+        # 端口提示名：空串=停用该联动（设置页下拉「无」）；缺键=无（不再
+        # 回退旧硬编码端口名）
+        self.vj_hint = str(cfg.get("vjPortHint") or "")
+        self.kb_hint = str(cfg.get("kbPortHint") or "")
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
@@ -1797,7 +1799,7 @@ class SettingsWindow(tk.Toplevel):
                    else saved_mon + _ABSENT if saved_mon else "无")
         self.mon_var = tk.StringVar(value=mon_val)
         menu_row("VJ显示位置", self.mon_var, mon_opts)
-        self.mute_var = tk.BooleanVar(value=bool(obs_cfg.get("vjMute")))
+        self.mute_var = tk.BooleanVar(value=bool(obs_cfg.get("vjMute", True)))
         tk.Checkbutton(body, text="VJ静音播放（视频不出声）",
                        variable=self.mute_var).pack(anchor="w", pady=1)
 
@@ -2008,8 +2010,8 @@ class SettingsWindow(tk.Toplevel):
         mon = "" if mon == "无" else mon
         vj = raw(self.vj_var.get())
         kb = raw(self.kb_var.get())
-        vj = "" if vj == "无" else (vj or mb.PORT_HINT)
-        kb = "" if kb == "无" else (kb or kbd_auto.KB_PORT_HINT)
+        vj = "" if vj == "无" else vj      # 空=停用该联动，不再回退旧端口名
+        kb = "" if kb == "无" else kb
         # 移动端遥控：端口数值解析（非法回退默认并提示）
         try:
             srv = int(self.srv_var.get().strip())
