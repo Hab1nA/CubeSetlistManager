@@ -61,6 +61,20 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 `config.json`、`playlist.json` 放 exe 同目录（安装目录的版本文件夹内）。
 
+### 双底座版本（Cubase / Studio One）
+
+同一套代码双后端（`daw_ctrl.py` 事实表），Release 提供**两个安装包**，可并存安装：
+
+| 安装包 | 底座 | 说明 |
+|---|---|---|
+| `CubeSetlistManager-Setup-x.y.z.exe` | Cubase | 主线，行为同历史版本 |
+| `CubeSetlistManager-S1-Setup-x.y.z.exe` | Studio One 7 Pro | 独立 AppId/目录（`CubeSetlistManagerS1`）/快捷方式 `Cube Setlist Manager S1`；首装预置 studioone 配置，升级保留用户数据 |
+
+底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
+段（旧 `cubase` 段仍兼容读取）。S1 版当前限制：`.song` 为私有格式——**工程时长
+只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用；窗口标题/弹窗词表
+等仍在 M0 真机校准中（见 `docs/StudioOne迁移调研.md`）。
+
 ## 环境要求
 
 - Windows 10/11（深色标题栏依赖 Win11 圆角特性）；

@@ -17,7 +17,7 @@ import time
 
 import advance
 import cpr_meta
-import cubase_ctrl
+import daw_ctrl
 import kbd_auto
 import midi_bridge as mb
 import obs_ctrl
@@ -66,7 +66,7 @@ def wait_until(fn, timeout, desc, interval=0.5):
 
 def dump_windows(tag):
     log("窗口转储（%s）：" % tag)
-    for h, t, c in cubase_ctrl._windows():
+    for h, t, c in daw_ctrl._windows():
         if c.startswith("Steinberg") or "Cubase" in t or "Steinberg" in t:
             log("  class=%-28s title=%r" % (c, t))
 
@@ -85,9 +85,10 @@ def cfg_cubase():
 
 
 def make_ctrl():
-    ccfg = cfg_cubase().get("cubase", {})
-    return cubase_ctrl.CubaseController(
-        ccfg.get("cubaseExe", cubase_ctrl.PROC_PREFIX), log=log)
+    import setlist_gui
+    ccfg = setlist_gui.daw_settings(setlist_gui._load_config(), "cubase")
+    return daw_ctrl.DawController(daw_ctrl.CUBASE,
+                                  ccfg.get("dawExe", ""), log=log)
 
 
 # ---- 阶段 ----
@@ -154,7 +155,7 @@ def p_switch():
     t0 = time.time()
     ctrl.switch_to(SONG_A, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "switch_to 完成")
-    ws = cubase_ctrl.project_windows()
+    ws = daw_ctrl.project_windows()
     log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
     dump_windows("冷启动/切换后")
     assert ws and any("intro" in t for _, t in ws), "intro 没打开：%r" % (ws,)
@@ -162,7 +163,7 @@ def p_switch():
     t0 = time.time()
     ctrl.switch_to(SONG_B, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "第二次切换")
-    ws = cubase_ctrl.project_windows()
+    ws = daw_ctrl.project_windows()
     log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
     dump_windows("第二次切换后")
     assert ws and any("TAIDADA" in t for _, t in ws), "TAIDADA 没打开：%r" % (ws,)
@@ -172,8 +173,8 @@ def p_switch():
 def p_transport():
     ctrl = make_ctrl()
     target = os.path.join(ROOT, "霓虹折叠", "優しい彗星", "優しい彗星.cpr")
-    if not cubase_ctrl.project_windows() or \
-            "優しい彗星" not in (cubase_ctrl.project_windows()[0][1] or ""):
+    if not daw_ctrl.project_windows() or \
+            "優しい彗星" not in (daw_ctrl.project_windows()[0][1] or ""):
         log("先切到 優しい彗星（有 VJ 触发轨/时钟配置的真实演出工程）…")
         ctrl.switch_to(target, on_done=lambda n: log("on_done → %s" % n))
         wait_until(lambda: not ctrl.busy, 200, "切到 優しい彗星")
@@ -210,8 +211,8 @@ def p_transport():
 
 def p_advance():
     ctrl = make_ctrl()
-    if not cubase_ctrl.project_windows() or \
-            "intro" not in (cubase_ctrl.project_windows()[0][1] or ""):
+    if not daw_ctrl.project_windows() or \
+            "intro" not in (daw_ctrl.project_windows()[0][1] or ""):
         log("先切到 intro…")
         ctrl.switch_to(SONG_A, on_done=lambda n: log("on_done → %s" % n))
         wait_until(lambda: not ctrl.busy, 200, "切到 intro")
@@ -242,7 +243,7 @@ def p_advance():
     log("播完自动触发 ✓，等待自动切换到下一首…")
     ctrl.switch_to(SONG_B, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "推进后的切换")
-    ws = cubase_ctrl.project_windows()
+    ws = daw_ctrl.project_windows()
     log("推进后工程窗口：%s" % [t for _, t in ws])
     dump_windows("自动推进后")
     assert ws and "TAIDADA" in ws[0][1]
@@ -250,7 +251,7 @@ def p_advance():
 
 
 class _WebShim:
-    """p_web 专用：WebServer 需要的 App 侧最小接口，切歌走真 CubaseController。"""
+    """p_web 专用：WebServer 需要的 App 侧最小接口，切歌走真 DawController。"""
 
     def __init__(self):
         import queue as _q
@@ -269,7 +270,7 @@ class _WebShim:
 
     def _refresh(self):
         self._web_snap = web_remote.build_snapshot(
-            self, bool(cubase_ctrl.project_windows()))
+            self, bool(daw_ctrl.project_windows()))
 
     def _switch(self, i, via, play_after=False):
         if not 0 <= i < len(self.pl_keys):
@@ -386,7 +387,7 @@ def p_web():
         assert wait_until(lambda: app.ctrl.busy, 5, "busy 置位"), \
             "切歌命令未被执行（calls 未消费）"
         assert wait_until(lambda: not app.ctrl.busy, 200, "切歌完成")
-        ws = cubase_ctrl.project_windows()
+        ws = daw_ctrl.project_windows()
         want = os.path.splitext(os.path.basename(SONG_A))[0]
         assert ws and want in (ws[0][1] or ""), ws
         log("网页 /cmd → Cubase 切歌 ✓（%s）" % want)

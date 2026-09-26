@@ -435,6 +435,10 @@ class _FakeWatch:
     def is_transport_live(self):
         return self.live
 
+    def ever_live(self):
+        # tstate 三态判定用：假件无时钟历史，跟 is_transport_live 同源
+        return bool(self.live)
+
     def set_duration(self, d):
         self.duration = d
 
@@ -495,7 +499,7 @@ def p_gui():
     orig_ask = _mb.askyesno
     answers = []
     _mb.askyesno = lambda *a, **k: answers.pop(0) if answers else True
-    orig_curproj = sg.cubase_ctrl.current_project
+    orig_curproj = sg.daw_ctrl.current_project
 
     def A(case, ok, detail=""):
         record(PH, case, bool(ok) if ok is not None else None, detail)
@@ -603,7 +607,7 @@ def p_gui():
         app._refresh()
         app.switch_confirm = True
         app.cur = None
-        sg.cubase_ctrl.current_project = lambda: None   # 固定"无工程"前提
+        sg.daw_ctrl.current_project = lambda: None   # 固定"无工程"前提
         sel(app.pl, 1)
         answers.append(False)               # 哨兵：误弹确认会被它拒绝
         app._on_pl_dbl(None)
@@ -616,7 +620,7 @@ def p_gui():
               app.cur, len(answers)))
         answers.clear()                     # 清哨兵，别污染下一条的回答
         # 有工程在开：拒绝→不切，同意→切
-        sg.cubase_ctrl.current_project = lambda: (
+        sg.daw_ctrl.current_project = lambda: (
             12345, "Cubase Pro 工程 - SongB")
         sel(app.pl, 0)
         answers.append(False)
@@ -648,13 +652,13 @@ def p_gui():
                                    app._pending_switch))
         # 同曲重切不重载（工程标题一致）
         app.cur = 0
-        sg.cubase_ctrl.current_project = lambda: (
+        sg.daw_ctrl.current_project = lambda: (
             (12345, "Cubase Pro 工程 - SongA"),) and (12345, "Cubase Pro 工程 - SongA")
         sel(app.pl, 0)
         n0 = len(app.ctrl.switch_calls)
         app._on_pl_dbl(None)
         A("同曲且已打开→不重载", len(app.ctrl.switch_calls) == n0)
-        sg.cubase_ctrl.current_project = orig_curproj
+        sg.daw_ctrl.current_project = orig_curproj
 
         # ---- _switch_key 快照：切换中改编排不张冠李戴 ----
         app._refresh()
@@ -710,13 +714,13 @@ def p_gui():
           and abs(app2.durations["TeamA/SongA"] - 134.4) < 0.01,
           "app=%s app2=%s" % (app.pl_keys, app2.pl_keys))
         # 按窗口标题恢复当前工程
-        sg.cubase_ctrl.current_project = \
+        sg.daw_ctrl.current_project = \
             lambda: (999, "Cubase Pro 工程 - SongA")
         app2._load_songs()
         idx = app2.pl_keys.index("TeamA/SongA") if "TeamA/SongA" \
             in app2.pl_keys else None
         A("按窗口标题恢复 cur", app2.cur == idx)
-        sg.cubase_ctrl.current_project = orig_curproj
+        sg.daw_ctrl.current_project = orig_curproj
         root2.destroy()
 
         # ---- 暂停/继续按钮随走带状态 ----
@@ -765,16 +769,16 @@ def p_gui():
         sg.find_processes_by_prefix = lambda p: []
         sg.launch_detached = lambda exe, args="": \
             (launched.append(exe), 42)[1]
-        app._ensure_cubase()
+        app._ensure_daw()
         m1 = list(fq.items)
         fq.items.clear()
         sg.find_processes_by_prefix = lambda p: [(1, "Cubase15.exe")]
-        app._ensure_cubase()
+        app._ensure_daw()
         m2 = list(fq.items)
         fq.items.clear()
         sg.find_processes_by_prefix = lambda p: []   # 切回未运行，测坏路径
         app.ccfg["cubaseExe"] = r"C:\no\Cubase15.exe"
-        app._ensure_cubase()
+        app._ensure_daw()
         m3 = list(fq.items)
         app.q = q0
         sg.find_processes_by_prefix, sg.launch_detached = orig_find, orig_launch
@@ -851,7 +855,7 @@ def p_gui():
         A("退出确认→destroy", dead)
     finally:
         _mb.askyesno = orig_ask
-        sg.cubase_ctrl.current_project = orig_curproj
+        sg.daw_ctrl.current_project = orig_curproj
         try:
             root.destroy()
         except Exception:
@@ -1055,18 +1059,18 @@ def _cubase_mem():
 
 
 def p_switch():
-    import cubase_ctrl as cc
+    import daw_ctrl as cc
     from obs_ctrl import find_processes_by_prefix
     PH = "switch"
-    cfg = json.loads((ROOT / "config.json").read_text(
-        encoding="utf-8"))["cubase"]
+    cfg = sg.daw_settings(json.loads((ROOT / "config.json").read_text(
+        encoding="utf-8")), "cubase")
     done = [None]
 
     def ctrl_log(m):
         log("  [ctrl] %s" % m)
-    ctrl = cc.CubaseController(cfg["cubaseExe"],
-                               auto_save=cfg.get("autoSave", True),
-                               log=ctrl_log)
+    ctrl = cc.DawController(cc.CUBASE, cfg["dawExe"],
+                            auto_save=cfg.get("autoSave", True),
+                            log=ctrl_log)
     LIB = cfg["projectsRoot"]
     SONG_A = os.path.join(LIB, "霓虹折叠", "intro", "intro.cpr")
     SONG_B = os.path.join(LIB, "Others", "TAIDADA", "TAIDADA.cpr")
@@ -1159,16 +1163,16 @@ PHASES["switch"] = p_switch
 
 def p_advance():
     import advance
-    import cubase_ctrl as cc
+    import daw_ctrl as cc
     import cpr_meta
     import kbd_auto
     import midi_bridge as mb
     PH = "advance"
-    cfg = json.loads((ROOT / "config.json").read_text(
-        encoding="utf-8"))["cubase"]
-    ctrl = cc.CubaseController(cfg["cubaseExe"],
-                               auto_save=cfg.get("autoSave", True),
-                               log=lambda m: log("  [ctrl] %s" % m))
+    cfg = sg.daw_settings(json.loads((ROOT / "config.json").read_text(
+        encoding="utf-8")), "cubase")
+    ctrl = cc.DawController(cc.CUBASE, cfg["dawExe"],
+                            auto_save=cfg.get("autoSave", True),
+                            log=lambda m: log("  [ctrl] %s" % m))
     LIB = cfg["projectsRoot"]
     SONG_A = os.path.join(LIB, "霓虹折叠", "intro", "intro.cpr")
     vj_hint = json.loads((ROOT / "config.json").read_text(
@@ -1306,14 +1310,15 @@ PHASES["advance"] = p_advance
 # ---- 阶段 F2：时钟断链判别探针（優しい彗星，双端口监听） ----
 
 def p_probe_transport():
-    import cubase_ctrl as cc
+    import daw_ctrl as cc
     import kbd_auto
     import midi_bridge as mb
     PH = "probe_transport"
     cfg = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-    ctrl = cc.CubaseController(cfg["cubase"]["cubaseExe"],
-                               log=lambda m: log("  [ctrl] %s" % m))
-    target = os.path.join(cfg["cubase"]["projectsRoot"],
+    ccfg = sg.daw_settings(cfg, "cubase")
+    ctrl = cc.DawController(cc.CUBASE, ccfg["dawExe"],
+                            log=lambda m: log("  [ctrl] %s" % m))
+    target = os.path.join(ccfg["projectsRoot"],
                           "霓虹折叠", "優しい彗星", "優しい彗星.cpr")
     done = [None]
     ctrl.switch_to(target, on_done=lambda n: done.__setitem__(0, n))

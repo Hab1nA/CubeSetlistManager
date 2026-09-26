@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler
 
 import advance
 import cpr_meta
-import cubase_ctrl
+import daw_ctrl
 import hotspot
 import kbd_auto
 import midi_bridge as mb
@@ -200,13 +200,41 @@ def test_advance_watch():
 
 def test_project_title():
     # 标题版本名随工程保存版本变：15 存的 Cubase Pro，13.0.40 存的 Cubase Version …
-    assert cubase_ctrl.project_name_from_title(
+    assert daw_ctrl.project_name_from_title(
         "Cubase Pro 工程 - アイドル") == "アイドル"
-    assert cubase_ctrl.project_name_from_title(
+    assert daw_ctrl.project_name_from_title(
         "Cubase Version 13.0.40 工程 - TAIDADA") == "TAIDADA"
-    assert cubase_ctrl.project_name_from_title("记事本") is None
-    assert cubase_ctrl.project_name_from_title("") is None
-    assert cubase_ctrl.project_windows.__doc__  # 冒烟：识别函数可用
+    assert daw_ctrl.project_name_from_title("记事本") is None
+    assert daw_ctrl.project_name_from_title("") is None
+    assert daw_ctrl.project_windows.__doc__  # 冒烟：识别函数可用
+
+
+def test_daw_backends():
+    # 双底座事实表：Cubase 默认激活；S1 换表后标题解析跟随，用时还原
+    assert daw_ctrl.ACTIVE is daw_ctrl.CUBASE
+    assert daw_ctrl.FACTS["cubase"]["song_ext"] == ".cpr"
+    s1 = daw_ctrl.FACTS["studioone"]
+    assert s1["song_ext"] == ".song" and not s1["probe_duration"]
+    assert set(s1["transport"]) == set(daw_ctrl.CUBASE["transport"])  # 动作齐
+    daw_ctrl.set_active(s1)
+    try:
+        assert daw_ctrl.project_name_from_title("優しい彗星 — Studio One") \
+            == "優しい彗星"
+        assert daw_ctrl.project_name_from_title("记事本") is None
+    finally:
+        daw_ctrl.set_active(daw_ctrl.CUBASE)
+
+
+def test_daw_settings_compat():
+    # config 兼容：旧 cubase 段（cubaseExe 键）→ dawSettings 优先、键名迁移
+    import setlist_gui as sg
+    s = sg.daw_settings({"cubase": {"cubaseExe": "C:/x.exe",
+                                    "projectsRoot": "P"}}, "cubase")
+    assert s["dawExe"] == "C:/x.exe" and s["projectsRoot"] == "P"
+    s = sg.daw_settings({"cubase": {"cubaseExe": "OLD"},
+                         "dawSettings": {"dawExe": "NEW"}}, "studioone")
+    assert s["dawExe"] == "NEW"
+    assert sg.scan_library.__doc__  # 冒烟：库扫描签名可用
 
 
 def test_kbd_auto():

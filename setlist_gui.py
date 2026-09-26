@@ -6,7 +6,7 @@
 行2=编排（加入/移除/上移/下移/清空，随标蓝启停）+播放（开始=回零从头播/暂停/
 继续=从当前位置播/回零/上一首/下一首/全停）+自动化（键盘自动化/踩钉控制）居中，
 退出靠右。
-切歌=CubaseController.switch_to（关闭当前工程[自动保存]→打开下一个），
+切歌=DawController.switch_to（关闭当前工程[自动保存]→打开下一个），
 只认播放列表里的歌；自动推进=AdvanceWatch 累计走带活跃时长≥工程时长×95%
 且时钟断流。工程时长：启动时后台全量重探（自动来源；手动设定不覆盖）+
 打开工程时重测，持久化在 playlist.json，未设定位条的用「写入时长」手填。
@@ -28,8 +28,8 @@ import tkinter.font as tkfont
 from tkinter import messagebox, filedialog
 
 import advance
-import cubase_ctrl
 import cpr_meta
+import daw_ctrl
 import dpi
 import hotspot
 import kbd_auto
@@ -66,9 +66,55 @@ def _find_cubase_exe():
     return best[1] if best else None
 
 
-DEFAULT_CUBASE_EXE = (_find_cubase_exe()
-                      or r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe")
-DEFAULT_PROJECTS_ROOT = r"C:\Users\XKZ\Documents\Cubase Projects"
+def _find_s1_exe():
+    r"""扫 Program Files\PreSonus 各版本目录，取版本号最高的 Studio One.exe
+    （版本号取自目录名，如「Studio One 7」；升级无需改路径）。"""
+    base = r"C:\Program Files\PreSonus"
+    try:
+        dirs = os.listdir(base)
+    except OSError:
+        return None
+    best = None
+    for d in dirs:
+        if "studio one" not in d.lower():
+            continue
+        try:
+            if "Studio One.exe" not in os.listdir(os.path.join(base, d)):
+                continue
+        except OSError:
+            continue
+        m = re.search(r"(\d+)", d)
+        v = int(m.group(1)) if m else 0
+        if best is None or v > best[0]:
+            best = (v, os.path.join(base, d, "Studio One.exe"))
+    return best[1] if best else None
+
+
+# 各底座的默认路径（exe 探测失败时的兜底 + 全新配置的工程库默认值）
+DAW_DEFAULTS = {
+    "cubase": {"exe": (_find_cubase_exe()
+                       or r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"),
+               "root": r"C:\Users\XKZ\Documents\Cubase Projects"},
+    "studioone": {"exe": (_find_s1_exe()
+                          or r"C:\Program Files\PreSonus\Studio One 7"
+                             r"\Studio One.exe"),
+                  "root": r"C:\Users\XKZ\Documents\Studio One\Songs"},
+}
+
+
+def daw_settings(cfg, daw):
+    """DAW 路径段归一：新 dawSettings 段优先，旧 cubase 段兼容读取
+    （cubaseExe 键名迁移为 dawExe，老配置零改动可用），缺项落底座默认。
+    优先级：dawSettings > 旧 cubase 段 > 默认。"""
+    s = dict(autoSave=True)
+    s.update(cfg.get("cubase") or {})
+    s.update(cfg.get("dawSettings") or {})
+    legacy = s.pop("cubaseExe", None)
+    if legacy:
+        s.setdefault("dawExe", legacy)
+    s.setdefault("dawExe", DAW_DEFAULTS[daw]["exe"])
+    s.setdefault("projectsRoot", DAW_DEFAULTS[daw]["root"])
+    return s
 
 if getattr(sys, "frozen", False):   # PyInstaller exe：数据文件放 exe 同目录
     _HERE = pathlib.Path(sys.executable).resolve().parent
@@ -148,8 +194,8 @@ def save_playlist(keys, durations, dur_src):
     _atomic_write(PLAYLIST_PATH, data)
 
 
-def scan_library(root):
-    """工程库：<root>/<队伍>/<歌>/<歌>.cpr → [{key, team, name, path}]。"""
+def scan_library(root, ext=".cpr"):
+    """工程库：<root>/<队伍>/<歌>/<歌><ext> → [{key, team, name, path}]。"""
     base = pathlib.Path(root).resolve()
     out = []
     for team in sorted(os.listdir(base), key=natural_key):
@@ -161,7 +207,7 @@ def scan_library(root):
         for name in sorted(os.listdir(tdir), key=natural_key):
             if not name or name.startswith("."):
                 continue
-            path = tdir / name / (name + ".cpr")
+            path = tdir / name / (name + ext)
             if path.exists():
                 out.append({"key": "%s/%s" % (team, name), "team": team,
                             "name": name, "path": str(path)})
@@ -274,16 +320,18 @@ class Marquee(tk.Entry):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Cube Setlist Manager")
+        cfg = _load_config()
+        # 底座选择：config 顶层 "daw"（cubase | studioone），缺省 cubase
+        self.daw = str(cfg.get("daw") or "cubase")
+        self.facts = daw_ctrl.FACTS.get(self.daw) or daw_ctrl.CUBASE
+        daw_ctrl.set_active(self.facts)
+        root.title("Cube Setlist Manager" + self.facts["app_suffix"])
         root.geometry(dpi.scale(root, 980, 840))
         root.minsize(dpi.scale(root, 940), dpi.scale(root, 760))
-        cfg = _load_config()
-        self.ccfg = dict(projectsRoot=DEFAULT_PROJECTS_ROOT,
-                         cubaseExe=DEFAULT_CUBASE_EXE, autoSave=True)
-        self.ccfg.update(cfg.get("cubase") or {})
-        if self.ccfg["cubaseExe"] and not os.path.exists(self.ccfg["cubaseExe"]):
-            # 配置钉的路径已不存在（升级 Cubase/换机）→ 回退自动探测，防静默失效
-            self.ccfg["cubaseExe"] = DEFAULT_CUBASE_EXE
+        self.ccfg = daw_settings(cfg, self.daw)
+        if self.ccfg["dawExe"] and not os.path.exists(self.ccfg["dawExe"]):
+            # 配置钉的路径已不存在（升级 DAW/换机）→ 回退自动探测，防静默失效
+            self.ccfg["dawExe"] = DAW_DEFAULTS[self.daw]["exe"]
         # 全新配置（无文件/掉配置）的默认值：端口联动一律停用（名称不再
         # 预设旧硬编码，用户在设置页按实际在线端口选）；勾选项按演出
         # 习惯给安全默认
@@ -621,7 +669,7 @@ class App:
         托盘时到点终止）。"""
         for fn in (close_obs_app, close_loopmidi):
             threading.Thread(target=fn, daemon=True).start()
-        cubase_ctrl.close_app(log=lambda *_: None)
+        daw_ctrl.close_app(log=lambda *_: None)
 
     # ---- 后台线程：起服务 + 扫素材库 + 探时长 ----
 
@@ -632,51 +680,54 @@ class App:
                 and not self.ctl.apply_projector():
             self.q.put("VJ显示位置未恢复：%s" % self.ctl.last_error)
 
-    def _ensure_cubase(self):
-        """启动自检：Cubase 未运行就自动拉起（冷启动到 Hub 约 30 秒，之后
-        切歌才能单实例转交）。进程在而界面全无=正在退出的空壳（上一局
+    def _ensure_daw(self):
+        """启动自检：DAW 未运行就自动拉起（Cubase 冷启动到 Hub 约 30 秒，
+        之后切歌才能单实例转交）。进程在而界面全无=正在退出的空壳（上一局
         「退出关闭被控软件」的尾巴），等它退净再拉起，不算「已在运行」。
         尽力而为，失败只记日志不阻断启动。"""
+        dn = self.facts["display_name"]
         try:
-            if find_processes_by_prefix("cubase"):
-                if cubase_ctrl.ui_alive():
-                    self.q.put("Cubase 已在运行")
+            if find_processes_by_prefix(self.facts["proc_prefix"]):
+                if daw_ctrl.ui_alive():
+                    self.q.put("%s 已在运行" % dn)
                     return
-                self.q.put("Cubase 正在退出（界面已无），退净后自动启动…")
+                self.q.put("%s 正在退出（界面已无），退净后自动启动…" % dn)
 
                 def launch():
-                    if not cubase_ctrl.wait_exit():
+                    if not daw_ctrl.wait_exit():
                         # 等待期间窗口出来了（如正处冷启动）：不算失败
-                        self.q.put("Cubase 已在运行" if cubase_ctrl.ui_alive()
-                                   else "Cubase 无界面进程迟迟未退净，"
-                                        "未自动启动")
+                        self.q.put("%s 已在运行" % dn
+                                   if daw_ctrl.ui_alive()
+                                   else "%s 无界面进程迟迟未退净，未自动启动"
+                                        % dn)
                         return
-                    self._launch_cubase("Cubase 已退净，已自动启动"
-                                        "（冷启动约 30 秒）")
+                    self._launch_daw("%s 已退净，已自动启动"
+                                     "（冷启动约 30 秒）" % dn)
                 threading.Thread(target=launch, daemon=True).start()
                 return
-            self._launch_cubase("Cubase 未运行，已自动启动（冷启动约 30 秒）")
+            self._launch_daw("%s 未运行，已自动启动（冷启动约 30 秒）" % dn)
         except Exception as e:
-            self.q.put("Cubase 自检失败：%s" % _err(e))
+            self.q.put("%s 自检失败：%s" % (dn, _err(e)))
 
-    def _launch_cubase(self, ok_msg):
-        """拉起 Cubase 本体（路径无效/启动失败只记日志，不抛出）。"""
-        exe = self.ccfg.get("cubaseExe") or ""
+    def _launch_daw(self, ok_msg):
+        """拉起 DAW 本体（路径无效/启动失败只记日志，不抛出）。"""
+        exe = self.ccfg.get("dawExe") or ""
         if not exe or not os.path.exists(exe):
-            self.q.put("cubaseExe 路径不存在，无法自动拉起")
+            self.q.put("dawExe 路径不存在，无法自动拉起")
             return
         r = launch_detached(exe)
         if r > 32:
             self.q.put(ok_msg)
         else:
-            self.q.put("Cubase 自动启动失败（ShellExecute 代码 %s）" % r)
+            self.q.put("%s 自动启动失败（ShellExecute 代码 %s）"
+                       % (self.facts["display_name"], r))
 
     def _startup(self):
         """后台启动：按依赖分组逐项降级——一组失败只废该组功能并记红字，
         其余服务照常起（缺什么补什么，不再一票否决）。三大后端
         （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起。"""
         try:
-            self._ensure_cubase()   # 最慢的后端最先拉起（冷启动约 30 秒）
+            self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
             try:
                 hint = self.vj_hint or self.kb_hint
                 if hint:
@@ -736,11 +787,12 @@ class App:
                 self.q.put(self.start_err)
             # 切歌/走带控制（独立于 VJ 链）
             try:
-                self.ctrl = cubase_ctrl.CubaseController(
-                    self.ccfg["cubaseExe"], auto_save=self.ccfg["autoSave"],
-                    log=self.q.put)
+                self.ctrl = daw_ctrl.DawController(
+                    self.facts, self.ccfg["dawExe"],
+                    auto_save=self.ccfg["autoSave"], log=self.q.put)
             except Exception as e:
-                self.q.put("Cubase 控制未启动：%s（切歌/走带不可用）" % _err(e))
+                self.q.put("%s 控制未启动：%s（切歌/走带不可用）"
+                           % (self.facts["display_name"], _err(e)))
             # 键盘自动化：发送线程（JUNO + AX-09）+ 联动端口
             try:
                 self.switcher = kbd_auto.ToneSwitcher(
@@ -796,17 +848,17 @@ class App:
     def _load_songs(self):
         root = self.ccfg["projectsRoot"]
         if not os.path.isdir(root):
-            self.q.put("工程库不存在：%s（改 config.json 的 cubase.projectsRoot）"
-                       % root)
+            self.q.put("工程库不存在：%s（改 config.json 的"
+                       " dawSettings.projectsRoot）" % root)
             return
-        songs = scan_library(root)
+        songs = scan_library(root, self.facts["song_ext"])
         self.by_key = {s["key"]: s for s in songs}
         self.songs = songs
         # 播放列表清掉库里已不存在的项
         self.pl_keys = [k for k in self.pl_keys if k in self.by_key]
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表
-        ws = cubase_ctrl.current_project()
-        name = cubase_ctrl.project_name_from_title(ws[1]) if ws else None
+        ws = daw_ctrl.current_project()
+        name = daw_ctrl.project_name_from_title(ws[1]) if ws else None
         if name:
             for i, k in enumerate(self.pl_keys):
                 if self.by_key[k]["name"] == name:
@@ -827,8 +879,11 @@ class App:
 
     def _probe_durations(self, songs):
         """全量重探自动来源的工程时长并持久化（后台线程；65 首/66MB 实测
-        约 0.15s）：在 Cubase 里改过定位条的歌，重启即跟上。手动设定不被
-        覆盖；值全没变就不落盘，安静返回。"""
+        约 0.15s）：在 DAW 里改过定位条的歌，重启即跟上。手动设定不被
+        覆盖；值全没变就不落盘，安静返回。底座不支持解析工程文件
+        （Studio One .song）时跳过，时长只能手填。"""
+        if not self.facts["probe_duration"]:
+            return
         fresh = _reprobe(songs, self.durations, self.dur_src)
         if not fresh:
             return
@@ -1082,7 +1137,7 @@ class App:
         if not sel:
             return
         i = sel[0]
-        ws = cubase_ctrl.current_project()
+        ws = daw_ctrl.current_project()
         if (self.switch_confirm and 0 <= i < len(self.pl_keys)
                 and i != self.cur and ws):
             # 双击是最易误触的手势、切歌会关掉当前工程：有工程在开时默认
@@ -1090,7 +1145,7 @@ class App:
             # 无打开工程时双击=直接打开，没有可被关掉的东西，不弹确认。
             # 「从」名取工程标题里的真实名字：当前工程可能不在播放列表里
             # （cur 为 None 按歌名查不到，会显示成《？》误导）
-            cur = cubase_ctrl.project_name_from_title(ws[1])
+            cur = daw_ctrl.project_name_from_title(ws[1])
             if not cur and self.cur is not None:
                 cur = self.by_key.get(self.pl_keys[self.cur], {}).get(
                     "name", "？")
@@ -1167,8 +1222,8 @@ class App:
             self.q.put("歌单项不在素材库里：%s" % key)
             return False
         if via == "手动" and i == self.cur:
-            ws = cubase_ctrl.current_project()
-            if ws and cubase_ctrl.project_name_from_title(ws[1]) == song["name"]:
+            ws = daw_ctrl.current_project()
+            if ws and daw_ctrl.project_name_from_title(ws[1]) == song["name"]:
                 self.q.put("《%s》已是当前工程，不重载" % song["name"])
                 return False
         if self.ctrl is None or not self.ctrl.switch_to(
@@ -1240,9 +1295,7 @@ class App:
         while time.time() < deadline:
             if self.cur is None:
                 return                      # 用户已手动切走
-            loading = [t for _, t, c in cubase_ctrl._windows()
-                       if c.startswith(cubase_ctrl.WIN_CLASS_PREFIX)
-                       and t.startswith("正在加载")]
+            loading = daw_ctrl.loading_windows()
             if not loading:
                 break
             time.sleep(0.5)
@@ -1331,7 +1384,7 @@ class App:
         if self.ctrl is None:
             self.q.put("服务未就绪（启动未完成）")
             return
-        if action == "play" and not cubase_ctrl.current_project():
+        if action == "play" and not daw_ctrl.current_project():
             # 没有打开的工程：自动加载播放列表当前项（无指针则第一首）再播放
             if not self.pl_keys:
                 self.q.put("播放列表为空，先从素材库加入歌曲再播放")
@@ -1424,11 +1477,11 @@ class App:
     def _regain_focus(self):
         """把键盘焦点收回本程序（工作线程调用）。置顶只保视觉 Z 序，
         不保焦点——走带键发完后焦点在 Cubase，若不收回，用户接着打字
-        会打进 Cubase（空格=停走带）。复用 cubase_ctrl.focus 的前台手法。"""
+        会打进 Cubase（空格=停走带）。复用 daw_ctrlfocus 的前台手法。"""
         try:
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             if hwnd:
-                cubase_ctrl.focus(hwnd, tries=2)
+                daw_ctrl.focus(hwnd, tries=2)
         except Exception:
             pass
 
@@ -1667,12 +1720,12 @@ class App:
             else:
                 now, color = "切换中…", dpi.C_WARN
         else:
-            ws = cubase_ctrl.current_project()
+            ws = daw_ctrl.current_project()
             has_proj = bool(ws)
             if not ws:
                 now, color = "（无打开的工程）", dpi.MUT
             else:
-                name = proj_name = cubase_ctrl.project_name_from_title(ws[1])
+                name = proj_name = daw_ctrl.project_name_from_title(ws[1])
                 want = (self.by_key.get(self.pl_keys[self.cur], {}).get("name")
                         if self.cur is not None and self.cur < len(self.pl_keys)
                         else None)
@@ -1890,7 +1943,7 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(body, text="目录", anchor="w").pack(fill="x", pady=(pad, 3))
         self.proj_var = tk.StringVar(value=app.ccfg.get("projectsRoot", ""))
         self.vid_var = tk.StringVar(value=obs_cfg.get("videoRoot", ""))
-        row("Cubase 工程库", self.proj_var, browse=True)
+        row("%s 工程库" % app.facts["display_name"], self.proj_var, browse=True)
         row("VJ 视频目录", self.vid_var, browse=True)
         self.closeapps_var = tk.BooleanVar(value=app.exit_close_apps)
         tk.Checkbutton(body, text="退出时关闭被控软件（Cubase/OBS/loopMIDI）",
@@ -2091,10 +2144,10 @@ class SettingsWindow(tk.Toplevel):
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
             cfg["obs"] = obs
-            cub = cfg.get("cubase") or {}
+            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
             if proj:
-                cub["projectsRoot"] = proj
-            cfg["cubase"] = cub
+                daw_sec["projectsRoot"] = proj
+            cfg["dawSettings"] = daw_sec
             cfg["webRemote"] = app._web_config_payload()
             _save_config(cfg)
         except (ValueError, OSError) as e:
@@ -2112,11 +2165,17 @@ _MUTEX = None
 
 def _acquire_single_instance():
     """命名互斥体防双开：双开会双份发走带键/双份监听 MIDI，行为错乱。
-    句柄存全局防 GC（句柄关闭=互斥体销毁）；进程退出内核自动释放。"""
+    句柄存全局防 GC（句柄关闭=互斥体销毁）；进程退出内核自动释放。
+    名字带底座后缀：Cubase 版与 S1 版是两套安装，允许并存（不同时跑）。"""
     global _MUTEX
+    daw = "cubase"
+    try:
+        daw = str(_load_config().get("daw") or "cubase")
+    except Exception:
+        pass
     k32 = ctypes.windll.kernel32
     k32.CreateMutexW.restype = ctypes.c_void_p
-    _MUTEX = k32.CreateMutexW(None, False, "Local\\CubeSetlistManager")
+    _MUTEX = k32.CreateMutexW(None, False, "Local\\CubeSetlistManager-" + daw)
     return k32.GetLastError() != 183        # ERROR_ALREADY_EXISTS
 
 
