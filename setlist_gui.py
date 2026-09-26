@@ -2139,6 +2139,17 @@ def main():
     ico = os.path.join(getattr(sys, "_MEIPASS", "") or ".", "app.ico")
     if os.path.exists(ico):
         root.iconbitmap(ico)        # 窗口/任务栏图标（打包由 spec datas 带入）
+        # Tk 的 iconbitmap 只稳定覆盖标题栏小图标槽；任务栏读 ICON_BIG 槽
+        # 可能仍是 Tk 默认图——用原生 WM_SETICON 把大小两槽都强设一遍
+        hicon = ctypes.windll.user32.LoadImageW(
+            None, ico, 1, 0, 0, 0x40 | 0x10)   # IMAGE_ICON|DEFAULTSIZE|FROMFILE
+        if hicon:
+            root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or \
+                root.winfo_id()
+            u32 = ctypes.windll.user32
+            u32.SendMessageW(hwnd, 0x80, 1, hicon)   # ICON_BIG
+            u32.SendMessageW(hwnd, 0x80, 0, hicon)   # ICON_SMALL
     App(root)
     root.mainloop()
 
