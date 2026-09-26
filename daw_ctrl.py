@@ -36,7 +36,8 @@ ENTER_HOLD = 0.12       # 仿人回车按下保持时长（零间隔连发会被
 # 键名 → 虚拟键码；值=tuple 时第二位为扩展键标志（NumEnter 等小键盘键
 # 须带 KEYEVENTF_EXTENDEDKEY，否则宿主收到的是主键盘同码键，语义可能不同）
 VK = {"ESC": 0x1B, "MENU": 0x12, "RETURN": 0x0D, "SPACE": 0x20,
-      "NUM0": 0x60, "NUM1": 0x61, "NUMENTER": (0x0D, True)}
+      "NUM0": 0x60, "NUM1": 0x61, "NUMDOT": 0x6E,
+      "NUMENTER": (0x0D, True)}
 ACTION_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
                 "rewind": "回零", "stop": "停止"}   # 日志用中文动作名
 
@@ -59,6 +60,7 @@ CUBASE = dict(
     frame_title="Cubase Pro",           # 关完工程只剩的空主框架
     loading_marks=("正在加载",),         # 加载浮层标题前缀
     song_ext=".cpr",
+    close_before_open=True,             # 先关后开（激活模型，见文件头）
     name_after_mark=True,               # 「<版本名> 工程 - <歌名>」：歌名在后
     probe_duration=True,                # .cpr RIFF 解析时长（cpr_meta）
     app_suffix="",                      # 窗口标题后缀（Cubase 版保持原样）
@@ -81,30 +83,37 @@ STUDIOONE = dict(
     name="studioone",
     display_name="Studio One",
     proc_prefix="studio one",           # Studio One.exe → 进程名小写前缀
-    title_mark=" — Studio One",         # 待采样：推断「<歌名> — Studio One」
-    name_after_mark=False,              # 歌名在标记前（Cubase 在标记后）
+    title_mark="Studio One - ",         # 真机采样 2026-09-26：「Studio One -
+                                        # lingo演出5.16」（Start 页=光杆"Studio
+                                        # One"，不含标记不被误认工程窗）
+    name_after_mark=True,               # 歌名在标记后（与 Cubase 同向）
     win_class_prefix="CCLWindowClass",  # 真机采样 2026-09-26（Start 页主窗）；
                                         # Song 文档窗同类与否待采样
     dialog_enter_marks=("保存",),        # 待采样：最小集，未知弹窗只记录不按键
     dialog_log_marks=("丢失", "无法"),
     dialog_ignores=("Studio One",),     # Start 页主窗标题（真机采样 2026-09-26）
     hub_title=None,
-    frame_title=None,                   # Start 页标题已采样="Studio One"（在
-                                        # dialog_ignores 里供退出关闭用）；
-                                        # CLI 转交在 Start 页态是否可用待校准，
-                                        # 不可用才考虑置此启用空框架退出特例
+    # 真机 2026-09-27 实测：Start 页态 CLI 递交被静默丢弃（120s 无窗口，
+    # 与 Cubase 空框架吞转交同款）→ frame_title 置 Start 页标题启用「关框架
+    # 退出→带路径冷启动」特例（Start 页 WM_CLOSE=正常退出，用户点 X 同款）
+    frame_title="Studio One",
     loading_marks=(),                   # 待采样：空=跳过浮层等待
     song_ext=".song",
     probe_duration=False,               # .song 私有容器无解析，时长手填
     app_suffix=" S1",
-    # 待校准：S1 默认键位 Space=播放/停止切换（无独立暂停键）、NumEnter=回零。
-    # Space 是状态切换键，stop/pause/resume 同键序；真机校准后可改绑独立键。
+    # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
+    # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
+    # 先关后开，autoSave 无实际作用（文档注明：切歌前自行保存）。
+    close_before_open=False,
+    # 待校准中：Space=播放/停止切换（真机双向已验）、小键盘.（NUMDOT）=
+    # 返回零点（用户查 S1 默认键表；真机单向待验）。S1 无独立暂停键，
+    # stop/pause/resume 同键序；play=先回零再播；rewind=先停再回零。
     transport={
-        "play": ("NUMENTER", "SPACE"),
+        "play": ("NUMDOT", "SPACE"),
         "stop": ("SPACE",),
         "pause": ("SPACE",),
         "resume": ("SPACE",),
-        "rewind": ("NUMENTER",),
+        "rewind": ("SPACE", "NUMDOT"),
     },
 )
 
@@ -226,7 +235,8 @@ def project_name_from_title(title):
     if mark not in title:
         return None
     before, _sep, after = title.partition(mark)
-    return (after if ACTIVE["name_after_mark"] else before) or None
+    name = after if ACTIVE["name_after_mark"] else before
+    return name.rstrip("*") or None    # S1 脏工程标记=歌名尾加*（真机采样）
 
 
 def project_title_shape(name):
@@ -367,8 +377,8 @@ class DawController:
                 raise SwitchError("工程文件不存在")
             for _ in range(5):              # 先关后开：清掉所有已开工程
                 cur = current_project()
-                if not cur:
-                    break
+                if not cur or not self.facts.get("close_before_open", True):
+                    break                   # S1：直接换歌（同窗替换，不弹框）
                 self._close(cur[0])
             else:
                 raise SwitchError("工程窗口关不完（异常状态）")
