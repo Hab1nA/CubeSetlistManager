@@ -109,6 +109,10 @@ class MainActivity : Activity() {
                     if (hadError || url == null || url.startsWith("about:")) return
                     loaded = true
                     timeoutTask?.let { mainHandler.removeCallbacks(it) }
+                    // 记录「已验证接通」的地址：下次启动自动直连。端口自动
+                    // 纠正（switchToAppPort）后的正确地址会在此覆盖旧值，
+                    // 两者不会错位
+                    prefs().edit().putString("addrOkUrl", normUrl(url)).apply()
                     welcome.visibility = ViewGroup.GONE
                 }
             }
@@ -194,8 +198,13 @@ class MainActivity : Activity() {
             }
         }
         startForegroundService(Intent(this, TurnService::class.java))
-        // 连接完全由「连接」按钮触发（错误地址不再于启动时吞掉欢迎页）；
-        // 地址框已在创建时预填上次地址或默认地址
+        // 自动直连：仅当保存地址与「上次验证接通的地址」一致（含端口自动
+        // 纠正后的正确地址）。未验证过/失败过的地址留在欢迎页等用户按
+        // 「连接」——失败时欢迎页与错误提示照常保留，不会黑屏
+        val saved = prefs().getString("addr", null)?.trimEnd('/')
+        if (!saved.isNullOrEmpty() && saved == prefs().getString("addrOkUrl", null)) {
+            connect(saved)
+        }
     }
 
     override fun onResume() {
@@ -203,6 +212,9 @@ class MainActivity : Activity() {
     }
 
     private fun prefs() = getSharedPreferences("cube", MODE_PRIVATE)
+
+    /** URL 归一（去尾部斜杠）：保存地址与验证地址的比较基准一致。 */
+    private fun normUrl(u: String) = u.trimEnd('/')
 
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
