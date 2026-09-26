@@ -15,6 +15,7 @@ import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -74,10 +75,26 @@ class MainActivity : Activity() {
                 }
             }
             webViewClient = object : WebViewClient() {
+                private fun fail(msg: String) {
+                    hadError = true
+                    showStatus(msg, true)
+                    welcome.visibility = ViewGroup.VISIBLE
+                }
+
+                // 主框架加载失败：必须拦——WebView 对失败加载同样回调
+                // onPageFinished，不置 hadError 欢迎页会被错误地藏掉，
+                // 整个 APP 只剩 WebView 深色底（全黑）
+                override fun onReceivedError(view: WebView?,
+                                             request: WebResourceRequest?,
+                                             error: WebResourceError?) {
+                    if (request?.isForMainFrame == true)
+                        fail("加载失败（${error?.errorCode}）：${error?.description}")
+                }
+
+                // 旧系统兼容过载（minSdk 26 实际不走，防御性保留）
                 override fun onReceivedError(view: WebView?, errorCode: Int,
                                              description: String?, failingUrl: String?) {
-                    showStatus("加载失败（$errorCode）：$description", true)
-                    welcome.visibility = ViewGroup.VISIBLE
+                    fail("加载失败（$errorCode）：$description")
                 }
                 // 只允许私网 IP：防止误输公网地址或被页面跳走
                 override fun shouldOverrideUrlLoading(
@@ -177,15 +194,8 @@ class MainActivity : Activity() {
             }
         }
         startForegroundService(Intent(this, TurnService::class.java))
-        // 尊重用户设定：连接哪个端口就先连哪个；端口不对时页面加载后
-        // 会经 /state 的 appPort 自动纠正（无需在此改写用户地址）
-        val saved = prefs().getString("addr", null)
-        if (saved.isNullOrEmpty()) {
-            status.visibility = ViewGroup.GONE
-            addrInput.setText(DEFAULT_ADDR)
-        } else {
-            connect(saved)
-        }
+        // 连接完全由「连接」按钮触发（错误地址不再于启动时吞掉欢迎页）；
+        // 地址框已在创建时预填上次地址或默认地址
     }
 
     override fun onResume() {
