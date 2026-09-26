@@ -1,5 +1,10 @@
 {
-  "daw": "cubase",
+  "daw": "studioone",
+  "dawSettings": {
+    "dawExe": "C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe",
+    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs",
+    "autoSave": true
+  },
   "obs": {
     "host": "127.0.0.1",
     "port": 4455,
@@ -11,11 +16,6 @@
     "projectorMonitor": "",
     "vjMute": false,
     "retrySec": 5
-  },
-  "dawSettings": {
-    "dawExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
-    "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects",
-    "autoSave": true
   },
   "juno": {
     "inHint": "JUNO",

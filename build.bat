@@ -36,6 +36,9 @@ if not exist "%ISCC%" (
 )
 "%ISCC%" /DAppVer=%APPVER% installer.iss || goto :err
 echo installer done: dist\CubeSetlistManager-Setup-%APPVER%.exe
+rem Studio One 版（同一 exe，预置 studioone 配置；独立 AppId/目录，可并存安装）
+"%ISCC%" /DAppVer=%APPVER% /Ds1 installer.iss || goto :err
+echo installer done: dist\CubeSetlistManager-S1-Setup-%APPVER%.exe
 exit /b 0
 :err
 echo BUILD FAILED (backups kept at dist\_config.bak / _playlist.bak)

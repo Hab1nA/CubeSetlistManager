@@ -4,6 +4,32 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [0.11.0-prerelease.1] - 2026-09-26
+
+### 新增
+
+- **双底座并行：Studio One 7 版新立**（`docs/StudioOne迁移调研.md` 落地）。
+  同一套代码双后端，构建出两个安装包：**Cube Setlist Manager**（Cubase 底座，
+  行为与 0.10.1 一致）与 **Cube Setlist Manager S1**（Studio One 底座，独立
+  AppId/安装目录/快捷方式，可与 Cubase 版并存安装；首装预置 studioone 配置，
+  升级保留用户配置）。
+- **daw 后端抽象**（`cubase_ctrl.py` → `daw_ctrl.py`）：Cubase 事实表（进程名/
+  窗口类与标题标记/弹窗词表/走带键序/工程扩展名）收拢为事实表 dict，
+  `DawController` 与全部切歌/走带/弹窗基础设施双底座共用；config 顶层
+  `"daw": "cubase" | "studioone"` 选底座。Cubase 路径配置段迁移为通用
+  `dawSettings` 段（旧 `cubase` 段兼容读取，老配置零改动）。
+- **Studio One 真机采样**（`probe_s1.py` 探针，M0 校准工具）：已采样进程名
+  `Studio One.exe`、主窗类 `CCLWindowClass`、Start 页标题；新增工程库扫描支持
+  `.song` 工程、S1 exe 自动探测（扫 `Program Files\PreSonus`）。
+
+### 已知限制（S1 版，待 M0 真机校准）
+
+- 窗口标题格式/弹窗全集/CLI 转交行为等按调研推断，未真机逐项校准；
+- `.song` 为私有格式无解析：**工程时长只能手填**（「写入时长」），未填的歌
+  不参与播完自动推进；键盘自动化音色槽（读 .cpr）暂不可用；
+- 走带仍走键注入（S1 默认键位 Space 切换/NumEnter 回零），Mackie/MIDI Learn
+  升通道为后续可选项。
+
 ## [0.10.1] - 2026-09-26
 
 ### 新增

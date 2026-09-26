@@ -348,7 +348,7 @@ root.update_idletasks()
 check("无进度时隐藏", not app.prog.winfo_ismapped())
 # 截图前模拟「工程已打开、走带 60s」：NOW/NEXT/进度条按真实路径渲染
 import types
-sg.cubase_ctrl.current_project = lambda: (None, "Cubase Pro 工程 - SongA")
+sg.daw_ctrl.current_project = lambda: (None, "Cubase Pro 工程 - SongA")
 app.ctrl = types.SimpleNamespace(busy=False)
 app.watch = types.SimpleNamespace(active=lambda: 60.0)
 app._tick_body()
