@@ -4,6 +4,24 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [0.11.0-prerelease.2] - 2026-09-27
+
+### 变更（S1 线真机校准第一批 + 应用级验证）
+
+- **M0 真机校准闭环**（探针 `probe_s1.py` 逐项实测）：工程窗标题=`Studio One - <歌名>`
+  （Start 页为光杆名不误判）；脏工程=歌名尾 `*`；CLI 递交=**同实例同窗口换歌**
+  （不弹任何确认框、未保存修改被静默丢弃——`.song` mtime 不变实证）→ 切歌跳过
+  「先关后开」（`close_before_open=False`）；Start 页态递交被丢弃（同 Cubase 空框架）
+  → `frame_title` 启用退出重启特例；回零键=**小键盘 `.`**（NumEnter/主 Enter 证伪）。
+- **应用级 E2E 全过**：NOW 横幅识别、素材库扫描 .song、双击切歌（确认弹窗→切换完成
+  **2 秒**，对比 Cubase 30-48s）、「开始」按钮起播、音色映射空槽降级、时长未知横幅。
+- **已知问题定位（走带跟随/自动推进暂不可用）**：S1 7.2.3 经 Windows MIDI Services
+  新栈对 loopMIDI（teVirtualMIDI）端口**零输出**（时钟配置全对仍无脉冲；WinMM 老栈
+  自环收发正常，监听侧健康）——2026-03 起 Windows MIDI 服务滚装的已知兼容问题类。
+  修复=重启 Windows MIDI 服务（管理员）：双击仓库新增的 **`fix_s1_midi_clock.bat`**
+  一键完成，重启 S1 后走带跟随即恢复。未修复期间 VJ 联动/自动推进/播放状态对 S1
+  歌曲停用，其余功能不受影响。
+
 ## [0.11.0-prerelease.1] - 2026-09-26
 
 ### 新增

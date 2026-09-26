@@ -72,8 +72,10 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
 段（旧 `cubase` 段仍兼容读取）。S1 版当前限制：`.song` 为私有格式——**工程时长
-只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用；窗口标题/弹窗词表
-等仍在 M0 真机校准中（见 `docs/StudioOne迁移调研.md`）。
+只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。**走带跟随/自动推进
+需要 MIDI 时钟**：S1 7.2 在 Windows MIDI Services 新栈下对 loopMIDI 零输出（已知
+兼容问题），双击 `fix_s1_midi_clock.bat` 重启 Windows MIDI 服务并重启 S1 即恢复。
+真机校准细节见 `docs/StudioOne迁移调研.md`。
 
 ## 环境要求
 
