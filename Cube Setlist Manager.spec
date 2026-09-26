@@ -5,7 +5,7 @@ a = Analysis(
     ['setlist_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('app.ico', '.')],       # 窗口/任务栏图标（exe 图标见 EXE.icon）
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='app.ico',
 )
 coll = COLLECT(
     exe,
