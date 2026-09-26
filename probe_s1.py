@@ -96,23 +96,24 @@ def cmd_transport(action):
 
 def cmd_clock():
     import midi_bridge as mb
+    hint = sys.argv[2] if len(sys.argv) > 2 else "loopMIDI"
     print("MIDI 输入端口（S1 勾 Send MIDI Clock 后等脉冲）：")
     for idx, name in mb._in_devices():
         print("  %d %s" % (idx, name))
-    hit = mb._pick(mb._in_devices(), "loopMIDI")
+    hit = mb._pick(mb._in_devices(), hint)
     if not hit:
-        print("（无 loopMIDI 端口在场）")
+        print("（没有匹配 %r 的端口）" % hint)
         return
     n = [0]
 
     def on_clock():
         n[0] += 1
-    port = mb.MidiIn("loopMIDI", lambda *a: None, on_clock=on_clock)
+    port = mb.MidiIn(hit[1], lambda *a: None, on_clock=on_clock)
     print("监听 %s 5 秒…" % port.name)
     t0 = time.time()
     while time.time() - t0 < 5:
         time.sleep(0.2)
-    print("5 秒收到时钟脉冲 %d 个（>0 = S1 时钟已到 loopMIDI）" % n[0])
+    print("5 秒收到时钟脉冲 %d 个（>0 = S1 时钟已到 %s）" % (n[0], port.name))
 
 
 if __name__ == "__main__":

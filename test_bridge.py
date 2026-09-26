@@ -218,8 +218,9 @@ def test_daw_backends():
     assert set(s1["transport"]) == set(daw_ctrl.CUBASE["transport"])  # 动作齐
     daw_ctrl.set_active(s1)
     try:
-        assert daw_ctrl.project_name_from_title("優しい彗星 — Studio One") \
+        assert daw_ctrl.project_name_from_title("Studio One - 優しい彗星") \
             == "優しい彗星"
+        assert daw_ctrl.project_name_from_title("Studio One") is None  # Start 页
         assert daw_ctrl.project_name_from_title("记事本") is None
     finally:
         daw_ctrl.set_active(daw_ctrl.CUBASE)
