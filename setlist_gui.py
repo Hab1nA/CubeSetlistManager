@@ -2134,6 +2134,9 @@ def main():
     except OSError:
         pass
     root = tk.Tk()
+    ico = os.path.join(getattr(sys, "_MEIPASS", "") or ".", "app.ico")
+    if os.path.exists(ico):
+        root.iconbitmap(ico)        # 窗口/任务栏图标（打包由 spec datas 带入）
     App(root)
     root.mainloop()
 
