@@ -469,6 +469,13 @@ def test_web_api():
         finally:
             web_remote._apk_file = real_apk
         assert _http_get(port, "/nope")[0] == 404
+        for icon_path in ("/favicon.ico", "/apple-touch-icon.png"):
+            conn = http.client.HTTPConnection(_LOOPBACK, port, timeout=3)
+            conn.request("GET", icon_path)
+            r = conn.getresponse()
+            raw = r.read()
+            conn.close()
+            assert r.status == 200 and raw[:4] == b"\x89PNG", icon_path
         # 双版页面：浏览器版无翻谱面板、APP 版承载翻谱设置
         assert "/app.apk" in web_remote.PAGE_BROWSER
         assert "翻谱设置" not in web_remote.PAGE_BROWSER
