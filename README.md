@@ -1,8 +1,32 @@
+<div align="center">
+
+<img src="docs/logo.png" width="128" alt="Cube Setlist Manager Logo"/>
+
 # Cube Setlist Manager
 
-演出用控制台：素材库编排播放列表 → 一键切换 Cubase 工程（先关后开）→
-播完自动切换下一首 → JUNO-DS 音色自动切换 + CC 踩钉快捷键 + OBS 外屏视频联动。
-深色大字界面，演出暗场可读（深色标题栏，Win11 圆角）。
+**演出用 Cubase 歌单控制台 · 移动端遥控 · 谱面自动翻页**
+
+[![Release](https://img.shields.io/github/v/release/Hab1nA/CubeSetlistManager)](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
+[![CI](https://github.com/Hab1nA/CubeSetlistManager/actions/workflows/ci.yml/badge.svg)](https://github.com/Hab1nA/CubeSetlistManager/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/Windows-10%2F11-0078D6)
+![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84)
+![Python](https://img.shields.io/badge/Python-3.14-3776AB)
+![Cubase](https://img.shields.io/badge/Cubase-13--15-673AB4)
+
+[下载安装包](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
+· [安卓 APP](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
+· [移动端设计文档](docs/移动端遥控与翻谱设计.md)
+· [演出前检查清单](docs/M0_验证清单.md)
+
+</div>
+
+---
+
+演出控制台一件套：素材库编排播放列表 → 一键切换 Cubase 工程（先关后开）→
+播完自动切换下一首 → JUNO-DS 音色自动切换 + CC 踩钉快捷键 + OBS 外屏视频联动
++ 平板/手机遥控 + 谱面自动翻页。深色大字界面，演出暗场可读（深色标题栏，
+Win11 圆角）。全程本地通信，不经互联网。
 
 ## 功能一览
 
@@ -11,9 +35,13 @@
 - **自动推进**：工程播完自动停止并切下一首（Cubase 播到头不会自己停）；
 - **音色自动切换**：Cubase 发音符 → JUNO-DS / AX-09 Lucina 按工程映射切音色；
 - **踩钉快捷键**：MIDI 踩钉 CC 绑定切歌/走带等动作，支持热插拔；
-- **移动端遥控**：电脑开 Windows 热点，平板连热点后浏览器遥控走带/切歌/全停
-  （与桌面同权）；Cubase 发翻谱音符 → 平板 Tasker+AutoInput 自动翻页。
-  全程本地通信不经互联网，翻谱链路不经浏览器（网页被冻结翻谱照常）；
+- **移动端遥控**：电脑开 Windows 热点，平板/手机连热点后用浏览器或
+  **Cube Remote 安卓 APP** 遥控走带/切歌/全停（与桌面同权）；全程本地通信
+  不经互联网；
+- **谱面自动翻页**：Cubase 发翻谱音符 → 平板 APP 按**本机翻页方法**
+  （点按/双击/滑动/媒体键四通道）在谱面 App 自动翻页——手势与坐标由 APP
+  组装，推送走持久连接 + Wi-Fi 低时延锁，翻谱链路不经浏览器（网页被冻结
+  翻谱照常）；
 - **VJ 视频联动**：走带跟随自动播/停 OBS 视频，熄屏一键黑场；
 - **节目投影**：把 OBS 节目画面全屏投影到指定显示器（设置页选择，重连自动恢复）；
 - **VJ 静音播放**：视频静音 + 关监听，或开「监视器并输出」出声，设置页切换；
@@ -26,9 +54,10 @@
 按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager`（免管理员），自动创建
 开始菜单/桌面快捷方式，自带卸载器；升级直接装新版，`config.json` 等数据保留。
 
-| 程序 | 定位 |
-|---|---|
-| `Cube Setlist Manager\Cube Setlist Manager.exe` | **演出主程序**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
+| 端 | 程序 | 定位 |
+|---|---|---|
+| Windows | `Cube Setlist Manager\Cube Setlist Manager.exe` | **演出主程序**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
+| Android | `CubeRemote-vX.Y.apk`（Release 下载，或热点网页「下载 APP」） | **Cube Remote 遥控/翻谱 APP**：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
 
 `config.json`、`playlist.json` 放 exe 同目录（安装目录的版本文件夹内）。
 
@@ -38,14 +67,16 @@
 - [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)（虚拟 MIDI 端口）；
 - OBS Studio（obs-websocket 5.x 已内置于 OBS 28+，需在「工具→WebSocket 服务器设置」启用）；
 - Steinberg Cubase（实测 Cubase 15 / Pro 13.0.40 窗口标题均兼容）；
-- 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、MIDI 踩钉。
+- 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、MIDI 踩钉；
+- 移动端遥控（可选）：安卓平板/手机 8.0+ 安装 Cube Remote，或任意现代浏览器。
 
 ### 开发 / 构建
 
 - Python **3.14.x**（实测版本；零第三方运行时依赖是刻意设计——python-rtmidi
   在 3.14 下 import 即崩，故 MIDI/OBS 协议均为标准库手写）；
+- 安卓 APP：Kotlin + Gradle（`mobile/` 工程，`gradlew assembleDebug`）；
 - 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
-  Inno Setup 6 会顺带出按用户安装包，版本取最近 git tag）；
+  Inno Setup 6 会顺带出按用户安装包并拷入最新 APK，版本取最近 git tag）；
 - 离线自检：`py test_bridge.py`，或 `py -m pytest test_bridge.py`（CI 每次
   push 自动跑）；
 - 真机 E2E：`py -u e2e_test.py <phase>`（库根默认本机路径，换机设环境变量
@@ -63,7 +94,11 @@
    - **Cubase**：进程不在就冷启动到 Hub（约 30 秒，之后切歌走单实例转交）。
 
    任一后端拉起失败只记日志，不阻断其余功能（缺什么补什么）。
-4. **音色/踩钉绑定**：见下文[键盘自动化](#键盘自动化--踩钉)与[踩钉](#踩钉)两节。
+4. **移动端遥控/自动翻谱**：设置页勾「启用移动端遥控」→ 平板/手机连热点 →
+   浏览器遥控即开即用；翻谱则在平板安装 Cube Remote APP（网页右上角
+   「下载 APP」或 Release 下载），按[设计文档第十二节](docs/移动端遥控与翻谱设计.md)
+   完成认领/翻页方法/无障碍授权；
+5. **音色/踩钉绑定**：见下文[键盘自动化](#键盘自动化--踩钉)与[踩钉](#踩钉)两节。
 
 ## 界面与操作
 
@@ -71,6 +106,9 @@
 
 - **NOW/NEXT 横幅**：当前工程大字 + 下一首 + 剩余时间，演出一眼可读；
   下方**全宽进度条**随走带活跃时长推进（回零归零、无工程隐藏）。
+- **播放状态**：控件栏最左「当前状态：未在播放/播放中/已暂停」，随状态
+  变色；移动端（网页/APP）状态行在 NOW 歌名右侧，切歌期间显示「切换中…」，
+  NOW/NEXT 保持切歌前画面不跳动。
 - **素材库**：双击加入播放列表；支持 Ctrl/Shift 多选批量加入；右上搜索框过滤。
 - **播放列表**：双击切换工程；**有工程在开时**默认弹确认防误触（设置页
   「切换工程需确认」可关），**无打开工程时双击直接打开、不弹确认**；
@@ -103,24 +141,37 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 - **踩钉**：MIDI CC 上升沿触发（瞬时/开关踩钉通吃）。窗口里点「学习」踩一下即完成绑定，
   存 `config.json` 的 pedal 段；支持热插拔（断开每 10 秒自动重连）。
 
+### 移动端遥控 / 谱面自动翻页
+
+- **网页遥控**（即开即用）：平板/手机连热点后访问 `http://<热点IP>:8765`，
+  与桌面同权控制走带/切歌/全停；播放状态行 + 进度条随设备尺寸自适应
+  （手机竖屏单列紧凑版）。
+- **Cube Remote APP**（推荐）：控制页与网页同源，另承载翻谱设置——认领设备、
+  翻页方法四选一（点按/双击/滑动/媒体键）、谱面 App 指定、测试翻页（自动切回
+  谱面 App 并回传诊断）；Cubase 发翻谱音符即按本机方法自动翻页。
+- **翻谱音符协议**：C2/C#2（36/48）=上一/下一页，C3–A3=选设备槽位；推送语义
+  指令到各设备，互不阻塞；端口全局统一（默认 8766，APP 内可改需两端同步）。
+- 首次配置/无障碍授权/翻页方法选择/常见问题：见[设计文档第十二节](docs/移动端遥控与翻谱设计.md)。
+
 ### 设置页
 
 保存即应用，写 `config.json` 持久化：
 
 - **联动端口**：VJ / 键盘自动化 / 翻谱信号的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——Cubase 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
 - **移动端遥控**：总开关（开=自动开热点→起网页服务→开翻谱端口，关=全停；
-  热点是本程序开的退出时自动关掉）、网页端口（默认 8765）、Tasker 端口
-  （默认 8766）、热点状态行（开/关、SSID、密码、本机 IP）。平板连热点后
-  访问 `http://<状态行IP>:8765`：网页遥控走带/切歌/全停，「翻谱设置」面板
-  认领本机为翻谱设备（自动上报分辨率）、选单击/双击、试翻一页、下载
-  Tasker 任务 XML（首次配置见 `docs/Tasker配置说明.md`）。首次监听 Windows
-  会弹防火墙放行，允许一次即可；
+  热点是本程序开的退出时自动关掉）、网页端口（默认 8765）、APP 页面端口
+  （默认 8767）、翻谱接收端口（默认 8766，全局统一）、热点状态行（开/关、
+  SSID、密码、本机 IP）。平板/手机连热点后：浏览器访问 `http://<状态行IP>:8765`
+  即网页遥控；Cube Remote APP 连接地址 `http://<IP>:8767`——遥控走带/切歌/
+  全停，「设置」面板认领翻谱设备、选翻页方法、试翻一页、下载 APK。首次监听
+  Windows 会弹防火墙放行，允许一次即可；
 - **VJ显示位置**：列本机显示器（Windows 枚举，不依赖 OBS 在线），选中即把
   OBS 节目画面全屏投影过去（换屏先关旧投影不留双份；屏名对不上 OBS 命名时按
   屏幕排列排名兜底；OBS 重连后自动恢复）；选「无」关闭投影；
 - **VJ静音播放**：勾选=媒体源静音+关监听；不勾=开「监视器并输出」，声音进
   OBS「设置→音频→高级→监视输出设备」（默认=系统播放设备）；
-- **目录**：Cubase 工程库变更触发热重扫，VJ 视频目录热生效；
+- **目录**：Cubase 工程库变更触发热重扫，VJ 视频目录热生效（均支持文件夹
+  选择对话框）；
 - **行为开关**：自动切换工程 / 连续播放 / 保持软件前台 / 切换工程需确认 /
   **退出时关闭被控软件**（Cubase → OBS → loopMIDI 按序优雅关闭：Cubase 未保存
   确认框回车=保存；OBS 走 WM_CLOSE 不强杀；loopMIDI 先关后终止）。
@@ -134,15 +185,15 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 | obs | host / port / password | obs-websocket 地址（OBS 内置服务器需启用，真配置在 `%APPDATA%\obs-studio\plugin_config\obs-websocket\config.json`） |
 | obs | obsExe / autoStart | OBS 未运行时自动拉起 |
 | obs | mediaInput / videoRoot | 媒体源名（缺源自动补建「舞台视频」）/ 视频库根目录 |
-| obs | vjMute | VJ 静音播放：勾选=静音+关监听；不勾=开监听「监视器并输出」（设置页可改） |
+| obs | vjMute | VJ 静音播放：勾选=静音+关监听；不勾=开监听「监视器并输出」（设置页可改，默认勾选） |
 | obs | projectorMonitor | VJ 显示位置屏名（空=不投影），设置页可改 |
 | cubase | cubaseExe / projectsRoot / autoSave | Cubase 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`）、切换时自动保存 |
 | juno | inHint / outHint / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道 |
 | ax09 | inHint / outHint / ch | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改） |
 | pedal | deviceHint / bindings | 踩钉设备名提示、动作→CC 号 |
-| webRemote | enabled / serverPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（默认 8765）、平板 Tasker 端口（默认 8766） |
-| webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/单击双击/启停/分辨率——由平板网页认领自动维护，勿手改） |
-| autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化 |
+| webRemote | enabled / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
+| webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
+| autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
 | autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
 | exitCloseApps | （顶层） | 「退出时关闭被控软件（Cubase/OBS/loopMIDI）」勾选持久化 |
@@ -155,35 +206,39 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ cubase_ctrl.py        Cubase 切歌/走带/进程（先关后开 + 键注入 + 优雅退出）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
 ├─ advance.py            自动推进看门狗（两段式）
-├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
-├─ web_remote.py / hotspot.py   移动端遥控（网页服务+翻谱推送+设备表）/ Windows 热点（WinRT）
 ├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
+├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
+├─ web_remote.py / hotspot.py   移动端遥控（网页服务+语义推送+设备表）/ Windows 热点（WinRT）
 ├─ cpr_meta.py           .cpr 时长解析
+├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
+├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包
 ├─ test_bridge.py        桥自检（离线，无 OBS/loopMIDI）
-├─ night_test.py         夜测编排器（gui 离线 55 项等分阶段）
+├─ night_test.py         夜测编排器（gui 离线分阶段）
 ├─ _render_check.py      离线渲染断言 + 四窗截图（落 _render\，可删可再生）
 ├─ e2e_test.py / probe_kb_pipeline.py / _probe_projector.py    真机分阶段 E2E / 键盘链路 / 投影屏名探针
-├─ config.json / playlist.json   dist 同源恢复副本（重打包事故的恢复源）
+├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
 ├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
-└─ docs\                 设计审查报告 / 夜测报告 / M0 赛前验证清单
+└─ docs\                 移动端设计文档（含 APP 使用说明）/ M0 赛前验证清单 / logo
 ```
 
 ## 开发与构建
 
 - 直接运行：`python setlist_gui.py`。
 - 验证链：`python test_bridge.py`（离线自检）→ `python night_test.py gui`
-  （离线 GUI 回归 55 项）→ `python _render_check.py`（版式断言+截图落
+  （离线 GUI 回归分阶段）→ `python _render_check.py`（版式断言+截图落
   `_render\`）；真机分阶段：`python e2e_test.py`。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
-  先备份 exe 目录两份 json → 打包 → 数据原样放回 → 编译安装包
+  先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
   `dist\CubeSetlistManager-Setup-<版本>.exe`（版本取最近 git tag；未装
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) 时跳过安装包只出绿色版），
   失败保留 .bak。
   **勿裸跑 `pyinstaller --noconfirm`**：它会先清空版本文件夹，dist 里是
   运行时真实数据（歌单/时长/设置），历史上因此丢过数据。杀毒偶发锁
   `_internal` 里的 DLL：等几秒删掉版本文件夹重跑即可。
+- 安卓 APP：`cd mobile` 后 `gradlew assembleDebug`（产物由 build.bat 自动拷为
+  `CubeRemote.apk` 随 dist 与安装包分发）。
 - onedir 而非 onefile（%TEMP% 清理失败会弹窗）。
 
 ## 演出前
@@ -212,4 +267,9 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 ## 版本历史
 
-见 [CHANGELOG.md](CHANGELOG.md)。
+见 [CHANGELOG.md](CHANGELOG.md)，图文版见
+[GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
+
+## License
+
+[MIT](LICENSE)
