@@ -45,6 +45,6 @@
   "topMost": true,
   "switchConfirm": true,
   "exitCloseApps": false,
-  "vjPortHint": "loopMIDI Port",
+  "vjPortHint": "CubeClock (B)",
   "kbPortHint": "Keyboard Automation"
 }

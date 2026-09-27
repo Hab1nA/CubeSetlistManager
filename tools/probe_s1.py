@@ -11,8 +11,11 @@
   clock             列 MIDI 输入端口（人工在 S1 External Devices 勾 Send
                     MIDI Clock 指向 loopMIDI 后，用它看脉冲是否到达）
 用法：py -u probe_s1.py <子命令> [参数]"""
+import pathlib
 import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import daw_ctrl
 from obs_ctrl import find_processes_by_prefix, launch_detached

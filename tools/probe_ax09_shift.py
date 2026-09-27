@@ -8,9 +8,12 @@ Implementation 实锤接收 RPN 0,2 Channel Coarse Tuning（±48 半音）——
   5 全复位
 用法：py -u probe_ax09_shift.py [输出端口名子串，默认 AX-09]"""
 import ctypes
+import pathlib
 import sys
 import time
 from ctypes import wintypes
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import kbd_auto
 

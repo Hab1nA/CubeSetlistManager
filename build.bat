@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d %~dp0
 rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never overwritten
-py _snapshot_bak.py || goto :err
+py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first
 if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\config.json" dist\_config.bak >nul

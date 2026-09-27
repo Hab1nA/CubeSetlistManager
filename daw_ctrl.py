@@ -63,7 +63,7 @@ CUBASE = dict(
     close_before_open=True,             # 先关后开（激活模型，见文件头）
     name_after_mark=True,               # 「<版本名> 工程 - <歌名>」：歌名在后
     probe_duration=True,                # .cpr RIFF 解析时长（cpr_meta）
-    app_suffix="",                      # 窗口标题后缀（Cubase 版保持原样）
+    app_suffix=" Cubase",               # 窗口标题后缀（与 Studio One 版对称）
     # 走带键序=本机默认：空格(仅停止态当播放)/小键盘0(停止)/小键盘1(回零)。
     # play=回零从头播/pause=原地停/resume=从当前位置继续/stop/rewind=停止+
     # 回零（播放中定位到零点会继续播，须先停——回零即停在零点）。stop 与
@@ -100,7 +100,7 @@ STUDIOONE = dict(
     loading_marks=(),                   # 待采样：空=跳过浮层等待
     song_ext=".song",
     probe_duration=False,               # .song 私有容器无解析，时长手填
-    app_suffix=" S1",
+    app_suffix=" Studio One",
     # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
     # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
     # 先关后开，autoSave 无实际作用（文档注明：切歌前自行保存）。

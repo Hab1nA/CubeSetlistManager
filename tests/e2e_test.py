@@ -12,8 +12,11 @@
 不带参数 = 顺序跑 preflight ports obs switch transport kb（advance/web 单独跑）。"""
 import glob
 import os
+import pathlib
 import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import advance
 import cpr_meta

@@ -6,9 +6,12 @@
   → send_slot 对 JUNO 缺席的优雅降级（错误进日志，不崩）。
 用法：py -u probe_kb_pipeline.py"""
 import os
+import pathlib
 import sys
 import time
 import tkinter as tk
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import midi_bridge as mb
 import setlist_gui

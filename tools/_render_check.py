@@ -3,10 +3,13 @@
 1) 同组按钮等宽、文字不裁剪；2) 列表间距>0；3) 截图五窗 PNG 供人工核对。"""
 import pathlib
 import struct
+import sys
 import tempfile
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import setlist_gui as sg
 sg.dpi.enable()          # 与真机一致：DPI 感染后按钮 bg 才按主题渲染
@@ -350,7 +353,10 @@ check("无进度时隐藏", not app.prog.winfo_ismapped())
 import types
 sg.daw_ctrl.current_project = lambda: (None, "Cubase Pro 工程 - SongA")
 app.ctrl = types.SimpleNamespace(busy=False)
-app.watch = types.SimpleNamespace(active=lambda: 60.0)
+app.watch = types.SimpleNamespace(
+    active=lambda: 60.0,
+    is_transport_live=lambda: False,
+    ever_live=lambda: False)
 app._tick_body()
 root.update_idletasks()
 root.update()

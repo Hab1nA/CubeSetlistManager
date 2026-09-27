@@ -50,13 +50,13 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 ## 程序组成
 
-**安装版（推荐）**：Release 下载 `CubeSetlistManager-Setup-x.y.z.exe` 双击安装——
-按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager`（免管理员），自动创建
+**安装版（推荐）**：Release 下载对应底座的安装包双击安装（两底座包名对称，见下表）——
+按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager[底座]`（免管理员），自动创建
 开始菜单/桌面快捷方式，自带卸载器；升级直接装新版，`config.json` 等数据保留。
 
 | 端 | 程序 | 定位 |
 |---|---|---|
-| Windows | `Cube Setlist Manager\Cube Setlist Manager.exe` | **演出主程序**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
+| Windows | `Cube Setlist Manager\Cube Setlist Manager Cubase.exe` | **演出主程序（Cubase 底座）**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
 | Android | `CubeRemote-vX.Y.apk`（Release 下载，或热点网页「下载 APP」） | **Cube Remote 遥控/翻谱 APP**：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
 
 `config.json`、`playlist.json` 放 exe 同目录（安装目录的版本文件夹内）。
@@ -67,8 +67,8 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 | 安装包 | 底座 | 说明 |
 |---|---|---|
-| `CubeSetlistManager-Setup-x.y.z.exe` | Cubase | 主线，行为同历史版本 |
-| `CubeSetlistManager-S1-Setup-x.y.z.exe` | Studio One 7 Pro | 独立 AppId/目录（`CubeSetlistManagerS1`）/快捷方式 `Cube Setlist Manager S1`；首装预置 studioone 配置，升级保留用户数据 |
+| `CubeSetlistManager-Cubase-Setup-x.y.z.exe` | Cubase | 主线，行为同历史版本 |
+| `CubeSetlistManager-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | 独立 AppId/目录（`CubeSetlistManagerS1`）/快捷方式 `Cube Setlist Manager Studio One`；首装预置 studioone 配置，升级保留用户数据 |
 
 底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
 段（旧 `cubase` 段仍兼容读取）。S1 版当前限制：`.song` 为私有格式——**工程时长
@@ -94,9 +94,9 @@ Win11 圆角）。全程本地通信，不经互联网。
 - 安卓 APP：Kotlin + Gradle（`mobile/` 工程，`gradlew assembleDebug`）；
 - 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
   Inno Setup 6 会顺带出按用户安装包并拷入最新 APK，版本取最近 git tag）；
-- 离线自检：`py test_bridge.py`，或 `py -m pytest test_bridge.py`（CI 每次
-  push 自动跑）；
-- 真机 E2E：`py -u e2e_test.py <phase>`（库根默认本机路径，换机设环境变量
+- 离线自检：`py tests\test_bridge.py`，或 `py -m pytest tests\test_bridge.py`
+  （CI 每次 push 自动跑）；
+- 真机 E2E：`py -u tests\e2e_test.py <phase>`（库根默认本机路径，换机设环境变量
   `CUBE_PROJECTS_ROOT` 覆盖）。
 
 ## 快速开始
@@ -220,7 +220,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ```
 ├─ setlist_gui.py        主程序（Cube Setlist Manager）
 ├─ midi_bridge.py        MIDI 音符→OBS 视频桥（主程序内嵌 VJ 联动）
-├─ cubase_ctrl.py        Cubase 切歌/走带/进程（先关后开 + 键注入 + 优雅退出）
+├─ daw_ctrl.py           DAW 底座控制器（Cubase/Studio One 事实表双后端：切歌/走带/进程）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
 ├─ advance.py            自动推进看门狗（两段式）
 ├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
@@ -229,23 +229,22 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ cpr_meta.py           .cpr 时长解析
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
-├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包
-├─ test_bridge.py        桥自检（离线，无 OBS/loopMIDI）
-├─ night_test.py         夜测编排器（gui 离线分阶段）
-├─ _render_check.py      离线渲染断言 + 四窗截图（落 _render\，可删可再生）
-├─ e2e_test.py / probe_kb_pipeline.py / _probe_projector.py    真机分阶段 E2E / 键盘链路 / 投影屏名探针
+├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包（双底座各一个安装包）
+├─ tests\                test_bridge（离线自检）/ night_test（夜测编排器）/ e2e_test（真机分阶段）
+├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）/ fix_s1_midi_clock.bat
+├─ config.example.json / config.studioone.json   两底座的预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
 ├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
-└─ docs\                 移动端设计文档（含 APP 使用说明）/ M0 赛前验证清单 / logo
+└─ docs\                 移动端设计文档 / Studio One 迁移调研 / M0 赛前验证清单 / logo
 ```
 
 ## 开发与构建
 
 - 直接运行：`python setlist_gui.py`。
-- 验证链：`python test_bridge.py`（离线自检）→ `python night_test.py gui`
-  （离线 GUI 回归分阶段）→ `python _render_check.py`（版式断言+截图落
-  `_render\`）；真机分阶段：`python e2e_test.py`。
+- 验证链：`py tests\test_bridge.py`（离线自检）→ `py tests\night_test.py gui`
+  （离线 GUI 回归分阶段）→ `py tools\_render_check.py`（版式断言+截图落
+  `_render\`）；真机分阶段：`py tests\e2e_test.py`。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
   先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
   `dist\CubeSetlistManager-Setup-<版本>.exe`（版本取最近 git tag；未装

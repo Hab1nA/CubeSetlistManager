@@ -7,18 +7,20 @@
 ; 装到 Program Files 会因权限写不进去，故必须 {localappdata}。
 
 #ifdef s1
-#define AppName "Cube Setlist Manager S1"
+#define AppName "Cube Setlist Manager Studio One"
 #define AppDirName "CubeSetlistManagerS1"
 #define AppId "CA6676E9-9731-4F52-9DA0-939FA46DBEDF"
-#define PkgBase "CubeSetlistManager-S1-Setup"
+#define PkgBase "CubeSetlistManager-StudioOne-Setup"
 #else
-#define AppName "Cube Setlist Manager"
+#define AppName "Cube Setlist Manager Cubase"
 #define AppDirName "CubeSetlistManager"
 #define AppId "C8F2EC15-371F-4C34-B8DB-9824E24E602A"
-#define PkgBase "CubeSetlistManager-Setup"
+#define PkgBase "CubeSetlistManager-Cubase-Setup"
 #endif
-; PyInstaller 产物目录固定（双安装包共用同一 exe，行为差异全走预置配置）
+; PyInstaller 产物目录与安装子目录均固定中性名（双安装包共用同一 exe，
+; 行为差异全走预置配置）；Cubase 版升级时子目录不变=原地保留用户数据
 #define SrcDir "Cube Setlist Manager"
+#define SubDir "Cube Setlist Manager"
 #ifndef AppVer
 #define AppVer "0.0.0"
 #endif
@@ -38,37 +40,45 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
-UninstallDisplayIcon={app}\{#AppName}\{#AppName}.exe
+UninstallDisplayIcon={app}\{#SubDir}\{#AppName}.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式(&D)"; \
     GroupDescription: "附加图标："
 
+[InstallDelete]
+; 清理旧命名布局（0.11.0-prerelease.2 前的安装产物），改版前先删防孤儿文件
+#ifdef s1
+Type: filesandordirs; Name: "{app}\Cube Setlist Manager S1"
+#else
+Type: files; Name: "{app}\Cube Setlist Manager\Cube Setlist Manager.exe"
+#endif
+
 [Files]
 ; 运行时真实数据（config.json/playlist.json/crash.log）不入包——
 ; 覆盖安装时 exe 目录里已有的用户数据原样保留
 Source: "dist\{#SrcDir}\{#SrcDir}.exe"; \
-    DestDir: "{app}\{#AppName}"; DestName: "{#AppName}.exe"; \
+    DestDir: "{app}\{#SubDir}"; DestName: "{#AppName}.exe"; \
     Flags: ignoreversion
 Source: "dist\{#SrcDir}\_internal\*"; \
-    DestDir: "{app}\{#AppName}\_internal"; \
+    DestDir: "{app}\{#SubDir}\_internal"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "config.example.json"; DestDir: "{app}\{#AppName}"; Flags: ignoreversion
+Source: "config.example.json"; DestDir: "{app}\{#SubDir}"; Flags: ignoreversion
 #ifdef s1
 ; S1 版首装预置 config.json（daw=studioone+S1 默认路径）；升级不覆盖用户配置
-Source: "config.s1.json"; DestDir: "{app}\{#AppName}"; DestName: "config.json"; \
+Source: "config.studioone.json"; DestDir: "{app}\{#SubDir}"; DestName: "config.json"; \
     Flags: onlyifdoesntexist ignoreversion
 #endif
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
-Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}\{#AppName}"; \
+Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}\{#SubDir}"; \
     Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppName}\{#AppName}.exe"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppName}\{#AppName}.exe"; \
+Name: "{group}\{#AppName}"; Filename: "{app}\{#SubDir}\{#AppName}.exe"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#SubDir}\{#AppName}.exe"; \
     Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppName}\{#AppName}.exe"; Description: "立即运行 {#AppName}"; \
+Filename: "{app}\{#SubDir}\{#AppName}.exe"; Description: "立即运行 {#AppName}"; \
     Flags: nowait postinstall skipifsilent

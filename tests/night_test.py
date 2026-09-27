@@ -18,7 +18,9 @@ import tempfile
 import time
 import traceback
 
-ROOT = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]   # 仓库根（输出/数据在根）
 BACKUP = pathlib.Path(tempfile.gettempdir()) / "night_backup_20260923"
 RESULTS_PATH = ROOT / "夜测_results.json"
 
