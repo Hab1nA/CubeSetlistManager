@@ -364,6 +364,7 @@ class App:
         self._lib_query = ""            # 素材库搜索词（小写）
         self.by_key = {}
         self.cur = None                 # 播放列表下标：已请求加载的项
+        self._adopted_name = None       # 横幅已跟随的工程名（手动跟随去重）
         self._play_after_switch = False  # 切换完成后是否自动开始播放
         self._pending_switch = None     # 切换中用户点的下一首（完成后执行）
         self._switch_key = None         # 进行中切换的 key 快照
@@ -1705,9 +1706,43 @@ class App:
             return "playing"
         return "paused" if w.ever_live() else "stopped"
 
+    def _adopt(self, name):
+        """手动跟随：Cubase 里的工程被人工变更（横幅发现标题对不上指针）
+        → 按标题对位播放列表。命中=采纳：指针/音色映射/时长全量就位（复用
+        启动恢复语义，自动推进对新工程照常计时）；未命中=游离：清指针回
+        第一首兜底、清映射、计时器清零（时长 0=未知=永不推进，防旧时长
+        误切）。只改状态，不碰窗口不抢焦点；播放列表未载入不动。"""
+        if not self.pl_keys:
+            return
+        for i, k in enumerate(self.pl_keys):
+            if self.by_key[k]["name"] == name:
+                self.cur = i
+                song = self.by_key[k]
+                d = self.durations.get(k) or \
+                    cpr_meta.read_duration(song["path"]) or 0.0
+                self.durations[k] = d
+                if self.watch is not None:
+                    self.watch.set_duration(d)   # 内部 reset：已播重新累计
+                self.slots = kbd_auto.load_slots(song["path"])
+                self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
+                self.cur_song_path = song["path"]
+                self._refresh()
+                self.q.put("已跟随手动打开：《%s》" % name)
+                return
+        self.cur = None
+        self.cur_song_path = None
+        self.slots = {}
+        self.ax_slots = {}
+        if self.watch is not None:
+            self.watch.reset()
+            self.watch.set_duration(0)
+        self._refresh()
+        self.q.put("《%s》不在播放列表：不自动推进（NEXT 置空）" % name)
+
     def _tick_banner(self):
-        """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（真实状态，切错红警），
-        右侧与歌名行对齐常显「已播 | 剩余」；暂停保持已播值，未知显黄字。"""
+        """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（外部手动改工程自动
+        跟随对位播放列表，见 _adopt），右侧与歌名行对齐常显「已播 | 剩余」；
+        暂停保持已播值，未知显黄字。"""
         now, color, remain, nxt = "…", dpi.MUT, "", ""
         frac = None                         # None=不显示进度条
         has_proj = False                    # 同步给网页 /state 快照
@@ -1733,27 +1768,36 @@ class App:
                 want = (self.by_key.get(self.pl_keys[self.cur], {}).get("name")
                         if self.cur is not None and self.cur < len(self.pl_keys)
                         else None)
-                if want and name != want:
-                    now, color = ("%s（应为 %s）" % (name, want)), dpi.C_ERR
-                else:
-                    now, color = "%s" % name, dpi.C_OK
-                    if want:
-                        nk = (self.pl_keys[self.cur + 1]
-                              if self.cur + 1 < len(self.pl_keys) else None)
-                        ns = self.by_key.get(nk) if nk else None
-                        nxt = "%s" % ns["name"] if ns else "（末尾）"
-                        d = self.durations.get(self.pl_keys[self.cur], 0.0)
-                        if not d:
-                            remain = "时长未知"
-                        else:
-                            played = min(d, max(
-                                0.0, self.watch.active()
-                                if self.watch is not None else 0.0))
-                            frac = min(1.0, played / d)
-                            rem = max(0, int(d - played))
-                            remain = ("%d:%02d | %d:%02d"
-                                      % (int(played) // 60, int(played) % 60,
-                                         rem // 60, rem % 60))
+                # 手动跟随：标题变化或与指针漂移（人工在 DAW 开了别的歌、
+                # 播放列表被编辑）→ 按标题对位播放列表（_adopt），采纳后
+                # want 重取；busy 走上面的冻结分支，不会与切歌流程抢跑。
+                if name != self._adopted_name or (want is not None
+                                                  and want != name):
+                    self._adopted_name = name
+                    if want is None or want != name:
+                        self._adopt(name)
+                        want = (self.by_key.get(self.pl_keys[self.cur],
+                                                {}).get("name")
+                                if self.cur is not None
+                                and self.cur < len(self.pl_keys) else None)
+                now, color = "%s" % name, dpi.C_OK
+                if want:
+                    nk = (self.pl_keys[self.cur + 1]
+                          if self.cur + 1 < len(self.pl_keys) else None)
+                    ns = self.by_key.get(nk) if nk else None
+                    nxt = "%s" % ns["name"] if ns else "（末尾）"
+                    d = self.durations.get(self.pl_keys[self.cur], 0.0)
+                    if not d:
+                        remain = "时长未知"
+                    else:
+                        played = min(d, max(
+                            0.0, self.watch.active()
+                            if self.watch is not None else 0.0))
+                        frac = min(1.0, played / d)
+                        rem = max(0, int(d - played))
+                        remain = ("%d:%02d | %d:%02d"
+                                  % (int(played) // 60, int(played) % 60,
+                                     rem // 60, rem % 60))
         if self.ctrl is not None and not self.ctrl.busy:
             self._banner_keep = (now, color, nxt, remain, frac)
         self._banner(now, color, nxt, remain)
