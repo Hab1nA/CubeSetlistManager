@@ -4,6 +4,64 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [未发布]
+
+### 新增
+
+- **第三个产品：Cube Automator Studio One（S1 简化版）**。S1 完整适配前的过渡
+  方案：去掉歌单/切歌/走带遥控，保留其余全部自动化（VJ 视频跟随、键盘音色/
+  移调/延音踏板 CC64、翻谱推送）。独立第三安装包 `CubeAutomator-StudioOne-Setup`
+  （独立 AppId/目录 `CubeAutomatorStudioOne`），与两个完整版并存安装。
+  - 入口 `automator_gui.py`（`app.lite=True` 分流），与完整版共用全部底层模块；
+    单实例互斥锁按产品+底座区分，三程序可同时运行；
+  - **自动识别当前工程**：轮询 S1 窗口标题，工程库精确匹配歌名、失败退唯一
+    子串匹配（S1 标题取工程元数据名，可能与文件名不同），识别后自动加载该歌
+    音色槽，键盘自动化设置窗口免手动选歌；
+  - 移动端双页面简化：浏览器页=提示+下载 APP；APP 页=完整版设置面板直接
+    作为主页（谱面翻页不变）；网页端 `/cmd` 一律 403；
+  - `kbd_auto` 捕获配对支持热同步到当前识别工程；`web_remote` 快照容忍无切歌
+    控制器的 lite 态（`ready`/三态由时钟推导）。
+
+### 变更（简化版打磨，真机反馈修复）
+
+- **PC 端主窗对齐主程序布局**：「当前状态」移到底部栏最左（与完整版同位），
+  已播时长与歌名同行右侧、无内容不占行（同完整版进度条手法，歌名贴顶）；
+  「退出」与「自动化」组按钮同一基线；「自动化」组在状态右侧剩余空间内
+  居中。热点绑定的 10049 等待改为只报一次（不再逐秒刷屏），OBS「未连接」
+  去掉多余括号解释。
+- **三产品构建/安装命名全面按底座对称**：两个完整版各自独立构建（`Cube
+  Setlist Manager Cubase.spec` / `Cube Setlist Manager Studio One.spec` → dist
+  各自产物目录+同名 exe），消除「S1 版挂后缀、Cubase 版裸名」的不对等写法
+  （安装根目录 `CubeSetlistManagerCubase` / `CubeSetlistManagerStudioOne`，
+  AppId 不变保升级）；Cube Automator 产物/exe/安装目录同步带上 Studio One
+  后缀（`Cube Automator Studio One` / `CubeAutomatorStudioOne`），对齐未来
+  可能的 Cube Automator Cubase。安装布局简化为 exe 直装 `{app}` 根，装前
+  自动迁移旧中性子目录（`Cube Setlist Manager\`）里的用户数据，装后清除。
+- **不管理其它软件生命周期**：启动不再拉起 loopMIDI/OBS（`obs.autoStart=false`
+  只连不拉、每 5 秒重连；loopMIDI 缺席只提示），退出不关闭任何软件；设置页
+  「行为」栏（保持前台/退出关闭）整栏删除，窗口不再置顶。
+- **APP 端 lite 页四连修**（同一根因：lite 页无「设置」按钮，`$("b-dev")`
+  接线抛 TypeError 杀死整个 script 块——openDev/c-save/refresh 轮询全失联）：
+  b-dev 接线改判空；页面初始化改调 `openDev()`——连接地址、APP 版本号、
+  「认领本机」块、使用情况访问状态提示全部恢复；无障碍状态+跳转按钮随全屏
+  面板盖住顶栏一并并入「设置」标题行（同行靠右）；面板内容手机屏超高改为
+  顶部锚定+覆盖层自身滚动（原底部锚定会把标题顶出屏外且无处滚）。
+- 浏览器提示页极简：一行标题「电脑端正在运行Cube Automator」+「下载Cube
+  Remote APP」按钮。
+
+### 修复（Cubase 版）
+
+- **脏工程切歌卡死根治**：手动改过工程后切歌，保存确认框完全无反应、30 秒后
+  报「关闭超时」——真机探针取证（tools/probe_dialog.py）实锤根因：保存框标题=
+  光杆「Cubase Pro」与空主框架同名，被常驻窗排除名单静默吞掉（多种确认框共用
+  应用名做标题，词表路线不可达）。改为按窗口样式判别（popup 小窗+enabled→
+  确认框回车；overlapped 大窗=真主框架恒不命中），默认键=保存（真机确认）。
+  - 连带修 WM_CLOSE 补发条件写反（注释「过半重发」实际立即双发→弹窗叠两层，
+    下层禁用框会白按）；
+  - 确认框改为按下成功才记录、按空自动重试；禁用窗一律跳过；
+  - 新增回归测试 tests/test_dialog_drain.py（8 例，样式值=真机探针实测）；
+    M0「弹窗文案校准」项销项。
+
 ## [0.11.0-prerelease.2] - 2026-09-27
 
 ### 变更（S1 线真机校准第一批 + 应用级验证）

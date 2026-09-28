@@ -28,6 +28,10 @@ from obs_ctrl import find_processes_by_prefix, launch_detached
 
 WM_CLOSE = 0x0010
 GW_OWNER = 4
+GWL_STYLE = -16
+WS_POPUP = 0x80000000
+WS_THICKFRAME = 0x00040000
+WS_MAXIMIZEBOX = 0x00010000
 CLOSE_TIMEOUT = 30      # 关工程等待上限（秒）
 OPEN_TIMEOUT = 120      # 打开/冷启动等待上限（大工程+采样库加载）
 KEY_GAP = 0.03          # 走带键逐事件间隔
@@ -56,6 +60,11 @@ CUBASE = dict(
     dialog_enter_marks=("保存", "激活", "未找到端口"),
     dialog_log_marks=("安全模式", "丢失", "锁定", "无法"),
     dialog_ignores=("Cubase Pro Hub", "Cubase Pro"),   # 常驻窗，非弹窗
+    # 保存确认框真机实测（2026-09-29 探针取证）：标题=光杆「Cubase Pro」，
+    # 与空主框架同名（多种确认框共用应用名做标题，词表不可达），默认键=
+    # 保存（真机确认）。confirm_by_style=放行 frame_title 同名候选交
+    # _drain 按窗口样式判别（popup 小窗=弹窗；overlapped 大窗=真主框架）。
+    confirm_by_style=True,
     hub_title="Cubase Pro Hub",
     frame_title="Cubase Pro",           # 关完工程只剩的空主框架
     loading_marks=("正在加载",),         # 加载浮层标题前缀
@@ -399,15 +408,17 @@ class DawController:
         _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
         deadline = time.time() + CLOSE_TIMEOUT
         kicked = False
+        answered = False    # 已放过确认框就不补发（补发会叠第二层弹窗）
         while time.time() < deadline:
             if not _win_alive(hwnd):
                 time.sleep(0.5)
                 self._log("工程已关闭")
                 return
-            if not kicked and time.time() < deadline - CLOSE_TIMEOUT / 2:
-                kicked = True               # 过半没关：确认框可能没应到，重发
+            if (not kicked and not answered
+                    and time.time() >= deadline - CLOSE_TIMEOUT / 2):
+                kicked = True       # 过半没关且确认框没应到：补发一次
                 _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-            self._drain_dialogs("关闭")
+            answered = self._drain_dialogs("关闭") or answered
             time.sleep(0.4)
         raise SwitchError("关闭超时（有无未处理的确认框？）")
 
@@ -469,24 +480,47 @@ class DawController:
 
 
 def _drain(f, stage, seen, log):
-    """处理自绘弹窗一轮：命中确认类仿人回车（返回 True，调用方据此补发
-    被模态吞掉的请求），其余只记录防误按，同一标题只记一次。
-    弹窗判定=排除法（非工程窗口、非常驻窗）。"""
+    """处理自绘弹窗一轮：确认类仿人回车（返回 True，调用方据此补发被模态
+    吞掉的请求），其余只记录防误按。seen 按 (hwnd, 标题) 记：确认类按下
+    成功才记（模态框刚弹出的瞬间可能按空，窗口还在就重试），记录类记一次
+    防日志刷屏。禁用窗跳过：叠层模态的下层框被禁用（真机实测），按了白按。
+    同名常驻窗特例（confirm_by_style）：Cubase 保存确认框标题与空主框架
+    同名（=光杆「Cubase Pro」，多种确认框共用应用名，词表不可达），同名
+    候选交 _confirm_by_style 按样式判别——popup 小窗=确认框回车；真主
+    框架/Hub=overlapped 大窗恒不命中，静默跳过（工程窗在场时主框架本就
+    不存在，打开阶段等到的也只会是弹窗）。"""
     pressed = False
     for h, t in _dialogs(f):
-        if t in seen:
+        if not _user32.IsWindowEnabled(h):
             continue
-        seen.add(t)
-        if any(m in t for m in f["dialog_enter_marks"]):
-            log("[%s] 弹窗「%s」→ 回车" % (stage, t))
-            if focus(h):
-                human_enter()
-                pressed = True
-        elif any(m in t for m in f["dialog_log_marks"]):
-            log("[%s] 弹窗「%s」（仅记录，不按键）" % (stage, t))
-        else:
-            log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
+        if (h, t) in seen:
+            continue
+        if t in f["dialog_ignores"]:
+            if not _confirm_by_style(f, h, t):
+                continue
+        elif not any(m in t for m in f["dialog_enter_marks"]):
+            if any(m in t for m in f["dialog_log_marks"]):
+                log("[%s] 弹窗「%s」（仅记录，不按键）" % (stage, t))
+            else:
+                log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
+            seen.add((h, t))
+            continue
+        log("[%s] 弹窗「%s」→ 回车" % (stage, t))
+        if focus(h):
+            human_enter()
+            pressed = True
+            seen.add((h, t))
     return pressed
+
+
+def _confirm_by_style(f, h, t):
+    """同名弹窗判别：仅 frame_title 同名候选参与。弹窗=WS_POPUP 小窗
+    （无 THICKFRAME/MAXIMIZEBOX，真机实测 style=0x96C80000）；主框架/
+    工程窗=overlapped（0x1FCF0000，有 THICKFRAME）恒不命中。"""
+    if t != f["frame_title"]:
+        return False
+    st = _user32.GetWindowLongW(h, GWL_STYLE) & 0xFFFFFFFF
+    return bool(st & WS_POPUP) and not st & (WS_THICKFRAME | WS_MAXIMIZEBOX)
 
 
 def close_app(timeout=60, log=print):
@@ -514,13 +548,18 @@ def close_app(timeout=60, log=print):
 
 def _dialogs(f):
     """自绘弹窗 = 事实表窗口类前缀的可见窗口里，非工程窗口、非常驻窗
-    （标题固定，排除）的其余有标题窗口。
+    （标题固定，排除）的其余有标题窗口。confirm_by_style 的底座放行
+    frame_title 同名候选（Cubase 保存框与主框架同名，交 _drain 按样式
+    判别；其余底座照旧排除）。
     注：Cubase 实测「未找到端口」弹窗没有 owner，owner 判定不可用。"""
     out = []
     for h, t, c in _windows():
         if not c.startswith(f["win_class_prefix"]) or not t:
             continue
-        if f["title_mark"] in t or t in f["dialog_ignores"]:
+        if f["title_mark"] in t:
+            continue
+        if (t in f["dialog_ignores"]
+                and not (f.get("confirm_by_style") and t == f["frame_title"])):
             continue
         out.append((h, t))
     return out
