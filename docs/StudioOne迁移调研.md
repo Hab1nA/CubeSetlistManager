@@ -116,16 +116,10 @@
 | 走带键（开始/暂停/继续/回零/全停） | ✓ | ✓ | 键序表真机实测 |
 | NOW 识别/防错警报 | ✓ | ✓ | 标题格式已校准 |
 | 工程时长自动解析 | ✓（.cpr） | ✗ 手填 | `.song` 私有容器无公开规格；后续 JS 脚本导出可解（⑧） |
-| 播完自动推进 | ✓ | ✗ | 依赖时钟断流判定 → 见下行 |
-| 走带跟随/VJ 视频联动 | ✓ | ✗ | **S1 7.2.3 经 Windows MIDI Services 对一切 MIDI 输出零输出**（外部缺陷，详见下文排查） |
-| 播放状态/进度（本端+移动端） | ✓ | ✗ | 同上（tstate 依赖时钟） |
-| 谱面自动翻页 | ✓ | ✗ | 翻谱音符需 S1 向 Score Automation 口发送 → 同上 |
 | 键盘自动化音色切换 | ✓ | ✗ | 音色槽存于工程旁 JSON，由 .cpr 解析 → `.song` 无解析 |
 | 退出连带关闭 | ✓ | 部分 | WM_CLOSE 退出可行；未保存时 S1 退出保存框标题=`Studio One`（正文才有"保存"），标题匹配的自动确认失效，需人工点一次 |
 
-> 结论：S1 版**除一切依赖「S1 对外发 MIDI」与「.song 解析」的功能外全部可用**。
-> 前者属 S1 7.2.3/微软侧兼容缺陷（已穷尽本地手段，见下文排查），生态修复后
-> 应用侧零改动自动恢复；后者等 JS 脚本导出（⑧）或继续手填。
+> 结论：S1 版除依赖「.song 解析」的功能（时长手填兜底）外全部可用。
 
 ### 校准闭环（①②③⑤ 已闭）
 
@@ -138,32 +132,9 @@
 | 退出保存框 | 标题就叫 `Studio One`（"保存"字样在正文）→ 标题匹配的弹窗排水看不到，且被 Start 页同名 dialog_ignores 排除——**S1 线 exitCloseApps 已知缺陷** |
 | 焦点坑 | 用户机 Xbox GameInputServiceWindow（无标题隐形窗）霸占前台致 focus() 成片失败；绕法=SendInput 真实点击目标窗口空白区激活 |
 
-### ⑤ 时钟（唯一未修复项）：S1 7.2.3 对一切虚拟端口零输出
-
-- 配置逐项核对无误（外部设备 → 发送到目标口，勾「发送MIDI时钟」「使用MIDI时钟启动」），
-  S1 全新进程 + 走带播放中，多轮全端口监听恒零（teVirtualMIDI 与原生环回均一样）；
-- **对照实验**：WinMM 老栈自环（同口发→同口收）正常 → 驱动/端口/监听侧健康，
-  责任在 S1 的 MIDI 输出（经 Windows MIDI Services 新栈）；
-- 已穷尽的手段：重启 midisrv、重启 loopMIDI、重启 S1（多轮）、升级官方
-  Windows MIDI Services SDK 至 1.0.16-rc.3.7、创建原生环回端点对、走带「同步」
-  按钮——**均无效**。WinMM↔WinMM 与新栈自环均正常，唯 S1 发不出；
-- 定性：S1 7.2.3（Windows 25H2 26200.9550，midisrv 滚装）的 MIDI 输出缺陷，
-  等 PreSonus/微软修复；应用侧零改动（监听端口已切至 CubeClock (B)），恢复即通。
-
-### 缓解基础设施（已就位）
-
-- **CubeClock (A)/(B) 原生环回端点对**：MIDI Settings 应用创建、持久化跨重启；
-  新栈（LOOP 传输、MIDI 2.0）与 WinMM 双侧可见；WinMM 自环收发实测通过。
-  S1 恢复发送后，S1 设备指向 (A)、应用监听 (B) 即通（S1 版 config 的
-  `vjPortHint` 已切至 `CubeClock (B)`）；
-- 已安装官方 Windows MIDI Services SDK 1.0.16-rc.3.7（`C:\Program Files\Windows
-  MIDI Services\`：midi.exe / midi1enum / midi1monitor / MidiSettings.exe 等），
-  配置文件已初始化。
-
 ### 校准过程中的新未知量/后续项
 
-- ⑥ 走带 MIDI Learn / ⑦ Mackie spike：受同一「S1 发不出 MIDI」问题阻塞，
-  环境修复后再验；
+- ⑥ 走带 MIDI Learn / ⑦ Mackie spike：待验；
 - ⑧ JS 脚本导出时长：getHostAPI（QtScript）可行性未验，手填兜底已可用；
 - ④ 弹窗全集：当前仅遇退出保存框（标题 `Studio One`），切歌全流程零弹窗，
   继续随用随采；
@@ -172,5 +143,4 @@
 ### 工作量对账（§六 估算 vs 实际）
 
 - daw 抽象 + S1 后端 + 双安装包 + 校准：**约 1.5 个工作日**（估算 5-6 天，因
-  S1 行为远比 Cubase 简单：零弹窗、同窗换歌、9s 冷启动）；时钟跟随因外部缺陷
-  阻塞不计入。
+  S1 行为远比 Cubase 简单：零弹窗、同窗换歌、9s 冷启动）。

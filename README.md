@@ -72,11 +72,8 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
 段（旧 `cubase` 段仍兼容读取）。S1 版当前限制：`.song` 为私有格式——**工程时长
-只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。**走带跟随/自动推进
-暂不可用**：实测 S1 7.2.3 在 Windows MIDI Services 新栈下向一切 MIDI 输出
-（loopMIDI 与官方原生环回端点均）不发时钟，属 S1/微软侧兼容缺陷——重启 MIDI 服务、
-升级官方 SDK 均无效，等 S1 或 Windows 更新；应用侧零改动，发送恢复即跟随恢复。
-真机校准与排查全过程见 `docs/StudioOne迁移调研.md`。
+只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。真机校准过程见
+`docs/StudioOne迁移调研.md`。
 
 ## 环境要求
 
@@ -231,7 +228,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包（双底座各一个安装包）
 ├─ tests\                test_bridge（离线自检）/ night_test（夜测编排器）/ e2e_test（真机分阶段）
-├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）/ fix_s1_midi_clock.bat
+├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
 ├─ config.example.json / config.studioone.json   两底座的预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
