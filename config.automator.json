@@ -1,0 +1,42 @@
+{
+  "daw": "studioone",
+  "dawSettings": {
+    "dawExe": "C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe",
+    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs",
+    "autoSave": false
+  },
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": "在 OBS 的 WebSocket 服务器设置里查看",
+    "obsExe": "",
+    "autoStart": false,
+    "mediaInput": "舞台视频",
+    "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
+    "projectorMonitor": "",
+    "vjMute": true,
+    "retrySec": 5
+  },
+  "juno": {
+    "inHint": "JUNO",
+    "outHint": "JUNO",
+    "patchCh": 1,
+    "perfCh": 16,
+    "deviceId": 16
+  },
+  "ax09": {
+    "inHint": "AX-09",
+    "outHint": "AX-09",
+    "ch": 1
+  },
+  "webRemote": {
+    "enabled": false,
+    "serverPort": 8765,
+    "appPort": 8767,
+    "taskerPort": 8766,
+    "midiIn": "Score Automation",
+    "devices": []
+  },
+  "vjPortHint": "VJ Automation",
+  "kbPortHint": "Keyboard Automation"
+}

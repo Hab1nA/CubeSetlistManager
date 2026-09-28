@@ -1,4 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
+# S1 完整版：与 Cubase 版同一入口（setlist_gui.py），底座行为差异全走
+# 安装时预置的 config.json——独立产物仅为命名对称与本地测试配置隔离。
 
 
 a = Analysis(
@@ -21,7 +23,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Cube Setlist Manager',
+    name='Cube Setlist Manager Studio One',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,5 +43,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='Cube Setlist Manager',
+    name='Cube Setlist Manager Studio One',
 )

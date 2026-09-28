@@ -381,6 +381,7 @@ class App:
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
         self.pedal_held = {}            # 延音踏板键按住计数（kbd_auto.PEDAL_NOTES）
+        self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal = None
         self.pedal_win = None
         self.start_err = ""
@@ -870,6 +871,7 @@ class App:
                     self.watch.set_duration(d)
                     self.slots = kbd_auto.load_slots(song["path"])
                     self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
+                    self.cur_song_path = song["path"]
                     self.q.put("已恢复当前工程：《%s》" % name)
                     break
         self._probe_durations(songs)
@@ -1241,6 +1243,7 @@ class App:
         self.cur = i
         self.slots = {}            # 切歌开始，旧映射立即失效
         self.ax_slots = {}
+        self.cur_song_path = None
         self._kb_warned = set()
         self._refresh()
         self.q.put("切换到《%s》…（%s）"
@@ -1275,6 +1278,7 @@ class App:
         self.calls.put(self._refresh)
         self.slots = kbd_auto.load_slots(song["path"])
         self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
+        self.cur_song_path = song["path"]
         if self.slots or self.ax_slots:
             self.q.put("音色映射已载入：JUNO %d 个 + AX-09 %d 个音符（%s）"
                        % (len(self.slots), len(self.ax_slots),

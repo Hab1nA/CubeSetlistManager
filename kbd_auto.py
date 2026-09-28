@@ -642,10 +642,10 @@ class KeyboardAutoWindow(tk.Toplevel):
             self.set_status("保存失败：%s" % e, dpi.C_ERR)
             return
         self._refresh(note)
-        loaded_key = (self.app.pl_keys[self.app.cur]
-                      if self.app.cur is not None
-                      and self.app.cur < len(self.app.pl_keys) else None)
-        if loaded_key == self.song["key"]:
+        # 热同步判定按「App 当前已装载映射的工程路径」：完整版=切歌完成/
+        # 恢复时装载的那首，简化版（Cube Automator）=标题识别的当前工程；
+        # 两种 App 都维护 cur_song_path（未装载/切换中=None，不热同步）
+        if getattr(self.app, "cur_song_path", None) == self.song["path"]:
             if note in AX_NOTES:            # 已加载的同一首：联动即时生效
                 self.app.ax_slots = dict(store)
             else:

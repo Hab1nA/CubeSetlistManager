@@ -537,7 +537,7 @@ class ObsController:
         if not exe or not os.path.exists(exe):
             raise ObsError("找不到 obs64.exe，请在 config.json obs.obsExe 指定")
         if not self.cfg.get("autoStart", True):
-            raise ObsError("OBS 未运行（autoStart=false 不自动拉起）")
+            raise ObsError("OBS 未运行")
         r = launch_detached(exe, "--disable-shutdown-check --minimize")
         if r <= 32:
             raise ObsError("启动 OBS 失败（代码 %s）" % r)

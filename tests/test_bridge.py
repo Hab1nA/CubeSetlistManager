@@ -238,6 +238,51 @@ def test_daw_settings_compat():
     assert sg.scan_library.__doc__  # 冒烟：库扫描签名可用
 
 
+def test_automator_lite():
+    # Cube Automator（简化版）：模块可导入、web lite 双页面、无控制器快照容错
+    import automator_gui as ag
+    assert ag.daw_settings.__doc__ and ag.scan_library.__doc__
+    import web_remote as wr
+    # APP 端 lite 页=完整版骨架+注入：设置面板（m-dev）强制常显为主页
+    assert "#m-dev{display:flex!important" in wr.PAGE_LITE_APP
+    # 手机屏内容超高：面板顶部锚定+覆盖层滚动（底部锚定会顶出标题无处滚）
+    assert "align-items:flex-start" in wr.LITE_CSS
+    assert "overflow-y:auto" in wr.LITE_CSS
+    assert 'id="m-dev"' in wr.PAGE_LITE_APP and 'id="apps-list"' in \
+        wr.PAGE_LITE_APP
+    # 回归锚：lite 页无 b-dev 按钮，DEV_JS 的接线必须判空——否则整个
+    # script 块抛 TypeError（地址框/版本号/认领块/保存全死，真机踩过）
+    assert 'id="b-dev"' not in wr.PAGE_LITE_APP
+    assert 'if(_bd)_bd.addEventListener' in wr.PAGE_LITE_APP
+    assert "openDev()" in wr.LITE_JS            # 主页初始化走 openDev
+    # 无障碍状态+跳转按钮：顶栏被全屏面板盖住，并入「设置」标题行靠右（唯一）
+    assert wr.PAGE_LITE_APP.count('id="acc-ind"') == 1
+    assert wr.PAGE_LITE_APP.count('id="b-acc"') == 1
+    assert '<h2 style="display:flex;align-items:center">设置' \
+        '<span class="ind" id="acc-ind"' in wr.PAGE_LITE_APP
+    assert wr.PAGE_LITE_APP.find('id="m-dev"') \
+        < wr.PAGE_LITE_APP.find('id="acc-ind"')  # 位于面板 HTML 内
+    # 网页端 lite 页=极简提示页（一行标题+下载 APP，不带控制页公共 JS）
+    assert "电脑端正在运行Cube Automator" in wr.PAGE_LITE_BROWSER
+    assert "下载Cube Remote APP" in wr.PAGE_LITE_BROWSER
+    assert "/app.apk" in wr.PAGE_LITE_BROWSER
+    assert "render()" not in wr.PAGE_LITE_BROWSER
+
+    class _FakeApp:                 # lite：无切歌控制器（ctrl=None）
+        lite = True
+        watch = None
+        ctrl = None
+        pl_keys = []
+        by_key = {}
+        durations = {}
+        cur = None
+        switch_confirm = False
+        web = None
+    snap = wr.build_snapshot(_FakeApp(), False)
+    assert snap["ready"] is True and snap["tstate"] == "stopped" \
+        and snap["songs"] == [] and snap["busy"] is False
+
+
 def test_kbd_auto():
     # 端口匹配收紧：loopMIDI 端口全名，不得再宽匹配误开 Keyboard Automation
     assert mb.PORT_HINT == "loopMIDI Port"

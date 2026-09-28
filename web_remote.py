@@ -158,16 +158,19 @@ def push_turn(dev, dir_, tasker_port, test=False):
 
 def _bind_web(app, registry, tport, ip, port, page, report=None):
     """热点刚（重）开时适配器 IPv4 可能尚未就位（PowerShell 拿到 IP 早于
-    系统把地址配到网卡），立刻 bind 报 WinError 10049：限期重试兜底。"""
+    系统完成地址配置/DAD），立刻 bind 报 WinError 10049：限期重试兜底。
+    地址配置通常 1–3 秒完成——只报一次等待，不逐次刷屏。"""
     deadline = time.monotonic() + 10.0
+    reported = False
     while True:
         try:
             return WebServer((ip, port), app, registry, tport, page=page)
         except OSError as e:
             if time.monotonic() >= deadline:
                 raise
-            if report:
-                report("绑定 %s:%d 未就绪（%s），重试…" % (ip, port, _err(e)))
+            if report and not reported:
+                report("热点网卡地址配置中，等待绑定 %s:%d …" % (ip, port))
+                reported = True
             time.sleep(1.0)
 
 
@@ -427,7 +430,9 @@ def build_snapshot(app, has_project, proj_name=None):
     cur = app.cur
     w = getattr(app, "watch", None)
     ctrl = getattr(app, "ctrl", None)
-    if w is None or ctrl is None:
+    lite = bool(getattr(app, "lite", False))
+    # 简化版（Cube Automator，app.lite=True）无切歌控制器：三态直接看时钟
+    if w is None or (ctrl is None and not lite):
         tstate = "stopped"
     elif w.is_transport_live():
         tstate = "playing"
@@ -438,7 +443,7 @@ def build_snapshot(app, has_project, proj_name=None):
     dur = float(app.durations.get(key) or 0.0) if key else 0.0
     pos = min(dur, max(0.0, w.active())) if (w is not None and dur > 0) else 0.0
     return {
-        "ready": ctrl is not None,
+        "ready": ctrl is not None or lite,
         "busy": bool(ctrl is not None and ctrl.busy),
         "open": bool(has_project),
         "projName": proj_name,
@@ -978,7 +983,10 @@ $("usage-grant").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openUsageAccess()});
 $("b-acc").addEventListener("click",function(){
   if(window.CubeApp)CubeApp.openAccSettings()});
-$("b-dev").addEventListener("click",openDev);
+/* b-dev 仅完整版页面存在（lite 版面板常显、无「设置」入口按钮）；
+   不判空会在 lite 页抛 TypeError，杀死整个 script 块——
+   openDev/c-save/refresh 轮询全部失联 */
+var _bd=$("b-dev");if(_bd)_bd.addEventListener("click",openDev);
 /* 翻页方法：四选一分段按钮，选中态存 APP 本机（语义协议由 APP 组装动作） */
 function renderMethod(){
   if(!window.CubeApp)return;
@@ -1144,6 +1152,77 @@ PAGE_APP = (PAGE_COMMON
             .replace("__DEV_PANEL__", DEV_PANEL_APP)
             .replace("__DEV_JS__", DEV_JS_APP))
 
+# ---- 简化版（Cube Automator，app.lite=True）双页面：无走带遥控。
+# 网页端=独立提示页+下载 APP；APP 端=完整版骨架注入 CSS/JS——隐藏歌单与
+# 走带区、设置浮层（m-dev）强制常显为全屏主页；顶栏被全屏面板覆盖，无障碍
+# 状态+跳转按钮随之移入面板标题行（顶栏占位清空防重复 ID）----
+
+LITE_CSS = """
+/* 简化版：无走带遥控——隐藏歌单/走带区，设置面板常显为全屏主页。
+   面板内容手机上超高：锚定顶部 + 覆盖层自身滚动（max-height:none 放开
+   高度后 sheet 底部锚定会把标题顶出屏外且无处滚） */
+body{padding-bottom:0}
+.hero,.list,#empty,footer.bar{display:none!important}
+#m-dev{display:flex!important;background:var(--bg);z-index:5;
+  align-items:flex-start;overflow-y:auto;overscroll-behavior:contain}
+#m-dev .sheet{max-height:none;min-height:100vh;border-radius:0}
+"""
+
+LITE_JS = """
+/* 简化版：设置面板=主页——openDev 填连接地址/APP版本/设备表（认领块）/
+   各项状态并显示面板（display 由 LITE_CSS 钉死）；b-dev 按钮已不存在 */
+try{openDev()}catch(e){}
+"""
+
+# 无障碍状态+入口按钮：完整版在顶栏，lite 全屏面板盖住顶栏→并入面板
+# 「设置」标题行（h2 转 flex，margin-left:auto 推到右侧）
+LITE_ACC_H2 = ('<h2 style="display:flex;align-items:center">设置'
+               '<span class="ind" id="acc-ind" '
+               'style="margin-left:auto">无障碍…</span>'
+               '<button class="ghost" id="b-acc" '
+               'style="margin-left:8px">无障碍</button></h2>')
+LITE_DEV_PANEL = DEV_PANEL_APP.replace("<h2>设置</h2>", LITE_ACC_H2, 1)
+
+PAGE_LITE_APP = (PAGE_COMMON
+                 .replace("__PAGE_TYPE__", "applite")
+                 .replace("__RIGHT_BTN__", "")
+                 .replace("__ACC_IND__", "")
+                 .replace("__DEV_PANEL__", LITE_DEV_PANEL)
+                 .replace("__DEV_JS__", DEV_JS_APP + LITE_JS)
+                 .replace("</style>", LITE_CSS + "</style>"))
+
+PAGE_LITE_BROWSER = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#14161a">
+<title>Cube 遥控（简化版）</title>
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>
+:root{--bg:#14161a;--panel:#1e2127;--panel2:#262a32;--line:#2e323b;
+  --fg:#e9ebef;--mut:#8b909a;--acc:#7fe896}
+*{margin:0;padding:0;box-sizing:border-box;
+  -webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--fg);min-height:100vh;
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei UI",sans-serif;
+  user-select:none;-webkit-user-select:none;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:18px;padding:32px 20px;
+  text-align:center}
+h1{font-size:20px}
+a.dl{display:inline-block;background:var(--acc);color:#10130f;
+  border-radius:12px;padding:14px 28px;font-size:15px;font-weight:700;
+  text-decoration:none}
+</style>
+</head>
+<body>
+<h1>电脑端正在运行Cube Automator</h1>
+<a class="dl" href="/app.apk">下载Cube Remote APP</a>
+</body>
+</html>
+"""
+
 # ---- HTTP 服务 ----
 
 class WebServer(ThreadingHTTPServer):
@@ -1252,6 +1331,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _h_cmd(self, body, _ip):
         app = self.server.app
         action = body.get("action")
+        # 简化版（Cube Automator）：无走带遥控，控制类请求一律拒绝
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无走带遥控"})
+            return
         # 全停永远可用（切换卡住时的安全阀），其余动作切换中禁用（设计第四节）
         if action == "panic":
             app.calls.put(app._panic)
@@ -1415,10 +1498,13 @@ class WebRemote:
                      else "热点关闭失败：%s" % r.get("err"))
 
     def _start_server(self, ip):
+        page_web, page_app = ((PAGE_LITE_BROWSER, PAGE_LITE_APP)
+                              if getattr(self.app, "lite", False)
+                              else (PAGE_BROWSER, PAGE_APP))
         try:
             self.server = _bind_web(self.app, self.registry,
                                     lambda: self.tasker_port, ip,
-                                    self.server_port, PAGE_BROWSER,
+                                    self.server_port, page_web,
                                     self._report)
         except OSError as e:
             self._report("网页服务启动失败（%s:%d）：%s"
@@ -1433,7 +1519,7 @@ class WebRemote:
         try:
             self.app_server = _bind_web(self.app, self.registry,
                                         lambda: self.tasker_port, ip,
-                                        self.app_port, PAGE_APP, self._report)
+                                        self.app_port, page_app, self._report)
         except OSError as e:
             self._report("APP 页面服务启动失败（%s:%d）：%s"
                          % (ip, self.app_port, _err(e)))

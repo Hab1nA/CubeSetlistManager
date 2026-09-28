@@ -50,30 +50,52 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 ## 程序组成
 
-**安装版（推荐）**：Release 下载对应底座的安装包双击安装（两底座包名对称，见下表）——
-按用户安装到 `%LOCALAPPDATA%\Programs\CubeSetlistManager[底座]`（免管理员），自动创建
-开始菜单/桌面快捷方式，自带卸载器；升级直接装新版，`config.json` 等数据保留。
+**安装版（推荐）**：Release 下载对应产品的安装包双击安装（包名/目录/快捷方式
+按底座对称，见下表）——按用户安装到 `%LOCALAPPDATA%\Programs\` 下各产品独立
+目录（免管理员），自动创建开始菜单/桌面快捷方式，自带卸载器；升级直接装
+新版，`config.json` 等数据保留。
 
 | 端 | 程序 | 定位 |
 |---|---|---|
-| Windows | `Cube Setlist Manager\Cube Setlist Manager Cubase.exe` | **演出主程序（Cubase 底座）**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
+| Windows | `Cube Setlist Manager Cubase.exe` | **演出主程序（Cubase 底座）**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
 | Android | `CubeRemote-vX.Y.apk`（Release 下载，或热点网页「下载 APP」） | **Cube Remote 遥控/翻谱 APP**：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
 
-`config.json`、`playlist.json` 放 exe 同目录（安装目录的版本文件夹内）。
+`config.json`、`playlist.json` 放 exe 同目录（安装根目录）。
 
-### 双底座版本（Cubase / Studio One）
+### 多产品版本（Cubase / Studio One × 完整版 / 简化版）
 
-同一套代码双后端（`daw_ctrl.py` 事实表），Release 提供**两个安装包**，可并存安装：
+同一套代码双后端（`daw_ctrl.py` 事实表），Release 提供**三个安装包**，可并存安装：
 
 | 安装包 | 底座 | 说明 |
 |---|---|---|
-| `CubeSetlistManager-Cubase-Setup-x.y.z.exe` | Cubase | 主线，行为同历史版本 |
-| `CubeSetlistManager-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | 独立 AppId/目录（`CubeSetlistManagerS1`）/快捷方式 `Cube Setlist Manager Studio One`；首装预置 studioone 配置，升级保留用户数据 |
+| `CubeSetlistManager-Cubase-Setup-x.y.z.exe` | Cubase | 主线完整版，行为同历史版本 |
+| `CubeSetlistManager-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | S1 完整版：独立 AppId/目录（`CubeSetlistManagerStudioOne`）/快捷方式 `Cube Setlist Manager Studio One`；首装预置 studioone 配置，升级保留用户数据 |
+| `CubeAutomator-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | S1 简化版 **Cube Automator Studio One**（见下节）：独立第三 AppId/目录（`CubeAutomatorStudioOne`，命名对齐未来可能的 Cube Automator Cubase） |
 
 底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
-段（旧 `cubase` 段仍兼容读取）。S1 版当前限制：`.song` 为私有格式——**工程时长
-只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。真机校准过程见
+段（旧 `cubase` 段仍兼容读取）。S1 完整版当前限制：`.song` 为私有格式——**工程时长
+只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。走带时钟链路已
+真机实证（S1 需以「**新建乐器**」类型建外部设备并勾 Send MIDI Clock，键盘类
+设备进不了音轨输出，详见调研文档 §九）。真机校准过程见
 `docs/StudioOne迁移调研.md`。
+
+### Cube Automator Studio One（S1 简化版）
+
+S1 完整适配前的过渡方案：**去掉歌单/切歌/走带遥控，保留其余全部自动化**——
+VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱推送。入口程序
+`automator_gui.py`（`app.lite=True`），与完整版共用全部底层模块。
+
+- **自动识别当前工程**：轮询 S1 窗口标题（`Studio One - 歌名`），在工程库里
+  精确匹配歌名、失败退唯一子串匹配（S1 标题取工程元数据名，可能与文件名不同），
+  识别后自动加载该歌的音色槽——键盘自动化设置窗口无需手动选歌；
+- **走带只看不控**：完整版的时钟跟随/三态显示/已播时长保留，但网页端
+  `/cmd` 一律 403；启动不拉起、退出不关闭任何其它软件（OBS 只连接不启动，
+  每 5 秒自动重连），loopMIDI 缺席时提示手动启动；
+- **移动端双页面简化**：浏览器页=「简化版无遥控」提示+下载 APP 按钮；
+  APP 页=完整版设置面板直接作为主页（谱面翻页功能不变）；
+- S1 工程侧需为每首歌把 3 条乐器轨分别接到 `VJ Automation` /
+  `Keyboard Automation` / `Score Automation` 外部设备（新建乐器类型，参考
+  调研文档 §九）。
 
 ## 环境要求
 
@@ -216,6 +238,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 ```
 ├─ setlist_gui.py        主程序（Cube Setlist Manager）
+├─ automator_gui.py      简化版主程序（Cube Automator，app.lite 分流共用底层模块）
 ├─ midi_bridge.py        MIDI 音符→OBS 视频桥（主程序内嵌 VJ 联动）
 ├─ daw_ctrl.py           DAW 底座控制器（Cubase/Studio One 事实表双后端：切歌/走带/进程）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
@@ -226,10 +249,10 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ cpr_meta.py           .cpr 时长解析
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
-├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包（双底座各一个安装包）
+├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
 ├─ tests\                test_bridge（离线自检）/ night_test（夜测编排器）/ e2e_test（真机分阶段）
 ├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
-├─ config.example.json / config.studioone.json   两底座的预置配置样例
+├─ config.example.json / config.studioone.json / config.automator.json   各产品预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
 ├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
@@ -244,7 +267,9 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
   `_render\`）；真机分阶段：`py tests\e2e_test.py`。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
   先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
-  `dist\CubeSetlistManager-Setup-<版本>.exe`（版本取最近 git tag；未装
+  `CubeSetlistManager-Cubase-Setup-<版本>.exe` /
+  `CubeSetlistManager-StudioOne-Setup-<版本>.exe` /
+  `CubeAutomator-StudioOne-Setup-<版本>.exe`（版本取最近 git tag；未装
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) 时跳过安装包只出绿色版），
   失败保留 .bak。
   **勿裸跑 `pyinstaller --noconfirm`**：它会先清空版本文件夹，dist 里是
