@@ -34,6 +34,7 @@ WS_THICKFRAME = 0x00040000
 WS_MAXIMIZEBOX = 0x00010000
 CLOSE_TIMEOUT = 30      # 关工程等待上限（秒）
 OPEN_TIMEOUT = 120      # 打开/冷启动等待上限（大工程+采样库加载）
+STARTPAGE_PROBE = 12    # 开始页直转探窗（秒）：无果退回「退出→冷启动」
 KEY_GAP = 0.03          # 走带键逐事件间隔
 ENTER_HOLD = 0.12       # 仿人回车按下保持时长（零间隔连发会被弹窗无视）
 
@@ -106,9 +107,22 @@ STUDIOONE = dict(
     # 与 Cubase 空框架吞转交同款）→ frame_title 置 Start 页标题启用「关框架
     # 退出→带路径冷启动」特例（Start 页 WM_CLOSE=正常退出，用户点 X 同款）
     frame_title="Studio One",
+    # S1 退出保存框与 Start 页主窗同名（标题=光杆「Studio One」，「保存」在
+    # 正文），词表不可达——沿用 Cubase confirm_by_style 范式按样式判别
+    # （popup 小窗=保存框回车；Start 页 overlapped 主窗恒不命中）。
+    confirm_by_style=True,
+    # 真机取证 2026-09-29：S1 保存框是系统标准类 #32770（Cubase 全自绘类），
+    # 弹窗候选须额外收这个类；它全系统共用，_dialogs 的 pid 过滤负责只认
+    # 本进程。默认按钮=「是」（保存）。
+    dialog_classes=("#32770",),
+    # S1 的 TaskDialog 收不到合成回车（真机实测两连败），确认动作改点
+    # 默认按钮（BS_DEFPUSHBUTTON=「是」，BM_CLICK 跨进程有效）。
+    confirm_action="click_default",
     loading_marks=(),                   # 待采样：空=跳过浮层等待
     song_ext=".song",
-    probe_duration=False,               # .song 私有容器无解析，时长手填
+    probe_duration=True,                # .song=ZIP/XML 事件终点解析（song_meta）
+    dirty_suffix="*",                   # 脏工程=歌名尾加*（真机采样）；切回时
+                                        # 修改保留在内存、星随工程恢复（2026-09-29）
     app_suffix=" Studio One",
     # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
     # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
@@ -228,6 +242,29 @@ def _ctypes_cb(fn):
                               wintypes.LPARAM)(fn)
 
 
+def _click_default_button(h):
+    """点对话框的默认按钮（BS_DEFPUSHBUTTON 的标准 Button 子窗）。
+    S1 的保存框是 TaskDialog 系（真机实测：合成回车两连败、焦点正常也不
+    触发默认钮），而它的按钮是真实 Button 类子窗——BM_CLICK 跨进程投递
+    即可，无需前台无需焦点。返回是否找到并点击。"""
+    hits = []
+
+    @_ctypes_cb
+    def _cb(ch, _l):
+        cls = ctypes.create_unicode_buffer(32)
+        _user32.GetClassNameW(ch, cls, 32)
+        if cls.value == "Button" and \
+                _user32.GetWindowLongW(ch, -16) & 0xFFFFFFFF & 0x0001:
+            hits.append(ch)                 # BS_DEFPUSHBUTTON
+        return True
+
+    _user32.EnumChildWindows(h, _cb, 0)
+    if not hits:
+        return False
+    _user32.PostMessageW(hits[0], 0x00F5, 0, 0)     # BM_CLICK
+    return True
+
+
 def project_windows():
     """当前打开的工程窗口 [(hwnd, 标题)]（按标题标记+窗口类前缀识别；
     类前缀为空=不限类，只认标题标记）。"""
@@ -254,6 +291,19 @@ def project_title_shape(name):
     f = ACTIVE
     return (f["title_mark"] + name) if f["name_after_mark"] \
         else (name + f["title_mark"])
+
+
+def title_matches(name, title):
+    """工程窗口标题是否为歌名 name 的打开态（_wait_open 完成判定）。
+    容忍底座的脏标记后缀：S1 手动改过的工程切走再切回，未保存修改保留
+    在 S1 内存里、连脏标记一起恢复（真机 2026-09-29 实测：切回后标题=
+    「Studio One - 3.21演出*」，此前"静默丢弃"的记录不完整）——按星零
+    容忍会卡满 120s 超时。Cubase 无脏后缀（dirty_suffix 缺省空）。"""
+    f = ACTIVE
+    shape = project_title_shape(name)
+    return title.endswith(shape) or \
+        (bool(f.get("dirty_suffix")) and
+         title.endswith(shape + f["dirty_suffix"]))
 
 
 def loading_windows():
@@ -427,7 +477,11 @@ class DawController:
         Cubase 特例（事实表驱动）：关完工程后只剩空主框架（无 Hub）时，
         转交会被丢弃（E2E 实测）→ 先 WM_CLOSE 框架退出应用再冷启动（实测
         关闭中收到的打开请求会被接管执行，总耗时约 30s）。其他底座
-        frame_title=None 时跳过该特例。"""
+        frame_title=None 时跳过该特例。
+        S1 开始页特例（2026-09-29 插桩实测修正）：开始页转交**多数歌能开**
+        （5.16 演出 8s），但存在按歌个体状态被静默丢弃的个例（3.21 演出
+        三次零反应；同文件换路径/换名/整树副本都能开，成因未明）——先直接
+        转交短探窗，无果再退回「退出→带路径冷启动」兜底（必成）。"""
         f = self.facts
         name = os.path.splitext(os.path.basename(path))[0]
         if self.running() and not project_windows():
@@ -439,8 +493,20 @@ class DawController:
                     elif f["frame_title"] and t == f["frame_title"]:
                         frame = h
             if hub is None and frame is not None:
-                self._log("%s 空闲无工程：退出后重新启动…"
-                          % f["display_name"])
+                self._log("%s 在开始页：尝试直接转交…" % f["display_name"])
+                launch_detached(self.exe, '"%s"' % path)
+                deadline = time.time() + STARTPAGE_PROBE
+                while time.time() < deadline:
+                    for h, t in project_windows():
+                        if title_matches(name, t):
+                            self._log("工程窗口已出现：《%s》" % name)
+                            return t
+                    self._drain_dialogs("打开")
+                    time.sleep(0.5)
+                # 转交未响应：该工程的个体状态所致（非开始页普遍行为），
+                # 退出整个应用再带路径冷启动（开始页无未保存内容，无损）
+                self._log("转交未响应（该工程的个体状态），退出后重新启动"
+                          "（约 10 秒）…")
                 _user32.PostMessageW(frame, WM_CLOSE, 0, 0)
                 wait_exit(45)
         self._log("启动打开工程（单实例转交/冷启动）…")
@@ -459,8 +525,8 @@ class DawController:
         kick_at = None
         while time.time() < deadline:
             for h, t in project_windows():
-                if t.endswith(project_title_shape(name)):
-                    return t        # 形态全等，防同名前缀误判
+                if title_matches(name, t):
+                    return t        # 形态全等（容忍脏星），防同名前缀误判
             pressed = self._drain_dialogs("打开")
             if pressed and kick_at is None:
                 kick_at = time.time() + 3   # 刚放行模态，稍等再补发
@@ -484,12 +550,15 @@ def _drain(f, stage, seen, log):
     吞掉的请求），其余只记录防误按。seen 按 (hwnd, 标题) 记：确认类按下
     成功才记（模态框刚弹出的瞬间可能按空，窗口还在就重试），记录类记一次
     防日志刷屏。禁用窗跳过：叠层模态的下层框被禁用（真机实测），按了白按。
-    同名常驻窗特例（confirm_by_style）：Cubase 保存确认框标题与空主框架
-    同名（=光杆「Cubase Pro」，多种确认框共用应用名，词表不可达），同名
-    候选交 _confirm_by_style 按样式判别——popup 小窗=确认框回车；真主
-    框架/Hub=overlapped 大窗恒不命中，静默跳过（工程窗在场时主框架本就
-    不存在，打开阶段等到的也只会是弹窗）。"""
+    同名常驻窗特例（confirm_by_style）：Cubase/S1 保存确认框标题与常驻
+    主窗同名（光杆应用名，多种确认框共用，词表不可达），同名候选交
+    _confirm_by_style 按样式判别——popup 小窗=确认框；真主框架=overlapped
+    大窗恒不命中，静默跳过。
+    确认动作（confirm_action）：默认仿人回车（Cubase 实测有效）；S1 的
+    TaskDialog 收不到合成回车（真机实测），设 "click_default" 改点默认
+    按钮（=「是」保存，真机取证 BS_DEFPUSHBUTTON），失败再回退回车。"""
     pressed = False
+    click_mode = f.get("confirm_action") == "click_default"
     for h, t in _dialogs(f):
         if not _user32.IsWindowEnabled(h):
             continue
@@ -505,8 +574,12 @@ def _drain(f, stage, seen, log):
                 log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
             seen.add((h, t))
             continue
-        log("[%s] 弹窗「%s」→ 回车" % (stage, t))
-        if focus(h):
+        log("[%s] 弹窗「%s」→ %s" % (stage, t,
+                                     "点默认钮" if click_mode else "回车"))
+        if click_mode and _click_default_button(h):
+            pressed = True
+            seen.add((h, t))
+        elif focus(h):
             human_enter()
             pressed = True
             seen.add((h, t))
@@ -539,22 +612,42 @@ def close_app(timeout=60, log=print):
         _drain(f, "退出", seen, log)
         for h, t, c in _windows():
             if (c.startswith(f["win_class_prefix"]) and t in f["dialog_ignores"]
-                    and h not in closed):
+                    and h not in closed
+                    and not _confirm_by_style(f, h, t)):
+                # 同名 popup=待回车的保存框，补 WM_CLOSE 等于点「取消」，
+                # 会跟排水流程打架——只清扫真常驻窗（Hub/Start 页主窗）
                 _user32.PostMessageW(h, WM_CLOSE, 0, 0)
                 closed.add(h)
         time.sleep(0.5)
     return not find_processes_by_prefix(f["proc_prefix"])
 
 
+def _pid_of(hwnd):
+    """窗口归属进程 PID（弹窗按进程过滤用：#32770 是系统标准类，所有
+    程序共用，必须只认 DAW 自己的对话框，防止误按其它应用的弹窗）。"""
+    pid = wintypes.DWORD()
+    _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
 def _dialogs(f):
     """自绘弹窗 = 事实表窗口类前缀的可见窗口里，非工程窗口、非常驻窗
-    （标题固定，排除）的其余有标题窗口。confirm_by_style 的底座放行
-    frame_title 同名候选（Cubase 保存框与主框架同名，交 _drain 按样式
-    判别；其余底座照旧排除）。
+    （标题固定，排除）的其余有标题窗口；且必须属于 DAW 本进程。
+    confirm_by_style 的底座放行 frame_title 同名候选（保存框与主窗同名，
+    交 _drain 按样式判别；其余底座照旧排除）。
+    dialog_classes：S1 的保存框走系统标准类 #32770（真机取证：类=#32770、
+    style=0x96C80284 popup、默认按钮=「是」，Cubase 则全用自绘类），这两类
+    全系统共用，pid 过滤负责不误伤。
     注：Cubase 实测「未找到端口」弹窗没有 owner，owner 判定不可用。"""
+    pids = {pid for pid, _p in find_processes_by_prefix(f["proc_prefix"])}
+    extra = f.get("dialog_classes") or ()
     out = []
     for h, t, c in _windows():
-        if not c.startswith(f["win_class_prefix"]) or not t:
+        if not (c.startswith(f["win_class_prefix"]) or c in extra):
+            continue
+        if pids and _pid_of(h) not in pids:
+            continue
+        if not t:
             continue
         if f["title_mark"] in t:
             continue

@@ -35,6 +35,7 @@ import hotspot
 import kbd_auto
 import midi_bridge as mb
 import pedal
+import song_meta
 import web_remote
 from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
@@ -105,12 +106,16 @@ DAW_DEFAULTS = {
 def daw_settings(cfg, daw):
     """DAW 路径段归一：新 dawSettings 段优先，旧 cubase 段兼容读取
     （cubaseExe 键名迁移为 dawExe，老配置零改动可用），缺项落底座默认。
-    优先级：dawSettings > 旧 cubase 段 > 默认。"""
+    优先级：dawSettings > 旧 cubase 段 > 默认。
+    旧 cubase 段与 cubaseExe 键只对 cubase 底座生效——它们语义上就是
+    Cubase 的路径，S1 底座继承会把 Cubase 当成自己的 exe/工程库
+    （真机事故：S1 版启动自检把 Cubase 拉了起来）。"""
     s = dict(autoSave=True)
-    s.update(cfg.get("cubase") or {})
+    if daw == "cubase":
+        s.update(cfg.get("cubase") or {})
     s.update(cfg.get("dawSettings") or {})
     legacy = s.pop("cubaseExe", None)
-    if legacy:
+    if legacy and daw == "cubase":
         s.setdefault("dawExe", legacy)
     s.setdefault("dawExe", DAW_DEFAULTS[daw]["exe"])
     s.setdefault("projectsRoot", DAW_DEFAULTS[daw]["root"])
@@ -214,14 +219,21 @@ def scan_library(root, ext=".cpr"):
     return out
 
 
+def _read_duration(path):
+    """按工程扩展名分发时长解析：.cpr→RIFF 定位条，.song→ZIP/XML 事件终点。"""
+    return (song_meta.read_duration(path)
+            if path.lower().endswith(".song")
+            else cpr_meta.read_duration(path))
+
+
 def _reprobe(songs, durations, dur_src):
-    """自动来源的工程时长全量重读 .cpr → {key: 新秒}（只收值有变化的）。
+    """自动来源的工程时长全量重读工程文件 → {key: 新秒}（只收值有变化的）。
     手动设定不参与（「写入时长」受保护，要回工程内原值用「重新识别」）。"""
     out = {}
     for s in songs:
         if dur_src.get(s["key"]) == "manual":
             continue
-        d = cpr_meta.read_duration(s["path"]) or 0.0
+        d = _read_duration(s["path"]) or 0.0
         if d != durations.get(s["key"]):
             out[s["key"]] = d
     return out
@@ -867,7 +879,7 @@ class App:
                     self.cur = i
                     song = self.by_key[k]
                     d = self.durations.get(k) or \
-                        cpr_meta.read_duration(song["path"]) or 0.0
+                        _read_duration(song["path"]) or 0.0
                     self.durations[k] = d
                     self.watch.set_duration(d)
                     self.slots = kbd_auto.load_slots(song["path"])
@@ -882,9 +894,9 @@ class App:
 
     def _probe_durations(self, songs):
         """全量重探自动来源的工程时长并持久化（后台线程；65 首/66MB 实测
-        约 0.15s）：在 DAW 里改过定位条的歌，重启即跟上。手动设定不被
-        覆盖；值全没变就不落盘，安静返回。底座不支持解析工程文件
-        （Studio One .song）时跳过，时长只能手填。"""
+        约 0.15s）：在 DAW 里改过定位条/事件终点的歌，重启即跟上。手动设定
+        不被覆盖；值全没变就不落盘，安静返回。解析失败（如未设定位条）由
+        手填兜底。"""
         if not self.facts["probe_duration"]:
             return
         fresh = _reprobe(songs, self.durations, self.dur_src)
@@ -1262,7 +1274,7 @@ class App:
         if song is None:
             return
         # 打开后再测一次时长；手动设定不被自动识别覆盖（需要时点「重新识别」）
-        d = cpr_meta.read_duration(song["path"]) or 0.0
+        d = _read_duration(song["path"]) or 0.0
         if self.dur_src.get(key) == "manual":
             self.q.put("《%s》保留手动时长 %s（工程内为 %s，可点「重新识别」改用）"
                        % (song["name"], cpr_meta.fmt_mmss(self.durations.get(key)),
@@ -1343,7 +1355,7 @@ class App:
         if song is None:
             self.q.put("歌单项不在素材库里：%s" % key)
             return
-        d = cpr_meta.read_duration(song["path"])
+        d = _read_duration(song["path"])
         if d:
             self.durations[key] = d
             self.dur_src.pop(key, None)     # 回归自动来源
@@ -1719,7 +1731,7 @@ class App:
                 self.cur = i
                 song = self.by_key[k]
                 d = self.durations.get(k) or \
-                    cpr_meta.read_duration(song["path"]) or 0.0
+                    _read_duration(song["path"]) or 0.0
                 self.durations[k] = d
                 if self.watch is not None:
                     self.watch.set_duration(d)   # 内部 reset：已播重新累计
@@ -1994,7 +2006,8 @@ class SettingsWindow(tk.Toplevel):
         row("%s 工程库" % app.facts["display_name"], self.proj_var, browse=True)
         row("VJ 视频目录", self.vid_var, browse=True)
         self.closeapps_var = tk.BooleanVar(value=app.exit_close_apps)
-        tk.Checkbutton(body, text="退出时关闭被控软件（Cubase/OBS/loopMIDI）",
+        tk.Checkbutton(body, text="退出时关闭被控软件（%s/OBS/loopMIDI）"
+                       % app.facts["display_name"],
                        variable=self.closeapps_var).pack(anchor="w",
                                                          pady=(pad, 1))
 

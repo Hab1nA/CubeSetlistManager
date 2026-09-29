@@ -12,7 +12,8 @@
   attrs <hwnd>  取证单个窗口：owner/样式/矩形/使能/前台（区分保存框与
             主框架用；弹窗开着时抓现场）
   kids <hwnd>   列子窗口（按钮文本+样式，找 BS_DEFPUSHBUTTON 默认按钮）
-用法：py -u tools/probe_dialog.py <win|watch|selftest|attrs|kids>"""
+用法：py -u tools/probe_dialog.py [--s1] <win|watch|selftest|attrs|kids>
+  --s1  指到 STUDIOONE 事实表（S1 保存框取证；默认 CUBASE）"""
 import ctypes
 import pathlib
 import sys
@@ -23,7 +24,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import daw_ctrl
 
-F = daw_ctrl.CUBASE
+USE_S1 = "--s1" in sys.argv
+F = daw_ctrl.STUDIOONE if USE_S1 else daw_ctrl.CUBASE
 daw_ctrl.set_active(F)
 _u32 = daw_ctrl._user32
 
@@ -50,13 +52,16 @@ def _all_windows():
 
 
 def _classify(c, t):
-    """按 daw_ctrl._dialogs/_drain 的真实判定树标注处置（CUBASE 事实表）。"""
+    """按 daw_ctrl._dialogs/_drain 的真实判定树标注处置（随 --s1 换表）。"""
     if not c.startswith(F["win_class_prefix"]):
         return ("drain 看不见（类名 %s 不在 %s* 内）"
                 % (c, F["win_class_prefix"]))
     if F["title_mark"] in t:
         return "工程窗（正常识别）"
     if t in F["dialog_ignores"]:
+        if F.get("confirm_by_style") and t == F["frame_title"]:
+            return ("同名候选→样式判别：popup=保存框【会回车】；"
+                    "overlapped=主窗静默跳过（attrs 看样式）")
         return ("【漏检①】被 dialog_ignores=%r 精确排除，drain 永远看不见"
                 % (F["dialog_ignores"],))
     if not t:
@@ -100,19 +105,21 @@ def cmd_watch():
 
 
 def cmd_selftest():
-    W, P = F["win_class_prefix"], "Cubase Pro"
+    W, P = F["win_class_prefix"], F["frame_title"]
+    mark = F["dialog_enter_marks"][0]
+    same = ("同名候选→样式判别" if F.get("confirm_by_style") else "【漏检①】")
     cases = [
-        (W + "xyz", P + " 工程 - テスト", "工程窗（正常识别）"),
-        (W + "xyz", P, "【漏检①】"),        # 保存框与主框架同名=最危险漏法
+        (W + "xyz", F["title_mark"] + "テスト", "工程窗（正常识别）"),
+        (W + "xyz", P, same),               # 保存框与主窗同名=最危险漏法
         (W + "xyz", "", "【漏检②】"),
-        (W + "xyz", "未找到端口", "【会回车】"),
+        (W + "xyz", mark, "【会回车】"),
         (W + "xyz", "工程已被修改", "【漏检③】"),
         ("#32770", "保存", "drain 看不见"),
     ]
     for c, t, want in cases:
         got = _classify(c, t)
         assert got.startswith(want), (c, t, got)
-    print("判定树自检通过（%d 例）" % len(cases))
+    print("判定树自检通过（%d 例，%s 表）" % (len(cases), F["name"]))
 
 
 def cmd_attrs(hstr):
@@ -172,8 +179,9 @@ def cmd_kids(hstr):
 
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    arg = sys.argv[2] if len(sys.argv) > 2 else None
+    argv = [a for a in sys.argv[1:] if a != "--s1"]
+    cmd = argv[0] if argv else ""
+    arg = argv[1] if len(argv) > 1 else None
     if cmd in ("attrs", "kids") and arg:
         (cmd_attrs if cmd == "attrs" else cmd_kids)(arg)
     else:

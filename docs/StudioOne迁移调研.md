@@ -116,9 +116,9 @@
 | 走带键（开始/暂停/继续/回零/全停） | ✓ | ✓ | 键序表真机实测 |
 | 走带时钟→VJ 跟随/播放状态/进度条 | ✓ | ✓（2026-09-28 实证，§九） | 前提=S1 外部设备必须「新建乐器」类型（键盘类进不了音轨输出） |
 | NOW 识别/防错警报 | ✓ | ✓ | 标题格式已校准 |
-| 工程时长自动解析 | ✓（.cpr） | ✗ 手填 | `.song` 私有容器无公开规格；后续 JS 脚本导出可解（⑧） |
-| 键盘自动化音色切换 | ✓ | ✗ | 音色槽存于工程旁 JSON，由 .cpr 解析 → `.song` 无解析 |
-| 退出连带关闭 | ✓ | 部分 | WM_CLOSE 退出可行；未保存时 S1 退出保存框标题=`Studio One`（正文才有"保存"），标题匹配的自动确认失效，需人工点一次 |
+| 工程时长自动解析 | ✓（.cpr） | ✓（**.song ZIP/XML**，§十） | 初判"私有无规格"有误；song_meta 按事件终点解析 |
+| 键盘自动化音色切换 | ✓ | ✓（机制同构，§十接线后） | 音色槽=工程旁 JSON，与工程格式解析无关（初判有误） |
+| 退出连带关闭 | ✓ | ✓（2026-09-29 闭环，§十） | 保存框=#32770 标准类+TaskDialog，click_default 修复 |
 
 > 结论：S1 版除依赖「.song 解析」的功能（时长手填兜底）外全部可用。
 
@@ -126,20 +126,20 @@
 
 | 项 | 实测结论 |
 |---|---|
-| ① CLI 打开 | **同实例、同窗口换歌**：标题原地翻转，旧 Song 不保留、不新开实例（Pro 的多 Song 同开默认不发生）。ShellExecute=42 正常提交 |
+| ① CLI 打开 | **同实例、同窗口换歌**：标题原地翻转，旧 Song 不保留、不新开实例（Pro 的多 Song 同开默认不发生）。ShellExecute=42 正常提交。**例外（2026-09-29 二次修正）**：开始页（无打开工程）态的转交**按歌个体状态**可能被静默丢弃——M0 当年与 09-29 上午均只测了 3.21演出（必现丢弃），误固化成"开始页普遍行为"；同日下午插桩矩阵证明同库 5.16 在开始页 **8s 正常打开**、3.21 的换名/换路径/整树副本也都正常打开（连"路径编码/长度/目录"假设全部排除），3.21 本体的被拒状态当日稍后自愈。CSM 对此实现**先直转短探窗（12s）、无果退回「退出→带路径冷启动」**的自适应策略（`_open` STARTPAGE_PROBE），两种形态都必达 |
 | ② 窗口标题 | `Studio One - <歌名>`（歌名在标记**后**，与推断相反）；脏工程=歌名尾加 `*`；Start 页=光杆 `Studio One`（不含标记，不误判） |
-| ③ 切歌序列 | **全程零弹窗**；有未保存修改时**静默丢弃**（.song mtime 不变实证）→ 无需先关后开（`close_before_open=False`）、autoSave 无实际作用（切歌前须自行保存）；Start 页态递交被静默丢弃（同 Cubase 空框架）→ `frame_title` 退出重启特例生效，全流程 9.0s、日常切换 **2 秒** |
+| ③ 切歌序列 | **全程零弹窗**；有未保存修改时**不落盘、修改保留在 S1 内存**（.song mtime 不变实证；**2026-09-29 修正：切回该工程时未保存修改连脏标记一起恢复**，标题带 `*`——初判"静默丢弃"不完整）→ 无需先关后开（`close_before_open=False`）、autoSave 无实际作用（切歌前须自行保存）；Start 页态递交被静默丢弃（同 Cubase 空框架）→ `frame_title` 退出重启特例生效，全流程 9.0s、日常切换 **2 秒** |
 | ⑤ 走带键 | 回零=**小键盘 `.`**（NUMDOT；NumEnter/主 Enter 证伪）；Space=播放/停止切换（双向实测）；S1 无独立暂停键，stop/pause/resume 同键序 |
 | 退出保存框 | 标题就叫 `Studio One`（"保存"字样在正文）→ 标题匹配的弹窗排水看不到，且被 Start 页同名 dialog_ignores 排除——**S1 线 exitCloseApps 已知缺陷** |
 | 焦点坑 | 用户机 Xbox GameInputServiceWindow（无标题隐形窗）霸占前台致 focus() 成片失败；绕法=SendInput 真实点击目标窗口空白区激活 |
 
 ### 校准过程中的新未知量/后续项
 
-- ⑥ 走带 MIDI Learn / ⑦ Mackie spike：待验；
-- ⑧ JS 脚本导出时长：getHostAPI（QtScript）可行性未验，手填兜底已可用；
-- ④ 弹窗全集：当前仅遇退出保存框（标题 `Studio One`），切歌全流程零弹窗，
+- ⑥ 走带 MIDI Learn / ⑦ Mackie spike：**§十 已结（结论=备选增强，本轮不实施）**；
+- ⑧ JS 脚本导出时长：**§十 已结（.song=ZIP/XML 直接解析，JS 路线作废）**；
+- ④ 弹窗全集：切歌全流程零弹窗；退出保存框已按样式判别闭环（§十），
   继续随用随采；
-- S1 退出保存框标题陷阱、Start 页递交丢弃等行为已固化进 `daw_ctrl.py` 事实表。
+- S1 退出保存框陷阱、Start 页递交丢弃等行为已固化进 `daw_ctrl.py` 事实表。
 
 ### 工作量对账（§六 估算 vs 实际）
 
@@ -169,3 +169,96 @@
   注入）。**SPP 历来不发**（勿设计依赖 SPP 的功能）；时钟仅播放时发送。
 - **待接线收尾**（时钟地基已通，功能待接）：.song 里建 Instrument 轨、
   输出选 VJ 设备，VJ 触发音符/音色切换即与 Cubase 版同构。
+
+## 十、S1 完整版收尾（2026-09-29，⑧+接线+退出保存框闭环）
+
+### ⑧ 工程时长：.song 实为 ZIP/XML，纯 Python 解析成立（推翻"私有无规格"前提）
+
+- `.song` = **ZIP 容器**（`PK\x03\x04`），`Song/song.xml` 明文 XML：事件带
+  `start`/`length`（**四分音符拍**），`TempoMap`/`TempoMapSegment`（兼容旧
+  `AudioTempoMapSegment`）给分段 `tempo`（**秒/拍**，120BPM=0.5），
+  `metainfo.xml` 有 `Media:Tempo`（BPM）兜底。
+- **时长 = 发声事件 max(start+length) 拍 × 节拍图换算**，已与 mediapool 里
+  WAV `frameCount` 交叉验证分秒不差（229.0s）。三个坑：
+  ① Root `length="300"` 是新建工程占位默认值，不可采信；
+  ② 无 `start` 的事件是 Part 内部相对事件，跳过（容器 Part 自带
+  start+length 已计入）；
+  ③ `MarkerEvent` 非发声元素不计入。
+- Click 轨尾部 4-5 分钟为**连续过渡节拍**（连排工程转场用，非离群残段），
+  真歌未静音 → S1 停表=全部轨播完 → 解析口径取**全轨 maxEnd**（实测
+  3.21=31:36、5.16=33:05）。若日后静音 Click，时长偏差由「写入时长」手填
+  兜底。
+- 落地：`song_meta.py`（接口对齐 cpr_meta），`setlist_gui._read_duration`
+  按扩展名分发，STUDIOONE `probe_duration=True`。
+
+### 逐曲接线：XML 形态完整逆向 + 已为本库全部歌曲接好
+
+- 外部乐器设备=全局 `MusicDevices.settings` 条目 + `User Devices\*.device`
+  文件；**`instrumentFile` 属性必须存在**（文件可缺，VJ 即缺文件仍加载），
+  否则设备不进浏览器。
+- 轨→设备路由存于**工程内** `Devices/musictrackdevice.xml`：
+  `MusicTrackChannel` 的 `<Connection x:id="destination"
+  objectID="{设备instanceID}/Channel0" friendlyName="N - 名/CH 1"/>`；
+  `Devices/musiciomanager.xml` 登记所用设备实例（instanceID=全局
+  settings 的 instanceID，同 GUID 跨工程复用）；preset 在工程
+  `Presets/External Devices/*.devicepreset`。
+- 据此已为本库两首歌（3.21演出/5.16演出）各接入 VJ（原有）/Keyboard/Score
+  三条乐器轨（XML 注入+S1 Ctrl+S 往返验收，路由/实例/preset 全幸存）。
+  新歌接线可用同一脚本或 UI 拖拽。
+
+### 退出保存框（§八已知缺陷）闭环
+
+- 真机取证：S1 退出保存框=**系统标准类 `#32770`**（非 CCL 自绘类）、
+  style=0x96C80284（popup）、标题=光杆「Studio One」、**默认按钮=「是」
+  （保存）**、TaskDialog 系**收不到合成回车**（焦点正常也吞）。
+- 修复（daw_ctrl 事实表驱动）：`dialog_classes=("#32770",)` 准入标准对话框
+  类 + `_dialogs` 按进程 PID 过滤（#32770 全系统共用，防误按他窗）+
+  `confirm_by_style=True` 样式判别 + `confirm_action="click_default"`（对
+  BS_DEFPUSHBUTTON 投 BM_CLICK，失败回退回车）；`close_app` 清扫对同名
+  popup 跳过 WM_CLOSE（否则等于点取消）。真机 E2E：脏工程 close_app
+  **2.6s** 自动保存退出。
+
+### ⑥⑦ 控制面 spike 结论（MIDI Learn / Mackie Control）
+
+- **Mackie Control**：S1 官方支持（选项→外部设备→添加 Mackie Control，指定
+  收发端口）；Play/Rec/Stop/FF/RW 直接控走带，且**自动回传播放状态与位置
+  显示**——若未来需要精确位置跟踪（如按实际播放位置推进），注册一对
+  loopMIDI 端口跑 Mackie 协议即可（走带键=Note-on 标准字节，回传=LCD 分段
+  解析）。
+- **MIDI Learn / MIDI 走带**：外部设备设置含「MMC/MIDI 走带控制」通道，
+  走带按钮可右键指派 MIDI 命令——比 SendInput 键注入稳（不吃焦点、不受
+  弹窗遮挡）。
+- **结论**：当前 SendInput 键序真机可用、song_meta 已消解时长诉求，Mackie
+  降级为「位置跟踪增强」备选项；实施 sketch=新增第 4 个 loopMIDI 端口
+  （Mackie 收发对）+ S1 添加 Mackie Control 设备（UI 一次性配置）+ CSM 侧
+  收发各一个 MIDI 线程，估 1-2 天。本轮不实施。
+- 参考来源：[PreSonus 官方走带 MIDI 指派](https://support.presonus.com)、
+  [S1 Mackie Control 官方文档](https://pae-web.presonusmusic.com)、
+  [社区实战帖](https://gearspace.com)。
+
+### 切回脏工程卡 120s（2026-09-29 用户报告，当日修复）
+
+- **现象**：手动改过 A → CSM 切 B 正常 → 切回 A 时 S1 已显示 A，CSM 却卡
+  「切换中…」满 120s（OPEN_TIMEOUT）才失败退出，随后 NOW 又按标题认出 A。
+- **根因**（插桩复现实证）：S1 的"切走不保存"并非丢弃——**未保存修改保留
+  在 S1 内存、切回时连脏标记一起恢复**，A 的标题回来时是
+  `Studio One - 3.21演出*`；而 `_wait_open` 的完成判定
+  `title.endswith(title_mark+name)` 对尾星零容忍 → 永不匹配 → 超时。超时后
+  NOW 识别走 `project_name_from_title`（本就 `rstrip("*")`）所以又能认出。
+- **修复**：新增事实表键 `dirty_suffix="*"`（S1）+ `title_matches(name,
+  title)` 完成判定（容忍脏星后缀；Cubase 无此键行为不变）。真机 E2E：
+  同场景 A(脏)→B→A 两次切换各 **0.6s** 完成。
+
+### 开始页递交"被丢弃"结论的三次修正（2026-09-29，用户要求攻击该结论）
+
+- **结论演化**：M0 固化的「开始页态转交必被静默丢弃」经插桩矩阵攻击后
+  **两度修正**——上午复测"仍成立"（依旧只测了 3.21）也是错的；同日下午
+  变体矩阵证明：同库 5.16 在开始页正常打开、3.21 的全 ASCII/8.3 短路径/
+  换名/换路径/整树副本全部正常打开（路径编码、长度、目录、文件名模式、
+  最近列表等假设逐一排除），唯 3.21 本体在彼时被拒、且当日稍后自愈。
+- **定性**：S1 开始页转交存在**按歌个体状态**的静默丢弃（个例、可自愈、
+  成因不明——S1 内部无日志痕迹、无公开记录）；不是开始页的普遍行为。
+- **工程对策**（`_open` STARTPAGE_PROBE=12s）：开始页先直转短探窗——多数
+  歌 8s 直开（比旧绕行省一次重启闪动）；探窗无果（个例被拒）自动退回
+  「退出→带路径冷启动」兜底，必达。真机验证：直转 7.2s / 兜底 14.8s /
+  常规同窗 1.2s 三路径全过。

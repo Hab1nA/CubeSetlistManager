@@ -9,6 +9,7 @@ import struct
 import tempfile
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler
 
 import advance
@@ -19,6 +20,7 @@ import kbd_auto
 import midi_bridge as mb
 import obs_ctrl
 import pedal
+import song_meta
 import web_remote
 from obs_ctrl import ObsController, natural_key
 
@@ -149,6 +151,110 @@ def test_cpr_duration():
     assert cpr_meta.parse_mmss("") is None
 
 
+def _fake_song(path, tracks, segs=(("TempoMapSegment", "start", "0", "0.5"),),
+               bpm=None):
+    """构造最小 .song（ZIP 容器 + song.xml/metainfo.xml）。
+
+    tracks: [(轨名, [(tag, start|None, length), ...]), ...]；start=None 模拟
+    Part 内部相对事件（应被跳过）。segs: 节拍图段 (标签, 起点属性名, 值,
+    tempo 秒/拍)；bpm 非 None 时写 metainfo 兜底、且节拍图留空。"""
+    ev = ""
+    for name, events in tracks:
+        body = "".join(
+            '<%s %s length="%s" name="e%d"/>' % (
+                tag, "" if s is None else 'start="%s"' % s, l, i)
+            for i, (tag, s, l) in enumerate(events))
+        ev += ('<MediaTrack mediaType="Audio" name="%s">'
+               '<List x:id="Events">%s</List></MediaTrack>' % (name, body))
+    if segs:
+        tm = "".join('<%s %s="%s" tempo="%s"/>' % (t, attr, v, spb)
+                     for t, attr, v, spb in segs)
+        tempo_xml = "<TempoMap>%s</TempoMap>" % tm
+    else:
+        tempo_xml = "<TempoMap/>"
+    song_xml = ('<Song><Attributes x:id="Root" length="300"/>%s%s</Song>'
+                % (tempo_xml, ev))
+    meta = ('<Info><Attribute id="Media:Tempo" value="%s"/></Info>' % bpm
+            if bpm else "<Info/>")
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("Song/song.xml", song_xml)
+        zf.writestr("metainfo.xml", meta)
+
+
+def test_song_duration():
+    # 基准：两轨事件取最大终点 × 秒/拍（120BPM=0.5）；占位 Root length=300
+    # （无 start，不构成事件）不参与
+    with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+        path = f.name
+    try:
+        _fake_song(path, [
+            ("Piano", [("AudioEvent", "100", "200"), ("AudioEvent", "400", "40")]),
+            ("Syn", [("AudioEvent", "50", "60")]),
+        ])
+        assert song_meta.read_duration(path) == 440 * 0.5
+    finally:
+        os.unlink(path)
+
+    # Part 语义：容器（AudioPartEvent 有 start+length）计入；内部相对
+    # 事件（无 start）跳过——容器终点已是绝对口径
+    with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+        path = f.name
+    try:
+        _fake_song(path, [("Piano", [
+            ("AudioPartEvent", "1000", "500"),
+            ("AudioEvent", None, "9999")])])
+        assert song_meta.read_duration(path) == 1500 * 0.5
+    finally:
+        os.unlink(path)
+
+    # 节拍图兼容两代标签/属性名；多段线性换算
+    for tag, attr in (("TempoMapSegment", "start"),
+                      ("AudioTempoMapSegment", "offset")):
+        with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+            path = f.name
+        try:
+            _fake_song(path, [("Piano", [("AudioEvent", "300", "100")])],
+                       segs=((tag, attr, "0", "0.5"),
+                             (tag, attr, "200", "0.25")))
+            # 0-200 拍 @0.5s/拍 =100s；200-400 拍 @0.25 =50s → 150
+            assert song_meta.read_duration(path) == 150.0
+        finally:
+            os.unlink(path)
+
+    # 无节拍图时退回 metainfo BPM（60/90=0.6667s/拍）
+    with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+        path = f.name
+    try:
+        _fake_song(path, [("Piano", [("AudioEvent", "0", "90")])],
+                   segs=(), bpm=90)
+        assert abs(song_meta.read_duration(path) - 60.0) < 1e-9
+    finally:
+        os.unlink(path)
+
+    # 节拍与 BPM 都缺 → None（手填兜底）；坏包 → None
+    with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+        path = f.name
+    try:
+        _fake_song(path, [("Piano", [("AudioEvent", "0", "10")])], segs=())
+        assert song_meta.read_duration(path) is None
+    finally:
+        os.unlink(path)
+    with tempfile.NamedTemporaryFile(suffix=".song", delete=False) as f:
+        f.write(b"JUNK")
+        path = f.name
+    try:
+        assert song_meta.read_duration(path) is None
+    finally:
+        os.unlink(path)
+
+    # 真歌冒烟（存在才验）：数值须落在勘查实证区间
+    real = pathlib.Path(r"C:\Users\XKZ\Documents\Studio One Projects\LinGo"
+                        r"\3.21演出\3.21演出.song")
+    if real.exists():
+        d = song_meta.read_duration(str(real))
+        assert d and 1500 < d < 2200     # 25~37 分钟界内（对表前宽松界）
+
+
 def test_advance_watch():
     now = [1000.0]
     fired, stops = [], []
@@ -214,7 +320,7 @@ def test_daw_backends():
     assert daw_ctrl.ACTIVE is daw_ctrl.CUBASE
     assert daw_ctrl.FACTS["cubase"]["song_ext"] == ".cpr"
     s1 = daw_ctrl.FACTS["studioone"]
-    assert s1["song_ext"] == ".song" and not s1["probe_duration"]
+    assert s1["song_ext"] == ".song" and s1["probe_duration"]  # song_meta ZIP 解析
     assert set(s1["transport"]) == set(daw_ctrl.CUBASE["transport"])  # 动作齐
     daw_ctrl.set_active(s1)
     try:
@@ -222,6 +328,13 @@ def test_daw_backends():
             == "優しい彗星"
         assert daw_ctrl.project_name_from_title("Studio One") is None  # Start 页
         assert daw_ctrl.project_name_from_title("记事本") is None
+        # 切歌完成判定容忍脏星：手动改过的工程切走再切回，S1 保留未保存
+        # 修改、连星一起恢复（真机 2026-09-29）——按星零容忍会卡满 120s
+        assert daw_ctrl.title_matches("優しい彗星", "Studio One - 優しい彗星")
+        assert daw_ctrl.title_matches("優しい彗星", "Studio One - 優しい彗星*")
+        assert not daw_ctrl.title_matches("優しい彗星",
+                                          "Studio One - 優しい彗星X")
+        assert not daw_ctrl.title_matches("優しい彗星", "Studio One - 優しい")
     finally:
         daw_ctrl.set_active(daw_ctrl.CUBASE)
 
@@ -235,6 +348,15 @@ def test_daw_settings_compat():
     s = sg.daw_settings({"cubase": {"cubaseExe": "OLD"},
                          "dawSettings": {"dawExe": "NEW"}}, "studioone")
     assert s["dawExe"] == "NEW"
+    # 底座隔离回归：cubase 遗留键（旧段与 cubaseExe 别名）绝不能泄漏给
+    # S1 底座——否则 S1 版启动自检会把 Cubase 拉起来（真机事故）
+    s = sg.daw_settings({"dawSettings": {"cubaseExe": "C:/Cubase.exe"}},
+                        "studioone")
+    assert "Cubase" not in s["dawExe"]
+    s = sg.daw_settings({"cubase": {"cubaseExe": "C:/Cubase.exe",
+                                    "projectsRoot": "CubaseLib"}},
+                        "studioone")
+    assert "Cubase" not in s["dawExe"] and s["projectsRoot"] != "CubaseLib"
     assert sg.scan_library.__doc__  # 冒烟：库扫描签名可用
 
 

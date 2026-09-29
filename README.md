@@ -73,10 +73,12 @@ Win11 圆角）。全程本地通信，不经互联网。
 | `CubeAutomator-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | S1 简化版 **Cube Automator Studio One**（见下节）：独立第三 AppId/目录（`CubeAutomatorStudioOne`，命名对齐未来可能的 Cube Automator Cubase） |
 
 底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
-段（旧 `cubase` 段仍兼容读取）。S1 完整版当前限制：`.song` 为私有格式——**工程时长
-只能手填**（未填的歌不自动推进）、键盘自动化音色槽暂不可用。走带时钟链路已
+段（旧 `cubase` 段仍兼容读取）。S1 完整版已与 Cubase 版功能对齐：工程时长从
+`.song`（ZIP/XML 容器）按事件终点自动解析（`song_meta.py`）、键盘自动化音色
+槽按工程路径旁挂 JSON、退出保存框按窗口样式判别自动确认。走带时钟链路已
 真机实证（S1 需以「**新建乐器**」类型建外部设备并勾 Send MIDI Clock，键盘类
-设备进不了音轨输出，详见调研文档 §九）。真机校准过程见
+设备进不了音轨输出）；每首歌需有输出到 VJ/Keyboard/Score 外部设备的乐器轨
+（本机库内两首已接好，新歌接线方法见调研文档 §十）。真机校准过程见
 `docs/StudioOne迁移调研.md`。
 
 ### Cube Automator Studio One（S1 简化版）
@@ -246,7 +248,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
 ├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
 ├─ web_remote.py / hotspot.py   移动端遥控（网页服务+语义推送+设备表）/ Windows 热点（WinRT）
-├─ cpr_meta.py           .cpr 时长解析
+├─ cpr_meta.py / song_meta.py   .cpr 与 .song 工程时长解析（RIFF 定位条 / ZIP+XML 事件终点）
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
