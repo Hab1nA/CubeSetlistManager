@@ -9,6 +9,8 @@
   transport  走带按键 E2E：时钟监听验证 播放/停止 真生效
   advance    自动推进全周期：播完最短歌→自动切下一首（需项目时钟，约 3 分钟）
   web        网页遥控/翻谱推送真机链路：MIDI 组合→推送 + /cmd→真切歌（回环）
+  s1_*       Studio One 底座同款五阶段（preflight/switch/transport/advance/
+             savedialog；库根 CUBE_S1_PROJECTS_ROOT，默认本机 S1 工程库）
 不带参数 = 顺序跑 preflight ports obs switch transport kb（advance/web 单独跑）。"""
 import glob
 import os
@@ -27,8 +29,10 @@ import obs_ctrl
 import web_remote
 from obs_ctrl import ObsController, find_processes_by_prefix
 
-# 库根：默认本机路径，换机用环境变量 CUBE_PROJECTS_ROOT 覆盖
+# 库根：默认本机路径，换机用环境变量 CUBE_PROJECTS_ROOT / CUBE_S1_PROJECTS_ROOT 覆盖
 ROOT = os.environ.get("CUBE_PROJECTS_ROOT") or r"C:\Users\XKZ\Documents\Cubase Projects"
+S1_ROOT = os.environ.get("CUBE_S1_PROJECTS_ROOT") or \
+    r"C:\Users\XKZ\Documents\Studio One Projects"
 
 
 def _pick_songs(root):
@@ -49,7 +53,15 @@ def _pick_songs(root):
     return songs[0][1], songs[1][1]
 
 
-SONG_A, SONG_B = _pick_songs(ROOT)
+_AB = None
+
+
+def songs_ab():
+    """Cubase 最短两首，惰性求值（S1 阶段不要求 Cubase 库在场）。"""
+    global _AB
+    if _AB is None:
+        _AB = _pick_songs(ROOT)
+    return _AB
 
 
 def log(msg):
@@ -97,6 +109,7 @@ def make_ctrl():
 # ---- 阶段 ----
 
 def p_preflight():
+    s_a, s_b = songs_ab()
     log("MIDI 输入端口：%s" % [n for _, n in mb._in_devices()])
     log("MIDI 输出端口：%s" % [n for _, n in mb._out_devices()])
     ins = [n for _, n in mb._in_devices()]
@@ -110,8 +123,8 @@ def p_preflight():
     log("JUNO 缺席降级：%s" % kbd_auto.send_slot(
         {"msb": 85, "lsb": 64, "pc": 3}, dict(kbd_auto.DEFAULT_JUNO)))
     log("时长解析 intro=%s TAIDADA=%s" % (
-        cpr_meta.fmt_mmss(cpr_meta.read_duration(SONG_A)),
-        cpr_meta.fmt_mmss(cpr_meta.read_duration(SONG_B))))
+        cpr_meta.fmt_mmss(cpr_meta.read_duration(s_a)),
+        cpr_meta.fmt_mmss(cpr_meta.read_duration(s_b))))
 
 
 def p_ports():
@@ -153,18 +166,19 @@ def p_obs():
 
 
 def p_switch():
+    s_a, s_b = songs_ab()
     ctrl = make_ctrl()
     log("切换前 Cubase 进程：%s" % find_processes_by_prefix("cubase"))
     t0 = time.time()
-    ctrl.switch_to(SONG_A, on_done=lambda n: log("on_done → %s" % n))
+    ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "switch_to 完成")
     ws = daw_ctrl.project_windows()
     log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
     dump_windows("冷启动/切换后")
     assert ws and any("intro" in t for _, t in ws), "intro 没打开：%r" % (ws,)
-    log("第二次切换（先关后开路径）：%s" % SONG_B)
+    log("第二次切换（先关后开路径）：%s" % s_b)
     t0 = time.time()
-    ctrl.switch_to(SONG_B, on_done=lambda n: log("on_done → %s" % n))
+    ctrl.switch_to(s_b, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "第二次切换")
     ws = daw_ctrl.project_windows()
     log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
@@ -217,9 +231,9 @@ def p_advance():
     if not daw_ctrl.project_windows() or \
             "intro" not in (daw_ctrl.project_windows()[0][1] or ""):
         log("先切到 intro…")
-        ctrl.switch_to(SONG_A, on_done=lambda n: log("on_done → %s" % n))
+        ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
         wait_until(lambda: not ctrl.busy, 200, "切到 intro")
-    dur = cpr_meta.read_duration(SONG_A)
+    dur = cpr_meta.read_duration(s_a)
     log("intro 时长 %.1fs，开始自动推进全周期" % dur)
     fired = []
     watch = advance.AdvanceWatch(lambda: fired.append(1), on_event=log,
@@ -244,7 +258,7 @@ def p_advance():
         ctrl.panic()
         return
     log("播完自动触发 ✓，等待自动切换到下一首…")
-    ctrl.switch_to(SONG_B, on_done=lambda n: log("on_done → %s" % n))
+    ctrl.switch_to(s_b, on_done=lambda n: log("on_done → %s" % n))
     wait_until(lambda: not ctrl.busy, 200, "推进后的切换")
     ws = daw_ctrl.project_windows()
     log("推进后工程窗口：%s" % [t for _, t in ws])
@@ -264,11 +278,12 @@ class _WebShim:
         self.cur = None
         self.ctrl = None
         self.watch = None
+        s_a, s_b = songs_ab()
         self.pl_keys = [os.path.splitext(os.path.basename(p))[0]
-                        for p in (SONG_A, SONG_B)]
+                        for p in (s_a, s_b)]
         self.by_key = {k: {"name": k} for k in self.pl_keys}
         self.durations = {}
-        self._map = dict(zip(self.pl_keys, (SONG_A, SONG_B)))
+        self._map = dict(zip(self.pl_keys, (s_a, s_b)))
         self._web_snap = {}
 
     def _refresh(self):
@@ -391,7 +406,7 @@ def p_web():
             "切歌命令未被执行（calls 未消费）"
         assert wait_until(lambda: not app.ctrl.busy, 200, "切歌完成")
         ws = daw_ctrl.project_windows()
-        want = os.path.splitext(os.path.basename(SONG_A))[0]
+        want = os.path.splitext(os.path.basename(app._map[app.pl_keys[0]]))[0]
         assert ws and want in (ws[0][1] or ""), ws
         log("网页 /cmd → Cubase 切歌 ✓（%s）" % want)
     finally:
@@ -401,9 +416,179 @@ def p_web():
         tsrv.server_close()
 
 
+# ---- S1 阶段（Studio One 底座）：共享 log/wait_until/dump 风格，独立选歌 ----
+
+def make_ctrl_s1():
+    import setlist_gui
+    ccfg = setlist_gui.daw_settings(setlist_gui._load_config(), "studioone")
+    return daw_ctrl.DawController(daw_ctrl.STUDIOONE,
+                                  ccfg.get("dawExe", ""), log=log)
+
+
+def s1_songs_ab():
+    """扫 <root>/<队伍>/<歌>/<歌>.song，按 song_meta 时长升序取最短两首。"""
+    import song_meta
+    songs = []
+    for p in glob.glob(os.path.join(S1_ROOT, "*", "*", "*.song")):
+        if os.path.splitext(os.path.basename(p))[0] != \
+                os.path.basename(os.path.dirname(p)):
+            continue
+        try:
+            dur = song_meta.read_duration(p)
+        except Exception:
+            dur = None
+        songs.append((dur if dur is not None else 1 << 30, p))
+    songs.sort()
+    if len(songs) < 2:
+        sys.exit("S1 工程库 %s 下可用歌不足两首（<队伍>/<歌>/<歌>.song）" % S1_ROOT)
+    return songs[0][1], songs[1][1]
+
+
+def dump_windows_s1(tag):
+    log("窗口转储（%s）：" % tag)
+    for h, t, c in daw_ctrl._windows():
+        if c.startswith("CCL") or "#32770" in c or "Studio One" in t:
+            log("  class=%-28s title=%r" % (c, t))
+
+
+def p_s1_preflight():
+    log("S1 MIDI 输入端口：%s" % [n for _, n in mb._in_devices()])
+    ins = [n for _, n in mb._in_devices()]
+    for hint in ("VJ Automation", "Keyboard Automation", "Score Automation"):
+        assert any(hint in n for n in ins), "缺 %s" % hint
+    log("S1 三端口 ✓")
+    log("S1 进程：%s" % find_processes_by_prefix("studio one"))
+    dump_windows_s1("当前")
+    import song_meta
+    s_a, s_b = s1_songs_ab()
+    log("时长解析 %s=%s %s=%s" % (
+        os.path.basename(s_a), song_meta.fmt_mmss(song_meta.read_duration(s_a)),
+        os.path.basename(s_b), song_meta.fmt_mmss(song_meta.read_duration(s_b))))
+
+
+def p_s1_switch():
+    ctrl = make_ctrl_s1()
+    s_a, s_b = s1_songs_ab()
+    names = tuple(os.path.splitext(os.path.basename(p))[0] for p in (s_a, s_b))
+    log("S1 切歌：A=%s B=%s（开始页起点自动走探窗/兜底）" % names)
+    t0 = time.time()
+    ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
+    wait_until(lambda: not ctrl.busy, 200, "switch A")
+    ws = daw_ctrl.project_windows()
+    log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
+    dump_windows_s1("切 A 后")
+    assert ws and any(daw_ctrl.title_matches(names[0], t) for _, t in ws), \
+        "%s 没打开：%r" % (names[0], ws)
+    t0 = time.time()
+    ctrl.switch_to(s_b, on_done=lambda n: log("on_done → %s" % n))
+    wait_until(lambda: not ctrl.busy, 200, "switch B")
+    ws = daw_ctrl.project_windows()
+    log("耗时 %.1fs，工程窗口：%s" % (time.time() - t0, [t for _, t in ws]))
+    assert ws and any(daw_ctrl.title_matches(names[1], t) for _, t in ws), \
+        "%s 没打开：%r" % (names[1], ws)
+    log("S1 切歌 E2E ✓")
+
+
+def p_s1_transport():
+    ctrl = make_ctrl_s1()
+    s_a, _s_b = s1_songs_ab()
+    name = os.path.splitext(os.path.basename(s_a))[0]
+    ws = daw_ctrl.project_windows()
+    if not ws or not any(daw_ctrl.title_matches(name, t) for _, t in ws):
+        log("先切到 %s（VJ 轨+时钟已接）…" % name)
+        ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
+        wait_until(lambda: not ctrl.busy, 200, "切到 A")
+    pulses = [0]
+    port = kbd_auto.RawMidiIn("VJ Automation", lambda s, d1, d2:
+                              pulses.__setitem__(0, pulses[0] + 1)
+                              if s in (0xF1, 0xF8) else None)
+    time.sleep(0.3)
+    base = pulses[0]
+    ctrl.transport("play")
+    assert wait_until(lambda: pulses[0] > base + 10, 15,
+                      "播放产生时钟（VJ Automation）"), \
+        "播放 15s 无时钟脉冲——VJ 轨未接线或 S1 时钟未开"
+    got = pulses[0] - base
+    ctrl.transport("stop")
+    time.sleep(2.0)
+    port.close()
+    log("播放窗口时钟脉冲 +%d；停止后未再监听（S1 停止即断流，§九已证）" % got)
+    assert got > 10
+    log("S1 走带 E2E ✓（VJ Automation 时钟验证）")
+
+
+def p_s1_advance():
+    ctrl = make_ctrl_s1()
+    s_a, s_b = s1_songs_ab()
+    name = os.path.splitext(os.path.basename(s_a))[0]
+    ws = daw_ctrl.project_windows()
+    if not ws or not any(daw_ctrl.title_matches(name, t) for _, t in ws):
+        ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
+        wait_until(lambda: not ctrl.busy, 200, "切到 A")
+    dur = 15.0    # 真歌 31 分钟：合成短时长验证全周期（15s→自动发停止键→断流→fired）
+    log("合成时长 %.0fs，开始 S1 自动推进全周期" % dur)
+    fired = []
+    watch = advance.AdvanceWatch(lambda: fired.append(1),
+                                 on_stop_transport=lambda: ctrl.transport("stop"),
+                                 on_event=log, clock_timeout=mb.CLOCK_TIMEOUT)
+    watch.set_armed(True)
+    watch.set_duration(dur)
+    pulses = [0]
+    port = kbd_auto.RawMidiIn("VJ Automation", lambda s, d1, d2:
+                              (watch.on_clock(),
+                               pulses.__setitem__(0, pulses[0] + 1))
+                              if s in (0xF1, 0xF8) else None)
+    ctrl.transport("play")
+    deadline = time.time() + dur + 60
+    while time.time() < deadline and not fired:
+        watch.poll()
+        time.sleep(mb.POLL_SEC)
+    port.close()
+    log("结果：fired=%s 活跃 %.1fs / 时长 %.0fs / 脉冲 %d" % (
+        bool(fired), watch._active, dur, pulses[0]))
+    assert fired, "15s 合成时长未触发自动推进"
+    log("播完自动触发 ✓，切到下一首…")
+    ctrl.switch_to(s_b, on_done=lambda n: log("on_done → %s" % n))
+    wait_until(lambda: not ctrl.busy, 200, "推进后的切换")
+    ws = daw_ctrl.project_windows()
+    bname = os.path.splitext(os.path.basename(s_b))[0]
+    assert ws and any(bname in t for _, t in ws), "推进后不在 %s：%r" % (bname, ws)
+    log("S1 自动推进全周期 ✓")
+
+
+def p_s1_savedialog():
+    """尽力而为型：键盘弄脏（M=选中轨静音）不生效则跳过不判失败——
+    click_default 的回归主力是离线排水测试（test_dialog_drain 10 例）。"""
+    ctrl = make_ctrl_s1()
+    s_a, _s_b = s1_songs_ab()
+    if not daw_ctrl.project_windows():
+        ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
+        wait_until(lambda: not ctrl.busy, 200, "切到 A")
+    h, t = daw_ctrl.current_project()
+    log("工程：%s" % t)
+    daw_ctrl.focus(h)
+    time.sleep(0.6)
+    daw_ctrl.tap(0x4D)                 # M：选中轨静音（S1 默认键位）
+    time.sleep(1.0)
+    h2, t2 = daw_ctrl.current_project()
+    if not (t2 and t2.rstrip().endswith("*")):
+        log("键盘弄脏未生效（跳过本阶段——保存框回归由离线测试覆盖）")
+        return
+    log("已弄脏：%s" % t2)
+    mt0 = os.path.getmtime(s_a)
+    assert daw_ctrl.close_app(timeout=60, log=log), "close_app 未退出"
+    time.sleep(2)
+    assert not find_processes_by_prefix("studio one"), "S1 仍存活"
+    assert os.path.getmtime(s_a) != mt0, "工程未被保存（mtime 未变）"
+    log("S1 退出保存框 E2E ✓（自动保存+退出）")
+
+
 PHASES = dict(preflight=p_preflight, ports=p_ports, obs=p_obs,
               switch=p_switch, transport=p_transport, advance=p_advance,
-              web=p_web)
+              web=p_web,
+              s1_preflight=p_s1_preflight, s1_switch=p_s1_switch,
+              s1_transport=p_s1_transport, s1_advance=p_s1_advance,
+              s1_savedialog=p_s1_savedialog)
 
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else None

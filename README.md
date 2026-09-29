@@ -279,7 +279,8 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 - 直接运行：`python setlist_gui.py`。
 - 验证链：`py tests\test_bridge.py`（离线自检，或
   `py -m pytest tests\`）→ `py tools\_render_check.py`（版式断言+截图落
-  `_render\`）；真机分阶段：`py tests\e2e_test.py`。
+  `_render\`）；真机分阶段：`py tests\e2e_test.py`（Cubase）与
+  `s1_*` 五阶段（Studio One，库根 `CUBE_S1_PROJECTS_ROOT`）。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
   先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
   `CubeSetlistManager-Cubase-Setup-<版本>.exe` /
