@@ -123,6 +123,8 @@ STUDIOONE = dict(
     probe_duration=True,                # .song=ZIP/XML 事件终点解析（song_meta）
     dirty_suffix="*",                   # 脏工程=歌名尾加*（真机采样）；切回时
                                         # 修改保留在内存、星随工程恢复（2026-09-29）
+    rewind_stopped=("NUMDOT",),         # 停止态回零：只跳开头不发空格
+                                        # （空格是播放⇄停止开关，会反向起播）
     app_suffix=" Studio One",
     # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
     # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
@@ -398,9 +400,12 @@ class DawController:
                          daemon=True).start()
         return True
 
-    def transport(self, action):
+    def transport(self, action, live=None):
         """走带键序由事实表 facts["transport"] 驱动（键名见 VK），
-        发到当前工程窗口（键盘路径，需聚焦）。"""
+        发到当前工程窗口（键盘路径，需聚焦）。
+        live=调用方感知的走带状态（True 播放中/False 已停/None 未知）：
+        S1 的回零键序是「空格停→点跳开头」，已停时空格会反向起播——
+        事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。"""
         ws = current_project()
         if not ws:
             self._log("走带控制：没有工程窗口")
@@ -408,7 +413,11 @@ class DawController:
         if not focus(ws[0]):
             self._log("走带控制：无法聚焦工程窗口")
             return False
-        for k in self.facts["transport"].get(action, ()):
+        keys = self.facts["transport"].get(action, ())
+        if action == "rewind" and live is not True \
+                and self.facts.get("rewind_stopped"):
+            keys = self.facts["rewind_stopped"]
+        for k in keys:
             tap(VK[k])
         self._log("走带 %s → 《%s》" % (ACTION_NAMES.get(action, action),
                                        project_name_from_title(ws[1])))

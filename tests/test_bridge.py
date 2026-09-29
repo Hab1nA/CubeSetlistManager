@@ -315,6 +315,29 @@ def test_project_title():
     assert daw_ctrl.project_windows.__doc__  # 冒烟：识别函数可用
 
 
+def test_transport_blocked():
+    """走带状态互锁：S1/Cubase 的 SPACE 系键序是播放⇄停止开关，状态盲发
+    会反向作用（已暂停按「暂停」起播、播放中按「播放/继续」反停、已停止
+    按「停止/全停」起播）。rewind 永不拦（停止态由 rewind_stopped 键序兜）。"""
+    import setlist_gui as sg
+    for ts in ("playing", "paused", "stopped"):
+        assert not sg.transport_blocked("rewind", ts)
+    assert sg.transport_blocked("pause", "playing") is False
+    assert sg.transport_blocked("pause", "paused")
+    assert sg.transport_blocked("pause", "stopped")
+    assert sg.transport_blocked("play", "stopped") is False
+    assert sg.transport_blocked("play", "paused") is False
+    assert sg.transport_blocked("play", "playing")
+    assert sg.transport_blocked("resume", "paused") is False
+    assert sg.transport_blocked("resume", "stopped") is False
+    assert sg.transport_blocked("resume", "playing")
+    assert sg.transport_blocked("stop", "playing") is False
+    assert sg.transport_blocked("stop", "paused")
+    assert sg.transport_blocked("stop", "stopped")
+    # S1 事实表带停止态回零键序（纯 NUMDOT，不发空格）
+    assert daw_ctrl.STUDIOONE.get("rewind_stopped") == ("NUMDOT",)
+
+
 def test_daw_backends():
     # 双底座事实表：Cubase 默认激活；S1 换表后标题解析跟随，用时还原
     assert daw_ctrl.ACTIVE is daw_ctrl.CUBASE

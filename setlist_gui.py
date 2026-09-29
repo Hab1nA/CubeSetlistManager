@@ -41,6 +41,23 @@ from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
 
 FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
+TX_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
+            "stop": "停止", "rewind": "回零"}
+
+
+def transport_blocked(action, tstate):
+    """走带命令的状态互锁：S1 的 SPACE 系键序是播放⇄停止开关、Cubase 的
+    「继续」也是裸 SPACE——不看当前状态盲发会反向作用（已暂停按「暂停」
+    反而起播、播放中按「播放/继续」反停、已暂停/停止按「停止/全停」反起
+    播——S1 无真暂停，暂停=停止）。返回 True=忽略该命令。rewind 不拦
+    （回零在停止态也有意义，键序由 facts["rewind_stopped"] 按态选择）。"""
+    if action == "play":
+        return tstate == "playing"
+    if action in ("pause", "stop"):
+        return tstate != "playing"
+    if action == "resume":
+        return tstate == "playing"
+    return False
 LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
 
 
@@ -1401,6 +1418,11 @@ class App:
         if self.ctrl is None:
             self.q.put("服务未就绪（启动未完成）")
             return
+        ts = self._transport_state()
+        if transport_blocked(action, ts):
+            self.q.put("%s：「%s」忽略（状态互锁）" % (FOLLOW[ts], TX_NAMES.get(
+                action, action)))
+            return
         if action == "play" and not daw_ctrl.current_project():
             # 没有打开的工程：自动加载播放列表当前项（无指针则第一首）再播放
             if not self.pl_keys:
@@ -1434,16 +1456,21 @@ class App:
         if self.ctrl is None:
             self.q.put("服务未就绪（启动未完成）")
             return
+        skip_keys = self._transport_state() != "playing"
 
         def run():
-            self.ctrl.panic()
+            if not skip_keys:
+                self.ctrl.panic()
             self._regain_focus()
 
         threading.Thread(target=run, daemon=True).start()
         self.watch.reset()          # 急停不得被误判成"播完"而自动切歌
         if self.ctl is not None:
             self.ctl.stop_media()   # 顺带熄掉 OBS 视频
-        self.q.put("全停：走带已停，自动切换已复位，视频已熄灭")
+        self.q.put("全停：走带已停，自动切换已复位，视频已熄灭"
+                   if not skip_keys else
+                   "全停：本就未在播放，走带键跳过（S1 空格会反向起播），"
+                   "计时已复位、视频已熄灭")
 
     def _open_settings(self):
         if self.settings_win is None or not self.settings_win.winfo_exists():
@@ -1503,7 +1530,8 @@ class App:
             pass
 
     def _transport_thread(self, action):
-        if self.ctrl.transport(action) and action == "rewind" \
+        if self.ctrl.transport(action, live=self._transport_state() == "playing") \
+                and action == "rewind" \
                 and self.watch is not None:
             self.watch.reset()      # 回零=停在零点，已播计时同步归零
         self._regain_focus()
