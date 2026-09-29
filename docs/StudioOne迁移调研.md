@@ -38,7 +38,7 @@
 | advance.py | 111 | 播完自动推进（时钟活跃×时长阈值+主动停） | 逻辑 DAW 无关，仅停止键序换表 |
 | midi_bridge.py TransportSync | 部分 | MIDI 时钟脉冲断流=暂停判定 | S1 同样可发时钟，**近零改动** |
 | setlist_gui.py | 82 处引用 | 调用面+projName 标题正则+config cubase 段 | 引入 daw 后端抽象后改动很小 |
-| e2e_test/night_test | — | Cubase 窗口/弹窗 fixtures | 移植一套 S1 fixtures |
+| e2e_test | — | Cubase 窗口/弹窗 fixtures | 移植一套 S1 fixtures |
 | 其余全部 | ~4500 | 无 | **零改动** |
 
 ## 三、逐项能力对照

@@ -252,7 +252,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
-├─ tests\                test_bridge（离线自检）/ night_test（夜测编排器）/ e2e_test（真机分阶段）
+├─ tests\                test_bridge（离线自检）/ e2e_test（真机分阶段）
 ├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
 ├─ config.example.json / config.studioone.json / config.automator.json   各产品预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
@@ -264,8 +264,8 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 ## 开发与构建
 
 - 直接运行：`python setlist_gui.py`。
-- 验证链：`py tests\test_bridge.py`（离线自检）→ `py tests\night_test.py gui`
-  （离线 GUI 回归分阶段）→ `py tools\_render_check.py`（版式断言+截图落
+- 验证链：`py tests\test_bridge.py`（离线自检，或
+  `py -m pytest tests\`）→ `py tools\_render_check.py`（版式断言+截图落
   `_render\`）；真机分阶段：`py tests\e2e_test.py`。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
   先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
