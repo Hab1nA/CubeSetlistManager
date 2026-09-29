@@ -4,7 +4,7 @@
 
 # Cube Setlist Manager
 
-**演出用 Cubase 歌单控制台 · 移动端遥控 · 谱面自动翻页**
+**Cubase / Studio One 演出歌单控制台 · 移动端遥控 · 谱面自动翻页**
 
 [![Release](https://img.shields.io/github/v/release/Hab1nA/CubeSetlistManager)](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
 [![CI](https://github.com/Hab1nA/CubeSetlistManager/actions/workflows/ci.yml/badge.svg)](https://github.com/Hab1nA/CubeSetlistManager/actions/workflows/ci.yml)
@@ -13,6 +13,7 @@
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84)
 ![Python](https://img.shields.io/badge/Python-3.14-3776AB)
 ![Cubase](https://img.shields.io/badge/Cubase-13--15-673AB4)
+![Studio One](https://img.shields.io/badge/Studio%20One-7%20Pro-0099D8)
 
 [下载安装包](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
 · [安卓 APP](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
@@ -23,56 +24,62 @@
 
 ---
 
-演出控制台一件套：素材库编排播放列表 → 一键切换 Cubase 工程（先关后开）→
-播完自动切换下一首 → JUNO-DS 音色自动切换 + CC 踩钉快捷键 + OBS 外屏视频联动
-+ 平板/手机遥控 + 谱面自动翻页。深色大字界面，演出暗场可读（深色标题栏，
+演出自动化套装：两个完整版 + 一个简化版 + 一个安卓 APP（三个 Windows 程序
+可并存安装）。主线 **Cube Setlist Manager**（Cubase / Studio One 双底座）——
+素材库编排播放列表 → 一键切换 DAW 工程 → 播完自动切换下一首 → JUNO-DS 音色
+自动切换 + CC 踩钉快捷键 + OBS 外屏视频联动 + 平板/手机遥控 + 谱面自动翻页；
+**Cube Automator Studio One** 为去掉歌单/切歌的自动化简化版；**Cube Remote**
+安卓 APP 负责遥控与谱面自动翻页。深色大字界面，演出暗场可读（深色标题栏，
 Win11 圆角）。全程本地通信，不经互联网。
 
 ## 功能一览
 
 - **歌单编排**：素材库双击/多选批量加入播放列表，搜索过滤，拖动顺序编排；
-- **工程切换**：双击歌单一键切换 Cubase 工程（先关后开），有工程在开时弹确认防误触；
-- **自动推进**：工程播完自动停止并切下一首（Cubase 播到头不会自己停）；
-- **音色自动切换**：Cubase 发音符 → JUNO-DS / AX-09 Lucina 按工程映射切音色；
+- **工程切换**：双击歌单一键切换 DAW 工程（Cubase 先关后开；S1 同窗换歌），有工程在开时弹确认防误触；
+- **自动推进**：工程播完自动停止并切下一首（DAW 播到头不会自己停，Cubase 实测）；
+- **音色自动切换**：DAW 发音符 → JUNO-DS / AX-09 Lucina 按工程映射切音色；
 - **踩钉快捷键**：MIDI 踩钉 CC 绑定切歌/走带等动作，支持热插拔；
 - **移动端遥控**：电脑开 Windows 热点，平板/手机连热点后用浏览器或
   **Cube Remote 安卓 APP** 遥控走带/切歌/全停（与桌面同权）；全程本地通信
   不经互联网；
-- **谱面自动翻页**：Cubase 发翻谱音符 → 平板 APP 按**本机翻页方法**
+- **谱面自动翻页**：DAW 发翻谱音符 → 平板 APP 按**本机翻页方法**
   （点按/双击/滑动/媒体键四通道）在谱面 App 自动翻页——手势与坐标由 APP
   组装，推送走持久连接 + Wi-Fi 低时延锁，翻谱链路不经浏览器（网页被冻结
   翻谱照常）；
 - **VJ 视频联动**：走带跟随自动播/停 OBS 视频，熄屏一键黑场；
 - **节目投影**：把 OBS 节目画面全屏投影到指定显示器（设置页选择，重连自动恢复）；
 - **VJ 静音播放**：视频静音 + 关监听，或开「监视器并输出」出声，设置页切换；
-- **启动自检**：loopMIDI / OBS / Cubase 未运行自动拉起，缺什么补什么；
-- **收尾可选**：退出时按序优雅关闭 Cubase / OBS / loopMIDI。
+- **启动自检**：loopMIDI / OBS / DAW（Cubase 或 Studio One）未运行自动拉起，缺什么补什么；
+- **收尾可选**：退出时按序优雅关闭 DAW / OBS / loopMIDI。
 
-## 程序组成
+## 产品组成
 
-**安装版（推荐）**：Release 下载对应产品的安装包双击安装（包名/目录/快捷方式
-按底座对称，见下表）——按用户安装到 `%LOCALAPPDATA%\Programs\` 下各产品独立
-目录（免管理员），自动创建开始菜单/桌面快捷方式，自带卸载器；升级直接装
-新版，`config.json` 等数据保留。
+**安装版（推荐）**：Release 下载对应产品的安装包双击安装——按用户安装到
+`%LOCALAPPDATA%\Programs\` 下各产品独立目录（免管理员），自动创建开始菜单/
+桌面快捷方式，自带卸载器；三个安装包独立 AppId/目录，**可并存安装**；升级
+直接装新版，`config.json` 等数据保留（Studio One 完整版首装预置 studioone
+配置、简化版预置 automator 配置，已有配置不被覆盖）。
 
-| 端 | 程序 | 定位 |
+| 产品 | 端 / 底座 | 定位 |
 |---|---|---|
-| Windows | `Cube Setlist Manager Cubase.exe` | **演出主程序（Cubase 底座）**：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主角） |
-| Android | `CubeRemote-vX.Y.apk`（Release 下载，或热点网页「下载 APP」） | **Cube Remote 遥控/翻谱 APP**：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
+| **Cube Setlist Manager** | Windows · Cubase | 演出主程序：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主线） |
+| **Cube Setlist Manager Studio One** | Windows · Studio One 7 Pro | 同上功能的 Studio One 版 |
+| **Cube Automator Studio One** | Windows · Studio One 7 Pro | 自动化简化版：无歌单/切歌/走带遥控，保留其余全部自动化（见下节） |
+| **Cube Remote** | Android 8.0+ | 遥控/翻谱 APP：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
+
+对应 Release 资产：`CubeSetlistManager-Cubase-Setup-x.y.z.exe` /
+`CubeSetlistManager-StudioOne-Setup-x.y.z.exe` /
+`CubeAutomator-StudioOne-Setup-x.y.z.exe` / `CubeRemote-vX.Y.apk`
+（APP 亦可装好电脑端后连热点经网页「下载 APP」获取）；安装目录分别为
+`%LOCALAPPDATA%\Programs\` 下的 `CubeSetlistManagerCubase` /
+`CubeSetlistManagerStudioOne` / `CubeAutomatorStudioOne`。
 
 `config.json`、`playlist.json` 放 exe 同目录（安装根目录）。
 
-### 多产品版本（Cubase / Studio One × 完整版 / 简化版）
+### 双底座（完整版：Cubase / Studio One）
 
-同一套代码双后端（`daw_ctrl.py` 事实表），Release 提供**三个安装包**，可并存安装：
-
-| 安装包 | 底座 | 说明 |
-|---|---|---|
-| `CubeSetlistManager-Cubase-Setup-x.y.z.exe` | Cubase | 主线完整版，行为同历史版本 |
-| `CubeSetlistManager-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | S1 完整版：独立 AppId/目录（`CubeSetlistManagerStudioOne`）/快捷方式 `Cube Setlist Manager Studio One`；首装预置 studioone 配置，升级保留用户数据 |
-| `CubeAutomator-StudioOne-Setup-x.y.z.exe` | Studio One 7 Pro | S1 简化版 **Cube Automator Studio One**（见下节）：独立第三 AppId/目录（`CubeAutomatorStudioOne`，命名对齐未来可能的 Cube Automator Cubase） |
-
-底座由 config 顶层 `"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
+同一套代码双后端（`daw_ctrl.py` 事实表）。底座由 config 顶层
+`"daw": "cubase" | "studioone"` 决定；DAW 路径在 `dawSettings`
 段（旧 `cubase` 段仍兼容读取）。S1 完整版已与 Cubase 版功能对齐：工程时长从
 `.song`（ZIP/XML 容器）按事件终点自动解析（`song_meta.py`）、键盘自动化音色
 槽按工程路径旁挂 JSON、退出保存框按窗口样式判别自动确认。走带时钟链路已
@@ -83,7 +90,8 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 ### Cube Automator Studio One（S1 简化版）
 
-S1 完整适配前的过渡方案：**去掉歌单/切歌/走带遥控，保留其余全部自动化**——
+面向不需要歌单/切歌遥控的场景（与完整版并存安装，按需选用）：**去掉歌单/切歌/
+走带遥控，保留其余全部自动化**——
 VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱推送。入口程序
 `automator_gui.py`（`app.lite=True`），与完整版共用全部底层模块。
 
@@ -104,7 +112,8 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
 - Windows 10/11（深色标题栏依赖 Win11 圆角特性）；
 - [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)（虚拟 MIDI 端口）；
 - OBS Studio（obs-websocket 5.x 已内置于 OBS 28+，需在「工具→WebSocket 服务器设置」启用）；
-- Steinberg Cubase（实测 Cubase 15 / Pro 13.0.40 窗口标题均兼容）；
+- DAW 按所装产品二选一：Steinberg Cubase（实测 Cubase 15 / Pro 13.0.40 窗口标题均兼容）
+  或 PreSonus Studio One 7 Pro（实测 7.2）；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、MIDI 踩钉；
 - 移动端遥控（可选）：安卓平板/手机 8.0+ 安装 Cube Remote，或任意现代浏览器。
 
@@ -123,13 +132,14 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
 ## 快速开始
 
 1. **首次配置**：把 `config.example.json` 复制为 exe 同目录的 `config.json`，
-   改 OBS 地址/密码、Cubase 路径、工程库与视频目录；
-2. **准备素材**：Cubase 工程按 `<队伍>/<歌>/<歌>.cpr` 放进工程库根目录，
-   视频放进 VJ 视频目录；歌名来源=`.cpr` 文件名；
+   改 OBS 地址/密码、DAW 路径、工程库与视频目录；
+2. **准备素材**：工程按 `<队伍>/<歌>/<歌>.cpr`（Studio One 为 `.song`）放进
+   工程库根目录，视频放进 VJ 视频目录；歌名来源=工程文件名；
 3. **启动主程序**：启动自检会自动拉起三大后端并写日志——
    - **loopMIDI**：端口不在就拉起程序并等虚拟端口就绪；
    - **OBS**：进程不在就自动启动（含等 WebSocket 就绪，至多 30 秒）；
-   - **Cubase**：进程不在就冷启动到 Hub（约 30 秒，之后切歌走单实例转交）。
+   - **DAW**：进程不在就冷启动（Cubase 约 30 秒到 Hub，之后切歌走单实例转交；
+     Studio One 为同实例同窗换歌，约 1–2 秒）。
 
    任一后端拉起失败只记日志，不阻断其余功能（缺什么补什么）。
 4. **移动端遥控/自动翻谱**：设置页勾「启用移动端遥控」→ 平板/手机连热点 →
@@ -156,19 +166,20 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
   绿/黄/红语义色；走带跟随格播放中会显示当前视频名。
 - **播放组**：开始=回零从头播 / 暂停 / 继续 / 回零（=停止+回零，停在零点、
   已播计时归零，之后「继续」从零点起播）/ 上一首 / 下一首 / **全停**（向所有
-  Cubase 工程窗口发停止 + 熄屏 OBS）。暂停/继续随走带状态自动启停。
+  DAW 工程窗口发停止 + 熄屏 OBS）。暂停/继续随走带状态自动启停。
 - **播放配置（底部独立一行）**：配置目标（标蓝选中曲）、时长三态（绿=自动识别 / 黄=手动值 /
   红=未知需手填）、写入/重新识别、「设置」入口。时长写入目标=两列表中唯一标蓝项。
 
 ### 自动切换（两段式）
 
-Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时长 ≥ 工程时长 → 主动发停止键
+DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播时长 ≥ 工程时长 → 主动发停止键
 （3 秒重试至多 3 次）→ 时钟断流 → 自动切播放列表下一首。中途手动停/暂停（已播不足）不切换。
-时长来自 .cpr 定位条解析（启动全量探测+打开工程时重测），未设定位条的手填兜底。
+时长来自工程文件解析（Cubase .cpr 定位条 / Studio One .song 事件终点；启动全量
+探测+打开工程时重测），未识别的手填兜底。
 
 ### 键盘自动化 / 踩钉
 
-- **键盘自动化**：Cubase 向 loopMIDI「Keyboard Automation」端口发音符，按当前工程
+- **键盘自动化**：DAW 向 loopMIDI「Keyboard Automation」端口发音符，按当前工程
   映射切音色——C3-A3(60-69) → **JUNO-DS**，C4-F4(72-77) → **AX-09 Lucina**。
   映射录制=窗口里点「录制」，JUNO 在琴上按 Favorite、AX-09 在琴上选中音色
   （**先把 AX-09 的 MIDI 设置 Bn 开为 ON**：SHIFT+V-LINK 连按 5 次，改完 SHIFT+WRITE），
@@ -186,7 +197,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
   （手机竖屏单列紧凑版）。
 - **Cube Remote APP**（推荐）：控制页与网页同源，另承载翻谱设置——认领设备、
   翻页方法四选一（点按/双击/滑动/媒体键）、谱面 App 指定、测试翻页（自动切回
-  谱面 App 并回传诊断）；Cubase 发翻谱音符即按本机方法自动翻页。
+  谱面 App 并回传诊断）；DAW 发翻谱音符即按本机方法自动翻页。
 - **翻谱音符协议**：C2/C#2（36/48）=上一/下一页，C3–A3=选设备槽位；推送语义
   指令到各设备，互不阻塞；端口全局统一（默认 8766，APP 内可改需两端同步）。
 - 首次配置/无障碍授权/翻页方法选择/常见问题：见[设计文档第十二节](docs/移动端遥控与翻谱设计.md)。
@@ -195,7 +206,7 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 
 保存即应用，写 `config.json` 持久化：
 
-- **联动端口**：VJ / 键盘自动化 / 翻谱信号的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——Cubase 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
+- **联动端口**：VJ / 键盘自动化 / 翻谱信号的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——DAW 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
 - **移动端遥控**：总开关（开=自动开热点→起网页服务→开翻谱端口，关=全停；
   热点是本程序开的退出时自动关掉）、网页端口（默认 8765）、APP 页面端口
   （默认 8767）、翻谱接收端口（默认 8766，全局统一）、热点状态行（开/关、
@@ -208,11 +219,12 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
   屏幕排列排名兜底；OBS 重连后自动恢复）；选「无」关闭投影；
 - **VJ静音播放**：勾选=媒体源静音+关监听；不勾=开「监视器并输出」，声音进
   OBS「设置→音频→高级→监视输出设备」（默认=系统播放设备）；
-- **目录**：Cubase 工程库变更触发热重扫，VJ 视频目录热生效（均支持文件夹
+- **目录**：DAW 工程库变更触发热重扫，VJ 视频目录热生效（均支持文件夹
   选择对话框）；
 - **行为开关**：自动切换工程 / 连续播放 / 保持软件前台 / 切换工程需确认 /
-  **退出时关闭被控软件**（Cubase → OBS → loopMIDI 按序优雅关闭：Cubase 未保存
-  确认框回车=保存；OBS 走 WM_CLOSE 不强杀；loopMIDI 先关后终止）。
+  **退出时关闭被控软件**（DAW → OBS → loopMIDI 按序优雅关闭：Cubase 未保存
+  确认框回车=保存、S1 保存框默认钮=「是」=保存；OBS 走 WM_CLOSE 不强杀；
+  loopMIDI 先关后终止）。
 
 ## 配置参考
 
@@ -225,7 +237,8 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 | obs | mediaInput / videoRoot | 媒体源名（缺源自动补建「舞台视频」）/ 视频库根目录 |
 | obs | vjMute | VJ 静音播放：勾选=静音+关监听；不勾=开监听「监视器并输出」（设置页可改，默认勾选） |
 | obs | projectorMonitor | VJ 显示位置屏名（空=不投影），设置页可改 |
-| cubase | cubaseExe / projectsRoot / autoSave | Cubase 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`）、切换时自动保存 |
+| daw | （顶层） | 底座选择：`cubase`（默认）或 `studioone` |
+| dawSettings | dawExe / projectsRoot / autoSave | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）、切换时自动保存 |
 | juno | inHint / outHint / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道 |
 | ax09 | inHint / outHint / ch | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改） |
 | pedal | deviceHint / bindings | 踩钉设备名提示、动作→CC 号 |
@@ -234,13 +247,13 @@ Cubase 播到头不会自己停（实测）：程序累计走带时钟已播时�
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
 | autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
-| exitCloseApps | （顶层） | 「退出时关闭被控软件（Cubase/OBS/loopMIDI）」勾选持久化 |
+| exitCloseApps | （顶层） | 「退出时关闭被控软件（DAW/OBS/loopMIDI）」勾选持久化 |
 
 ## 文件架构
 
 ```
 ├─ setlist_gui.py        主程序（Cube Setlist Manager）
-├─ automator_gui.py      简化版主程序（Cube Automator，app.lite 分流共用底层模块）
+├─ automator_gui.py      简化版主程序（Cube Automator Studio One，app.lite 分流共用底层模块）
 ├─ midi_bridge.py        MIDI 音符→OBS 视频桥（主程序内嵌 VJ 联动）
 ├─ daw_ctrl.py           DAW 底座控制器（Cubase/Studio One 事实表双后端：切歌/走带/进程）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
