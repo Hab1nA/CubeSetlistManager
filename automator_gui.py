@@ -303,6 +303,8 @@ class App:
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
         self.clock_port = None
+        self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
+        self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.kb_port = self.switcher = self.ax_switcher = None
         self.kbd_win = None
         self.start_err = ""
@@ -409,7 +411,8 @@ class App:
         if not messagebox.askyesno("退出", "确定退出 Cube Automator？"):
             return
         for closer in ((lambda: self.port.close()),
-                       (lambda: self.kb_port.close())):
+                       (lambda: self.kb_port.close()),
+                       (lambda: self.clock_port.close())):
             try:
                 closer()
             except Exception:
@@ -496,7 +499,8 @@ class App:
                                               self.watch.on_clock()))
                         self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用（未设时钟端口）")
+                        self.q.put("时钟监听已停用（未设时钟端口：走带三态/"
+                                   "已播不可用）")
                 except SystemExit as e:
                     self.clock_port = None
                     self.q.put("时钟监听未启动：%s（走带三态不可用）" % e)
@@ -540,9 +544,14 @@ class App:
                 self._scan_library()
             except Exception as e:
                 self.q.put("工程库扫描失败：%s" % _err(e))
-        except Exception as e:
+        except (Exception, SystemExit) as e:   # SystemExit=MidiIn 端口降级
             self.start_err = self.start_err or "启动异常：%s" % _err(e)
             self.q.put(self.start_err)
+        finally:
+            self._startup_done = True
+            if self._pending_ports:      # 消费启动期票据：补热切换（幂等清零）
+                self._pending_ports = False
+                self.calls.put(self._apply_ports)
 
     def _watch(self):
         while True:
@@ -705,7 +714,14 @@ class App:
     # ---- 端口/遥控热切换与持久化（与完整版同构）----
 
     def _apply_ports(self):
-        """设置页改了端口名称后热切换监听（主线程调用）。"""
+        """设置页改了端口名称后热切换监听（主线程调用）。启动未完成时禁
+        热切换——启动线程与主线程无锁交叉会泄漏句柄。"""
+        if not self._startup_done:
+            # 幂等票据：置位后由启动线程 finally（补投队列）或本方法的
+            # 后续重入执行——谁消费谁清零，双消费路径天然互斥不双跑
+            self._pending_ports = True
+            self.q.put("端口名称已保存，启动完成后自动热切换")
+            return
         if self.ctl is not None and self.sync is not None:
             try:
                 if self.port is not None:
@@ -726,17 +742,26 @@ class App:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
-        # 时钟监听热切换
-        if self.clock_port is not None:
+        # 时钟监听热切换（停用/换口=走带基线复位，仅时钟口实际变化时执行）
+        clock_changed = getattr(self, "_clock_changed", True)
+        if clock_changed and self.clock_port is not None:
             try:
                 self.clock_port.close()
-            except OSError:
+            except Exception:
                 pass
-        self.clock_port = None
-        if self.ctl is not None and self.sync is not None:
+        if clock_changed:
+            self.clock_port = None
+            if self.sync is not None:
+                self.sync.reset()
+            if self.watch is not None:
+                self.watch.reset()
+        if self.ctl is not None and self.sync is not None \
+                and self.watch is not None:
             if not self.clock_hint:
-                self.q.put("时钟监听已停用（未设时钟端口）")
-            else:
+                if clock_changed:
+                    self.q.put("时钟监听已停用（未设时钟端口：走带三态/已播"
+                               "不可用）")
+            elif clock_changed:
                 try:
                     self.clock_port = mb.MidiIn(
                         self.clock_hint, lambda n, v: None,
@@ -750,7 +775,7 @@ class App:
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
-            except OSError:
+            except Exception:
                 pass
         self.kb_port = None
         if not self.kb_hint:
@@ -1222,6 +1247,7 @@ class SettingsWindow(tk.Toplevel):
             threading.Thread(target=app._scan_library, daemon=True).start()
         ports_changed = ((vj != app.vj_hint) or (kb != app.kb_hint)
                          or (ck != app.clock_hint))
+        app._clock_changed = ck != app.clock_hint   # 供 _apply_ports 判基线
         app.vj_hint, app.kb_hint, app.clock_hint = vj, kb, ck
         try:
             cfg = _load_config()

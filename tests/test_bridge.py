@@ -340,7 +340,19 @@ def test_transport_blocked():
 
 def test_clock_port():
     """时钟端口独立配置：预置配置必须直填时钟端口（空/缺键=时钟监听停用，
-    走带三态/已播/自动推进全不可用——不许手滑清空静默下线）。"""
+    走带三态/已播/自动推进全不可用——不许手滑清空静默下线）。另以源码
+    锚断言双端接线（持久化/热切换/设置页行/基线复位）不回归。"""
+    src_set = open(pathlib.Path(__file__).resolve().parents[1]
+                   / "setlist_gui.py", encoding="utf-8").read()
+    src_auto = open(pathlib.Path(__file__).resolve().parents[1]
+                    / "automator_gui.py", encoding="utf-8").read()
+    for src in (src_set, src_auto):
+        # hint 读取 + 持久化 + 热切换 + 设置页行
+        assert 'cfg.get("clockPortHint")' in src
+        assert '"clockPortHint": ck' in src
+        assert 'menu_row("时钟端口名称"' in src
+        assert "self.clock_port = mb.MidiIn(" in src
+        assert "self.sync.reset()" in src            # 换口走带基线复位
     for f in ("config.example.json", "config.studioone.json",
               "config.automator.json"):
         cfg = json.load(open(pathlib.Path(__file__).resolve().parents[1] / f,

@@ -286,6 +286,8 @@ class RawMidiIn:
             self._on_msg(p1 & 0xFF, (p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
 
     def close(self):
+        mb._winmm.midiInStop(self._h)    # 官方收尾序，见 midi_bridge.MidiIn.close
+        mb._winmm.midiInReset(self._h)
         mb._winmm.midiInClose(self._h)
 
 

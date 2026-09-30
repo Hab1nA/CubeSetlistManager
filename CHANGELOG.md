@@ -8,6 +8,16 @@
 
 ### 新增
 
+- **时钟端口模块四轮对抗复审收敛**（独立子代理 R1 FAIL 中1+低7 → R3 FAIL
+  低2 → R4 PASS 0 问题）：M1 时钟热切换停用/换口后走带基线复位
+  （TransportSync.reset()+AdvanceWatch.reset()，三态回「未播放」防互锁卡死
+  与全停谎报）；仅时钟口实际变化才动基线（改 VJ/键盘口不清已播）；
+  _startup_done 门+_pending_ports 幂等票据（启动期保存端口启动完成自动
+  补热切换，无双执行）；退出 closer 补关时钟口（官方 Stop→Reset→Close
+  收尾序防回调竞态，F8 流中 230 轮压测无崩溃）；全停跳过键日志按
+  「时钟已监听/未监听」如实分支。复试验证：F8 注入同端口双句柄广播
+  （含硬件口）✓。
+
 - **踩钉系统支持蓝牙键盘型踩钉，且可区分输入来源、定向拦截**（M-Vave
   CUBE TURNER PRO 实测只发按键不发 MIDI）：新增 Raw Input 设备桥——
   INPUTSINK 后台逐事件携带设备句柄（hDevice→接口路径→蓝牙 MAC/USB

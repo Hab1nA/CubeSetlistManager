@@ -120,6 +120,11 @@ class MidiIn:
             self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
 
     def close(self):
+        """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
+        → Close。裸 Close 在回调密集时（F8 流 ~20ms 一个）与回调执行存在
+        竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续 open/close。"""
+        _winmm.midiInStop(self._h)
+        _winmm.midiInReset(self._h)
         _winmm.midiInClose(self._h)
 
 
@@ -154,6 +159,15 @@ class TransportSync:
         with self._lock:
             self._enabled = True
             self._last_pulse = time.time()
+
+    def reset(self):
+        """跟随基线复位（时钟端口热切换时调用）：跟随态与脉冲计时清零，
+        三态回「未播放」——旧口断流不再卡「已暂停」误导互锁/全停。
+        video_state 不动：OBS 视频保持现场（在播不误停、暂停不被误拉起），
+        新口时钟到来后按实况对齐。"""
+        with self._lock:
+            self._enabled = False
+            self._last_pulse = 0.0
 
     def poll(self):
         with self._lock:

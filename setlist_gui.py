@@ -422,6 +422,8 @@ class App:
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
         self.clock_port = None
+        self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
+        self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
         self.pedal_held = {}            # 延音踏板键按住计数（kbd_auto.PEDAL_NOTES）
@@ -677,6 +679,7 @@ class App:
             return
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
+                       (lambda: self.clock_port.close()),
                        (lambda: self.pedal.shutdown())):
             try:
                 closer()
@@ -774,7 +777,7 @@ class App:
         try:
             self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
             try:
-                hint = self.vj_hint or self.kb_hint
+                hint = self.vj_hint or self.kb_hint or self.clock_hint
                 if hint:
                     mb.ensure_loopmidi(hint)
                     self.q.put("loopMIDI 端口就绪")
@@ -829,7 +832,8 @@ class App:
                                               self.watch.on_clock()))
                         self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用（未设时钟端口）")
+                        self.q.put("时钟监听已停用（未设时钟端口：走带三态/"
+                                   "已播/自动推进与停止键不可用）")
                 except SystemExit as e:
                     self.clock_port = None
                     self.q.put("时钟监听未启动：%s（走带三态/自动推进不可用）" % e)
@@ -900,6 +904,11 @@ class App:
         except Exception as e:              # 后台线程兜底：任何异常都进日志
             self.start_err = self.start_err or "启动异常：%s" % _err(e)
             self.q.put(self.start_err)
+        finally:
+            self._startup_done = True
+            if self._pending_ports:      # 消费启动期票据：补热切换（幂等清零）
+                self._pending_ports = False
+                self.calls.put(self._apply_ports)
 
     def _load_songs(self):
         root = self.ccfg["projectsRoot"]
@@ -1499,10 +1508,14 @@ class App:
             self.watch.reset()      #   独立成功）——裸 reset 会炸 _drain_calls
         if self.ctl is not None:
             self.ctl.stop_media()   # 顺带熄掉 OBS 视频
-        self.q.put("全停：走带已停，自动切换已复位，视频已熄灭"
-                   if not skip_keys else
-                   "全停：本就未在播放，走带键跳过（S1 空格会反向起播），"
-                   "计时已复位、视频已熄灭")
+        if skip_keys:
+            known = bool(self.clock_hint) and self.clock_port is not None
+            self.q.put("全停：%s，走带键跳过（S1 空格会反向起播），"
+                       "计时已复位、视频已熄灭；如 DAW 仍在播放请手动停止"
+                       % ("本就未在播放" if known
+                          else "时钟未监听，走带状态未知"))
+        else:
+            self.q.put("全停：走带已停，自动切换已复位，视频已熄灭")
 
     def _open_settings(self):
         if self.settings_win is None or not self.settings_win.winfo_exists():
@@ -1511,7 +1524,14 @@ class App:
 
     def _apply_ports(self):
         """设置页改了端口名称后热切换监听（主线程调用；找不到新端口只记
-        红字并保留状态，改回或重启可恢复）。"""
+        红字并保留状态，改回或重启可恢复）。启动未完成时禁热切换——启动
+        线程与主线程无锁交叉会泄漏句柄。"""
+        if not self._startup_done:
+            # 幂等票据：置位后由启动线程 finally（补投队列）或本方法的
+            # 后续重入执行——谁消费谁清零，双消费路径天然互斥不双跑
+            self._pending_ports = True
+            self.q.put("端口名称已保存，启动完成后自动热切换")
+            return
         if self.ctl is not None and self.sync is not None:
             try:
                 if self.port is not None:
@@ -1532,17 +1552,28 @@ class App:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
-        # 时钟监听热切换
-        if self.clock_port is not None:
+        # 时钟监听热切换（停用/换口=走带基线复位：三态回「未播放」，防旧口
+        # 断流卡「已暂停」误导互锁与全停；视频跟随同步复位不误报暂停）。
+        # 仅时钟口实际变化才动时钟基线——改 VJ/键盘口不动时钟，已播不清零
+        clock_changed = getattr(self, "_clock_changed", True)
+        if clock_changed and self.clock_port is not None:
             try:
                 self.clock_port.close()
-            except OSError:
+            except Exception:
                 pass
-        self.clock_port = None
-        if self.ctl is not None and self.sync is not None:
+        if clock_changed:
+            self.clock_port = None
+            if self.sync is not None:
+                self.sync.reset()
+            if self.watch is not None:
+                self.watch.reset()
+        if self.ctl is not None and self.sync is not None \
+                and self.watch is not None:
             if not self.clock_hint:
-                self.q.put("时钟监听已停用（未设时钟端口）")
-            else:
+                if clock_changed:
+                    self.q.put("时钟监听已停用（未设时钟端口：走带三态/已播/"
+                               "自动推进与停止键不可用）")
+            elif clock_changed:
                 try:
                     self.clock_port = mb.MidiIn(
                         self.clock_hint, lambda n, v: None,
@@ -1556,7 +1587,7 @@ class App:
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
-            except OSError:
+            except Exception:
                 pass
         self.kb_port = None
         if not self.kb_hint:
@@ -2296,6 +2327,7 @@ class SettingsWindow(tk.Toplevel):
         # 端口：热切换
         ports_changed = ((vj != app.vj_hint) or (kb != app.kb_hint)
                          or (ck != app.clock_hint))
+        app._clock_changed = ck != app.clock_hint   # 供 _apply_ports 判基线
         app.vj_hint, app.kb_hint, app.clock_hint = vj, kb, ck
         # 持久化
         try:
