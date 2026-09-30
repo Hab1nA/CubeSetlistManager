@@ -378,7 +378,21 @@ class App:
         self.jcfg.update(cfg.get("juno") or {})
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self.axcfg.update(cfg.get("ax09") or {})
+        # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
+        # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
+        self.q = queue.Queue()          # 日志/事件
+        self.calls = queue.Queue()      # 跨线程 GUI 调用
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
+        self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
+        self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
+        # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
+        # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
+        self.pedal = pedal.PedalListener(
+            on_action=lambda a: self.calls.put(
+                lambda: self._pedal_action(a)))
+        self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
+                         self.pedal_device_hint, self.pedal_intercept)
+        self.pedal.try_open()
         self._pedal_retry = 0.0
         # 移动端遥控（webRemote 段；web 实例在 _startup 里起）
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
@@ -403,8 +417,6 @@ class App:
         self._sel_lock = False          # 双列表互斥选中的防重入标记
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 60-69）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
-        self.q = queue.Queue()          # 日志/事件
-        self.calls = queue.Queue()      # 跨线程 GUI 调用
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
@@ -412,13 +424,13 @@ class App:
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
         self.pedal_held = {}            # 延音踏板键按住计数（kbd_auto.PEDAL_NOTES）
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
-        self.pedal = None
-        self.pedal_win = None
+        self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self.start_err = ""
         self._build()
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
+        root.after(50, self._drain_calls)
 
     # ---- 界面 ----
 
@@ -663,7 +675,7 @@ class App:
             return
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
-                       (lambda: self.pedal.close())):
+                       (lambda: self.pedal.shutdown())):
             try:
                 closer()
             except Exception:
@@ -846,17 +858,17 @@ class App:
                 self.kb_port = None
                 self.kb_err = str(e)
                 self.q.put("键盘自动化未启动：%s" % _err(e))
-            # 踩钉
+            # 踩钉（监听器已在构造期创建并启动设备桥，这里补试 MIDI 口）
             try:
-                self.pedal = pedal.PedalListener(
-                    on_action=lambda a: self.calls.put(
-                        lambda: self._pedal_action(a)))
-                self.pedal.apply(self.pedal_hint, self.pedal_binds)
                 if self.pedal.try_open():
                     self.q.put("CC 踩钉监听已启动（%s）" % self.pedal.name)
                 elif self.pedal_hint:
                     self.q.put("未找到踩钉口「%s」，每 10 秒自动重试"
                                % self.pedal_hint)
+                if self.pedal.hid_active:
+                    disp = (pedal.device_display(self.pedal_device_hint)
+                            if self.pedal_device_hint else "未选择设备")
+                    self.q.put("键盘踩钉监听已启动（设备：%s）" % disp)
             except Exception as e:
                 self.q.put("踩钉监听未启动：%s" % _err(e))
             # 移动端遥控 + 翻谱推送（整组独立降级：总开关关=只报停用）
@@ -898,7 +910,8 @@ class App:
                     d = self.durations.get(k) or \
                         _read_duration(song["path"]) or 0.0
                     self.durations[k] = d
-                    self.watch.set_duration(d)
+                    if self.watch is not None:  # watch 缺席降级态同 _switch
+                        self.watch.set_duration(d)
                     self.slots = kbd_auto.load_slots(song["path"])
                     self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
                     self.cur_song_path = song["path"]
@@ -1269,7 +1282,8 @@ class App:
             return False
         self._switch_key = key      # 快照：完成时按 key 归属，防编排变动张冠李戴
         self._play_after_switch = play_after
-        self.watch.reset()
+        if self.watch is not None:  # watch 没起来（VJ 链构造失败）不得炸切歌，
+            self.watch.reset()      #   与 _panic 同款守卫（审计实测可达）
         self.cur = i
         self.slots = {}            # 切歌开始，旧映射立即失效
         self.ax_slots = {}
@@ -1304,7 +1318,8 @@ class App:
         elif not d and not self.durations.get(key):
             self.q.put("《%s》时长未知（工程未设循环定位条）：可用「写入时长」手填"
                        % song["name"])
-        self.watch.set_duration(d)
+        if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
+            self.watch.set_duration(d)
         self.calls.put(self._refresh)
         self.slots = kbd_auto.load_slots(song["path"])
         self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
@@ -1357,7 +1372,8 @@ class App:
         loaded = (self.pl_keys[self.cur] if self.cur is not None
                   and self.cur < len(self.pl_keys) else None)
         if key == loaded:
-            self.watch.set_duration(sec)
+            if self.watch is not None:  # watch 缺席降级态同 _switch
+                self.watch.set_duration(sec)
         self.q.put("《%s》手动时长已写为 %s" % (key.split("/")[-1],
                                                 cpr_meta.fmt_mmss(sec)))
 
@@ -1381,7 +1397,8 @@ class App:
             loaded = (self.pl_keys[self.cur] if self.cur is not None
                       and self.cur < len(self.pl_keys) else None)
             if key == loaded:
-                self.watch.set_duration(d)
+                if self.watch is not None:  # watch 缺席降级态同 _switch
+                    self.watch.set_duration(d)
             self.q.put("已识别《%s》工程内原时长 %s" % (song["name"],
                                                         cpr_meta.fmt_mmss(d)))
         else:
@@ -1436,7 +1453,8 @@ class App:
                          daemon=True).start()
 
     def _pedal_action(self, action):
-        """踩钉 CC 上升沿 → 功能分发（经 calls 队列在主线程执行）。"""
+        """踩钉触发（MIDI CC 上升沿或 HID 按键）→ 功能分发（经 calls 队列
+        在主线程执行）。"""
         if action in ("play", "stop", "rewind"):
             self._transport(action)
         elif action == "next":
@@ -1464,7 +1482,8 @@ class App:
             self._regain_focus()
 
         threading.Thread(target=run, daemon=True).start()
-        self.watch.reset()          # 急停不得被误判成"播完"而自动切歌
+        if self.watch is not None:  # watch 可能没起来（VJ 链构造失败而 ctrl
+            self.watch.reset()      #   独立成功）——裸 reset 会炸 _drain_calls
         if self.ctl is not None:
             self.ctl.stop_media()   # 顺带熄掉 OBS 视频
         self.q.put("全停：走带已停，自动切换已复位，视频已熄灭"
@@ -1537,6 +1556,8 @@ class App:
         self._regain_focus()
 
     def _toggle_auto(self):
+        # 回写属性：watch 建立时按它恢复；踩钉可在 watch 存在前翻转
+        self.auto_advance = self.auto_var.get()
         if self.watch is not None:
             self.watch.set_armed(self.auto_var.get())
             self.q.put("自动切换工程%s" % ("已开启（播完自动切下一首）"
@@ -1633,6 +1654,29 @@ class App:
         self.tbtns["暂停"].config(state=tk.DISABLED if live is False
                                   else tk.NORMAL)
 
+    def _drain_calls(self):
+        """跨线程 GUI 调用队列的快速排空（50ms 独立循环）。踩钉动作从设备
+        桥线程入队到执行最坏只等一个排空周期；原来搭在 400ms 状态轮询车上，
+        演出中踩一脚最坏等 400ms 才起效。单动作异常吞掉进日志——循环死一次
+        =踩钉/自动推进/界面刷新全部永久失联（审计实测复现过）。"""
+        while True:
+            try:
+                fn = self.calls.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception as e:
+                try:
+                    self.log.insert("end", time.strftime("[%H:%M:%S] ")
+                                    + "动作执行异常（已恢复）：%s" % _err(e))
+                    self.log.itemconfigure(self.log.size() - 1,
+                                           foreground=dpi.C_ERR)
+                    self.log.see("end")
+                except Exception:
+                    pass
+        self.root.after(50, self._drain_calls)
+
     def _tick(self):
         try:
             self._tick_body()
@@ -1709,18 +1753,13 @@ class App:
         text, color = self._kb_last
         self.m_last.set(text, color)
         if (self.pedal is not None and not self.pedal.connected
-                and self.pedal.hint and time.time() > self._pedal_retry):
+                and self.pedal.hint and not self.pedal.muted
+                and time.time() > self._pedal_retry):
             self._pedal_retry = time.time() + 10
             if self.pedal.try_open():
                 self.q.put("CC 踩钉已连接（%s）" % self.pedal.name)
         self._update_transport_buttons()
         self._tick_banner()
-        while True:
-            try:
-                fn = self.calls.get_nowait()
-            except queue.Empty:
-                break
-            fn()
         follow = self.log.yview()[1] > 0.99    # 上翻看历史时不强行滚回底部
         while True:
             try:

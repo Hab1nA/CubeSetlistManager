@@ -513,12 +513,145 @@ def test_pedal():
 
     hits = []
     pl = pedal.PedalListener(hits.append)
-    pl.binds = {4: "next"}
-    pl._msg(0x90, 60, 100)              # 音符不触发
+    pl.apply("", {"next": 4}, {})       # 生产契约：{动作: CC}（首版测试直塞
+    pl._msg(0x90, 60, 100)              #   {CC: 动作} 掩盖了 apply 漏反转的 P0）
     pl._msg(0xB0, 60, 127)              # 未绑定的 CC 不触发
     pl._msg(0xB0, 4, 127)               # 绑定 CC 上升沿 → 回调
     pl._msg(0xB0, 4, 127)               # 保持不重复
     assert hits == ["next"]
+
+    # 学习期静音：停触发、让出 MIDI 口、挂起重连；取消后恢复
+    hits2 = []
+    pl2 = pedal.PedalListener(hits2.append)
+    pl2.apply("无此口", {"next": 4}, {"next": 0xB0})
+    assert pl2.bridge.binds == {0xB0: "next"}       # 换绑同步到设备桥（VK→动作）
+    assert not pl2.try_open() and pl2.hid_active    # MIDI 口没有，HID 在听
+    pl2.mute()
+    assert pl2.muted and pl2.bridge.learning
+    assert not pl2.try_open()                       # 静音期重连被挂起
+    pl2.unmute()
+    pl2.apply("无此口", {"next": 4}, {"next": 0xB0})
+    assert not pl2.try_open() and pl2.hid_active    # 恢复后 HID 回来
+    pl2.shutdown()
+    assert not pl2.bridge.running
+
+    # 配置加载：JSON true 是 bool（int 子类），不能混进 CC/VK；hint 挡 null
+    assert pedal.load_binding({"pedal": {"bindings": {"play": True}}}) == ("", {})
+    assert pedal.load_binding({"pedal": {"deviceHint": None}}) == ("", {})
+    assert pedal.load_hid({}) == {}
+    assert pedal.load_hid(
+        {"pedal": {"hidBindings": {"next": 0xB0, "bad": 9}}}) == {"next": 0xB0}
+    assert pedal.load_hid({"pedal": {"hidBindings": {"play": True}}}) == {}
+    assert pedal.load_device_cfg({}) == ("", True)
+    assert pedal.load_device_cfg(
+        {"pedal": {"hidDeviceHint": None, "intercept": False}}) == ("", False)
+    # 手改配置的类型错不炸启动路径：pedal 段非 dict 按空段、intercept 非
+    # bool（如字符串 "false"，bool() 会变 True）回退默认；子键层同样只认 dict
+    assert pedal.load_binding({"pedal": ["x"]}) == ("", {})
+    assert pedal.load_hid({"pedal": ["x"]}) == {}
+    assert pedal.load_device_cfg({"pedal": ["x"]}) == ("", True)
+    assert pedal.load_device_cfg({"pedal": {"intercept": "false"}}) == ("", True)
+    assert pedal.load_device_cfg({"pedal": {"intercept": 0}}) == ("", True)
+    assert pedal.load_device_cfg({"pedal": {"intercept": ""}}) == ("", True)
+    for junk in ("junk", 5, [4], True):
+        assert pedal.load_binding({"pedal": {"bindings": junk}}) == ("", {})
+        assert pedal.load_hid({"pedal": {"hidBindings": junk}}) == {}
+    hs = {}
+    assert pedal.hid_fire(hs, 0xB0, True, 200.0)    # 首按
+    assert not pedal.hid_fire(hs, 0xB0, True, 200.05)   # 按住不重复
+    assert not pedal.hid_fire(hs, 0xB0, False, 200.1)   # 松开不触发
+    assert not pedal.hid_fire(hs, 0xB0, True, 200.12)   # 去抖窗内再按被挡
+    assert not pedal.hid_fire(hs, 0xB0, False, 200.13)  # 松开
+    assert pedal.hid_fire(hs, 0xB0, True, 200.3)    # 释放后重踩可再触发
+    assert pedal.hid_fire(hs, 0xB1, True, 200.31)   # 其他键独立计数
+    assert pedal.hid_name(0xB0) == "下一曲" and pedal.hid_name(0x70) == "F1"
+    assert 0xB0 in pedal.LEARN_VKS                  # 多媒体键可学
+    assert 0x0D in pedal.LEARN_VKS                  # 回车可学（首版漏掉的坑）
+    assert 0x01 not in pedal.LEARN_VKS              # 鼠标键不可学
+    assert 0x11 not in pedal.LEARN_VKS              # 修饰键（Ctrl）不可学
+    assert 0x14 not in pedal.LEARN_VKS              # CapsLock 不可学
+    assert 0xA0 not in pedal.LEARN_VKS              # 修饰键左变体不可学
+
+    # 设备身份解析（本机真实路径形态；BLE 取 MAC，USB 取 VID&PID+接口）
+    p_ble = (r"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}"
+             r"_9df17da3c702&Col02#9&7bdb7a&0&0001"
+             r"#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}")
+    p_usb = (r"\\?\HID#VID_32D7&PID_0001&MI_00&Col02#7&42fb74b&0&0001"
+             r"#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}")
+    assert pedal.device_identity(p_ble) == "9DF17DA3C702"
+    assert pedal.device_identity(p_usb) == "VID_32D7&PID_0001&MI_00"
+
+    # 设备桥：来源判定（只有所选设备触发）+ 学习捕获 + 拦截决策
+    hits3 = []
+    br = pedal.RawInputBridge(hits3.append)
+    br.configure(binds={0x0D: "play"}, device_hint="9DF17DA3C702", block=True)
+    br._feed(0x0D, True, True)                      # 踩钉回车按下 → 触发
+    br._feed(0x0D, True, False)                     # 键盘回车 → 只记证据
+    assert hits3 == ["play"]
+    assert br._evidence[0x0D] == [True, True]       # 两台都发过的证据
+    assert 0x0D in br.pedal_keys
+    assert not br._hook_event(0x0D, True)           # 键盘也发过 → 放行不拦
+
+    br2 = pedal.RawInputBridge(hits3.append)
+    br2.configure(binds={0xB0: "next"}, device_hint="9DF17DA3C702", block=True)
+    assert not br2._hook_event(0xB0, True)   # 空证据：来源不明，放行不触发
+    assert not br2._hook_event(0xB0, True, True)  # 软件注入：永远放行
+    br2._evidence[0xB0] = [True, False]      # 踩钉已证实发过（raw 侧积累）
+    assert br2._hook_event(0xB0, True)       # 证实过的独占键 → 吞+触发
+    assert br2._hook_event(0xB0, True)       # 按住自动重复：吞不触发
+    assert br2._hook_event(0xB0, False)      # up 一并吞
+    assert not br2._hook_event(0xB0, True, True)  # 注入键：证据再足也放行
+    assert hits3 == ["play", "next"]
+    br2.learning = True
+    assert not br2._hook_event(0xB0, True)   # 学习期不拦截
+    br2.learning = False
+    br2.configure(device_hint="OTHER")       # 换设备：证据/已证实键全清
+    assert br2._evidence == {} and not br2.pedal_keys
+    assert not br2._hook_event(0xB0, True)   # 旧设备的键不再拦
+    br2.stop()                               # 未 start 时 stop 安全
+
+    # mid-hold 切拦截：拦截关掉的窗口期漏掉的 up 没人处理，残留按下态
+    # 会把下一踩吃成「按住重复」静默吞掉（实测切一次勾选后下一脚无反应）
+    hits4 = []
+    br4 = pedal.RawInputBridge(hits4.append)
+    br4.configure(binds={0xB0: "next"}, device_hint="X", block=True)
+    br4._evidence[0xB0] = [True, False]
+    assert br4._hook_event(0xB0, True)       # 吞 down+触发
+    br4.configure(block=False)               # 拦截关：up 不会被吞单处理
+    assert not br4._hook_event(0xB0, False)
+    br4.configure(block=True)
+    assert br4._hook_event(0xB0, True)       # 修复前：被当 repeat 吞不触发
+    assert hits4 == ["next", "next"]
+    br4.stop()
+
+    # 学习期边界同根问题：按住中进学习、学习期松脚（up 走 learning 早退
+    # 不消费吞单），学完第一脚不得被残留吞单吃掉
+    hits5 = []
+    pl3 = pedal.PedalListener(hits5.append)
+    pl3.apply("", {}, {"next": 0xB0}, "X", True)
+    pl3.bridge._evidence[0xB0] = [True, False]
+    assert pl3.bridge._hook_event(0xB0, True)    # 按住（吞+触发）
+    pl3.mute()
+    pl3.bridge._hook_event(0xB0, False)          # 学习期松脚（放行、不清态）
+    pl3.unmute()
+    assert pl3.bridge._hook_event(0xB0, True)    # 修复前：残留吞单吃掉这一脚
+    assert hits5 == ["next", "next"]
+    pl3.shutdown()
+
+    cap = []
+    br3 = pedal.RawInputBridge(None)
+    br3.configure(device_hint="9DF17DA3C702")
+    br3.begin_capture(cap.append)
+    assert br3.learning and br3.capture is not None
+    br3._feed(0x0D, True, True)                     # 学习捕获（不触发动作）
+    assert cap == [0x0D]
+    br3.end_capture()
+    assert br3.capture is None
+
+    ln = object.__new__(pedal.Learner)              # 绕过 __init__ 不开真端口
+    ln.cc = None
+    ln._raw_capture(0xB0)
+    assert ln.result() == ("hid", "下一曲", 0xB0)   # 学习捕获 → 三元组
 
 
 def test_hotspot_logic():
@@ -560,12 +693,25 @@ def test_hotspot_script():
         path = f.name
     try:
         import subprocess
-        p = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "[void][scriptblock]::Create((Get-Content -Raw -LiteralPath "
-             "'%s')); 'SYNTAX_OK'" % path],
-            capture_output=True, timeout=90)
-        assert b"SYNTAX_OK" in p.stdout, p.stderr.decode("utf-8", "replace")
+        ok = False
+        detail = ""
+        for attempt in range(2):    # 本机突发窗口下 CreateProcess 偶发
+            try:                    #   WinError 50/6（EDR 交互），重试一次
+                p = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "[void][scriptblock]::Create((Get-Content -Raw "
+                     "-LiteralPath '%s')); 'SYNTAX_OK'" % path],
+                    capture_output=True, timeout=90,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                ok = b"SYNTAX_OK" in p.stdout
+                detail = p.stderr.decode("utf-8", "replace")
+            except OSError as e:
+                detail = str(e)
+            if ok:
+                break
+            time.sleep(0.5)
+        assert ok, detail
     finally:
         os.unlink(path)
     r = hotspot._run("state", timeout=60)
