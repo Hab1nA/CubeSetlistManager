@@ -337,8 +337,8 @@ class MidiIn:
         """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
         → Close。裸 Close 在回调密集时（F8 流 ~20ms 一个）与回调执行存在
         竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续 open/close。
-        在 winmm 专线上限时执行：挂死时调用方（含主线程）3 秒即返，专线
-        迟到完成收尾；幂等（二次 close 无操作）。"""
+        在 winmm 专线上 fire-and-forget：调用方（含主线程）即刻返回，收尾
+        排队迟到完成；幂等（二次 close 无操作）。"""
         h = self._h
         self._h = None
         if h:

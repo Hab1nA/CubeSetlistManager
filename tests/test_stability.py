@@ -562,7 +562,7 @@ def test_winmm_poison_causal_guard(monkeypatch):
 
 
 def test_close_in_enqueued_under_poison(monkeypatch):
-    """毒化期 close_in 的收尾 job 必须入队（force 豁免快速失败）——否则
+    """毒化期 close_in 的收尾 job 必须入队（post_io 无条件入队）——否则
     句柄永久泄漏+幽灵口继续派发回调（复审 M1）。"""
     fake = _FakeWinmm(open_delay=0.6)   # 首次 open 慢→制造毒化窗口
     monkeypatch.setattr(mb, "_winmm", fake)
@@ -578,7 +578,7 @@ def test_close_in_enqueued_under_poison(monkeypatch):
         time.sleep(0.02)
     with mb._io_stuck_lock:
         assert mb._io_stuck             # 毒化窗口内
-    mb.close_in(42)                     # 毒化期 close：force 必须仍入队
+    mb.close_in(42)                     # 毒化期 close：post_io 仍入队
     t.join(3.0)
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and fake.log.count("close") < 2:
