@@ -4,6 +4,7 @@
 test_clock_port 的既有风格（防回归复学回旧写法）。"""
 import pathlib
 import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -85,3 +86,75 @@ def test_regain_focus_prefetched_hwnd():
     body = _slice(src, "def _regain_focus", "def _transport_thread")
     assert "self.root.winfo_id()" not in body      # 旧跨线程 Tk 调用不回归
     assert "self._main_hwnd" in body
+
+
+# ---- 修复6：主线程停摆黑匣子（stallguard） ----
+
+def test_watchdog_logs_stall_and_recovery(tmp_path):
+    import stallguard
+    hb = {"t": time.monotonic()}
+    msgs = []
+    log = tmp_path / "stall.log"
+    wd = stallguard.StallWatchdog(
+        heartbeat=lambda: hb["t"],
+        snapshot=lambda: {"tag": "_tick_body", "calls": 3},
+        path=log, notify=msgs.append, threshold=0.2, period=0.05)
+    wd.start()
+    time.sleep(0.5)                     # 心跳冻结=停摆窗口
+    hb["t"] = time.monotonic()          # 恢复
+    time.sleep(0.4)
+    wd.stop()
+    text = log.read_text(encoding="utf-8")
+    assert "停摆" in text and "_tick_body" in text and "恢复" in text
+    assert any("主线程曾停摆" in m for m in msgs)
+
+
+def test_watchdog_silent_when_healthy(tmp_path):
+    import stallguard
+    hb = {"t": time.monotonic()}
+    log = tmp_path / "stall.log"
+    wd = stallguard.StallWatchdog(
+        heartbeat=lambda: hb["t"],
+        snapshot=lambda: {}, path=log, threshold=0.2, period=0.05)
+    wd.start()
+    for _ in range(8):                  # 健康心跳：每 50ms 喂一次
+        time.sleep(0.05)
+        hb["t"] = time.monotonic()
+    wd.stop()
+    assert not log.exists() or log.read_text(encoding="utf-8").strip() == ""
+
+
+def test_bounded_call_queue_drops_oldest():
+    import stallguard
+    q = stallguard.BoundedCallQueue(3)
+    for i in range(4):
+        q.put(i)
+    assert q.dropped == 1
+    assert [q.get_nowait() for _ in range(3)] == [1, 2, 3]
+
+
+def test_coalesce_keeps_last_occurrence():
+    import stallguard
+
+    a = lambda: 0  # noqa: E731
+    b = lambda: 1  # noqa: E731
+    c = lambda: 2  # noqa: E731
+    assert stallguard.coalesce([a, b, a, c]) == [b, a, c]
+    assert stallguard.coalesce([a]) == [a]
+    x, y = (lambda: 1), (lambda: 1)     # 不同 lambda 对象永不相等，不合流
+    assert stallguard.coalesce([x, y]) == [x, y]
+
+    class A:
+        def m(self):
+            pass
+
+    o = A()
+    assert stallguard.coalesce([o.m, o.m]) == [o.m]   # 同绑定方法合流保尾
+
+
+def test_watchdog_wired_both_guis():
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        assert "StallWatchdog(" in src, name
+        assert 'self._hb = time.monotonic()' in src, name
+        assert '_hb_tag = getattr(fn, "__name__", "<lambda>")' in src, name

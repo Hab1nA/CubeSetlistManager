@@ -29,6 +29,7 @@ import dpi
 import hotspot
 import kbd_auto
 import midi_bridge as mb
+import stallguard
 import web_remote
 from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     list_screens
@@ -310,6 +311,18 @@ class App:
         self.start_err = ""
         self._build()
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
+        # 主线程停摆黑匣子（完整版同款）：停摆现场落盘 stall.log
+        self._hb = time.monotonic()     # 主线程最近心跳（monotonic）
+        self._hb_tag = ""               # 正在执行的主线程回调名（取证）
+        self._stall_wd = stallguard.StallWatchdog(
+            heartbeat=lambda: self._hb,
+            snapshot=lambda: {"calls": self.calls.qsize(),
+                              "q": self.q.qsize(),
+                              "dropped": getattr(self.calls, "dropped", 0),
+                              "tag": self._hb_tag},
+            path=_HERE / "stall.log",
+            notify=self.q.put)
+        self._stall_wd.start()
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
         root.after(50, self._drain_calls)
@@ -850,11 +863,13 @@ class App:
         原来搭在 400ms 状态轮询车上且逐条无兜底——一条回调炸掉本批剩余
         积压推迟 400ms；BaseException（MidiIn 端口降级抛 SystemExit）更是
         连 400ms 轮询链一起杀死=状态+指令全部永久失联。"""
+        self._hb = time.monotonic()     # 喂看门狗心跳
         while True:
             try:
                 fn = self.calls.get_nowait()
             except queue.Empty:
                 break
+            self._hb_tag = getattr(fn, "__name__", "<lambda>")
             try:
                 fn()
             except BaseException as e:
@@ -867,9 +882,12 @@ class App:
                     self.log.see("end")
                 except Exception:
                     pass
+            self._hb_tag = ""
         self.root.after(50, self._drain_calls)
 
     def _tick(self):
+        self._hb = time.monotonic()     # 喂看门狗心跳
+        self._hb_tag = "_tick_body"
         try:
             self._tick_body()
         except Exception as e:
@@ -881,6 +899,7 @@ class App:
                 self.log.see("end")
             except Exception:
                 pass
+        self._hb_tag = ""
         self.root.after(400, self._tick)
 
     def _tick_body(self):
