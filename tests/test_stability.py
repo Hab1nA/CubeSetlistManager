@@ -17,6 +17,13 @@ def _src(name):
     return (ROOT / name).read_text(encoding="utf-8")
 
 
+def _wait_log(fake, entry, timeout=2.0):
+    """等异步 winmm 收尾在专线上落地（close 类 fire-and-forget，F1）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and entry not in fake.log:
+        time.sleep(0.02)
+
+
 def _slice(src, start, end):
     """按标记切片：start 标记到其后第一个 end 标记之间的源码。"""
     i = src.index(start)
@@ -235,6 +242,7 @@ def test_open_in_success_and_double_close(monkeypatch):
     assert fake.log[:2] == ["numdevs", "open"] or "open" in fake.log
     mb.close_in(h)
     mb.close_in(h)                      # 幂等：二次 close 无操作
+    _wait_log(fake, "close")
     assert fake.log.count("close") == 1
     assert fake.log[-3:] == ["stop", "reset", "close"]
 
@@ -297,6 +305,7 @@ def test_midiin_open_and_idempotent_close(monkeypatch):
     assert port.name == "FakePort"
     port.close()
     port.close()
+    _wait_log(fake, "close")
     assert fake.log.count("close") == 1
     assert port._h is None
 
@@ -587,7 +596,7 @@ def test_out_devices_via_io_thread():
     assert "_winmm.midiOutOpen(ctypes.byref(h)" not in ksrc
     src = _src("midi_bridge.py")
     assert "def open_out" in src and "def close_out" in src
-    assert "run_io(job, force=True)" in src      # close 类 force 入队
+    assert "post_io(job)" in src                 # close 类 fire-and-forget（F1）
 
 
 def test_enum_devices_bounded():
@@ -708,6 +717,30 @@ def test_open_out_dead_flag_recycle(monkeypatch):
     while time.monotonic() < deadline and "outclose" not in fake.log:
         time.sleep(0.05)
     assert "outclose" in fake.log
+
+
+def test_close_returns_immediately(monkeypatch):
+    """close 类 fire-and-forget 契约（终审 F1）：专线被慢 job 占住时调用方
+    （含主线程）即刻返回，绝不等满 IO_TIMEOUT——毒化期设置页三连 close
+    曾白冻 ~9s。"""
+    fake = _FakeWinmm(open_delay=0.5)   # 占住专线的慢 job
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 3.0)
+    blocker = threading.Thread(target=lambda: mb.open_in(0, None), daemon=True)
+    blocker.start()
+    time.sleep(0.1)                     # 慢 job 在途
+    t0 = time.monotonic()
+    # 唯一哨兵句柄：_close_guard 按 is 判重且跨用例常驻，CPython 小整数
+    # 缓存会让 int 42 与前序用例遗留的 42 恒同（真实代码恒传 HANDLE 对象，
+    # 不受影响）
+    h_in, h_out = object(), object()
+    mb.close_in(h_in)
+    mb.close_out(h_out)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.5                # 即刻返回（非 2×3s 等待）
+    blocker.join(5.0)
+    _wait_log(fake, "close")            # 收尾仍会迟到执行
+    assert fake.log.count("close") >= 1
 
 
 def test_switch_done_third_writer_locked():

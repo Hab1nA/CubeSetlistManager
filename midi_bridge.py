@@ -101,7 +101,7 @@ _io_thread = threading.Thread(target=_io_worker, daemon=True,
 _io_thread.start()
 
 
-def run_io(fn, timeout=None, force=False):
+def run_io(fn, timeout=None):
     """fn 在 winmm 专线上串行执行，调用方至多等 timeout 秒（None=模块默认
     IO_TIMEOUT，调用时求值便于测试桩改写）。返回 (done, value)：
     done=False=超时（fn 仍会迟到执行，返回值弃置——需要「迟到自知」的
@@ -112,8 +112,7 @@ def run_io(fn, timeout=None, force=False):
     入队时领票 _io_ticket，job 了结时回填 _io_done_ticket；超时置位仅当
     「自己的票还没被回填」，job 恰在唤醒延迟窗口内迟到完成则后到置位被
     拒（H1），前面排队的 job 先完成也不误伤本 job 的置位资格（R3-3）。
-    force=True 豁免快速失败（close 类必须入队的收尾 job——不入队=句柄
-    永久泄漏，复审 M1）。"""
+    close 类不需要等待语义，走 post_io（fire-and-forget，终审 F1）。"""
     global _io_stuck, _io_ticket, _io_done_ticket
     if timeout is None:
         timeout = IO_TIMEOUT
@@ -123,7 +122,7 @@ def run_io(fn, timeout=None, force=False):
         stuck = _io_stuck
         _io_ticket += 1
         my = _io_ticket
-    if stuck and not force:
+    if stuck:
         return False, None
     done = threading.Event()
     box = {}
@@ -189,11 +188,18 @@ _close_guard_lock = threading.Lock()   # 本身（c_void_p 不可哈希），顺
 # 引用防 id 复用误判——句柄数值会被系统回收复用，绝不能按数值判重
 
 
+def post_io(fn):
+    """fire-and-forget 入队（close 类收尾专用）：不等待、不超时、不置毒化。
+    收尾 job 排在专线上串行迟到照常执行；挂死占线时排在挂死 job 后，挂死
+    释放后顺序收尾（终审 F1：原 run_io 等待语义让主线程每个 close 白冻
+    3s——文档承诺即刻返回、返回值又无人消费，纯白等；毒化期 force 入队
+    依旧保证句柄必收尾，复审 M1 语义不变）。"""
+    _io_q.put(fn)
+
+
 def close_in(h):
-    """在专线按官方收尾序 Stop→Reset→Close 关输入口（限时）。超时弃置：
-    闭包持句柄，专线迟到后照常收尾；调用方（含主线程）即刻返回。
-    force=True 豁免毒化快速失败：收尾 job 必须入队（毒化期被跳过=句柄
-    永久泄漏+已 Start 的幽灵口继续派发回调，复审 M1）。
+    """在专线按官方收尾序 Stop→Reset→Close 关输入口。fire-and-forget：
+    调用方（含主线程）即刻返回，收尾在专线串行完成（终审 F1）。
     幂等守卫：对象层 close() 虽有 _h 置空，但两线程并发 close 可同时读
     到同一句柄；句柄值被系统回收复用后二次 close 会误关无关新口。
     迟到收尾的句柄值复用问题被单线程串行结构性排除：所有 winmm open/
@@ -209,7 +215,7 @@ def close_in(h):
         _winmm.midiInReset(h)
         _winmm.midiInClose(h)
 
-    run_io(job, force=True)
+    post_io(job)
 
 
 def open_out(idx, timeout=None):
@@ -243,12 +249,11 @@ def open_out(idx, timeout=None):
 
 
 def close_out(h):
-    """在专线 midiOutClose（限时）；超时弃置由闭包迟到完成（同 close_in
-    的串行结构性安全论证）。"""
+    """在专线 midiOutClose。fire-and-forget（同 close_in，终审 F1）。"""
     def job():
         _winmm.midiOutClose(h)
 
-    run_io(job, force=True)
+    post_io(job)
 
 
 def _in_devices():
