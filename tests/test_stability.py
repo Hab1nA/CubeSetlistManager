@@ -158,3 +158,144 @@ def test_watchdog_wired_both_guis():
         assert "StallWatchdog(" in src, name
         assert 'self._hb = time.monotonic()' in src, name
         assert '_hb_tag = getattr(fn, "__name__", "<lambda>")' in src, name
+
+
+# ---- 修复7：winmm 专线（open/close 收敛专职线程，主线程限时等待） ----
+
+import midi_bridge as mb  # noqa: E402
+import kbd_auto  # noqa: E402
+
+
+class _FakeWinmm:
+    """可编排 winmm 桩：记录调用序列，midiInOpen 可脚本化延迟/失败。"""
+
+    def __init__(self, ndevs=1, name=b"FakePort", open_delay=0.0,
+                 open_ret=0):
+        self.log = []
+        self.ndevs = ndevs
+        self.name = name
+        self.open_delay = open_delay
+        self.open_ret = open_ret
+        self._lock = __import__("threading").Lock()
+
+    def midiInGetNumDevs(self):
+        self.log.append("numdevs")
+        return self.ndevs
+
+    def midiInGetDevCapsA(self, _i, caps, _n):
+        # 裸桩无 argtypes：byref 传入的是 CArgObject，_obj 才是结构体
+        getattr(caps, "_obj", caps).szPname = self.name.ljust(32, b"\0")
+        return 0
+
+    def midiInOpen(self, ph, _idx, _proc, _inst, _flags):
+        if self.open_delay:
+            time.sleep(self.open_delay)
+        with self._lock:
+            self.log.append("open")
+        if not self.open_ret:
+            getattr(ph, "_obj", ph).value = 42
+        return self.open_ret
+
+    def midiInStart(self, _h):
+        self.log.append("start")
+
+    def midiInStop(self, _h):
+        self.log.append("stop")
+
+    def midiInReset(self, _h):
+        self.log.append("reset")
+
+    def midiInClose(self, _h):
+        self.log.append("close")
+
+
+def test_open_in_success_and_double_close(monkeypatch):
+    fake = _FakeWinmm()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    h, err = mb.open_in(0, None)
+    assert err is None and h.value == 42
+    assert fake.log[:2] == ["numdevs", "open"] or "open" in fake.log
+    mb.close_in(h)
+    mb.close_in(h)                      # 幂等：二次 close 无操作
+    assert fake.log.count("close") == 1
+    assert fake.log[-3:] == ["stop", "reset", "close"]
+
+
+def test_open_in_timeout_aborts_late(monkeypatch):
+    """超时弃单：调用方 (None, err) 即返；迟到的 open 完成后自查弃单标志
+    即开即回收，句柄绝不泄漏。"""
+    fake = _FakeWinmm(open_delay=0.4)
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    t0 = time.monotonic()
+    h, err = mb.open_in(0, None)
+    elapsed = time.monotonic() - t0
+    assert h is None and "超时" in err
+    assert elapsed < 2.0                # 主线程限时返回
+    deadline = time.monotonic() + 2.0   # 弃单迟到回收
+    while time.monotonic() < deadline and "close" not in fake.log:
+        time.sleep(0.05)
+    assert "close" in fake.log
+
+
+def test_open_in_hard_hang_bounded(monkeypatch):
+    """midiInOpen 无限挂死（Win11 进程级锁场景）：调用方仍限时返回。"""
+    fake = _FakeWinmm(open_delay=1.2)   # 远超 timeout+宽限，模拟挂死
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    t0 = time.monotonic()
+    h, err = mb.open_in(0, None)
+    assert h is None and "超时" in err
+    assert time.monotonic() - t0 < 2.0
+    time.sleep(1.0)                     # 迟到 job 收尾（排空专线）
+
+
+def test_midiin_missing_port_exits(monkeypatch):
+    """缺端口=SystemExit（调用方按既有降级语义捕获），口径不变。"""
+    fake = _FakeWinmm(ndevs=0)
+    monkeypatch.setattr(mb, "_winmm", fake)
+    try:
+        mb.MidiIn("NoSuchPort", lambda n, v: None)
+        assert False, "must SystemExit"
+    except SystemExit as e:
+        assert "没找到" in str(e)
+
+
+def test_midiin_open_and_idempotent_close(monkeypatch):
+    fake = _FakeWinmm()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    port = mb.MidiIn("FakePort", lambda n, v: None)
+    assert port.name == "FakePort"
+    port.close()
+    port.close()
+    assert fake.log.count("close") == 1
+    assert port._h is None
+
+
+def test_rawmidiin_timeout_raises_portnotfound(monkeypatch):
+    """kbd_auto.RawMidiIn 走同一专线：超时=PortNotFound（调用方既有
+    降级分支直接消化），迟到弃单同样回收。"""
+    fake = _FakeWinmm(open_delay=0.4)
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    try:
+        kbd_auto.RawMidiIn("FakePort", lambda s, a, b: None)
+        assert False, "must PortNotFound"
+    except kbd_auto.PortNotFound as e:
+        assert "超时" in str(e)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "close" not in fake.log:
+        time.sleep(0.05)
+    assert "close" in fake.log
+
+
+def test_winmm_io_thread_wiring():
+    """双 GUI 枚举降频 + kbd_auto 走专线（源码锚）。"""
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        assert "_enum_n" in src, name               # 枚举降频 ~2s
+        assert 'mb._pick(mb._in_devices(), self.vj_hint)' in src, name
+    ksrc = _src("kbd_auto.py")
+    assert "mb.open_in(idx, self._cb)" in ksrc
+    assert "mb.close_in(h)" in ksrc
+    assert "midiInOpen(ctypes.byref(self._h)" not in ksrc  # 旧直连不回归

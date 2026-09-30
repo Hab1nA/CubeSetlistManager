@@ -263,7 +263,9 @@ class PortNotFound(Exception):
 
 
 class RawMidiIn:
-    """按名字子串打开 MIDI 输入口；on_msg(status, d1, d2) 只收短消息。"""
+    """按名字子串打开 MIDI 输入口；on_msg(status, d1, d2) 只收短消息。
+    open/close 走 midi_bridge 的 winmm 专线（限时+弃单回收）——主线程
+    （热切换/录制/学习期）不再被进程级 close 锁挂死。"""
 
     def __init__(self, hint, on_msg):
         devs = mb._in_devices()
@@ -274,21 +276,20 @@ class RawMidiIn:
         idx, self.name = hits[0]
         self._on_msg = on_msg
         self._cb = mb._Proc(self._dispatch)   # 持引用防 GC
-        self._h = wintypes.HANDLE()
-        r = mb._winmm.midiInOpen(ctypes.byref(self._h), idx, self._cb, 0,
-                                 mb._CALLBACK_FUNC)
-        if r:
-            raise PortNotFound("midiInOpen 失败（code %d，端口被占用？）" % r)
-        mb._winmm.midiInStart(self._h)
+        h, err = mb.open_in(idx, self._cb)
+        if h is None:
+            raise PortNotFound(err)
+        self._h = h
 
     def _dispatch(self, h, msg, inst, p1, p2):
         if msg == mb._MIM_DATA:
             self._on_msg(p1 & 0xFF, (p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
 
     def close(self):
-        mb._winmm.midiInStop(self._h)    # 官方收尾序，见 midi_bridge.MidiIn.close
-        mb._winmm.midiInReset(self._h)
-        mb._winmm.midiInClose(self._h)
+        h = self._h
+        self._h = None
+        if h:
+            mb.close_in(h)   # 官方收尾序，见 midi_bridge.close_in
 
 
 class _MIDIHDR(ctypes.Structure):

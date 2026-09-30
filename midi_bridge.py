@@ -68,6 +68,115 @@ def _pick(pairs, hint=PORT_HINT):
     return hits[0] if hits else None
 
 
+# ---- winmm 专线：open/close 统一走专职线程 ----
+# winmm 的 close 在 Win11 走进程级锁（见 MidiIn.close 注释），回调密集时
+# 最坏无限挂死，open 同锁。这些调用此前大量落在 GUI 主线程（端口热切换/
+# 退出/每 10s 踩钉重连/录制开关），一次挂死=主线程停摆=黑面+指令积压。
+# 专职线程串行执行所有 winmm open/close，调用方限时等待：超时即放弃等待，
+# 迟到结果由内部弃单回收（不漏句柄），主线程从此不被 winmm 挂死。
+IO_TIMEOUT = 3.0
+_io_q = queue.Queue()
+
+
+def _io_worker():
+    while True:
+        job = _io_q.get()
+        try:
+            job()
+        except BaseException:
+            pass                # 专线绝不死；成功/失败语义由 job 自行记账
+
+
+_io_thread = threading.Thread(target=_io_worker, daemon=True,
+                              name="winmm-io")
+_io_thread.start()
+
+
+def run_io(fn, timeout=None):
+    """fn 在 winmm 专线上串行执行，调用方至多等 timeout 秒（None=模块默认
+    IO_TIMEOUT，调用时求值便于测试桩改写）。返回 (done, value)：
+    done=False=超时（fn 仍会迟到执行，返回值弃置——需要「迟到自知」的
+    操作在 fn 里读共享 state，见 open_in）。等到了异常则原样抛出。
+    专线线程内重入直接执行（否则自己等自己=必然超时假象）。"""
+    if timeout is None:
+        timeout = IO_TIMEOUT
+    if threading.current_thread() is _io_thread:
+        return True, fn()
+    done = threading.Event()
+    box = {}
+
+    def job():
+        try:
+            box["r"] = fn()
+        except BaseException as e:
+            box["e"] = e
+        finally:
+            done.set()
+
+    _io_q.put(job)
+    if not done.wait(timeout):
+        return False, None
+    if "e" in box:
+        raise box["e"]
+    return True, box.get("r")
+
+
+def open_in(idx, proc, timeout=None):
+    """在专线 midiInOpen+Start（限时等待）。返回 (HANDLE, None) 或
+    (None, 错误文案)。超时弃单：job 迟到执行后自查弃单标志，即开即回收，
+    绝不泄漏已打开的句柄。"""
+    if timeout is None:
+        timeout = IO_TIMEOUT
+    h = wintypes.HANDLE()
+    state = {"dead": False}
+    result = {}
+
+    def job():
+        r = _winmm.midiInOpen(ctypes.byref(h), idx, proc, 0, _CALLBACK_FUNC)
+        if r:
+            result["err"] = "midiInOpen 失败（code %d，端口被占用？）" % r
+            return
+        _winmm.midiInStart(h)
+        if state["dead"]:       # 等待方已放弃：即开即回收
+            _winmm.midiInStop(h)
+            _winmm.midiInReset(h)
+            _winmm.midiInClose(h)
+            result["err"] = "打开超时（%.0f 秒，弃单已回收）" % timeout
+            return
+        result["ok"] = True
+
+    done, _ = run_io(job, timeout)
+    if not done:
+        state["dead"] = True
+        run_io(lambda: None, 0.5)   # 宽限弃单回收（job 迟到完成时置 err）
+    if result.get("ok"):
+        return h, None
+    return None, result.get("err") or "打开超时（%.0f 秒）" % timeout
+
+
+_close_guard = []           # 已收尾的句柄对象：close_in 幂等守卫。存对象
+_close_guard_lock = threading.Lock()   # 本身（c_void_p 不可哈希），顺带持
+# 引用防 id 复用误判——句柄数值会被系统回收复用，绝不能按数值判重
+
+
+def close_in(h):
+    """在专线按官方收尾序 Stop→Reset→Close 关输入口（限时）。超时弃置：
+    闭包持句柄，专线迟到后照常收尾；调用方（含主线程）即刻返回。
+    幂等守卫：对象层 close() 虽有 _h 置空，但两线程并发 close 可同时读
+    到同一句柄；句柄值被系统回收复用后二次 close 会误关无关新口。"""
+    with _close_guard_lock:
+        if any(g is h for g in _close_guard):
+            return
+        _close_guard.append(h)
+
+    def job():
+        _winmm.midiInStop(h)
+        _winmm.midiInReset(h)
+        _winmm.midiInClose(h)
+
+    run_io(job)
+
+
 def _in_devices():
     # 用 A 版查询：W 版对 teVirtualMIDI/Rubix 等驱动返回 INVALPARAM，名字拿不到
     out = []
@@ -102,12 +211,10 @@ class MidiIn:
         self._on_note = on_note
         self._on_clock = on_clock
         self._cb = _Proc(self._dispatch)   # 必须持有引用，防止回调被 GC
-        self._h = wintypes.HANDLE()
-        r = _winmm.midiInOpen(ctypes.byref(self._h), idx, self._cb, 0,
-                              _CALLBACK_FUNC)
-        if r:
-            sys.exit("midiInOpen 失败（code %d，端口被占用？）" % r)
-        _winmm.midiInStart(self._h)
+        h, err = open_in(idx, self._cb)    # 专线上限时打开（主线程不陪葬）
+        if h is None:
+            sys.exit(err)
+        self._h = h
 
     def _dispatch(self, h, msg, inst, p1, p2):
         if msg != _MIM_DATA:
@@ -122,10 +229,13 @@ class MidiIn:
     def close(self):
         """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
         → Close。裸 Close 在回调密集时（F8 流 ~20ms 一个）与回调执行存在
-        竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续 open/close。"""
-        _winmm.midiInStop(self._h)
-        _winmm.midiInReset(self._h)
-        _winmm.midiInClose(self._h)
+        竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续 open/close。
+        在 winmm 专线上限时执行：挂死时调用方（含主线程）3 秒即返，专线
+        迟到完成收尾；幂等（二次 close 无操作）。"""
+        h = self._h
+        self._h = None
+        if h:
+            close_in(h)
 
 
 class TransportSync:

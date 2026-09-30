@@ -1796,7 +1796,13 @@ class App:
             self._pending_switch = None
             self._switch(i, "排队")     # busy 期间用户点的歌，完成后接续执行
         if self.vj_hint:
-            hit = mb._pick(mb._in_devices(), self.vj_hint)
+            # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：查询本身毫秒级，
+            # 但落在主线程且与 midiInOpen/Close 共进程级锁——挂死=主线程陪葬
+            if getattr(self, "_enum_n", 0) <= 0:
+                self._vj_hit = mb._pick(mb._in_devices(), self.vj_hint)
+                self._enum_n = 5
+            self._enum_n -= 1
+            hit = self._vj_hit
             self._set(("vj", "端口名称"), hit[1] if hit else "未找到",
                       dpi.C_OK if hit else dpi.C_ERR)
             self._set(("vj", "端口状态"),
