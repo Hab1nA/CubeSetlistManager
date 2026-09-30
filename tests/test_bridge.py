@@ -746,6 +746,7 @@ class _FakeWebApp:
     def __init__(self):
         self.calls = queue.Queue()
         self.q = queue.Queue()
+        self.calls_urgent = queue.Queue()   # App.urgent 替身通道
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
         self.switch_confirm = True
         self.cur = None
@@ -775,6 +776,10 @@ class _FakeWebApp:
 
     def _persist_web_remote(self):
         pass                        # 测试里绝不写真 config.json
+
+    def urgent(self, fn):
+        """App.urgent 替身：紧急调用（全停）走独立通道。"""
+        self.calls_urgent.put(fn)
 
 
 class _FakeDevice(BaseHTTPRequestHandler):
@@ -897,7 +902,7 @@ def test_web_api():
         app._web_snap = dict(app._web_snap, busy=True)
         assert _http_post(port, "/cmd", {"action": "play"})[0] == 409
         assert _http_post(port, "/cmd", {"action": "panic"})[0] == 200
-        app.calls.get_nowait()()
+        app.calls_urgent.get_nowait()()     # 全停走紧急通道（App.urgent）
         assert app.done[-1] == "panic"
         app._web_snap = dict(app._web_snap, busy=False)
         # 设备认领：自动槽位 + IP 来自连接 + 幂等

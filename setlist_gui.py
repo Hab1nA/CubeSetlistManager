@@ -19,6 +19,7 @@ import os
 import pathlib
 import socket
 import queue
+import collections
 import re
 import sys
 import threading
@@ -383,7 +384,8 @@ class App:
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件
-        self.calls = queue.Queue()      # 跨线程 GUI 调用
+        self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
+        self.calls_urgent = collections.deque()  # 紧急调用（全停插队）
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
@@ -391,7 +393,8 @@ class App:
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
             on_action=lambda a: self.calls.put(
-                lambda: self._pedal_action(a)))
+                lambda: self._pedal_action(a)),
+            on_event=lambda m: self.q.put("踩钉桥：%s" % m))
         self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
                          self.pedal_device_hint, self.pedal_intercept)
         self.pedal.try_open()
@@ -1742,34 +1745,47 @@ class App:
         self.tbtns["暂停"].config(state=tk.DISABLED if live is False
                                   else tk.NORMAL)
 
+    def _run_call(self, fn):
+        """执行单个跨线程回调：tag 供看门狗取证；按 BaseException 捕——
+        MidiIn 端口降级抛 SystemExit，不在 Exception 之列，漏过去连 after
+        重挂都不执行=排水循环永久死亡（审计实测复现过）。"""
+        self._hb_tag = getattr(fn, "__name__", "<lambda>")
+        try:
+            fn()
+        except BaseException as e:
+            try:
+                self.log.insert("end", time.strftime("[%H:%M:%S] ")
+                                + "动作执行异常（已恢复）：%s: %s"
+                                % (type(e).__name__, _err(e)))
+                self.log.itemconfigure(self.log.size() - 1,
+                                       foreground=dpi.C_ERR)
+                self.log.see("end")
+            except Exception:
+                pass
+        self._hb_tag = ""
+
     def _drain_calls(self):
         """跨线程 GUI 调用队列的快速排空（50ms 独立循环）。踩钉动作从设备
         桥线程入队到执行最坏只等一个排空周期；原来搭在 400ms 状态轮询车上，
-        演出中踩一脚最坏等 400ms 才起效。单动作异常吞掉进日志——循环死一次
-        =踩钉/自动推进/界面刷新全部永久失联（审计实测复现过）；按
-        BaseException 捕：MidiIn 端口降级抛 SystemExit，不在 Exception
-        之列，漏过去连 after 重挂都不执行=排水循环永久死亡。"""
+        演出中踩一脚最坏等 400ms 才起效。紧急队列（全停）优先——停摆积压
+        恢复后全停必须先于陈旧普通指令；普通批次先合流（幂等回调恢复后
+        成批重复，只执行最后一次）。"""
         self._hb = time.monotonic()     # 喂看门狗心跳
+        while self.calls_urgent:
+            self._run_call(self.calls_urgent.popleft())
+        batch = []
         while True:
             try:
-                fn = self.calls.get_nowait()
+                batch.append(self.calls.get_nowait())
             except queue.Empty:
                 break
-            self._hb_tag = getattr(fn, "__name__", "<lambda>")
-            try:
-                fn()
-            except BaseException as e:
-                try:
-                    self.log.insert("end", time.strftime("[%H:%M:%S] ")
-                                    + "动作执行异常（已恢复）：%s: %s"
-                                    % (type(e).__name__, _err(e)))
-                    self.log.itemconfigure(self.log.size() - 1,
-                                           foreground=dpi.C_ERR)
-                    self.log.see("end")
-                except Exception:
-                    pass
-            self._hb_tag = ""
+        for fn in stallguard.coalesce(batch):
+            self._run_call(fn)
         self.root.after(50, self._drain_calls)
+
+    def urgent(self, fn):
+        """紧急 GUI 调用（全停安全阀）：插队到普通指令前执行。"""
+        self.calls_urgent.append(fn)
 
     def _tick(self):
         self._hb = time.monotonic()     # 喂看门狗心跳

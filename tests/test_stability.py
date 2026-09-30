@@ -55,7 +55,7 @@ def test_automator_independent_drain():
     BaseException 连 400ms 轮询链一起杀死=永久假死）。"""
     src = _src("automator_gui.py")
     assert "root.after(50, self._drain_calls)" in src
-    body = _slice(src, "def _drain_calls", "def _tick_body")
+    body = _slice(src, "def _run_call", "def _tick_body")
     assert "except BaseException" in body
     tick = _slice(src, "def _tick_body", "def _transport_state")
     assert "self.calls.get_nowait()" not in tick   # tick 不再排水
@@ -64,7 +64,7 @@ def test_automator_independent_drain():
 def test_setlist_drain_catches_baseexception():
     """MidiIn 端口降级抛 SystemExit（不在 Exception 之列）——漏过去
     after 重挂不执行=排水循环永久死亡。"""
-    body = _slice(_src("setlist_gui.py"), "def _drain_calls", "def _tick(")
+    body = _slice(_src("setlist_gui.py"), "def _run_call", "def _tick(")
     assert "except BaseException" in body
 
 
@@ -299,3 +299,58 @@ def test_winmm_io_thread_wiring():
     assert "mb.open_in(idx, self._cb)" in ksrc
     assert "mb.close_in(h)" in ksrc
     assert "midiInOpen(ctypes.byref(self._h)" not in ksrc  # 旧直连不回归
+
+
+# ---- 修复8：calls 队列治理接线（有界/合流/紧急通道） ----
+
+def test_queue_governance_wiring():
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        assert "stallguard.BoundedCallQueue(200)" in src, name
+        assert "self.calls_urgent = collections.deque()" in src, name
+        assert "def urgent(self, fn)" in src, name
+        assert "stallguard.coalesce(batch)" in src, name
+    src = _src("web_remote.py")
+    assert "app.urgent(app._panic)" in src           # 全停走紧急通道
+    assert "app.calls.put(app._panic)" not in src    # 旧同队写法不回归
+
+
+# ---- 修复9：LL 钩子运行期自愈（pedal） ----
+
+def test_hook_selfheal_probe_and_rehook(monkeypatch):
+    """raw 见键而钩子探针滞后=钩子被系统静默摘除（LowLevelHooksTimeout）：
+    换独立常驻线程重装+拆旧钩，限频 15 秒，_live=False 不自愈。"""
+    import pedal
+    calls = []
+    br = pedal.RawInputBridge(on_action=lambda a: None,
+                              on_event=calls.append)
+    br._live = True
+    br._hook = "old-hook"
+    br._href = "trampoline-stub"    # 真桥由 _run 生成，测试桩不需要真回调
+    monkeypatch.setattr(pedal.u32, "SetWindowsHookExW",
+                        lambda *a: (calls.append("install"), 77)[1])
+    monkeypatch.setattr(pedal.u32, "UnhookWindowsHookEx",
+                        lambda h: calls.append("unhook"))
+    monkeypatch.setattr(pedal.k32, "GetCurrentThreadId", lambda: 99)
+    monkeypatch.setattr(pedal.u32, "GetMessageW", lambda *a: 0)  # 泵即退
+    br._probe(time.monotonic())          # 探针 None=钩子从未见键 → 自愈
+    br._probe(time.monotonic())          # 在途/限频：不二次触发
+    br._rehook(time.monotonic())         # 显式调用同样受限频
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "install" not in calls:
+        time.sleep(0.02)
+    assert "install" in calls
+    assert calls.count("install") == 1   # 15s 限频内只装一次
+    assert "unhook" in calls             # 旧钩子被拆
+    assert any(isinstance(c, str) and "已自动重装" in c for c in calls)
+    br._live = False
+    br._probe(time.monotonic())          # 非 live 不自愈
+    assert calls.count("install") == 1
+
+
+def test_hook_selfheal_wiring():
+    src = _src("pedal.py")
+    assert "_hook_seen" in src and "_probe(" in src and "_rehook(" in src
+    assert "self._rehook_tid" in src     # stop 时收尾自愈线程
+    src = _src("setlist_gui.py")
+    assert 'on_event=lambda m: self.q.put("踩钉桥：%s" % m)' in src

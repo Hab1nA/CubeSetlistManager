@@ -1342,7 +1342,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         # 全停永远可用（切换卡住时的安全阀），其余动作切换中禁用（设计第四节）
         if action == "panic":
-            app.calls.put(app._panic)
+            app.urgent(app._panic)   # 紧急通道：停摆积压恢复后全停插队
         elif getattr(app, "_web_snap", {}).get("busy"):
             self._json(409, {"error": "切换中，稍候再操作"})
             return

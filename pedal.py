@@ -303,8 +303,9 @@ class RawInputBridge:
        WM_INPUT、证据永无积累，误触发是永久性的）；键盘也发过的键放行；
        软件注入（LLKHF_INJECTED）不是踩钉，放行。"""
 
-    def __init__(self, on_action):
+    def __init__(self, on_action, on_event=None):
         self.on_action = on_action
+        self.on_event = on_event   # 可选：内部事件上报（钩子自愈等，桥线程）
         self.binds = {}          # vk → 动作
         self.device_hint = ""    # 所选设备身份子串（空=未选择）
         self.block = False       # 拦截开关
@@ -318,6 +319,10 @@ class RawInputBridge:
         self._thread = None
         self._tid = None
         self._hook = None
+        self._hook_seen = None   # 钩子最近一次见键时刻（运行期自愈探针）
+        self._rehook_at = 0.0    # 上次自愈重装时刻（限频 15s）
+        self._rehooking = False  # 自愈线程在途标志
+        self._rehook_tid = None  # 自愈线程 id（stop 时投 WM_QUIT 收尾）
         self.raw_ok = None           # 线程启动后回填：INPUTSINK 是否注册成功
         self._installed = threading.Event()   # LL 钩子安装完成信号
         self._pumping = threading.Event()     # 线程消息队列已建成（WM_QUIT 可投）
@@ -412,6 +417,8 @@ class RawInputBridge:
                 if u32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0):
                     break
                 time.sleep(0.01)
+        if self._rehook_tid is not None:    # 自愈线程的泵同步退场拆钩
+            u32.PostThreadMessageW(self._rehook_tid, WM_QUIT, 0, 0)
         th = self._thread     # 先摘登记再 join：对已赋值未起跑的交错态，
         self._thread = None   #   join 会抛 RuntimeError 且残留登记谎报 running
         self._tid = None
@@ -469,6 +476,61 @@ class RawInputBridge:
             name = b.value
         is_pedal = bool(self.device_hint) and self.device_hint in name.upper()
         self._feed(kb.VKey, kb.Message in _LL_KEYDOWN, is_pedal)
+        self._probe(time.monotonic())
+
+    def _probe(self, now):
+        """钩子自愈探测（raw 事件时点调用，桥线程同线程无锁）：物理键必先
+        过 LL 钩子链再到 raw——被吞键不产生 WM_INPUT，钩子活着则每条 raw
+        键事件前几毫秒必有钩子事件（_hook_seen 刚更新）。raw 见键而探针
+        落后 2 秒=钩子已被系统静默摘除（LowLevelHooksTimeout 超时规则，
+        官方文档明言无任何通知）。动作由 raw 侧兜底不中断，这里只恢复
+        「拦截」能力；探针为 None=钩子从未见过任何键（装完即死同理）。"""
+        if self._live and (self._hook_seen is None
+                           or now - self._hook_seen > 2.0):
+            self._rehook(now)
+
+    def _rehook(self, now):
+        """钩子运行期自愈：换独立常驻线程重装。LL 钩子回调在安装线程的
+        消息泵上执行——一次性线程装完即死=钩子变僵尸，故重装线程自带消息
+        泵（stop 时收 WM_QUIT 拆钩退场）。SetWindowsHookExW 已知偶发挂死，
+        绝不在桥线程重装（桥死=raw 通道死=动作也断，比死拦截更糟）。
+        旧钩子若其实还活着：重叠窗口里 _hook_event 双见同键，动作由
+        hid_fire 按住态去重、吞键幂等，无副作用。限频 15 秒。"""
+        if self._rehooking or now - self._rehook_at < 15:
+            return
+        self._rehook_at = now
+        self._rehooking = True
+
+        def job():
+            self._rehook_tid = k32.GetCurrentThreadId()
+            h = u32.SetWindowsHookExW(13, self._href, None, 0)
+            if not h:
+                self._rehooking = False
+                self._report("低级钩子疑似被系统摘除，重装失败"
+                             "（15 秒后自动重试）")
+                return
+            old = self._hook
+            self._hook = h
+            if old:
+                u32.UnhookWindowsHookEx(old)
+            self._report("低级钩子疑似被系统摘除，已自动重装")
+            msg = wintypes.MSG()
+            while not self._stop.is_set() \
+                    and u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                u32.TranslateMessage(ctypes.byref(msg))
+                u32.DispatchMessageW(ctypes.byref(msg))
+            u32.UnhookWindowsHookEx(h)
+            self._rehooking = False
+
+        threading.Thread(target=job, daemon=True,
+                         name="hid-rehook").start()
+
+    def _report(self, msg):
+        try:
+            if self.on_event:
+                self.on_event(msg)
+        except Exception:
+            pass
 
     def _hook_cb(self, nCode, wp, lp):
         """LL 钩子回调（签名=nCode/wp/lp）；决策转投 _hook_event。
@@ -482,6 +544,7 @@ class RawInputBridge:
                 if down or up:
                     st = ctypes.cast(lp, ctypes.POINTER(
                         _KBDLLHOOKSTRUCT)).contents
+                    self._hook_seen = time.monotonic()   # 自愈探针证据
                     if self._hook_event(st.vkCode, down,
                                         bool(st.flags & LLKHF_INJECTED)):
                         return 1                 # 系统级拦截
@@ -645,7 +708,7 @@ class PedalListener:
     （HID 按下沿，来源判定+定向拦截）→ on_action(动作名)。MIDI 回调在
     winmm 线程、按键在设备桥线程触发，GUI 侧自行转投主线程。"""
 
-    def __init__(self, on_action):
+    def __init__(self, on_action, on_event=None):
         self.on_action = on_action
         self.hint = ""
         self.binds = {}
@@ -657,7 +720,7 @@ class PedalListener:
         self._state = {}
         self._lock = threading.Lock()
         self._muted = False        # 学习期静音：停触发、让出 MIDI 口
-        self.bridge = RawInputBridge(on_action)
+        self.bridge = RawInputBridge(on_action, on_event)
 
     def apply(self, hint, binds, hid_binds=None, device_hint=None,
               intercept=None):

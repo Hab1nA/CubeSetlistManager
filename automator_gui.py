@@ -9,6 +9,7 @@ VJ 视频跟随（时钟+音符触发+熄屏/投影）、键盘自动化（音�
 与完整版同源模块：midi_bridge/kbd_auto/web_remote/obs_ctrl/daw_ctrl
 （只用其只读窗口识别函数，不实例化 DawController）。"""
 import ctypes
+import collections
 import faulthandler
 import json
 import os
@@ -300,7 +301,8 @@ class App:
         self.juno_shift = 0
         self.pedal_held = {}
         self.q = queue.Queue()
-        self.calls = queue.Queue()
+        self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
+        self.calls_urgent = collections.deque()  # 紧急调用（对称预留）
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
         self.clock_port = None
@@ -858,32 +860,45 @@ class App:
     def _on_ui_error(self, exc, val, _tb):
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
 
+    def _run_call(self, fn):
+        """执行单个跨线程回调：tag 供看门狗取证；按 BaseException 捕——
+        MidiIn 端口降级抛 SystemExit，漏过去连 after 重挂都不执行=排水
+        循环永久死亡（完整版同款）。"""
+        self._hb_tag = getattr(fn, "__name__", "<lambda>")
+        try:
+            fn()
+        except BaseException as e:
+            try:
+                self.log.insert("end", time.strftime("[%H:%M:%S] ")
+                                + "动作执行异常（已恢复）：%s: %s"
+                                % (type(e).__name__, e))
+                self.log.itemconfigure(self.log.size() - 1,
+                                       foreground=dpi.C_ERR)
+                self.log.see("end")
+            except Exception:
+                pass
+        self._hb_tag = ""
+
     def _drain_calls(self):
         """跨线程 GUI 调用队列的快速排空（50ms 独立循环，完整版同款）。
-        原来搭在 400ms 状态轮询车上且逐条无兜底——一条回调炸掉本批剩余
-        积压推迟 400ms；BaseException（MidiIn 端口降级抛 SystemExit）更是
-        连 400ms 轮询链一起杀死=状态+指令全部永久失联。"""
+        原来搭在 400ms 状态轮询车上且逐条无兜底；紧急队列优先+普通批次
+        合流（幂等回调恢复后成批重复，只执行最后一次）。"""
         self._hb = time.monotonic()     # 喂看门狗心跳
+        while self.calls_urgent:
+            self._run_call(self.calls_urgent.popleft())
+        batch = []
         while True:
             try:
-                fn = self.calls.get_nowait()
+                batch.append(self.calls.get_nowait())
             except queue.Empty:
                 break
-            self._hb_tag = getattr(fn, "__name__", "<lambda>")
-            try:
-                fn()
-            except BaseException as e:
-                try:
-                    self.log.insert("end", time.strftime("[%H:%M:%S] ")
-                                    + "动作执行异常（已恢复）：%s: %s"
-                                    % (type(e).__name__, e))
-                    self.log.itemconfigure(self.log.size() - 1,
-                                           foreground=dpi.C_ERR)
-                    self.log.see("end")
-                except Exception:
-                    pass
-            self._hb_tag = ""
+        for fn in stallguard.coalesce(batch):
+            self._run_call(fn)
         self.root.after(50, self._drain_calls)
+
+    def urgent(self, fn):
+        """紧急 GUI 调用：插队到普通指令前执行（对称预留）。"""
+        self.calls_urgent.append(fn)
 
     def _tick(self):
         self._hb = time.monotonic()     # 喂看门狗心跳
