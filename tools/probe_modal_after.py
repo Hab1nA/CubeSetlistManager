@@ -56,23 +56,22 @@ def send_click(x, y):
     ax = int(x * 65535 / (sw - 1))
     ay = int(y * 65535 / (sh - 1))
 
-    def one(typ, fields):
+    def one(member, fields):
         inp = _INPUT()
-        inp.type = typ
-        inp.u = fields
+        inp.type = INPUT_MOUSE
+        setattr(inp, member, fields)
         u32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
 
-    mi = _MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
-                     0, None)
-    one(INPUT_MOUSE, mi)
+    one("mi", _MOUSEINPUT(ax, ay, 0,
+                          MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, 0, None))
     time.sleep(0.05)
-    one(INPUT_MOUSE, _MOUSEINPUT(0, 0, 0,
-                                 MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
-                                 0, None))
+    one("mi", _MOUSEINPUT(0, 0, 0,
+                          MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
+                          0, None))
     time.sleep(0.05)
-    one(INPUT_MOUSE, _MOUSEINPUT(0, 0, 0,
-                                 MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP,
-                                 0, None))
+    one("mi", _MOUSEINPUT(0, 0, 0,
+                          MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP,
+                          0, None))
 
 
 def send_esc():
@@ -83,6 +82,7 @@ def send_esc():
         inp.ki = _KBINPUT(0x1B, 0, flags, 0, None)
         u32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
         time.sleep(0.03)
+# 注：键盘注入用成员名直赋（匿名联合体构造器初始化在 py3.14 不认）
 
 
 _WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,

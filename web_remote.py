@@ -1248,6 +1248,11 @@ class WebServer(ThreadingHTTPServer):
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "CubeSetlist/1.0"
+    # 死连接回收：APP 掉网（Wi-Fi 断开无 FIN）时 handler 线程会永久阻塞在
+    # keep-alive 的 readline 上，僵尸线程逐个累积。30 秒无请求即优雅关连接
+    # （http.server 对超时自带关连接处理）；活跃 APP/网页每秒轮询，打不到
+    # 这个超时。WebServer.handle_error 已静音 TimeoutError。
+    timeout = 30
 
     def log_message(self, fmt, *args):
         pass                                # /state 每秒轮询，不能刷 GUI 日志

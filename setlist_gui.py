@@ -431,6 +431,10 @@ class App:
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self.start_err = ""
         self._build()
+        # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
+        # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
+        # HWND，窗口生命周期=进程生命周期，无需失效机制
+        self._main_hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
@@ -1497,17 +1501,21 @@ class App:
             self.q.put("服务未就绪（启动未完成）")
             return
         skip_keys = self._transport_state() != "playing"
+        ctl = self.ctl
 
         def run():
             if not skip_keys:
                 self.ctrl.panic()
+            if ctl is not None:
+                # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
+                # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
+                # 竞争），主线程直跑=全停按钮最坏卡 10s+（黑面+指令积压）
+                ctl.stop_media()
             self._regain_focus()
 
         threading.Thread(target=run, daemon=True).start()
         if self.watch is not None:  # watch 可能没起来（VJ 链构造失败而 ctrl
             self.watch.reset()      #   独立成功）——裸 reset 会炸 _drain_calls
-        if self.ctl is not None:
-            self.ctl.stop_media()   # 顺带熄掉 OBS 视频
         if skip_keys:
             known = bool(self.clock_hint) and self.clock_port is not None
             self.q.put("全停：%s，走带键跳过（S1 空格会反向起播），"
@@ -1603,11 +1611,12 @@ class App:
     def _regain_focus(self):
         """把键盘焦点收回本程序（工作线程调用）。置顶只保视觉 Z 序，
         不保焦点——走带键发完后焦点在 Cubase，若不收回，用户接着打字
-        会打进 Cubase（空格=停走带）。复用 daw_ctrlfocus 的前台手法。"""
+        会打进 Cubase（空格=停走带）。hwnd 在构造期主线程预取：工作线程
+        直接调 winfo_id() 会被 threaded Tcl 封送回主线程事件循环阻塞等待，
+        主线程停摆期间整批 worker（走带/全停/切歌完成回调）集体挂起。"""
         try:
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            if hwnd:
-                daw_ctrl.focus(hwnd, tries=2)
+            if self._main_hwnd:
+                daw_ctrl.focus(self._main_hwnd, tries=2)
         except Exception:
             pass
 
@@ -1721,7 +1730,9 @@ class App:
         """跨线程 GUI 调用队列的快速排空（50ms 独立循环）。踩钉动作从设备
         桥线程入队到执行最坏只等一个排空周期；原来搭在 400ms 状态轮询车上，
         演出中踩一脚最坏等 400ms 才起效。单动作异常吞掉进日志——循环死一次
-        =踩钉/自动推进/界面刷新全部永久失联（审计实测复现过）。"""
+        =踩钉/自动推进/界面刷新全部永久失联（审计实测复现过）；按
+        BaseException 捕：MidiIn 端口降级抛 SystemExit，不在 Exception
+        之列，漏过去连 after 重挂都不执行=排水循环永久死亡。"""
         while True:
             try:
                 fn = self.calls.get_nowait()
@@ -1729,10 +1740,11 @@ class App:
                 break
             try:
                 fn()
-            except Exception as e:
+            except BaseException as e:
                 try:
                     self.log.insert("end", time.strftime("[%H:%M:%S] ")
-                                    + "动作执行异常（已恢复）：%s" % _err(e))
+                                    + "动作执行异常（已恢复）：%s: %s"
+                                    % (type(e).__name__, _err(e)))
                     self.log.itemconfigure(self.log.size() - 1,
                                            foreground=dpi.C_ERR)
                     self.log.see("end")
@@ -2303,21 +2315,27 @@ class SettingsWindow(tk.Toplevel):
         app.root.attributes("-topmost", top)
         app.switch_confirm = confirm
         app.exit_close_apps = closeapps
-        # VJ静音：即时生效（没连 OBS 就只存配置，连上后自动同步）
-        if app.ctl is not None:
-            app.ctl.cfg["vjMute"] = mute
-            if app.ctl.is_connected() and not app.ctl.apply_mute():
-                app.q.put("VJ静音未生效：%s" % app.ctl.last_error)
-        # 目录：视频热生效；工程库变更触发重扫
-        if app.ctl is not None and vid:
-            app.ctl.cfg["videoRoot"] = vid
-        # VJ显示位置：热开/关投影（没连 OBS 就只存配置，连上后自动恢复）
-        if app.ctl is not None:
-            app.ctl.cfg["projectorMonitor"] = mon
-            if mon and not app.ctl.apply_projector():
-                app.q.put("VJ显示位置未生效：%s" % app.ctl.last_error)
+        # VJ静音/视频目录/VJ显示位置：OBS 热应用全放后台——apply_mute/
+        # apply_projector 每请求 5s 超时且全程持 ctl._lock，此前在主线程
+        # 直跑，「保存并应用」最坏卡 20s+（黑面+指令积压惯犯二号）。
+        # 没连 OBS 只存配置，连上后 on_connected 自动同步，语义不变。
+        def apply_obs():
+            ctl = app.ctl
+            if ctl is None:
+                return
+            ctl.cfg["vjMute"] = mute
+            if vid:
+                ctl.cfg["videoRoot"] = vid
+            ctl.cfg["projectorMonitor"] = mon
+            if ctl.is_connected() and not ctl.apply_mute():
+                app.q.put("VJ静音未生效：%s" % ctl.last_error)
+            if mon and not ctl.apply_projector():
+                app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
             elif not mon:
-                app.ctl.close_projector()
+                ctl.close_projector()
+
+        if app.ctl is not None:
+            threading.Thread(target=apply_obs, daemon=True).start()
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj

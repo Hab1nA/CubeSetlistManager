@@ -312,6 +312,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
+        root.after(50, self._drain_calls)
 
     # ---- 界面 ----
 
@@ -844,6 +845,30 @@ class App:
     def _on_ui_error(self, exc, val, _tb):
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
 
+    def _drain_calls(self):
+        """跨线程 GUI 调用队列的快速排空（50ms 独立循环，完整版同款）。
+        原来搭在 400ms 状态轮询车上且逐条无兜底——一条回调炸掉本批剩余
+        积压推迟 400ms；BaseException（MidiIn 端口降级抛 SystemExit）更是
+        连 400ms 轮询链一起杀死=状态+指令全部永久失联。"""
+        while True:
+            try:
+                fn = self.calls.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except BaseException as e:
+                try:
+                    self.log.insert("end", time.strftime("[%H:%M:%S] ")
+                                    + "动作执行异常（已恢复）：%s: %s"
+                                    % (type(e).__name__, e))
+                    self.log.itemconfigure(self.log.size() - 1,
+                                           foreground=dpi.C_ERR)
+                    self.log.see("end")
+                except Exception:
+                    pass
+        self.root.after(50, self._drain_calls)
+
     def _tick(self):
         try:
             self._tick_body()
@@ -934,12 +959,6 @@ class App:
         self.elapsed_lbl.grid() if shown else self.elapsed_lbl.grid_remove()
         self._web_snap = web_remote.build_snapshot(
             self, bool(self._cur_title), self._cur_title)
-        while True:
-            try:
-                fn = self.calls.get_nowait()
-            except queue.Empty:
-                break
-            fn()
         follow = self.log.yview()[1] > 0.99
         while True:
             try:
@@ -1227,18 +1246,24 @@ class SettingsWindow(tk.Toplevel):
         mute = self.mute_var.get()
         proj = self.proj_var.get().strip()
         vid = self.vid_var.get().strip()
-        if app.ctl is not None:
-            app.ctl.cfg["vjMute"] = mute
-            if app.ctl.is_connected() and not app.ctl.apply_mute():
-                app.q.put("VJ静音未生效：%s" % app.ctl.last_error)
-        if app.ctl is not None and vid:
-            app.ctl.cfg["videoRoot"] = vid
-        if app.ctl is not None:
-            app.ctl.cfg["projectorMonitor"] = mon
-            if mon and not app.ctl.apply_projector():
-                app.q.put("VJ显示位置未生效：%s" % app.ctl.last_error)
+        # VJ静音/视频目录/VJ显示位置：OBS 热应用全放后台（完整版 _save 同款）
+        def apply_obs():
+            ctl = app.ctl
+            if ctl is None:
+                return
+            ctl.cfg["vjMute"] = mute
+            if vid:
+                ctl.cfg["videoRoot"] = vid
+            ctl.cfg["projectorMonitor"] = mon
+            if ctl.is_connected() and not ctl.apply_mute():
+                app.q.put("VJ静音未生效：%s" % ctl.last_error)
+            if mon and not ctl.apply_projector():
+                app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
             elif not mon:
-                app.ctl.close_projector()
+                ctl.close_projector()
+
+        if app.ctl is not None:
+            threading.Thread(target=apply_obs, daemon=True).start()
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj
