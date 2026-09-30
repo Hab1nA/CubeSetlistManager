@@ -528,6 +528,19 @@ class ObsController:
                 with self._lock:
                     self._ws = None
                 self._stop.wait(self.cfg.get("retrySec", 5))
+            except Exception as e:
+                # 重连线程绝不允许静默死亡（死=OBS 永不重连、VJ 链全灭且
+                # 零日志）：捕获面以外的逃逸者（obs_ws json.loads 的
+                # ValueError 族、_ensure_media_input 的 KeyError 等响应
+                # 形状异常）同样按断线处理进重连
+                self.last_error = "连接循环异常（已恢复）：%s: %s" % (
+                    type(e).__name__, e)
+                with self._lock:
+                    self._ws = None
+                try:
+                    self._stop.wait(self.cfg.get("retrySec", 5))
+                except Exception:
+                    time.sleep(5)
 
     def _ensure_obs_running(self):
         """OBS 没跑就拉起并等端口就绪；返回是否由本次拉起（True=冷启动）。"""

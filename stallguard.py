@@ -61,7 +61,11 @@ class StallWatchdog:
             if self._stop.is_set():
                 return
             now = self._clock()
-            hb = self._hb()
+            try:
+                hb = self._hb()
+                snap = self._snap()
+            except Exception:
+                continue        # 心跳/快照查询失败：绝不杀死黑匣子线程
             stall = now - hb
             if stall > self._threshold:
                 if not in_stall:
@@ -70,15 +74,13 @@ class StallWatchdog:
                     last_write = now
                     self._write("%s 停摆 %.1fs：正在执行=%s 现场=%s"
                                 % (time.strftime("%m-%d %H:%M:%S"), stall,
-                                   self._snap().get("tag") or "（循环间隙）",
-                                   self._snap()))
+                                   snap.get("tag") or "（循环间隙）", snap))
                 elif now - last_write >= 5.0:
                     last_write = now
                     self._write("%s 仍在停摆（已 %.1fs）：正在执行=%s 现场=%s"
                                 % (time.strftime("%m-%d %H:%M:%S"),
                                    now - stall_start,
-                                   self._snap().get("tag") or "（循环间隙）",
-                                   self._snap()))
+                                   snap.get("tag") or "（循环间隙）", snap))
             elif in_stall:
                 in_stall = False
                 total = hb - stall_start

@@ -4,7 +4,9 @@
 游离（清指针回第一首兜底、计时器清零防旧时长误切）。设计拍板 2026-09-29：
 采纳自动推进生效；歌单外清指针不推进。"""
 import pathlib
+import queue
 import sys
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -39,8 +41,31 @@ def _app(name="X", durs=None, pl=("a", "b")):
     app.cur_song_path = "/old"
     app.cur = 99
     app.q = app.logs = _Q()
+    app.calls = queue.Queue()       # 装载完成回调（_refresh）走这里
     app._refresh = lambda: app.logs.append("<refresh>")
+    # SimpleNamespace 无类方法解析：显式绑定真实现（装载半程要真跑）
+    app._adopted_load = lambda key: setlist_gui.App._adopted_load(app, key)
     return app
+
+
+def _drain(app):
+    while True:
+        try:
+            app.calls.get_nowait()()
+        except queue.Empty:
+            return
+
+
+def _wait(app, cond, timeout=3.0):
+    """等后台装载完成并排空其回调（_adopt 的装载半程已在后台线程跑）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _drain(app)
+        if cond():
+            return True
+        time.sleep(0.02)
+    _drain(app)
+    return cond()
 
 
 def test_adopt_match(monkeypatch):
@@ -51,11 +76,14 @@ def test_adopt_match(monkeypatch):
                         lambda p, kind=None: loaded.append(p) or {"s": 1})
     app = _app()
     setlist_gui.App._adopt(app, "Y")
-    assert app.cur == 1                      # 指针指到命中的那首
-    assert app.cur_song_path == "/p2" and app.durations["b"] == 120.0
+    assert app.cur == 1                      # 指针指到命中的那首（立即）
+    assert _wait(app, lambda: app.cur_song_path == "/p2"
+                 and app.slots == {"s": 1})
+    _drain(app)
+    assert app.durations["b"] == 120.0
     assert app.watch.durs == [120.0]         # 时长就位（内部 reset 重新累计）
     assert loaded == ["/p2", "/p2"]          # JUNO + AX 槽都按新工程装载
-    assert app.slots == {"s": 1} and app.ax_slots == {"s": 1}
+    assert app.ax_slots == {"s": 1}
     assert any("已跟随" in m for m in app.logs)
 
 
@@ -66,6 +94,7 @@ def test_adopt_match_keeps_manual_duration(monkeypatch):
                         lambda p, kind=None: {})
     app = _app(durs={"a": 42.0})
     setlist_gui.App._adopt(app, "X")
+    assert _wait(app, lambda: app.cur_song_path == "/p1")
     assert app.durations["a"] == 42.0 and app.watch.durs == [42.0]
 
 
@@ -89,7 +118,8 @@ def test_adopt_duplicate_name_takes_first(monkeypatch):
     app = _app(pl=("a", "b"))
     app.by_key["b"] = {"name": "X", "path": "/p2"}   # 同名歌取靠前项
     setlist_gui.App._adopt(app, "X")
-    assert app.cur == 0 and app.cur_song_path == "/p1"
+    assert app.cur == 0
+    assert _wait(app, lambda: app.cur_song_path == "/p1")
 
 
 def test_adopt_empty_playlist_noop():

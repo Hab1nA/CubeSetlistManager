@@ -232,8 +232,27 @@ def load_slots(cpr_path, key="slots"):
         return {}
     try:
         data = json.loads(p.resolve().read_text(encoding="utf-8"))
-        return {int(k): v for k, v in data.get(key, {}).items()
-                if str(k).isdigit() and isinstance(v, dict) and "pc" in v}
+        out = {}
+        for k, v in data.get(key, {}).items():
+            # 类型全验：手改 JSON 把 pc/msb/lsb 写成 null/字符串时，此前只
+            # 验 "pc" in v，describe_slot 做 501+pc 才炸（且会炸死发送线程）
+            if not (str(k).isdigit() and isinstance(v, dict)):
+                continue
+            pc = v.get("pc")
+            if not isinstance(pc, int) or isinstance(pc, bool):
+                continue
+            slot = {"pc": pc}
+            for f in ("msb", "lsb"):
+                x = v.get(f)
+                if x is None:
+                    continue
+                if not isinstance(x, int) or isinstance(x, bool):
+                    slot = None
+                    break
+                slot[f] = x
+            if slot is not None:
+                out[int(k)] = slot
+        return out
     except (OSError, ValueError):
         return {}
 
@@ -381,19 +400,34 @@ class ToneSwitcher:
     def _loop(self):
         while True:
             item, why = self._q.get()
-            if isinstance(item, list):          # 预构造序列（移调/延音）
-                err = send_slot(None, self.cfg, msgs=item)
-                self._log("%s%s" % (why, "失败：%s" % err if err else ""))
+            try:
+                if isinstance(item, list):      # 预构造序列（移调/延音）
+                    err = send_slot(None, self.cfg, msgs=item)
+                    self._log("%s%s" % (why, "失败：%s" % err if err else ""))
+                    if self.on_result:
+                        self.on_result(why, err)
+                    continue
+                slot = item
+                err = send_slot(slot, self.cfg)
+                self._log("音色切换%s → %s%s" % (
+                    "（%s）" % why if why else "", describe_slot(slot),
+                    "失败：%s" % err if err else ""))
                 if self.on_result:
-                    self.on_result(why, err)
-                continue
-            slot = item
-            err = send_slot(slot, self.cfg)
-            self._log("音色切换%s → %s%s" % (
-                "（%s）" % why if why else "", describe_slot(slot),
-                "失败：%s" % err if err else ""))
-            if self.on_result:
-                self.on_result(describe_slot(slot), err)
+                    self.on_result(describe_slot(slot), err)
+            except Exception as e:
+                # 发送线程绝不允许静默死亡：死一次=音色切换/延音/移调全场
+                # 失效且零日志（load_slots 类型洞曾可经 describe_slot 炸死）
+                try:
+                    self._log("音色发送异常（已恢复）：%s: %s"
+                              % (type(e).__name__, e))
+                except Exception:
+                    pass
+                if self.on_result:
+                    try:
+                        self.on_result(why or "音色切换",
+                                       "内部异常：%s" % e)
+                    except Exception:
+                        pass
             time.sleep(0.05)
 
 

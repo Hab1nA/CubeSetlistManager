@@ -39,20 +39,22 @@ def test_panic_obs_network_off_main_thread():
 
 def test_settings_save_obs_off_main_thread():
     """「保存并应用」的静音/投影热应用（2×5s+2×5s+持锁）挪后台线程，
-    双端同改；旧的主线程直调写法不得回归。"""
+    双端同改；旧的主线程直调写法不得回归。连续保存的热应用有锁串行。"""
     for name in ("setlist_gui.py", "automator_gui.py"):
-        src = _slice(_src(name), "def _save", "_MUTEX = None")
+        src = _slice(_src(name), "def _save(self)", "_MUTEX = None")
         assert "def apply_obs" in src, name
         assert "threading.Thread(target=apply_obs" in src, name
         assert "not app.ctl.apply_mute()" not in src, name
         assert "not app.ctl.apply_projector()" not in src, name
+        assert "with app._obs_apply_lock" in src, name
 
 
 # ---- 修复3：简化版独立 _drain_calls + 两端排水循环 BaseException 韧性 ----
 
 def test_automator_independent_drain():
-    """简化版补独立 50ms _drain_calls（原搭 400ms tick 且逐条无兜底，
-    BaseException 连 400ms 轮询链一起杀死=永久假死）。"""
+    """简化版补独立 50ms _drain_calls（原搭 400ms tick 且逐条无兜底）。
+    BaseException 必须就地吞掉：SystemExit 在 py3.14 实测会冲出 mainloop
+    终止进程（report_callback_exception 都不经过）。"""
     src = _src("automator_gui.py")
     assert "root.after(50, self._drain_calls)" in src
     body = _slice(src, "def _run_call", "def _tick_body")
@@ -62,8 +64,7 @@ def test_automator_independent_drain():
 
 
 def test_setlist_drain_catches_baseexception():
-    """MidiIn 端口降级抛 SystemExit（不在 Exception 之列）——漏过去
-    after 重挂不执行=排水循环永久死亡。"""
+    """同 automator：SystemExit 不在 Exception 之列，漏过去=进程闪退。"""
     body = _slice(_src("setlist_gui.py"), "def _run_call", "def _tick(")
     assert "except BaseException" in body
 
@@ -167,7 +168,8 @@ import kbd_auto  # noqa: E402
 
 
 class _FakeWinmm:
-    """可编排 winmm 桩：记录调用序列，midiInOpen 可脚本化延迟/失败。"""
+    """可编排 winmm 桩：记录调用序列，midiInOpen 可脚本化延迟（仅首次，
+    供毒化-恢复测试）/失败。"""
 
     def __init__(self, ndevs=1, name=b"FakePort", open_delay=0.0,
                  open_ret=0):
@@ -176,6 +178,7 @@ class _FakeWinmm:
         self.name = name
         self.open_delay = open_delay
         self.open_ret = open_ret
+        self._opens = 0
         self._lock = __import__("threading").Lock()
 
     def midiInGetNumDevs(self):
@@ -188,8 +191,11 @@ class _FakeWinmm:
         return 0
 
     def midiInOpen(self, ph, _idx, _proc, _inst, _flags):
-        if self.open_delay:
-            time.sleep(self.open_delay)
+        with self._lock:
+            self._opens += 1
+            delay = self.open_delay if self._opens == 1 else 0.0
+        if delay:
+            time.sleep(delay)
         with self._lock:
             self.log.append("open")
         if not self.open_ret:
@@ -247,7 +253,12 @@ def test_open_in_hard_hang_bounded(monkeypatch):
     h, err = mb.open_in(0, None)
     assert h is None and "超时" in err
     assert time.monotonic() - t0 < 2.0
-    time.sleep(1.0)                     # 迟到 job 收尾（排空专线）
+    deadline = time.monotonic() + 3.0   # 毒化语义：迟到 job 了结才解除熔断
+    while time.monotonic() < deadline:
+        with mb._io_stuck_lock:
+            if not mb._io_stuck:
+                break
+        time.sleep(0.05)
 
 
 def test_midiin_missing_port_exits(monkeypatch):
@@ -354,3 +365,130 @@ def test_hook_selfheal_wiring():
     assert "self._rehook_tid" in src     # stop 时收尾自愈线程
     src = _src("setlist_gui.py")
     assert 'on_event=lambda m: self.q.put("踩钉桥：%s" % m)' in src
+
+
+# ---- R1 复审 FAIL 清单（A-I）回归 ----
+
+def test_load_slots_rejects_bad_types(tmp_path):
+    """手改 JSON 的 pc/msb/lsb 类型洞（null/字符串）按条丢弃不再外漏——
+    旧过滤只验 "pc" in v，describe_slot 做 501+pc 才炸（曾可毒杀发送线程）。"""
+    f = tmp_path / "keyboard_automation.json"
+    f.write_text('{"slots": {"60": {"pc": 3, "msb": 87, "lsb": 0},'
+                 ' "61": {"pc": null}, "62": {"pc": "3"},'
+                 ' "63": {"pc": 1, "msb": null}, "64": {"pc": true}}}',
+                 encoding="utf-8")
+    import kbd_auto
+    slots = kbd_auto.load_slots(str(tmp_path / "x.cpr"))
+    # pc 类型洞全弃；msb:null 视为未提供（保留条目，映射语义=无 MSB）
+    assert set(slots) == {60, 63}
+    assert slots[60] == {"pc": 3, "msb": 87, "lsb": 0}
+    assert slots[63] == {"pc": 1}
+
+
+def test_tone_switcher_loop_survives_exception(monkeypatch):
+    """发送线程裸 while True 曾被单次异常静默毒杀（音色/延音/移调全场
+    失效零日志）：现异常就地吞掉进日志，线程存活继续消费。"""
+    import kbd_auto
+    results = []
+    sw = kbd_auto.ToneSwitcher(
+        dict(kbd_auto.DEFAULT_JUNO), lambda m: None,
+        on_result=lambda d, e: results.append((d, e)))
+    calls = {"n": 0}
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TypeError("boom")
+        return None
+
+    monkeypatch.setattr(kbd_auto, "send_slot", flaky)
+    sw.submit({"pc": 3}, why="t1")
+    sw.submit({"pc": 4}, why="t2")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and len(results) < 2:
+        time.sleep(0.02)
+    assert len(results) >= 2             # 第一次异常后线程仍活着
+    sw._q.put(((0.0, None), "quit-marker"))  # 不会退出也无妨（daemon）
+
+
+def test_winmm_poison_fastfail(monkeypatch):
+    """专线毒化（挂死 job 占住串行队列）时后续 run_io 立即快速失败，
+    主线程不再每次都等满超时（踩钉 10s 重试曾致周期性 3.5s 冻结）。"""
+    fake = _FakeWinmm(open_delay=0.8)
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    h1, err1 = mb.open_in(0, None)       # 第一次：等满超时并置毒化标志
+    assert h1 is None and "超时" in err1
+    t0 = time.monotonic()
+    h2, err2 = mb.open_in(0, None)       # 第二次：快速失败
+    assert time.monotonic() - t0 < 0.5
+    assert h2 is None and "超时" in err2
+    deadline = time.monotonic() + 3.0    # 迟到 job 了结→熔断解除
+    while time.monotonic() < deadline:
+        with mb._io_stuck_lock:
+            if not mb._io_stuck:
+                break
+        time.sleep(0.05)
+    h3, err3 = mb.open_in(0, None)       # 熔断解除后恢复正常
+    assert h3 is not None and err3 is None
+
+
+def test_mainloop_daemon_wiring():
+    """后台线程静默死亡家族的兜底锚：OBS 重连/音符/翻谱/音色发送四循环
+    异常均就地吞掉并上报，不带走线程。"""
+    assert "连接循环异常（已恢复）" in _src("obs_ctrl.py")
+    assert "音符处理异常（已恢复）" in _src("midi_bridge.py")
+    assert "翻谱处理异常（已恢复）" in _src("web_remote.py")
+    assert "音色发送异常（已恢复）" in _src("kbd_auto.py")
+
+
+def test_title_load_off_main_thread():
+    """_adopt/_redict/_apply_title 的工程文件 IO 挪后台（网络盘无界卡顿）+
+    代际守卫；kbd 窗热同步经 calls 回主线程。"""
+    src = _src("setlist_gui.py")
+    assert "def _adopted_load" in src
+    body = _slice(src, "def _adopt", "def _tick_banner")
+    assert "_load_gen" in body
+    assert "load_slots(path)" in body
+    redict = _slice(src, "def _redict", "def _persist(self)")
+    assert "threading.Thread(target=run" in redict
+    assert "        d = _read_duration(song[\"path\"])" not in redict
+    src = _src("automator_gui.py")
+    assert "_title_gen" in src
+    assert "def _kbd_sync" in src
+    assert "self.calls.put(lambda: self._kbd_sync(song))" in src
+
+
+def test_settings_probe_off_marshalled_after():
+    """设置页探测 worker 改走 calls 队列（self.after 封送阻塞 worker），
+    复探走 Timer 线程（网络不占主线程）。"""
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        assert "self.app.calls.put(apply)" in src, name
+        assert "threading.Timer(1.2" in src, name
+        assert "self.after(1200" not in src, name   # 旧主线程复探不回归
+
+
+def test_marquee_step_guard():
+    """跑马灯单步异常不再断 after 链（TclError 退场、其余下个 set 重挂）。"""
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        assert "def _step_body" in src, name
+        body = _slice(src, "def _step(self)", "def _step_body")
+        assert "except tk.TclError" in body, name
+        assert "except Exception" in body, name
+
+
+def test_tick_baseexception_aligned():
+    """_tick 与排水循环同为 BaseException 防御（SystemExit 闪退风险对齐）。"""
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _src(name)
+        body = _slice(src, "def _tick(self)", "def _tick_body")
+        assert "except BaseException as e" in body, name
+
+
+def test_pedal_hid_retry_gated():
+    """HID 桥泵死亡而 MIDI 口在连时，10s 重试门控也覆盖 HID 通道。"""
+    src = _slice(_src("setlist_gui.py"), "ped = self.pedal",
+                 "self._update_transport_buttons")
+    assert "not ped.bridge.running" in src

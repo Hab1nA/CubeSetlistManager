@@ -208,26 +208,34 @@ class ScoreTurnHub:
 
     def _loop(self):
         while self._alive:
-            first = self.q.get()
-            if first[1] is None:
-                break
-            batch = {first[1]}
-            deadline = first[0] + COMBO_WINDOW
-            while True:                        # 固定窗口收满即判；窗口外=新组合
-                remain = deadline - self._clock()
-                if remain <= 0:
+            try:
+                first = self.q.get()
+                if first[1] is None:
                     break
+                batch = {first[1]}
+                deadline = first[0] + COMBO_WINDOW
+                while True:                    # 固定窗口收满即判；窗口外=新组合
+                    remain = deadline - self._clock()
+                    if remain <= 0:
+                        break
+                    try:
+                        _t, n = self.q.get(timeout=remain)
+                    except queue.Empty:
+                        break
+                    if n is None:
+                        self._alive = False
+                        break
+                    batch.add(n)
+                if not self._alive:
+                    break
+                self._fire(batch)
+            except Exception as e:
+                # worker 绝不允许静默死亡（死=翻谱推送全场失效且零日志）
                 try:
-                    _t, n = self.q.get(timeout=remain)
-                except queue.Empty:
-                    break
-                if n is None:
-                    self._alive = False
-                    break
-                batch.add(n)
-            if not self._alive:
-                break
-            self._fire(batch)
+                    self._report("翻谱处理异常（已恢复）：%s: %s"
+                                 % (type(e).__name__, e))
+                except Exception:
+                    pass
 
     def _fire(self, batch):
         try:

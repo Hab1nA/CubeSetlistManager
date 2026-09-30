@@ -315,10 +315,21 @@ class Marquee(tk.Entry):
             self._job = self.after(self.STEP_MS, self._step)
 
     def _step(self):
+        self._job = None
+        try:
+            cont = self._step_body()
+        except tk.TclError:
+            return                          # 组件销毁：跑马灯自然退场
+        except Exception:
+            return                          # 单步异常不断链：下个 set() 重挂
+        if cont:
+            self._job = self.after(self.STEP_MS, self._step)
+
+    def _step_body(self):
         if not self._overflow():
             self._cancel()
             self.xview_moveto(0)
-            return
+            return False
         total = max(1, self._font.measure(self._full))
         span = max(0.0, 1.0 - self.winfo_width() / total)   # 可滚动比例
         cpx = total / max(1, len(self._full))               # 平均字符像素
@@ -337,7 +348,7 @@ class Marquee(tk.Entry):
                     + self._dir * self.SPEED * cpx * self.STEP_MS / 1000
                     / total))
                 self.xview_moveto(self._frac)
-        self._job = self.after(self.STEP_MS, self._step)
+        return True
 
     def _cancel(self):
         if self._job is not None:
@@ -423,6 +434,7 @@ class App:
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 60-69）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
+        self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
         self.clock_port = None
@@ -437,8 +449,11 @@ class App:
         self._build()
         # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
         # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
-        # HWND，窗口生命周期=进程生命周期，无需失效机制
-        self._main_hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+        # HWND，窗口生命周期=进程生命周期，无需失效机制。GetParent 在窗口
+        # 未 realize 时实测返回 0（图标缺失分支会跳过 update_idletasks），
+        # 退回 widget 句柄本身兜底
+        self._main_hwnd = ctypes.windll.user32.GetParent(
+            self.root.winfo_id()) or self.root.winfo_id()
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         # 主线程停摆黑匣子：心跳由 _tick/_drain_calls 每轮喂，专职守护线程
         # 发现停摆超 3 秒即把现场（正在执行的回调/队列深度）落盘 stall.log——
@@ -1333,6 +1348,7 @@ class App:
         self.slots = {}            # 切歌开始，旧映射立即失效
         self.ax_slots = {}
         self.cur_song_path = None
+        self._load_gen = getattr(self, "_load_gen", 0) + 1  # 作废在途后台装载
         self._kb_warned = set()
         self._refresh()
         self.q.put("切换到《%s》…（%s）"
@@ -1423,7 +1439,8 @@ class App:
                                                 cpr_meta.fmt_mmss(sec)))
 
     def _redict(self):
-        """重新识别：清手填值，重读工程文件恢复工程内原时长设定。"""
+        """重新识别：清手填值，重读工程文件恢复工程内原时长设定
+        （读文件放后台线程——工程库在网络盘时主线程读会无界卡顿）。"""
         t = self._sel_target()
         if t is None:
             self.q.put("先在素材库或播放列表选中一首再识别")
@@ -1433,22 +1450,25 @@ class App:
         if song is None:
             self.q.put("歌单项不在素材库里：%s" % key)
             return
-        d = _read_duration(song["path"])
-        if d:
+        loaded = (self.pl_keys[self.cur] if self.cur is not None
+                  and self.cur < len(self.pl_keys) else None)
+        path, name = song["path"], song["name"]
+
+        def run():
+            d = _read_duration(path)
+            if not d:
+                self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
+                           % name)
+                return
             self.durations[key] = d
             self.dur_src.pop(key, None)     # 回归自动来源
             self._persist()
-            self._refresh()
-            loaded = (self.pl_keys[self.cur] if self.cur is not None
-                      and self.cur < len(self.pl_keys) else None)
-            if key == loaded:
-                if self.watch is not None:  # watch 缺席降级态同 _switch
-                    self.watch.set_duration(d)
-            self.q.put("已识别《%s》工程内原时长 %s" % (song["name"],
-                                                        cpr_meta.fmt_mmss(d)))
-        else:
-            self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
-                       % song["name"])
+            if key == loaded and self.watch is not None:
+                self.watch.set_duration(d)  # watch 缺席降级态同 _switch
+            self.calls.put(self._refresh)
+            self.q.put("已识别《%s》工程内原时长 %s"
+                       % (name, cpr_meta.fmt_mmss(d)))
+        threading.Thread(target=run, daemon=True).start()
 
     def _persist(self):
         # 串行化：并发写会踩同一个临时文件（Windows 上报错或写出交错内容）
@@ -1747,8 +1767,9 @@ class App:
 
     def _run_call(self, fn):
         """执行单个跨线程回调：tag 供看门狗取证；按 BaseException 捕——
-        MidiIn 端口降级抛 SystemExit，不在 Exception 之列，漏过去连 after
-        重挂都不执行=排水循环永久死亡（审计实测复现过）。"""
+        MidiIn 端口降级抛 SystemExit，不在 Exception 之列，py3.14 实测漏
+        过去会冲出 mainloop 终止进程（report_callback_exception 都不经过
+        =闪退），而不是旧注释误记的「仅排水链死亡」。"""
         self._hb_tag = getattr(fn, "__name__", "<lambda>")
         try:
             fn()
@@ -1792,8 +1813,10 @@ class App:
         self._hb_tag = "_tick_body"
         try:
             self._tick_body()
-        except Exception as e:
-            # 轮询循环绝不允许死（死一次=状态/队列全部冻结=界面假死）
+        except BaseException as e:
+            # 轮询循环绝不允许死（死一次=状态/队列全部冻结=界面假死）；按
+            # BaseException 捕：SystemExit 在 py3.14 实测会冲出 mainloop
+            # 终止进程（report_callback_exception 都不经过），必须就地吞掉
             try:
                 self.log.insert("end", time.strftime("[%H:%M:%S] ")
                                 + "状态刷新异常（已自动恢复）：%s" % _err(e))
@@ -1871,12 +1894,15 @@ class App:
                            dpi.C_OK if n or a else dpi.C_WARN)
         text, color = self._kb_last
         self.m_last.set(text, color)
-        if (self.pedal is not None and not self.pedal.connected
-                and self.pedal.hint and not self.pedal.muted
-                and time.time() > self._pedal_retry):
+        ped = self.pedal
+        if (ped is not None and not ped.muted
+                and ((ped.hint and not ped.connected)
+                     or (ped.hid_binds and ped.device_hint
+                         and not ped.bridge.running))   # HID 泵死了也重拉，
+                and time.time() > self._pedal_retry):  # 此前只盯 MIDI 口
             self._pedal_retry = time.time() + 10
-            if self.pedal.try_open():
-                self.q.put("CC 踩钉已连接（%s）" % self.pedal.name)
+            if ped.try_open():
+                self.q.put("CC 踩钉已连接（%s）" % ped.name)
         self._update_transport_buttons()
         self._tick_banner()
         follow = self.log.yview()[1] > 0.99    # 上翻看历史时不强行滚回底部
@@ -1906,24 +1932,19 @@ class App:
 
     def _adopt(self, name):
         """手动跟随：Cubase 里的工程被人工变更（横幅发现标题对不上指针）
-        → 按标题对位播放列表。命中=采纳：指针/音色映射/时长全量就位（复用
-        启动恢复语义，自动推进对新工程照常计时）；未命中=游离：清指针回
-        第一首兜底、清映射、计时器清零（时长 0=未知=永不推进，防旧时长
-        误切）。只改状态，不碰窗口不抢焦点；播放列表未载入不动。"""
+        → 按标题对位播放列表。命中=采纳：指针立即就位，时长/音色映射 IO
+        后台装载（网络盘工程库时主线程 400ms 轮询链上做整文件读=无界卡顿，
+        审计 D 项）；未命中=游离：清指针回第一首兜底、清映射、计时器清零
+        （时长 0=未知=永不推进，防旧时长误切）。只改状态，不碰窗口不抢
+        焦点；播放列表未载入不动。"""
         if not self.pl_keys:
             return
         for i, k in enumerate(self.pl_keys):
             if self.by_key[k]["name"] == name:
                 self.cur = i
-                song = self.by_key[k]
-                d = self.durations.get(k) or \
-                    _read_duration(song["path"]) or 0.0
-                self.durations[k] = d
-                if self.watch is not None:
-                    self.watch.set_duration(d)   # 内部 reset：已播重新累计
-                self.slots = kbd_auto.load_slots(song["path"])
-                self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
-                self.cur_song_path = song["path"]
+                self.slots = {}
+                self.ax_slots = {}
+                self._adopted_load(k)
                 self._refresh()
                 self.q.put("已跟随手动打开：《%s》" % name)
                 return
@@ -1936,6 +1957,32 @@ class App:
             self.watch.set_duration(0)
         self._refresh()
         self.q.put("《%s》不在播放列表：不自动推进（NEXT 置空）" % name)
+
+    def _adopted_load(self, key):
+        """_adopt 的装载半程（后台线程）：读时长+音色映射（整文件 IO），
+        完成后代际校验——装载期间用户又切歌/又手动跟随时丢弃旧结果，
+        防跨歌错装。写状态均为无锁属性/GIL 原子（_switch_done 同款）。"""
+        song = self.by_key.get(key)
+        if song is None:
+            return
+        self._load_gen = getattr(self, "_load_gen", 0) + 1
+        gen = self._load_gen
+        path = song["path"]
+
+        def run():
+            d = self.durations.get(key) or _read_duration(path) or 0.0
+            slots = kbd_auto.load_slots(path)
+            ax = kbd_auto.load_slots(path, "ax")
+            if gen != self._load_gen:
+                return                  # 已被更新的一次装载/切歌取代
+            self.durations[key] = d
+            if self.watch is not None:
+                self.watch.set_duration(d)   # 内部 reset：已播重新累计
+            self.slots = slots
+            self.ax_slots = ax
+            self.cur_song_path = path
+            self.calls.put(self._refresh)
+        threading.Thread(target=run, daemon=True).start()
 
     def _tick_banner(self):
         """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（外部手动改工程自动
@@ -2259,10 +2306,9 @@ class SettingsWindow(tk.Toplevel):
             self.web_prefix.config(text="http://%s:" % ip)
             self.app_prefix.config(text="http://%s:" % ip)
             self._refresh_port_status()
-        try:
-            self.after(0, apply)       # UI 更新回主线程
-        except tk.TclError:
-            pass
+        # worker→主线程走 calls 队列：self.after 会把 worker 封送阻塞到主
+        # 循环空闲（主线程停摆期间探测线程集体挂起），主窗若销毁还会炸
+        self.app.calls.put(apply)
 
     def _refresh_port_status(self, retries=3):
         """网页/APP 两个本机端口的指示器：connect 探测（服务绑热点 IP）。
@@ -2284,14 +2330,14 @@ class SettingsWindow(tk.Toplevel):
                     return
                 if not ok and left > 0:     # 可能正在重建服务：稍后复探
                     lbl.config(text="探测中…", fg=dpi.MUT)
-                    self.after(1200, lambda: probe(port, lbl, left - 1))
+                    t = threading.Timer(1.2, lambda: probe(port, lbl,
+                                                           left - 1))
+                    t.daemon = True
+                    t.start()               # 复探在 Timer 线程：网络不占主线程
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
                            fg=dpi.C_OK if ok else dpi.C_ERR)
-            try:
-                self.after(0, apply)
-            except tk.TclError:
-                pass
+            self.app.calls.put(apply)
         for var, lbl in ((self.srv_var, self.web_ok),
                          (self.app_var, self.app_ok)):
             try:
@@ -2367,16 +2413,19 @@ class SettingsWindow(tk.Toplevel):
             ctl = app.ctl
             if ctl is None:
                 return
-            ctl.cfg["vjMute"] = mute
-            if vid:
-                ctl.cfg["videoRoot"] = vid
-            ctl.cfg["projectorMonitor"] = mon
-            if ctl.is_connected() and not ctl.apply_mute():
-                app.q.put("VJ静音未生效：%s" % ctl.last_error)
-            if mon and not ctl.apply_projector():
-                app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-            elif not mon:
-                ctl.close_projector()
+            # 串行化：连续两次保存的两个 apply_obs 线程不许交错（旧保存的
+            # close_projector 落在新保存的 apply_projector 之后=状态回退）
+            with app._obs_apply_lock:
+                ctl.cfg["vjMute"] = mute
+                if vid:
+                    ctl.cfg["videoRoot"] = vid
+                ctl.cfg["projectorMonitor"] = mon
+                if ctl.is_connected() and not ctl.apply_mute():
+                    app.q.put("VJ静音未生效：%s" % ctl.last_error)
+                if mon and not ctl.apply_projector():
+                    app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
+                elif not mon:
+                    ctl.close_projector()
 
         if app.ctl is not None:
             threading.Thread(target=apply_obs, daemon=True).start()

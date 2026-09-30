@@ -224,10 +224,21 @@ class Marquee(tk.Entry):
             self._job = self.after(self.STEP_MS, self._step)
 
     def _step(self):
+        self._job = None
+        try:
+            cont = self._step_body()
+        except tk.TclError:
+            return                          # 组件销毁：跑马灯自然退场
+        except Exception:
+            return                          # 单步异常不断链：下个 set() 重挂
+        if cont:
+            self._job = self.after(self.STEP_MS, self._step)
+
+    def _step_body(self):
         if not self._overflow():
             self._cancel()
             self.xview_moveto(0)
-            return
+            return False
         total = max(1, self._font.measure(self._full))
         span = max(0.0, 1.0 - self.winfo_width() / total)
         cpx = total / max(1, len(self._full))
@@ -246,7 +257,7 @@ class Marquee(tk.Entry):
                     + self._dir * self.SPEED * cpx * self.STEP_MS / 1000
                     / total))
                 self.xview_moveto(self._frac)
-        self._job = self.after(self.STEP_MS, self._step)
+        return True
 
     def _cancel(self):
         if self._job is not None:
@@ -303,6 +314,7 @@ class App:
         self.q = queue.Queue()
         self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
         self.calls_urgent = collections.deque()  # 紧急调用（对称预留）
+        self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
         self.clock_port = None
@@ -602,14 +614,16 @@ class App:
         self.calls.put(lambda: self._apply_title(force=True))
 
     def _apply_title(self, force=False):
-        """标题→当前工程：变化时匹配工程库并装载音色映射（主线程调用）。
-        未打开工程/库里没有 → 清空映射；匹配到 → 装载旁挂 JSON 并同步
-        键盘自动化窗口。"""
+        """标题→当前工程：变化时匹配工程库并装载音色映射（主线程调用；
+        装载 IO 后台执行——.song 旁挂 JSON 在网络盘时主线程读=无界卡顿，
+        审计 D 项；代际守卫防装载期间标题又变时的跨歌错装）。
+        未打开工程/库里没有 → 清空映射；匹配到 → 后台装载并同步键盘窗。"""
         ws = daw_ctrl.current_project()
         name = daw_ctrl.project_name_from_title(ws[1]) if ws else None
         if not force and name == self._cur_title:
             return
         self._cur_title = name
+        self._title_gen = getattr(self, "_title_gen", 0) + 1
         if self.watch is not None:
             self.watch.reset()   # 换工程=已播从头计（横幅时长语义按歌）
         if not name:
@@ -634,13 +648,27 @@ class App:
             self.q.put("《%s》不在工程库，未载入音色映射（检查工程库根目录）"
                        % name)
             return
-        self.slots = kbd_auto.load_slots(song["path"])
-        self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
-        self.cur_song = song
-        self.cur_song_path = song["path"]
+        self.slots, self.ax_slots = {}, {}      # 旧映射即刻失效，装载后补
         self._kb_warned = set()
-        self.q.put("已识别当前工程《%s》：JUNO %d + AX-09 %d 个音符映射"
-                   % (name, len(self.slots), len(self.ax_slots)))
+        gen = self._title_gen
+        path, song_name = song["path"], song["name"]
+
+        def run():
+            slots = kbd_auto.load_slots(path)
+            ax = kbd_auto.load_slots(path, "ax")
+            if gen != self._title_gen:
+                return              # 装载期间标题又变：丢弃旧结果
+            self.slots = slots
+            self.ax_slots = ax
+            self.cur_song = song
+            self.cur_song_path = path
+            self.q.put("已识别当前工程《%s》：JUNO %d + AX-09 %d 个音符映射"
+                       % (song_name, len(slots), len(ax)))
+            self.calls.put(lambda: self._kbd_sync(song))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _kbd_sync(self, song):
+        """键盘自动化窗口热同步（仅主线程跑——worker 摸 Tk 会封送阻塞）。"""
         if self.kbd_win is not None and self.kbd_win.winfo_exists():
             self.kbd_win.set_song(song)
 
@@ -862,8 +890,8 @@ class App:
 
     def _run_call(self, fn):
         """执行单个跨线程回调：tag 供看门狗取证；按 BaseException 捕——
-        MidiIn 端口降级抛 SystemExit，漏过去连 after 重挂都不执行=排水
-        循环永久死亡（完整版同款）。"""
+        MidiIn 端口降级抛 SystemExit，py3.14 实测漏过去会冲出 mainloop
+        终止进程（report_callback_exception 都不经过=闪退）。"""
         self._hb_tag = getattr(fn, "__name__", "<lambda>")
         try:
             fn()
@@ -880,8 +908,8 @@ class App:
         self._hb_tag = ""
 
     def _drain_calls(self):
-        """跨线程 GUI 调用队列的快速排空（50ms 独立循环，完整版同款）。
-        原来搭在 400ms 状态轮询车上且逐条无兜底；紧急队列优先+普通批次
+        """跨线程 GUI 调用队列的快速排空（50ms 独立循环，完整版同款；
+        原来搭在 400ms 状态轮询车上且逐条无兜底）。紧急队列优先+普通批次
         合流（幂等回调恢复后成批重复，只执行最后一次）。"""
         self._hb = time.monotonic()     # 喂看门狗心跳
         while self.calls_urgent:
@@ -905,7 +933,7 @@ class App:
         self._hb_tag = "_tick_body"
         try:
             self._tick_body()
-        except Exception as e:
+        except BaseException as e:      # SystemExit 实测会冲出 mainloop 闪退
             try:
                 self.log.insert("end", time.strftime("[%H:%M:%S] ")
                                 + "状态刷新异常（已自动恢复）：%s" % _err(e))
@@ -1204,10 +1232,8 @@ class SettingsWindow(tk.Toplevel):
             self.web_prefix.config(text="http://%s:" % ip)
             self.app_prefix.config(text="http://%s:" % ip)
             self._refresh_port_status()
-        try:
-            self.after(0, apply)
-        except tk.TclError:
-            pass
+        # worker→主线程走 calls 队列（self.after 封送会阻塞 worker，完整版同款）
+        self.app.calls.put(apply)
 
     def _refresh_port_status(self, retries=3):
         def probe(port, lbl, left):
@@ -1226,14 +1252,14 @@ class SettingsWindow(tk.Toplevel):
                     return
                 if not ok and left > 0:
                     lbl.config(text="探测中…", fg=dpi.MUT)
-                    self.after(1200, lambda: probe(port, lbl, left - 1))
+                    t = threading.Timer(1.2, lambda: probe(port, lbl,
+                                                           left - 1))
+                    t.daemon = True
+                    t.start()               # 复探在 Timer 线程：网络不占主线程
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
                            fg=dpi.C_OK if ok else dpi.C_ERR)
-            try:
-                self.after(0, apply)
-            except tk.TclError:
-                pass
+            self.app.calls.put(apply)
         for var, lbl in ((self.srv_var, self.web_ok),
                          (self.app_var, self.app_ok)):
             try:
@@ -1291,16 +1317,18 @@ class SettingsWindow(tk.Toplevel):
             ctl = app.ctl
             if ctl is None:
                 return
-            ctl.cfg["vjMute"] = mute
-            if vid:
-                ctl.cfg["videoRoot"] = vid
-            ctl.cfg["projectorMonitor"] = mon
-            if ctl.is_connected() and not ctl.apply_mute():
-                app.q.put("VJ静音未生效：%s" % ctl.last_error)
-            if mon and not ctl.apply_projector():
-                app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-            elif not mon:
-                ctl.close_projector()
+            # 串行化：连续两次保存的两个 apply_obs 线程不许交错（完整版同款）
+            with app._obs_apply_lock:
+                ctl.cfg["vjMute"] = mute
+                if vid:
+                    ctl.cfg["videoRoot"] = vid
+                ctl.cfg["projectorMonitor"] = mon
+                if ctl.is_connected() and not ctl.apply_mute():
+                    app.q.put("VJ静音未生效：%s" % ctl.last_error)
+                if mon and not ctl.apply_projector():
+                    app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
+                elif not mon:
+                    ctl.close_projector()
 
         if app.ctl is not None:
             threading.Thread(target=apply_obs, daemon=True).start()

@@ -76,15 +76,22 @@ def _pick(pairs, hint=PORT_HINT):
 # 迟到结果由内部弃单回收（不漏句柄），主线程从此不被 winmm 挂死。
 IO_TIMEOUT = 3.0
 _io_q = queue.Queue()
+_io_stuck = False             # 专线毒化标志：某条 job 超过等待时限仍在跑
+_io_stuck_lock = threading.Lock()
 
 
 def _io_worker():
+    global _io_stuck
     while True:
         job = _io_q.get()
+        with _io_stuck_lock:
+            _io_stuck = False    # 上一条已了结（正常完成/迟到完成/异常）
         try:
             job()
         except BaseException:
             pass                # 专线绝不死；成功/失败语义由 job 自行记账
+        with _io_stuck_lock:
+            _io_stuck = False
 
 
 _io_thread = threading.Thread(target=_io_worker, daemon=True,
@@ -102,6 +109,14 @@ def run_io(fn, timeout=None):
         timeout = IO_TIMEOUT
     if threading.current_thread() is _io_thread:
         return True, fn()
+    with _io_stuck_lock:
+        stuck = _io_stuck
+    if stuck:
+        # 毒化熔断：一次真硬挂死的 midiInClose（Win11 进程级锁）会永久占住
+        # 专线，此后每个操作都注定等满超时——主线程侧（踩钉 10s 重试/
+        # _apply_ports/_on_exit）改为立即快速失败，直到挂死 job 迟到了结
+        # 自动解除。锁被占住期间 winmm 本就无可成功操作，语义不变
+        return False, None
     done = threading.Event()
     box = {}
 
@@ -115,6 +130,8 @@ def run_io(fn, timeout=None):
 
     _io_q.put(job)
     if not done.wait(timeout):
+        with _io_stuck_lock:
+            globals()["_io_stuck"] = True
         return False, None
     if "e" in box:
         raise box["e"]
@@ -327,25 +344,33 @@ def note_handler(ctl, sync, report=print):
     def worker():
         while True:
             note = q.get()
-            while True:                 # 倒掉积压：切换归最新音符管
+            try:
+                while True:             # 倒掉积压：切换归最新音符管
+                    try:
+                        note = q.get_nowait()
+                    except queue.Empty:
+                        break
+                target = NOTE_MAP[note]
+                if target is None:
+                    ok = ctl.stop_media()
+                    if ok:
+                        sync.set_state("stopped")
+                        sync.current_video = None
+                else:
+                    ok = ctl.set_media(target, False)
+                    if ok:
+                        sync.set_state("playing")
+                        sync.current_video = target
+                report("音符 %d → %s%s" % (
+                    note, "熄屏" if target is None else target,
+                    "" if ok else " 失败：%s" % ctl.last_error))
+            except Exception as e:
+                # 工作线程绝不允许静默死亡（死=VJ 触发全场失效且零日志）
                 try:
-                    note = q.get_nowait()
-                except queue.Empty:
-                    break
-            target = NOTE_MAP[note]
-            if target is None:
-                ok = ctl.stop_media()
-                if ok:
-                    sync.set_state("stopped")
-                    sync.current_video = None
-            else:
-                ok = ctl.set_media(target, False)
-                if ok:
-                    sync.set_state("playing")
-                    sync.current_video = target
-            report("音符 %d → %s%s" % (
-                note, "熄屏" if target is None else target,
-                "" if ok else " 失败：%s" % ctl.last_error))
+                    report("音符处理异常（已恢复）：%s: %s"
+                           % (type(e).__name__, e))
+                except Exception:
+                    pass
     threading.Thread(target=worker, daemon=True).start()
     return on_note
 
