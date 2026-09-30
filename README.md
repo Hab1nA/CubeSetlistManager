@@ -247,6 +247,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
 | autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
+| clockPortHint | （顶层） | MIDI 时钟监听端口（设置页「时钟端口名称」，独立于 VJ 音符口；DAW 侧需把时钟发到该端口——Cubase 工程设置的时钟发送端口、S1 外部设备勾 Send MIDI Clock；空串=停用，走带三态/已播/自动推进不可用） |
 | exitCloseApps | （顶层） | 「退出时关闭被控软件（DAW/OBS/loopMIDI）」勾选持久化 |
 
 ## 文件架构

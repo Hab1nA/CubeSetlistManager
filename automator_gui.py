@@ -269,6 +269,7 @@ class App:
         self.lite = True                # web_remote 简化版分流标志（页面/门禁）
         self.vj_hint = str(cfg.get("vjPortHint") or "")
         self.kb_hint = str(cfg.get("kbPortHint") or "")
+        self.clock_hint = str(cfg.get("clockPortHint") or "")
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
@@ -301,6 +302,7 @@ class App:
         self.calls = queue.Queue()
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
+        self.clock_port = None
         self.kb_port = self.switcher = self.ax_switcher = None
         self.kbd_win = None
         self.start_err = ""
@@ -479,14 +481,25 @@ class App:
                         self.port = mb.MidiIn(
                             self.vj_hint,
                             mb.note_handler(self.ctl, self.sync,
-                                            report=self.q.put),
-                            on_clock=lambda: (self.sync.on_clock(),
-                                              self.watch.on_clock()))
+                                            report=self.q.put))
                     else:
                         self.q.put("VJ 触发监听已停用")
                 except SystemExit as e:
                     self.port = None
                     self.q.put("MIDI 监听未启动：%s" % e)
+                # 时钟监听：独立端口（与 VJ 音符口解耦）
+                try:
+                    if self.clock_hint:
+                        self.clock_port = mb.MidiIn(
+                            self.clock_hint, lambda n, v: None,
+                            on_clock=lambda: (self.sync.on_clock(),
+                                              self.watch.on_clock()))
+                        self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
+                    else:
+                        self.q.put("时钟监听已停用（未设时钟端口）")
+                except SystemExit as e:
+                    self.clock_port = None
+                    self.q.put("时钟监听未启动：%s（走带三态不可用）" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -707,14 +720,33 @@ class App:
                     self.port = mb.MidiIn(
                         self.vj_hint,
                         mb.note_handler(self.ctl, self.sync,
-                                        report=self.q.put),
-                        on_clock=lambda: (self.sync.on_clock(),
-                                          self.watch.on_clock()))
+                                        report=self.q.put))
                     self.q.put("VJ 监听已切换（%s）" % self.port.name)
                 except SystemExit as e:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
+        # 时钟监听热切换
+        if self.clock_port is not None:
+            try:
+                self.clock_port.close()
+            except OSError:
+                pass
+        self.clock_port = None
+        if self.ctl is not None and self.sync is not None:
+            if not self.clock_hint:
+                self.q.put("时钟监听已停用（未设时钟端口）")
+            else:
+                try:
+                    self.clock_port = mb.MidiIn(
+                        self.clock_hint, lambda n, v: None,
+                        on_clock=lambda: (self.sync.on_clock(),
+                                          self.watch.on_clock()))
+                    self.q.put("时钟监听已切换（%s）" % self.clock_port.name)
+                except SystemExit as e:
+                    self.q.put("时钟监听未启动：%s" % e)
+        else:
+            self.q.put("时钟服务未就绪：端口名称已保存，重启程序后生效")
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
@@ -974,7 +1006,8 @@ class SettingsWindow(tk.Toplevel):
                  anchor="w").pack(fill="x", pady=(pad, 3))
         live = list(dict.fromkeys(n for _i, n in mb._in_devices()))
         ins = ["无"] + live
-        for hint in dict.fromkeys(h for h in (app.vj_hint, app.kb_hint) if h):
+        for hint in dict.fromkeys(
+                h for h in (app.vj_hint, app.kb_hint, app.clock_hint) if h):
             if not any(hint in n for n in live):
                 ins.append(hint + _ABSENT)
 
@@ -983,8 +1016,10 @@ class SettingsWindow(tk.Toplevel):
                 (n for n in live if hint and hint in n),
                 hint + _ABSENT if hint else "无"))
 
+        self.clock_var = port_var(app.clock_hint)
         self.vj_var = port_var(app.vj_hint)
         self.kb_var = port_var(app.kb_hint)
+        menu_row("时钟端口名称", self.clock_var, ins)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
         # 移动端遥控（翻谱）
@@ -1135,8 +1170,10 @@ class SettingsWindow(tk.Toplevel):
         mon = "" if mon == "无" else mon
         vj = raw(self.vj_var.get())
         kb = raw(self.kb_var.get())
+        ck = raw(self.clock_var.get())
         vj = "" if vj == "无" else vj
         kb = "" if kb == "无" else kb
+        ck = "" if ck == "无" else ck
         try:
             srv = int(self.srv_var.get().strip())
             assert srv > 0
@@ -1183,11 +1220,13 @@ class SettingsWindow(tk.Toplevel):
         if rescan:
             app.q.put("工程库已变更，后台重扫…")
             threading.Thread(target=app._scan_library, daemon=True).start()
-        ports_changed = (vj != app.vj_hint) or (kb != app.kb_hint)
-        app.vj_hint, app.kb_hint = vj, kb
+        ports_changed = ((vj != app.vj_hint) or (kb != app.kb_hint)
+                         or (ck != app.clock_hint))
+        app.vj_hint, app.kb_hint, app.clock_hint = vj, kb, ck
         try:
             cfg = _load_config()
-            cfg.update({"vjPortHint": vj, "kbPortHint": kb})
+            cfg.update({"vjPortHint": vj, "kbPortHint": kb,
+                        "clockPortHint": ck})
             obs = cfg.get("obs") or {}
             if vid:
                 obs["videoRoot"] = vid

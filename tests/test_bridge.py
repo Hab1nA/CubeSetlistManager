@@ -338,6 +338,16 @@ def test_transport_blocked():
     assert daw_ctrl.STUDIOONE.get("rewind_stopped") == ("NUMDOT",)
 
 
+def test_clock_port():
+    """时钟端口独立配置：预置配置必须直填时钟端口（空/缺键=时钟监听停用，
+    走带三态/已播/自动推进全不可用——不许手滑清空静默下线）。"""
+    for f in ("config.example.json", "config.studioone.json",
+              "config.automator.json"):
+        cfg = json.load(open(pathlib.Path(__file__).resolve().parents[1] / f,
+                             encoding="utf-8"))
+        assert cfg.get("clockPortHint"), "%s 缺 clockPortHint" % f
+
+
 def test_daw_backends():
     # 双底座事实表：Cubase 默认激活；S1 换表后标题解析跟随，用时还原
     assert daw_ctrl.ACTIVE is daw_ctrl.CUBASE

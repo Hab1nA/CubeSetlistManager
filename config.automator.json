@@ -38,5 +38,6 @@
     "devices": []
   },
   "vjPortHint": "VJ Automation",
-  "kbPortHint": "Keyboard Automation"
+  "kbPortHint": "Keyboard Automation",
+  "clockPortHint": "VJ Automation"
 }
