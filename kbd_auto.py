@@ -594,12 +594,55 @@ class KeyboardAutoWindow(tk.Toplevel):
                 else describe_slot(slot))
 
     def set_song(self, song):
+        """绑定歌曲并装载映射。装载 IO（工程文件夹旁挂 JSON）放后台线程
+        ——网络盘慢/掉线时主线程（打开窗口/标题热同步路径）不再冻结
+        （复审 R3-1：_adopt/_redict 同款手法）；代际守卫防连点换歌回落。"""
         self._cancel_capture()
         self.song = song
-        self.slots = load_slots(song["path"]) if song else {}
-        self.ax_slots = load_slots(song["path"], "ax") if song else {}
+        self.slots = {}
+        self.ax_slots = {}
+        self._song_gen = getattr(self, "_song_gen", 0) + 1
+        gen = self._song_gen
+        for note in SLOT_NOTES + AX_NOTES:
+            self._refresh(note)             # 旧映射即刻失效
+        if not song:
+            return
+        path = song["path"]
+
+        def run():
+            slots = load_slots(path)
+            ax = load_slots(path, "ax")
+            if gen != self._song_gen:
+                return                      # 绑定已换：丢弃旧装载
+            self.slots = slots
+            self.ax_slots = ax
+            self.app.calls.put(self._refresh_all)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _refresh_all(self):
+        """装载完成的全量刷新（经 calls 回主线程；窗口已关则自然蒸发）。"""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
         for note in SLOT_NOTES + AX_NOTES:
             self._refresh(note)
+
+    def _persist_async(self, store, path, key):
+        """save_slots 落盘放后台线程（网络盘写冻结主线程，复审 R3-1）；
+        失败经 calls 回主线程报状态。落盘目标是捕获时的歌曲路径，换绑后
+        照写无碍（写的就是那首歌的旁挂文件）。"""
+        snapshot = dict(store)
+
+        def run():
+            try:
+                save_slots(path, snapshot, key)
+            except (OSError, ValueError) as e:
+                self.app.calls.put(lambda: self.set_status(
+                    "映射保存失败：%s" % e, dpi.C_ERR))
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _refresh(self, note):
         slot = self._store(note).get(note)
@@ -672,13 +715,9 @@ class KeyboardAutoWindow(tk.Toplevel):
             return
         store = self._store(note)
         store[note] = cap.slot
-        try:
-            save_slots(self.song["path"], store,
-                       "ax" if note in AX_NOTES else "slots")
-        except (OSError, ValueError) as e:
-            self.set_status("保存失败：%s" % e, dpi.C_ERR)
-            return
         self._refresh(note)
+        self._persist_async(store, self.song["path"],
+                            "ax" if note in AX_NOTES else "slots")
         # 热同步判定按「App 当前已装载映射的工程路径」：完整版=切歌完成/
         # 恢复时装载的那首，简化版（Cube Automator）=标题识别的当前工程；
         # 两种 App 都维护 cur_song_path（未装载/切换中=None，不热同步）
@@ -705,13 +744,10 @@ class KeyboardAutoWindow(tk.Toplevel):
     def _clear(self, note):
         if not self._store(note).pop(note, None):
             return
-        try:
-            save_slots(self.song["path"], self._store(note),
-                       "ax" if note in AX_NOTES else "slots")
-            self._refresh(note)
-            self.set_status("%s 已清除" % note_name(note))
-        except (OSError, ValueError) as e:
-            self.set_status("保存失败：%s" % e, dpi.C_ERR)
+        self._persist_async(self._store(note), self.song["path"],
+                            "ax" if note in AX_NOTES else "slots")
+        self._refresh(note)
+        self.set_status("已清除")
 
     # ---- 轮询：录制进度/超时 + 端口状态 ----
 

@@ -1385,9 +1385,12 @@ class App:
         if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
             self.watch.set_duration(d)
         self.calls.put(self._refresh)
-        self.slots = kbd_auto.load_slots(song["path"])
-        self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
-        self.cur_song_path = song["path"]
+        slots = kbd_auto.load_slots(song["path"])
+        ax_slots = kbd_auto.load_slots(song["path"], "ax")
+        with self._load_lock:       # 写回与 _switch 清空/后台装载同锁原子化
+            self.slots = slots      # （复审 R3-1：第三写者收编；IO 在锁外）
+            self.ax_slots = ax_slots
+            self.cur_song_path = song["path"]
         if self.slots or self.ax_slots:
             self.q.put("音色映射已载入：JUNO %d 个 + AX-09 %d 个音符（%s）"
                        % (len(self.slots), len(self.ax_slots),

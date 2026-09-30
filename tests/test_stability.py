@@ -381,7 +381,7 @@ def test_hook_selfheal_probe_and_rehook(monkeypatch):
 def test_hook_selfheal_wiring():
     src = _src("pedal.py")
     assert "_hook_seen" in src and "_probe(" in src and "_rehook(" in src
-    assert "self._rehook_tid" in src     # stop 时收尾自愈线程
+    assert "self._rehook_tids" in src    # stop 逐个收尾在途自愈泵
     src = _src("setlist_gui.py")
     assert 'on_event=lambda m: self.q.put("踩钉桥：%s" % m)' in src
 
@@ -516,31 +516,38 @@ def test_pedal_hid_retry_gated():
 # ---- R2 复审清单（H1/M1/M3/TOCTOU/P1-1/P1-2/P2-4/L1/L2/L4）回归 ----
 
 def test_winmm_poison_causal_guard(monkeypatch):
-    """假毒化防：置位以 _io_done 计数为因果锚——job 在超时唤醒延迟窗口内
-    迟到完成时，后到的置位被拒绝（复审 H1：否则永久熔断至重启）。"""
+    """假毒化防：置位以票号为因果锚——job 在超时唤醒延迟窗口内迟到完成
+    时，后到的置位被拒绝（复审 H1：否则永久熔断至重启）。"""
     fake = _FakeWinmm()
     monkeypatch.setattr(mb, "_winmm", fake)
+    deadline = time.monotonic() + 3.0   # 先等前序用例的毒化标志清零
+    while time.monotonic() < deadline:
+        with mb._io_stuck_lock:
+            if not mb._io_stuck:
+                break
+        time.sleep(0.05)
     done = threading.Event()
     holder = {}
 
     def slow_fn():
-        done.wait(1.0)                  # 占住专线但会在时限内完成
+        done.wait(1.0)                  # 占住专线，超时后仍会完成
         return "ok"
 
     t = threading.Thread(target=lambda: holder.update(
         r=mb.run_io(slow_fn, 0.05)), daemon=True)
     t.start()
-    time.sleep(0.15)                    # 等 run_io 超时分支走完
+    time.sleep(0.3)                     # 等超时分支走完（job 尚未完成）
     with mb._io_stuck_lock:
         stuck_after = mb._io_stuck
-        done_count = mb._io_done
-    done.set()
+    assert stuck_after                  # 确曾置位（job 明确未了结）
+    done.set()                          # 迟到完成
     t.join(2.0)
-    time.sleep(0.2)                     # 迟到了结推进计数
+    time.sleep(0.2)
     with mb._io_stuck_lock:
         final_stuck = mb._io_stuck
-    assert stuck_after or done_count >= 0   # 超时时确曾置位（或已了结）
-    assert not final_stuck              # 关键：了结后标志必为 False
+        done_ticket = mb._io_done_ticket
+    assert not final_stuck              # 了结后标志必为 False（假毒化被拒）
+    assert done_ticket > 0              # 票号已回填
     ok, val = mb.run_io(lambda: "next", 1.0)
     assert ok and val == "next"         # 专线未被假毒化锁死
 
@@ -600,8 +607,8 @@ def test_cpr_read_duration_catches_oserror():
 
 
 def test_rehook_hang_watchdog(monkeypatch):
-    """重装 SetWindowsHookExW 挂死：10s 看门狗放行 _rehooking（自愈能力
-    不得单点失效，复审 L1）。"""
+    """重装 SetWindowsHookExW 挂死：看门狗放行 _rehooking（自愈能力不得
+    单点失效，复审 L1；时长常量化供测试缩时）。"""
     import pedal
 
     calls = []
@@ -610,7 +617,6 @@ def test_rehook_hang_watchdog(monkeypatch):
     br._live = True
     br._hook = "old"
     br._href = "trampoline-stub"
-    calls_now = time.monotonic
 
     def hang(*a):                       # 永不返回（挂死模拟）
         calls.append("hang")
@@ -618,14 +624,15 @@ def test_rehook_hang_watchdog(monkeypatch):
 
     monkeypatch.setattr(pedal.u32, "SetWindowsHookExW", hang)
     monkeypatch.setattr(pedal.k32, "GetCurrentThreadId", lambda: 99)
-    br._rehook(calls_now())
-    deadline = time.monotonic() + 1.0
+    monkeypatch.setattr(pedal, "REHOOK_UNSTICK_SEC", 0.3)
+    br._rehook(time.monotonic())
+    deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and "hang" not in calls:
         time.sleep(0.02)
     assert br._rehooking                # 在途
-    deadline = time.monotonic() + 12.0  # 10s 看门狗放行
+    deadline = time.monotonic() + 3.0   # 看门狗放行
     while time.monotonic() < deadline and br._rehooking:
-        time.sleep(0.2)
+        time.sleep(0.05)
     assert not br._rehooking            # 自愈能力恢复（可再试）
     assert any("超时未返回" in c for c in calls if isinstance(c, str))
 
@@ -658,3 +665,66 @@ def test_exit_stops_watchdog():
     for name in ("setlist_gui.py", "automator_gui.py"):
         src = _slice(_src(name), "def _on_exit", "def _exit_worker")
         assert "self._stall_wd.stop()" in src, name
+
+
+# ---- R3 复审清单（R3-1/R3-2/R3-4/R3-5）回归 ----
+
+def test_kbd_window_io_off_main_thread():
+    """键盘自动化窗口的映射装载/落盘出主线程（网络盘部署下的停摆残留，
+    复审 R3 全量 ISSUE-1）：set_song 后台装载+代际守卫、保存走后台。"""
+    src = _src("kbd_auto.py")
+    body = _slice(src, "def set_song", "def _refresh(self, note)")
+    assert "threading.Thread(target=run" in body
+    assert "_song_gen" in body
+    assert "def _persist_async" in src
+    cap = _slice(src, "def _finish_capture", "def _trigger(self, note)")
+    assert "_persist_async(store, self.song" in cap
+    assert "save_slots(self.song[\"path\"]" not in cap   # 旧同步写不回归
+    clr = _slice(src, "def _clear(self", "    def _tick(self)")
+    assert "_persist_async" in clr
+
+
+def test_open_out_dead_flag_recycle(monkeypatch):
+    """open_out 超时弃单同款即开即回收（复审 R3 全量 ISSUE-2，M1 的
+    输出方向对偶项）：迟到的 open 成功后自查 dead 标志自行 close。"""
+    class _OutFake(_FakeWinmm):
+        def midiOutOpen(self, ph, _idx, _proc, _inst, _flags):
+            time.sleep(0.4)             # 首次慢开制造弃单窗口
+            with self._lock:
+                self.log.append("outopen")
+            getattr(ph, "_obj", ph).value = 7
+            return 0
+
+        def midiOutClose(self, _h):
+            with self._lock:
+                self.log.append("outclose")
+
+    fake = _OutFake()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    h, err = mb.open_out(0)
+    assert h is None and "超时" in err
+    deadline = time.monotonic() + 2.0   # 迟到 open 完成后自查回收
+    while time.monotonic() < deadline and "outclose" not in fake.log:
+        time.sleep(0.05)
+    assert "outclose" in fake.log
+
+
+def test_switch_done_third_writer_locked():
+    """_switch_done 写回纳入 _load_lock；daw_ctrl 改为 on_done 完成后才清
+    busy（完成回调的 IO 尾巴期间门控不再失效，复审 R3 对抗 M 项）。"""
+    src = _src("setlist_gui.py")
+    body = _slice(src, "def _switch_done", "def _auto_play")
+    assert "with self._load_lock:" in body
+    dsrc = _src("daw_ctrl.py")
+    fin = _slice(dsrc, "def _switch(self, path, on_done)",
+                 "    def _close(self, hwnd)")
+    tail = fin[fin.index("        finally:"):]
+    assert tail.index("on_done(") < tail.index("self.busy = False")
+
+
+def test_grace_noop_removed():
+    """open_in 的 0.5s 宽限 no-op 已删（复审 R3-4 死重+毒化期队列增长源）：
+    弃单 job 本就在队列里会迟到自查回收。"""
+    src = _slice(_src("midi_bridge.py"), "def open_in", "def close_in")
+    assert "run_io(lambda: None" not in src

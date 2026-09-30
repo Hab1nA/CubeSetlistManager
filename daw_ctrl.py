@@ -456,9 +456,15 @@ class DawController:
         except SwitchError as e:
             self._log("切换失败：%s" % e)
         finally:
-            self.busy = False
-            if on_done:
-                on_done(project_name_from_title(opened) if opened else None)
+            try:
+                # on_done（含时长/映射装载的慢文件 IO）期间保持 busy：此前
+                # 先清 busy 再跑 on_done，完成回调的 IO 尾巴里用户可再点
+                # 切歌，旧映射回落到新歌上（复审 R3-1 的门控失效口）
+                if on_done:
+                    on_done(project_name_from_title(opened)
+                            if opened else None)
+            finally:
+                self.busy = False
 
     def _close(self, hwnd):
         """PostMessage WM_CLOSE 直达窗口（Cubase E2E 实测 0.5s 生效）。

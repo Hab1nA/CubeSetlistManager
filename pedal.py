@@ -323,7 +323,9 @@ class RawInputBridge:
         self._rehook_at = 0.0    # 上次自愈重装时刻（限频 15s）
         self._rehooking = False  # 自愈线程在途标志
         self._rehook_seq = 0     # 自愈尝试代际（挂死看门狗甄别用）
-        self._rehook_tid = None  # 自愈线程 id（stop 时投 WM_QUIT 收尾）
+        self._rehook_ok_seq = 0  # 已成功装上钩子的代际（甄别边界误报）
+        self._rehook_tids = []   # 在途自愈泵线程 id（stop 逐个收尾）
+        self._tids_lock = threading.Lock()
         self.raw_ok = None           # 线程启动后回填：INPUTSINK 是否注册成功
         self._installed = threading.Event()   # LL 钩子安装完成信号
         self._pumping = threading.Event()     # 线程消息队列已建成（WM_QUIT 可投）
@@ -419,9 +421,10 @@ class RawInputBridge:
                 if u32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0):
                     break
                 time.sleep(0.01)
-        if self._rehook_tid is not None:    # 自愈线程的泵同步退场拆钩
-            u32.PostThreadMessageW(self._rehook_tid, WM_QUIT, 0, 0)
-            self._rehook_tid = None         # 一次投递：防 tid 复用后误投
+        with self._tids_lock:               # 在途自愈泵逐个收尾（复审 R3-5：
+            rehook_tids, self._rehook_tids = self._rehook_tids, []  # 多代
+        for tid in rehook_tids:             #   并存时不再只通知最后一个）
+            u32.PostThreadMessageW(tid, WM_QUIT, 0, 0)
         th = self._thread     # 先摘登记再 join：对已赋值未起跑的交错态，
         self._thread = None   #   join 会抛 RuntimeError 且残留登记谎报 running
         self._tid = None
@@ -507,13 +510,16 @@ class RawInputBridge:
         seq = self._rehook_seq
 
         def job():
-            self._rehook_tid = k32.GetCurrentThreadId()
+            tid = k32.GetCurrentThreadId()
+            with self._tids_lock:
+                self._rehook_tids.append(tid)
             h = u32.SetWindowsHookExW(13, self._href, None, 0)
             if not h:
                 self._rehooking = False
                 self._report("低级钩子疑似被系统摘除，重装失败"
                              "（15 秒后自动重试）")
                 return
+            self._rehook_ok_seq = seq
             old = self._hook
             self._hook = h
             if old:
@@ -532,13 +538,16 @@ class RawInputBridge:
 
         def unstick():
             # 重装挂死看门狗：SetWindowsHookExW 已知偶发不返回（启动路径
-            # 同款），挂死则 _rehooking 永久 True=自愈单点失效——10 秒无果
-            # 放行限频门再试（挂死线程为 daemon，随进程回收）
+            # 同款），挂死则 _rehooking 永久 True=自愈单点失效——到点放行
+            # 限频门再试（挂死线程为 daemon，随进程回收）。装成于边界时
+            # 静默放行（_rehooking 在泵退出前一直为 True，这里兼任「成功
+            # 后放行未来再自愈」职责，不打误导日志，复审 R3-5）
             if self._rehooking and self._rehook_seq == seq:
+                if self._rehook_ok_seq != seq:
+                    self._report("钩子重装超时未返回，稍后自动重试")
                 self._rehooking = False
-                self._report("钩子重装超时未返回，稍后自动重试")
 
-        t = threading.Timer(10.0, unstick)
+        t = threading.Timer(REHOOK_UNSTICK_SEC, unstick)
         t.daemon = True
         t.start()
 
@@ -896,6 +905,8 @@ class Learner:
 
 
 LEARN_TIMEOUT = 8.0        # 学习等待踩踏的时限（秒）
+REHOOK_UNSTICK_SEC = 10.0  # 运行期重装挂死看门狗（SetWindowsHookExW 已知
+                           #   偶发不返回；常量化供测试缩时）
 
 
 class PedalWindow(tk.Toplevel):

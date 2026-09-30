@@ -77,12 +77,13 @@ def _pick(pairs, hint=PORT_HINT):
 IO_TIMEOUT = 3.0
 _io_q = queue.Queue()
 _io_stuck = False             # 专线毒化标志：某条 job 超过等待时限仍在跑
-_io_done = 0                  # 已了结的 job 计数（毒化置位的因果保护用）
+_io_ticket = 0                # 递增 job 票号（入队时分配）
+_io_done_ticket = 0           # 最近一条了结 job 的票号（毒化置位因果锚）
 _io_stuck_lock = threading.Lock()
 
 
 def _io_worker():
-    global _io_stuck, _io_done
+    global _io_stuck
     while True:
         job = _io_q.get()
         with _io_stuck_lock:
@@ -92,7 +93,6 @@ def _io_worker():
         except BaseException:
             pass                # 专线绝不死；成功/失败语义由 job 自行记账
         with _io_stuck_lock:
-            _io_done += 1       # 计数只在 job 真正了结后推进（因果锚）
             _io_stuck = False
 
 
@@ -108,35 +108,41 @@ def run_io(fn, timeout=None, force=False):
     操作在 fn 里读共享 state，见 open_in）。等到了异常则原样抛出。
     专线线程内重入直接执行（否则自己等自己=必然超时假象）。
     毒化熔断：挂死 job 占住串行队列时，后续操作快速失败（等了也白等），
-    直到挂死 job 迟到了结自动解除——置位以 _io_done 计数为因果锚：仅在
-    「本 job 尚无任何了结记录」时置位，杜绝 job 恰在超时唤醒延迟窗口内
-    完成后被后到置位盖回的假毒化（复审 H1）。force=True 豁免快速失败
-    （close 类必须入队的收尾 job——不入队=句柄永久泄漏，复审 M1）。"""
-    global _io_stuck
+    直到挂死 job 迟到了结自动解除——置位以票号为因果锚（复审 H1/R3-3）：
+    入队时领票 _io_ticket，job 了结时回填 _io_done_ticket；超时置位仅当
+    「自己的票还没被回填」，job 恰在唤醒延迟窗口内迟到完成则后到置位被
+    拒（H1），前面排队的 job 先完成也不误伤本 job 的置位资格（R3-3）。
+    force=True 豁免快速失败（close 类必须入队的收尾 job——不入队=句柄
+    永久泄漏，复审 M1）。"""
+    global _io_stuck, _io_ticket, _io_done_ticket
     if timeout is None:
         timeout = IO_TIMEOUT
     if threading.current_thread() is _io_thread:
         return True, fn()
     with _io_stuck_lock:
         stuck = _io_stuck
-        base_done = _io_done
+        _io_ticket += 1
+        my = _io_ticket
     if stuck and not force:
         return False, None
     done = threading.Event()
     box = {}
 
     def job():
-        try:
+        global _io_done_ticket          # 嵌套函数须自行声明：run_io 的
+        try:                            #   global 不传导到闭包内层
             box["r"] = fn()
         except BaseException as e:
             box["e"] = e
         finally:
+            with _io_stuck_lock:        # 了结回填自己的票（串行队列单调）
+                _io_done_ticket = my
             done.set()
 
     _io_q.put(job)
     if not done.wait(timeout):
         with _io_stuck_lock:
-            if _io_done == base_done:   # 了结计数未动=我们这条 job 还在跑
+            if _io_done_ticket < my:    # 本票未回填=我们这条 job 还在跑
                 _io_stuck = True
         return False, None
     if "e" in box:
@@ -170,11 +176,9 @@ def open_in(idx, proc, timeout=None):
 
     done, _ = run_io(job, timeout)
     if not done:
-        state["dead"] = True
-        # 宽限弃单回收：force 豁免毒化快速失败——迟到 job 完成后有机会
-        # 自查 dead 标志把刚打开的口收掉（复审 M1：毒化下宽限被快速失败
-        # 吞掉=宽限死代码）
-        run_io(lambda: None, 0.5, force=True)
+        state["dead"] = True        # 弃单 job 本就排在队列里会迟到执行并
+                                    #   自查回收——无需宽限等待（复审 R3-4：
+                                    #   原 0.5s no-op 宽限是死重+毒化期队列增长源）
     if result.get("ok"):
         return h, None
     return None, result.get("err") or "打开超时（%.0f 秒）" % timeout
@@ -210,10 +214,13 @@ def close_in(h):
 
 def open_out(idx, timeout=None):
     """在专线 midiOutOpen（限时等待）。返回 (HANDLE, None) 或
-    (None, 错误文案)。输出方向与输入同锁，同走专线（复审 P1-2）。"""
+    (None, 错误文案)。输出方向与输入同锁，同走专线（复审 P1-2）；
+    超时弃单与 open_in 同款即开即回收（复审 R3-2：迟到 open 成功后
+    句柄不再无人认领）。"""
     if timeout is None:
         timeout = IO_TIMEOUT
     h = wintypes.HANDLE()
+    state = {"dead": False}
     result = {}
 
     def job():
@@ -221,9 +228,15 @@ def open_out(idx, timeout=None):
         if r:
             result["err"] = "midiOutOpen 失败（code %d）" % r
             return
+        if state["dead"]:           # 等待方已弃单：即开即回收
+            _winmm.midiOutClose(h)
+            result["err"] = "打开超时（%.0f 秒，弃单已回收）" % timeout
+            return
         result["ok"] = True
 
     done, _ = run_io(job, timeout)
+    if not done:
+        state["dead"] = True
     if result.get("ok"):
         return h, None
     return None, result.get("err") or "打开超时（%.0f 秒）" % timeout
