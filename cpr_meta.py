@@ -17,9 +17,14 @@ _RE_CYCLE = re.compile(
 
 
 def read_duration(path):
-    """工程时长秒数（右定位条-左定位条）；未设定位条/解析失败返回 None。"""
-    with open(path, "rb") as f:
-        data = f.read()
+    """工程时长秒数（右定位条-左定位条）；未设定位条/解析失败/文件不可读
+    返回 None。OSError 必须就地消化：本函数跑在装载后台线程，裸抛会静默
+    杀死线程（_switch_done 尾部/adopted_load/重扫，复审 P2-4）。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
     if data[:4] not in (b"RIFF", b"RIF2"):
         return None
     pos = {}

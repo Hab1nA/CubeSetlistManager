@@ -435,6 +435,7 @@ class App:
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
         self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
+        self._load_lock = threading.Lock()  # 装载代际守卫的校验+写原子化
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
         self.clock_port = None
@@ -715,6 +716,7 @@ class App:
         if not messagebox.askyesno(
                 "退出", "确定退出Cube Setlist Manager？"):
             return
+        self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close()),
@@ -1345,10 +1347,11 @@ class App:
         if self.watch is not None:  # watch 没起来（VJ 链构造失败）不得炸切歌，
             self.watch.reset()      #   与 _panic 同款守卫（审计实测可达）
         self.cur = i
-        self.slots = {}            # 切歌开始，旧映射立即失效
-        self.ax_slots = {}
-        self.cur_song_path = None
-        self._load_gen = getattr(self, "_load_gen", 0) + 1  # 作废在途后台装载
+        with self._load_lock:       # 清空+代际递增原子化：堵后台装载的
+            self.slots = {}         # 「校验后写入」TOCTOU 窗（复审 M3）
+            self.ax_slots = {}
+            self.cur_song_path = None
+            self._load_gen = getattr(self, "_load_gen", 0) + 1
         self._kb_warned = set()
         self._refresh()
         self.q.put("切换到《%s》…（%s）"
@@ -1800,7 +1803,8 @@ class App:
                 batch.append(self.calls.get_nowait())
             except queue.Empty:
                 break
-        for fn in stallguard.coalesce(batch):
+        for fn in stallguard.coalesce(
+                batch, {"_refresh", "_persist_web_remote"}):
             self._run_call(fn)
         self.root.after(50, self._drain_calls)
 
@@ -1942,9 +1946,12 @@ class App:
         for i, k in enumerate(self.pl_keys):
             if self.by_key[k]["name"] == name:
                 self.cur = i
-                self.slots = {}
-                self.ax_slots = {}
-                self._adopted_load(k)
+                with self._load_lock:   # 清空+代际递增原子化（同 _switch）
+                    self.slots = {}
+                    self.ax_slots = {}
+                    self._load_gen = getattr(self, "_load_gen", 0) + 1
+                    gen = self._load_gen
+                self._adopted_load(k, gen)
                 self._refresh()
                 self.q.put("已跟随手动打开：《%s》" % name)
                 return
@@ -1958,29 +1965,29 @@ class App:
         self._refresh()
         self.q.put("《%s》不在播放列表：不自动推进（NEXT 置空）" % name)
 
-    def _adopted_load(self, key):
-        """_adopt 的装载半程（后台线程）：读时长+音色映射（整文件 IO），
-        完成后代际校验——装载期间用户又切歌/又手动跟随时丢弃旧结果，
-        防跨歌错装。写状态均为无锁属性/GIL 原子（_switch_done 同款）。"""
+    def _adopted_load(self, key, gen):
+        """_adopt 的装载半程（后台线程）：读时长+音色映射（整文件 IO）。
+        gen 由调用方在 _load_lock 内递增后传入；写回时锁内复核——「校验后
+        写入」的 TOCTOU 窗（装载完成与切歌清空的交错=跨歌错装）靠同锁
+        原子化关闭。写状态均为无锁属性/GIL 原子（_switch_done 同款）。"""
         song = self.by_key.get(key)
         if song is None:
             return
-        self._load_gen = getattr(self, "_load_gen", 0) + 1
-        gen = self._load_gen
         path = song["path"]
 
         def run():
             d = self.durations.get(key) or _read_duration(path) or 0.0
             slots = kbd_auto.load_slots(path)
             ax = kbd_auto.load_slots(path, "ax")
-            if gen != self._load_gen:
-                return                  # 已被更新的一次装载/切歌取代
-            self.durations[key] = d
-            if self.watch is not None:
-                self.watch.set_duration(d)   # 内部 reset：已播重新累计
-            self.slots = slots
-            self.ax_slots = ax
-            self.cur_song_path = path
+            with self._load_lock:
+                if gen != self._load_gen:
+                    return              # 已被更新的一次装载/切歌取代
+                self.durations[key] = d
+                if self.watch is not None:
+                    self.watch.set_duration(d)   # 内部 reset：重新累计
+                self.slots = slots
+                self.ax_slots = ax
+                self.cur_song_path = path
             self.calls.put(self._refresh)
         threading.Thread(target=run, daemon=True).start()
 

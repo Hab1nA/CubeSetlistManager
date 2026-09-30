@@ -322,6 +322,7 @@ class RawInputBridge:
         self._hook_seen = None   # 钩子最近一次见键时刻（运行期自愈探针）
         self._rehook_at = 0.0    # 上次自愈重装时刻（限频 15s）
         self._rehooking = False  # 自愈线程在途标志
+        self._rehook_seq = 0     # 自愈尝试代际（挂死看门狗甄别用）
         self._rehook_tid = None  # 自愈线程 id（stop 时投 WM_QUIT 收尾）
         self.raw_ok = None           # 线程启动后回填：INPUTSINK 是否注册成功
         self._installed = threading.Event()   # LL 钩子安装完成信号
@@ -385,7 +386,8 @@ class RawInputBridge:
                                             name="hid-bridge", daemon=True)
             self._thread.start()
             if self._installed.wait(8):
-                return
+                self._watchdog = None   # 成功即放行 start()：泵线程日后自行
+                return                  #   死亡（GetMessageW -1）必须可重拉
             self._thread = None        # 卡死的旧线程随进程退出（daemon）
             self._tid = None
         self._watchdog = None
@@ -419,6 +421,7 @@ class RawInputBridge:
                 time.sleep(0.01)
         if self._rehook_tid is not None:    # 自愈线程的泵同步退场拆钩
             u32.PostThreadMessageW(self._rehook_tid, WM_QUIT, 0, 0)
+            self._rehook_tid = None         # 一次投递：防 tid 复用后误投
         th = self._thread     # 先摘登记再 join：对已赋值未起跑的交错态，
         self._thread = None   #   join 会抛 RuntimeError 且残留登记谎报 running
         self._tid = None
@@ -500,6 +503,8 @@ class RawInputBridge:
             return
         self._rehook_at = now
         self._rehooking = True
+        self._rehook_seq += 1
+        seq = self._rehook_seq
 
         def job():
             self._rehook_tid = k32.GetCurrentThreadId()
@@ -524,6 +529,18 @@ class RawInputBridge:
 
         threading.Thread(target=job, daemon=True,
                          name="hid-rehook").start()
+
+        def unstick():
+            # 重装挂死看门狗：SetWindowsHookExW 已知偶发不返回（启动路径
+            # 同款），挂死则 _rehooking 永久 True=自愈单点失效——10 秒无果
+            # 放行限频门再试（挂死线程为 daemon，随进程回收）
+            if self._rehooking and self._rehook_seq == seq:
+                self._rehooking = False
+                self._report("钩子重装超时未返回，稍后自动重试")
+
+        t = threading.Timer(10.0, unstick)
+        t.daemon = True
+        t.start()
 
     def _report(self, msg):
         try:
@@ -591,6 +608,14 @@ class RawInputBridge:
         return u32.DefWindowProcW(h, m, w, l)
 
     def _run(self):
+        try:
+            self._run_inner()
+        except BaseException:
+            # 未捕异常死亡也必须清登记：残留 _thread 会让 running 恒 True、
+            # 10s 重拉门控（not bridge.running）失去触发条件=HID 死到重启
+            self._retire()
+
+    def _run_inner(self):
         gen = self._gen                  # 看门狗换线程后旧值失效，迟到即退场
         if gen == self._gen:             # 迟到线程不得写 _tid：stop 已清过后
             self._tid = k32.GetCurrentThreadId()   #   再写入会拖慢下次 stop

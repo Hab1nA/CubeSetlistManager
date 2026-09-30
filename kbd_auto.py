@@ -347,16 +347,16 @@ def _send_long(h, data):
 
 def send_slot(slot, cfg, msgs=None):
     """按 cfg（JUNO 或 AX-09）向输出端口发整个切换序列（或预构造 msgs）；
-    返回错误文案，None=成功。"""
+    返回错误文案，None=成功。open/close 走 midi_bridge 输出专线（与输入
+    同锁同队列）——Win11 进程级锁挂死时发送线程限时失败不再陪葬。"""
     devs = mb._out_devices()
     hits = [(i, n) for i, n in devs if cfg["outHint"] in n]
     if not hits:
         return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
             cfg["outHint"], "、".join(n for _, n in devs) or "无")
-    h = wintypes.HANDLE()
-    r = _winmm.midiOutOpen(ctypes.byref(h), hits[0][0], mb._Proc(), 0, 0)
-    if r:
-        return "midiOutOpen 失败（code %d）" % r
+    h, err = mb.open_out(hits[0][0])
+    if h is None:
+        return err
     try:
         if msgs is None:
             msgs = (ax_switch_msgs(slot, cfg) if cfg.get("ax")
@@ -370,7 +370,7 @@ def send_slot(slot, cfg, msgs=None):
             if gap:
                 time.sleep(gap)
     finally:
-        _winmm.midiOutClose(h)
+        mb.close_out(h)
     return None
 
 

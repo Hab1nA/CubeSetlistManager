@@ -117,13 +117,17 @@ class BoundedCallQueue(queue.Queue):
                     pass                    # 消费侧刚拿走：重试即成
 
 
-def coalesce(batch):
-    """一次排空批次内合流重复回调（幂等回调如 _refresh/_persist 在停摆
-    恢复后会成批重复）：保留每个回调的最后一次出现，顺序不变。不同 lambda
-    对象永不相等，按引用去重不误伤；单元素批次原样返回。"""
+def coalesce(batch, names=None):
+    """一次排空批次内合流重复回调：保留最后一次出现，顺序不变。
+    names=None=全部合流（单元测试用）；GUI 传幂等回调名集合（{"_refresh",
+    "_persist_web_remote"}）——有状态指令（_next/_prev 等）不在名单内，
+    同批连发两次就是两次，永不丢（复审 L2：绑定方法按引用相等，无差别
+    合流会吞掉 50ms 内的合法连发）。不同 lambda 对象永不相等，不误伤。"""
     if len(batch) < 2:
         return batch
-    last = {}
+    last = {fn: i for i, fn in enumerate(batch)}
+    keep = []
     for i, fn in enumerate(batch):
-        last[fn] = i
-    return [fn for i, fn in enumerate(batch) if last[fn] == i]
+        coalescable = names is None or getattr(fn, "__name__", "") in names
+        keep.append(last[fn] == i or not coalescable)
+    return [fn for i, fn in enumerate(batch) if keep[i]]

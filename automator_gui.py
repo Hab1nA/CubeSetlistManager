@@ -315,6 +315,7 @@ class App:
         self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
         self.calls_urgent = collections.deque()  # 紧急调用（对称预留）
         self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
+        self._title_lock = threading.Lock()  # 装载代际守卫的校验+写原子化
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
         self.clock_port = None
@@ -438,6 +439,7 @@ class App:
     def _on_exit(self):
         if not messagebox.askyesno("退出", "确定退出 Cube Automator？"):
             return
+        self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close())):
@@ -623,7 +625,9 @@ class App:
         if not force and name == self._cur_title:
             return
         self._cur_title = name
-        self._title_gen = getattr(self, "_title_gen", 0) + 1
+        with self._title_lock:      # 代际递增原子化（复审 M3 同款）
+            self._title_gen = getattr(self, "_title_gen", 0) + 1
+            gen = self._title_gen
         if self.watch is not None:
             self.watch.reset()   # 换工程=已播从头计（横幅时长语义按歌）
         if not name:
@@ -650,18 +654,18 @@ class App:
             return
         self.slots, self.ax_slots = {}, {}      # 旧映射即刻失效，装载后补
         self._kb_warned = set()
-        gen = self._title_gen
         path, song_name = song["path"], song["name"]
 
         def run():
             slots = kbd_auto.load_slots(path)
             ax = kbd_auto.load_slots(path, "ax")
-            if gen != self._title_gen:
-                return              # 装载期间标题又变：丢弃旧结果
-            self.slots = slots
-            self.ax_slots = ax
-            self.cur_song = song
-            self.cur_song_path = path
+            with self._title_lock:
+                if gen != self._title_gen:
+                    return          # 装载期间标题又变：丢弃旧结果
+                self.slots = slots
+                self.ax_slots = ax
+                self.cur_song = song
+                self.cur_song_path = path
             self.q.put("已识别当前工程《%s》：JUNO %d + AX-09 %d 个音符映射"
                        % (song_name, len(slots), len(ax)))
             self.calls.put(lambda: self._kbd_sync(song))
@@ -920,7 +924,8 @@ class App:
                 batch.append(self.calls.get_nowait())
             except queue.Empty:
                 break
-        for fn in stallguard.coalesce(batch):
+        for fn in stallguard.coalesce(
+                batch, {"_refresh", "_persist_web_remote"}):
             self._run_call(fn)
         self.root.after(50, self._drain_calls)
 

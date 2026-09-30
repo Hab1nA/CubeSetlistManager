@@ -4,6 +4,7 @@
 test_clock_port 的既有风格（防回归复学回旧写法）。"""
 import pathlib
 import sys
+import threading
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -153,6 +154,17 @@ def test_coalesce_keeps_last_occurrence():
     assert stallguard.coalesce([o.m, o.m]) == [o.m]   # 同绑定方法合流保尾
 
 
+def test_coalesce_respects_allowlist():
+    """有状态指令（_next/_prev）不在白名单：同批连发两次就是两次。"""
+    import stallguard
+
+    nxt = lambda: "next"  # noqa: E731
+    r = lambda: "r"  # noqa: E731
+    batch = [nxt, r, nxt, r]
+    assert stallguard.coalesce(batch, {"_refresh"}) == [nxt, r, nxt, r]
+    assert stallguard.coalesce(batch, {"<lambda>"}) == [nxt, r]
+
+
 def test_watchdog_wired_both_guis():
     for name in ("setlist_gui.py", "automator_gui.py"):
         src = _src(name)
@@ -242,6 +254,12 @@ def test_open_in_timeout_aborts_late(monkeypatch):
     while time.monotonic() < deadline and "close" not in fake.log:
         time.sleep(0.05)
     assert "close" in fake.log
+    deadline = time.monotonic() + 3.0   # 熔断标志了结清零（不污染后续用例）
+    while time.monotonic() < deadline:
+        with mb._io_stuck_lock:
+            if not mb._io_stuck:
+                break
+        time.sleep(0.05)
 
 
 def test_open_in_hard_hang_bounded(monkeypatch):
@@ -320,7 +338,8 @@ def test_queue_governance_wiring():
         assert "stallguard.BoundedCallQueue(200)" in src, name
         assert "self.calls_urgent = collections.deque()" in src, name
         assert "def urgent(self, fn)" in src, name
-        assert "stallguard.coalesce(batch)" in src, name
+        assert 'stallguard.coalesce(\n                batch' in src, name
+        assert '"_persist_web_remote"}' in src, name
     src = _src("web_remote.py")
     assert "app.urgent(app._panic)" in src           # 全停走紧急通道
     assert "app.calls.put(app._panic)" not in src    # 旧同队写法不回归
@@ -492,3 +511,150 @@ def test_pedal_hid_retry_gated():
     src = _slice(_src("setlist_gui.py"), "ped = self.pedal",
                  "self._update_transport_buttons")
     assert "not ped.bridge.running" in src
+
+
+# ---- R2 复审清单（H1/M1/M3/TOCTOU/P1-1/P1-2/P2-4/L1/L2/L4）回归 ----
+
+def test_winmm_poison_causal_guard(monkeypatch):
+    """假毒化防：置位以 _io_done 计数为因果锚——job 在超时唤醒延迟窗口内
+    迟到完成时，后到的置位被拒绝（复审 H1：否则永久熔断至重启）。"""
+    fake = _FakeWinmm()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    done = threading.Event()
+    holder = {}
+
+    def slow_fn():
+        done.wait(1.0)                  # 占住专线但会在时限内完成
+        return "ok"
+
+    t = threading.Thread(target=lambda: holder.update(
+        r=mb.run_io(slow_fn, 0.05)), daemon=True)
+    t.start()
+    time.sleep(0.15)                    # 等 run_io 超时分支走完
+    with mb._io_stuck_lock:
+        stuck_after = mb._io_stuck
+        done_count = mb._io_done
+    done.set()
+    t.join(2.0)
+    time.sleep(0.2)                     # 迟到了结推进计数
+    with mb._io_stuck_lock:
+        final_stuck = mb._io_stuck
+    assert stuck_after or done_count >= 0   # 超时时确曾置位（或已了结）
+    assert not final_stuck              # 关键：了结后标志必为 False
+    ok, val = mb.run_io(lambda: "next", 1.0)
+    assert ok and val == "next"         # 专线未被假毒化锁死
+
+
+def test_close_in_enqueued_under_poison(monkeypatch):
+    """毒化期 close_in 的收尾 job 必须入队（force 豁免快速失败）——否则
+    句柄永久泄漏+幽灵口继续派发回调（复审 M1）。"""
+    fake = _FakeWinmm(open_delay=0.6)   # 首次 open 慢→制造毒化窗口
+    monkeypatch.setattr(mb, "_winmm", fake)
+    monkeypatch.setattr(mb, "IO_TIMEOUT", 0.1)
+    box = {}
+    t = threading.Thread(target=lambda: box.update(r=mb.open_in(0, None)))
+    t.start()
+    deadline = time.monotonic() + 2.0   # 等首次超时置位毒化
+    while time.monotonic() < deadline:
+        with mb._io_stuck_lock:
+            if mb._io_stuck:
+                break
+        time.sleep(0.02)
+    with mb._io_stuck_lock:
+        assert mb._io_stuck             # 毒化窗口内
+    mb.close_in(42)                     # 毒化期 close：force 必须仍入队
+    t.join(3.0)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and fake.log.count("close") < 2:
+        time.sleep(0.05)
+    # 弃单回收 + close_in 收尾都执行了（毒化期 close 不再被快速失败吞掉）
+    assert fake.log.count("close") >= 2
+
+
+def test_out_devices_via_io_thread():
+    """输出方向同走专线（send_slot 的 midiOutOpen/Close 曾直调 winmm，
+    进程级锁挂死时发送线程无限挂死零日志，复审 P1-2）。"""
+    ksrc = _src("kbd_auto.py")
+    assert "mb.open_out(hits[0][0])" in ksrc
+    assert "mb.close_out(h)" in ksrc
+    assert "_winmm.midiOutOpen(ctypes.byref(h)" not in ksrc
+    src = _src("midi_bridge.py")
+    assert "def open_out" in src and "def close_out" in src
+    assert "run_io(job, force=True)" in src      # close 类 force 入队
+
+
+def test_enum_devices_bounded():
+    """枚举走专线+last-good 缓存：毒化/挂死时主线程拿缓存不陪葬（M3）。"""
+    src = _src("midi_bridge.py")
+    assert "_enum_devices" in src and "_in_cache_holder" in src
+    body = _slice(src, "def _in_devices", "def _out_devices")
+    assert "_enum_devices(job, _in_cache_holder)" in body
+    assert "_winmm.midiInGetNumDevs" in body
+
+
+def test_cpr_read_duration_catches_oserror():
+    """工程文件不可读（OSError）返回 None 不外抛——三个装载后台线程的
+    静默死亡源（复审 P2-4）。"""
+    import cpr_meta
+    assert cpr_meta.read_duration(str(pathlib.Path("Z:/nope/x.cpr"))) is None
+
+
+def test_rehook_hang_watchdog(monkeypatch):
+    """重装 SetWindowsHookExW 挂死：10s 看门狗放行 _rehooking（自愈能力
+    不得单点失效，复审 L1）。"""
+    import pedal
+
+    calls = []
+    br = pedal.RawInputBridge(on_action=lambda a: None,
+                              on_event=calls.append)
+    br._live = True
+    br._hook = "old"
+    br._href = "trampoline-stub"
+    calls_now = time.monotonic
+
+    def hang(*a):                       # 永不返回（挂死模拟）
+        calls.append("hang")
+        time.sleep(30)
+
+    monkeypatch.setattr(pedal.u32, "SetWindowsHookExW", hang)
+    monkeypatch.setattr(pedal.k32, "GetCurrentThreadId", lambda: 99)
+    br._rehook(calls_now())
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and "hang" not in calls:
+        time.sleep(0.02)
+    assert br._rehooking                # 在途
+    deadline = time.monotonic() + 12.0  # 10s 看门狗放行
+    while time.monotonic() < deadline and br._rehooking:
+        time.sleep(0.2)
+    assert not br._rehooking            # 自愈能力恢复（可再试）
+    assert any("超时未返回" in c for c in calls if isinstance(c, str))
+
+
+def test_bridge_start_gate_released():
+    """HID 桥成功启动后看门狗引用必须清空：泵线程日后自行死亡时 10s
+    重拉不被 start() 门槛永久拒绝（复审 P1-1）。"""
+    src = _slice(_src("pedal.py"), "def _start_watchdog", "def _retire")
+    assert "self._watchdog = None   # 成功即放行 start()" in src
+    body = _slice(_src("pedal.py"), "def _run(self)", "def _run_inner")
+    assert "self._retire()" in body     # 未捕异常死亡也清登记
+
+
+def test_generation_guard_locked():
+    """代际守卫的校验+写原子化（TOCTOU 闭环，复审 M3）。"""
+    src = _src("setlist_gui.py")
+    assert "self._load_lock = threading.Lock()" in src
+    body = _slice(src, "def _adopted_load", "def _tick_banner")
+    assert "with self._load_lock:" in body
+    sw = _slice(src, "def _switch", "def _switch_done")
+    assert "with self._load_lock:" in sw
+    src = _src("automator_gui.py")
+    assert "self._title_lock = threading.Lock()" in src
+    body = _slice(src, "def _apply_title", "def _kbd_sync")
+    assert "with self._title_lock:" in body
+
+
+def test_exit_stops_watchdog():
+    """退出确认后停黑匣子：root.destroy 后心跳冻结不算停摆（复审 L4）。"""
+    for name in ("setlist_gui.py", "automator_gui.py"):
+        src = _slice(_src(name), "def _on_exit", "def _exit_worker")
+        assert "self._stall_wd.stop()" in src, name

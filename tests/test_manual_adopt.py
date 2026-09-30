@@ -42,9 +42,12 @@ def _app(name="X", durs=None, pl=("a", "b")):
     app.cur = 99
     app.q = app.logs = _Q()
     app.calls = queue.Queue()       # 装载完成回调（_refresh）走这里
+    import threading as _th
+    app._load_lock = _th.Lock()     # 装载代际守卫锁（_adopt/_switch 触及）
     app._refresh = lambda: app.logs.append("<refresh>")
     # SimpleNamespace 无类方法解析：显式绑定真实现（装载半程要真跑）
-    app._adopted_load = lambda key: setlist_gui.App._adopted_load(app, key)
+    app._adopted_load = lambda key, gen: \
+        setlist_gui.App._adopted_load(app, key, gen)
     return app
 
 
