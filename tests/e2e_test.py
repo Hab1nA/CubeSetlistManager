@@ -357,7 +357,7 @@ def p_web():
     threading.Thread(target=srv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
     # /cmd 经 calls 队列异步投递（主程序由 Tk 主循环消费）；shim 无主循环，
-    # 交给守护线程串行消费——没有它切歌命令永远不执行（02310ee 假阳性根源）
+    # 交给守护线程串行消费——没有它切歌命令永远不执行（3d920d9 假阳性根源）
     def _drain():
         while True:
             fn = app.calls.get()
@@ -401,7 +401,7 @@ def p_web():
         conn.close()
         assert r.status == 200, body
         # 两段等待：busy 置位（消费者线程接力有延迟）→ busy 结束；
-        # 只等 not busy 会在置位前瞬间假通过（02310ee 教训）
+        # 只等 not busy 会在置位前瞬间假通过（3d920d9 教训）
         assert wait_until(lambda: app.ctrl.busy, 5, "busy 置位"), \
             "切歌命令未被执行（calls 未消费）"
         assert wait_until(lambda: not app.ctrl.busy, 200, "切歌完成")

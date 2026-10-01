@@ -104,7 +104,7 @@
 
 ## 八、M0 真机校准结果（2026-09-27 凌晨，全部实测）
 
-> 实施记录见 CHANGELOG 0.11.0-prerelease.1/2 与 git log（a93adf4、721d0cf、836fce6）。
+> 实施记录见 CHANGELOG 0.11.0-prerelease.1/2 与 git log（21ea58b、36e4ec5、21a09c6）。
 > 本节为§四清单的逐项对账 + 新增事实。
 
 ### 功能状态矩阵（迁移交付现状一览）
