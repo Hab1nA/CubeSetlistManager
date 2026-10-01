@@ -4,7 +4,7 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
-## [未发布]
+## [0.12.0] - 2026-10-01
 
 ### 新增
 
@@ -70,6 +70,14 @@
   保留的状态色）。
 
 ### 修复
+
+- **主线程停摆治理（UI 黑面/「无响应」根治系列）**：OBS 网络调用移出主
+  线程（独立排水线程+死连接回收）；winmm open/close 收敛专职 IO 线程、
+  枚举降频，close 类调用改 fire-and-forget（消除主线程每处 3 秒白等）；
+  calls 队列治理接线+LL 钩子运行期自愈；发送线程毒杀/OBS 重连逃逸/专线
+  熔断/键盘窗文件 IO 出主线程/句柄弃单回收等多轮隐患清除；新增黑匣子
+  看门狗 stallguard.py 留痕取证（tools/repro_mainloop_stall.py 复现器
+  实证，`tools/` 不随安装包分发）。
 
 - **踩钉模块七轮独立对抗审计收敛**（每轮独立子代理清洁室复审+实弹攻击，
   直至零问题判定），并新增 `tests/pedal_sim.py` 端到端模拟输入 harness
