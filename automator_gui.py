@@ -286,8 +286,10 @@ class App:
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
+        self.jcfg["dev"] = kbd_auto._norm_dev(self.jcfg.get("dev"))
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self.axcfg.update(cfg.get("ax09") or {})
+        self.axcfg["dev"] = kbd_auto._norm_dev(self.axcfg.get("dev"))
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
         self.web_cfg.update(cfg.get("webRemote") or {})
         self.web = None

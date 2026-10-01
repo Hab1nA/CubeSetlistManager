@@ -56,10 +56,16 @@ MSG_GAP = 0.05                              # BS→PC 间隔
 SYSEX_GAP = 0.1                             # 模式 SysEx→BS 间隔
 SLOT_FILE = "keyboard_automation.json"      # 存在工程（歌）文件夹里
 WHDR_DONE = 0x1
+ABSENT_MARK = "（当前不可用）"               # 设备下拉幽灵项：已选名字不在在线清单
+                                            # （文案与设置页 _ABSENT 同款；本模块不能
+                                            #   反向 import setlist_gui，就地同文）
 
-DEFAULT_JUNO = dict(inHint="JUNO", outHint="JUNO",
+DEFAULT_JUNO = dict(inHint="JUNO", outHint="JUNO", dev=0,
                     patchCh=1, perfCh=16, deviceId=0x10)
-DEFAULT_AX = dict(inHint="AX-09", outHint="AX-09", ch=1, ax=True)
+DEFAULT_AX = dict(inHint="AX-09", outHint="AX-09", ch=1, ax=True, dev=0)
+# dev=同名端口序号（0 基）：两只同型号无线 MIDI 盒在 winmm 里是两个完全同名
+# 的口，名字本身不可区分，靠用户在「键盘自动化」下拉里选的序号落到哪台琴。
+# 旧 config 无此键由 DEFAULT 补 0，单设备行为不变。
 
 # AX-09 六组各 24 个常规音色（官方 Tone List：MSB 恒 87，1-128 号 LSB=0、
 # 129-144 号 LSB=1；PC 字节=(音色号-1) mod 128）
@@ -281,18 +287,72 @@ class PortNotFound(Exception):
     pass
 
 
+def _norm_dev(v):
+    """config 手编敌意值收敛：dev 只认 int（bool 是 int 子类须排除——
+    true 会静默等于 1 错绑第 2 个同名口）；字符串/null/浮点一律回 0。
+    配置值进门即校验、不在使用点炸（load_slots pc:null 事故同族口径）。"""
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def _in_dev(cfg):
+    """IN 侧位次：dev 是用户在设备下拉（列 OUT 口）里选的序号，只有
+    inHint 与 outHint 同名（同一台盒的一对口）时才对 IN 组有意义；
+    异名手工配置的 inHint 位次独立，退回首命中——一个序号不跨两组用。"""
+    return cfg["dev"] if cfg["inHint"] == cfg["outHint"] else 0
+
+
+def _pick_hit(devs, hint, dev=0):
+    """名字命中第 dev 个端口（同名多口消歧）。hint 非字符串或空 → None
+    （显式未配置态；"" 子串对一切口恒真，曾会打到第一个口）。全名精确
+    命中优先——下拉存的是完整端口名，防止「USB-Midi」子串误配到
+    「USB-Midi 2」这类前缀重名口；无精确命中再回退子串（兼容「JUNO」
+    这类手写宽 hint）。dev 脏类型经 _norm_dev 收敛，越界收敛到末位——
+    选了「第2个」后拔掉一只，剩余选择仍落在真实端口上而不是报错。
+    返回 (设备号, 端口名) 或 None。纯函数，发送/打开/状态行/下拉共用。"""
+    if not isinstance(hint, str) or not hint:
+        return None
+    hits = ([(i, n) for i, n in devs if n == hint]
+            or [(i, n) for i, n in devs if hint in n])
+    if not hits:
+        return None
+    return hits[min(max(_norm_dev(dev), 0), len(hits) - 1)]
+
+
+def _name_pos(devs, name, idx):
+    """端口在同名端口中的位次与总数（1 基）——状态行与下拉标注「第N个」用。"""
+    same = [i for i, n in devs if n == name]
+    return same.index(idx) + 1, len(same)
+
+
+def _device_entries(names):
+    """在线端口名清单 → 下拉项 [(显示名, 端口名, 同名序 0 基)]。唯一名字
+    显示全名；同名 N 个逐项带（第N个）。纯函数，UI 与测试共用。"""
+    total = {}
+    for n in names:
+        total[n] = total.get(n, 0) + 1
+    seen = {}
+    out = []
+    for n in names:
+        seen[n] = seen.get(n, 0) + 1
+        out.append((n if total[n] == 1 else "%s（第%d个）" % (n, seen[n]),
+                    n, seen[n] - 1))
+    return out
+
+
 class RawMidiIn:
     """按名字子串打开 MIDI 输入口；on_msg(status, d1, d2) 只收短消息。
     open/close 走 midi_bridge 的 winmm 专线（限时+弃单回收）——主线程
     （热切换/录制/学习期）不再被进程级 close 锁挂死。"""
 
-    def __init__(self, hint, on_msg):
+    def __init__(self, hint, on_msg, dev=0):
+        """dev：名字命中多个端口时取第 dev 个（见 _pick_hit）——录槽捕获
+        从 cfg["dev"] 传入，保证收发落在同一序号的那只盒子上。"""
         devs = mb._in_devices()
-        hits = [(i, n) for i, n in devs if hint in n]
-        if not hits:
+        hit = _pick_hit(devs, hint, dev)
+        if hit is None:
             raise PortNotFound("未找到含「%s」的 MIDI 输入端口；现有：%s" % (
                 hint, "、".join(n for _, n in devs) or "无"))
-        idx, self.name = hits[0]
+        idx, self.name = hit
         self._on_msg = on_msg
         self._cb = mb._Proc(self._dispatch)   # 持引用防 GC
         h, err = mb.open_in(idx, self._cb)
@@ -350,11 +410,11 @@ def send_slot(slot, cfg, msgs=None):
     返回错误文案，None=成功。open/close 走 midi_bridge 输出专线（与输入
     同锁同队列）——Win11 进程级锁挂死时发送线程限时失败不再陪葬。"""
     devs = mb._out_devices()
-    hits = [(i, n) for i, n in devs if cfg["outHint"] in n]
-    if not hits:
+    hit = _pick_hit(devs, cfg["outHint"], cfg.get("dev", 0))
+    if hit is None:
         return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
             cfg["outHint"], "、".join(n for _, n in devs) or "无")
-    h, err = mb.open_out(hits[0][0])
+    h, err = mb.open_out(hit[0])
     if h is None:
         return err
     try:
@@ -484,6 +544,8 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._slot_lbl = {}
         self._rec_btn = {}
         self._pages = {}
+        self._dev_vars = {}         # 每乐器页的设备下拉（key: juno/ax）
+        self._dev_menus = {}
         for key, groups in (
                 ("juno", (("── 音色槽（C3 起 10 键）──", SLOT_NOTES),
                           ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)),
@@ -491,6 +553,23 @@ class KeyboardAutoWindow(tk.Toplevel):
                 ("ax", (("── 音色槽（C4 起 6 键）──", AX_NOTES),
                         ("── 延音踏板 ──", [45])))):
             page = tk.Frame(self)
+            # MIDI 设备行：本页乐器走哪个端口，选在录/触发之前。下拉动态
+            # 枚举当前在线端口——零写死设备名（无线盒今天枚举出 USB-Midi、
+            # 明天换有线枚举出 JUNO-DS，同一套机制）；同名多口（两只同型号
+            # 无线盒）以（第N个）区分，序号存 cfg["dev"]。行构成仿踩钉控制
+            # 窗的设备行（宽 15 标签+下拉填充+宽 6 刷新）。
+            devrow = tk.Frame(page)
+            devrow.pack(fill="x", pady=(0, 4))
+            tk.Label(devrow, text="MIDI 设备", width=15,
+                     anchor="w").pack(side="left")
+            self._dev_vars[key] = tk.StringVar(value="…")
+            opt = tk.OptionMenu(devrow, self._dev_vars[key], "…")
+            opt.config(anchor="w", direction="below")
+            opt.pack(side="left", fill="x", expand=True)
+            self._dev_menus[key] = opt
+            tk.Button(devrow, text="刷新", width=6,
+                      command=lambda k=key: self._rebuild_device_menu(k)
+                      ).pack(side="left", padx=(6, 0))
             grid = tk.Frame(page)
             grid.pack(fill="both", expand=True)
             for c, t in enumerate(("音符", "音色映射", "操作")):
@@ -554,6 +633,14 @@ class KeyboardAutoWindow(tk.Toplevel):
                  highlightcolor=dpi.C_OK, padx=8, pady=3)
         m["menu"].config(bg=dpi.FIELD, fg=dpi.FG,
                          activebackground=dpi.SELECT, activeforeground=dpi.FG)
+        for opt in self._dev_menus.values():    # 设备下拉同族色，同须 darkify 后套
+            opt.config(bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
+                       activeforeground=dpi.FG, relief="flat", bd=0,
+                       highlightthickness=1, highlightbackground=dpi.BORDER,
+                       highlightcolor=dpi.C_OK, padx=8, pady=3)
+            opt["menu"].config(bg=dpi.FIELD, fg=dpi.FG,
+                               activebackground=dpi.SELECT,
+                               activeforeground=dpi.FG)
         # 尺寸适配：按当前页内容定高（状态行动态出现也不会裁掉底部端口行）
         self.status.pack(fill="x", padx=pad, pady=(6, 0),
                          before=self._port_lbl["juno"])
@@ -574,6 +661,10 @@ class KeyboardAutoWindow(tk.Toplevel):
             lbl.pack_forget()
         self._pages[key].pack(fill="both", expand=True,
                               padx=dpi.scale(self, 12))
+        # 切页即重枚举当前页下拉（开窗首次也走这里）：另一页在看不见的
+        # 期间设备可能插拔，陈旧菜单误导选——枚举走 io 专线（1s 限时+
+        # last-good 缓存）不担心主线程挂死
+        self._rebuild_device_menu(key)
         self._port_lbl[key].pack(fill="x", padx=dpi.scale(self, 12),
                                  pady=(0, dpi.scale(self, 8)))
         self.update_idletasks()
@@ -673,9 +764,9 @@ class KeyboardAutoWindow(tk.Toplevel):
             return
         cap = SlotCapture()
         ax = note in AX_NOTES
+        cfg = self.app.axcfg if ax else self.app.jcfg
         try:
-            port = RawMidiIn(self.app.axcfg["inHint"] if ax
-                             else self.app.jcfg["inHint"], cap.feed)
+            port = RawMidiIn(cfg["inHint"], cap.feed, dev=_in_dev(cfg))
         except PortNotFound as e:
             self.set_status(str(e), dpi.C_ERR)
             return
@@ -780,25 +871,78 @@ class KeyboardAutoWindow(tk.Toplevel):
                             dpi.C_ERR)
 
     def _poll_ports(self):
-        ins = [n for _, n in mb._in_devices()]
-        outs = [n for _, n in mb._out_devices()]
+        ins = mb._in_devices()
+        outs = mb._out_devices()
+        for key, cfg, cfg_key in (("juno", self.app.jcfg, "juno"),
+                                  ("ax", self.app.axcfg, "ax09")):
+            ti, oki = self._side_line(ins, cfg["inHint"], _in_dev(cfg),
+                                      cfg_key, "inHint")
+            to, oko = self._side_line(outs, cfg["outHint"], cfg.get("dev", 0),
+                                      cfg_key, "outHint")
+            self._port_row(key, "输入 %s ｜ 输出 %s" % (ti, to), oki and oko)
 
-        def io_line(hint, cfg_key):
-            ok_in = any(hint in n for n in ins)
-            ok_out = any(hint in n for n in outs)
-            return "输入 %s ｜ 输出 %s" % (
-                "✓" if ok_in else "✗ 未找到（查 config %s.inHint）" % cfg_key,
-                "✓" if ok_out else "✗ 未找到（查 config %s.outHint）" % cfg_key
-            ), ok_in and ok_out
-
-        text, ok = io_line(self.app.jcfg["inHint"], "juno")
-        self._port_row("juno", text, ok)
-        text, ok = io_line(self.app.axcfg["inHint"], "ax09")
-        self._port_row("ax", text, ok)
+    @staticmethod
+    def _side_line(devs, hint, dev, cfg_key, hint_key):
+        """单向（输入或输出）端口状态文案：✓（同名多口时标注实际绑定的
+        「第N个」）或 ✗ 未找到（提示 config 键）。"""
+        hit = _pick_hit(devs, hint, dev)
+        if hit is None:
+            return ("✗ 未找到（查 config %s.%s）" % (cfg_key, hint_key)), False
+        pos, total = _name_pos(devs, hit[1], hit[0])
+        return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 
     def _port_row(self, key, text, ok):
         self._port_lbl[key].config(text=text,
                                    fg=dpi.C_OK if ok else dpi.C_ERR)
+
+    def _rebuild_device_menu(self, key):
+        """重建设备下拉项（开窗/点「刷新」/改选后调用）：枚举当前在线输出
+        端口，唯一名显示全名、同名多口逐项「名（第N个）」；已选设备不在
+        在线清单则追加幽灵项保住显示（设备可能只是没上电），改选其它项即
+        替换。收发两向同名同选——一台盒子双向口同名，dev 序号两向同用。"""
+        cfg = self.app.jcfg if key == "juno" else self.app.axcfg
+        outs = mb._out_devices()
+        hit = _pick_hit(outs, cfg["outHint"], cfg.get("dev", 0))
+        menu = self._dev_menus[key]["menu"]
+        menu.delete(0, "end")
+        for label, name, k in _device_entries([n for _, n in outs]):
+            menu.add_radiobutton(
+                label=label, variable=self._dev_vars[key],
+                command=lambda d=key, nm=name, kk=k:
+                    self._select_device(d, nm, kk))
+        if hit is not None:
+            pos, total = _name_pos(outs, hit[1], hit[0])
+            shown = hit[1] if total == 1 else "%s（第%d个）" % (hit[1], pos)
+        else:                       # 幽灵项：已选设备当前不在场，可点回它
+            shown = cfg["outHint"] + ABSENT_MARK
+            menu.add_radiobutton(
+                label=shown, variable=self._dev_vars[key],
+                command=lambda d=key: self._select_device(
+                    d, cfg["outHint"], cfg.get("dev", 0)))
+        self._dev_vars[key].set(shown)
+
+    def _select_device(self, key, name, k):
+        """选定设备：outHint 置为所选完整端口名（完整名是其自身的子串，
+        恒命中且不误配他口）、同名序号写 dev；inHint 仅在原本与 outHint
+        同名、或已无任何命中时跟随——异名接口（IN/OUT 口名不同）手工配
+        置过的录制路径不被下拉改选打断。原地改 cfg dict——ToneSwitcher
+        持有本体、发送路径每次现枚举、录制路径录制时现开，选完下个音符
+        即生效，无需重连重启；落盘后状态行即时复核。config 按段整替落盘
+        （与 pedal._save 同口径，单实例互斥下运行中外部手加的未知键会被
+        内存快照覆盖——已知取舍）。dev 是 OUT 组里选的位次，仅在与
+        outHint 同名的 inHint 上对 IN 侧生效（见 _in_dev；踩钉学习候选
+        的 kb_ports 解析同此口径）。"""
+        cfg = self.app.jcfg if key == "juno" else self.app.axcfg
+        if cfg["inHint"] == cfg["outHint"] or \
+                _pick_hit(mb._in_devices(), cfg["inHint"],
+                          _in_dev(cfg)) is None:
+            cfg["inHint"] = name
+        cfg["outHint"] = name
+        cfg["dev"] = k
+        self.app._persist_config(**({"juno": dict(cfg)} if key == "juno"
+                                    else {"ax09": dict(cfg)}))
+        self._rebuild_device_menu(key)
+        self._poll_ports()
 
     def _close(self):
         self._cancel_capture()
@@ -819,8 +963,11 @@ if __name__ == "__main__":
     m3 = ax_switch_msgs({"pc": 7}, ax)                         # 纯 PC（未开 Bn）
     assert len(m3) == 1 and m3[0][1] >> 8 & 0xFF == 7
     assert "SYNTH/PAD #1" in describe_ax({"msb": 87, "lsb": 0, "pc": 0})
-    assert "GUITAR/BASS #129" in describe_ax({"msb": 87, "lsb": 1, "pc": 0})
-    assert "GUITAR/BASS #144" in describe_ax({"msb": 87, "lsb": 1, "pc": 15})
+    # lsb=1 = 129-144 号 = GUITAR/BASS 组第 9-24 个：组内序号口径（2026-09-25
+    # 拍板「报目标说第几类第几个」；此处旧期望 #129/#144 是裸编号口径的陈值，
+    # 2026-10-01 随自检重启修正）
+    assert "GUITAR/BASS #9" in describe_ax({"msb": 87, "lsb": 1, "pc": 0})
+    assert "GUITAR/BASS #24" in describe_ax({"msb": 87, "lsb": 1, "pc": 15})
     assert "PC #144" in describe_ax({"msb": 87, "lsb": 1, "pc": 143})  # 越界兜底
     assert "SYNTH/PAD #8" in describe_ax({"pc": 7})   # 纯 PC 按 LSB=0 归组
     assert describe_ax(None) == "未设置"
@@ -837,6 +984,23 @@ if __name__ == "__main__":
     assert note_name(36) == "C2" and note_name(39) == "D#2"
     assert note_name(40) == "E2" and note_name(45) == "A2"
     assert PEDAL_NOTES == {40: "juno", 45: "ax"}
+    # 同名多口消歧（两只同型号无线盒）：dev 序号落位/越界收敛/互不误配
+    dv = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
+    assert _pick_hit(dv, "USB-Midi") == (1, "USB-Midi")
+    assert _pick_hit(dv, "USB-Midi", 1) == (2, "USB-Midi")
+    assert _pick_hit(dv, "USB-Midi", 5) == (2, "USB-Midi")      # 越界收敛末位
+    assert _pick_hit(dv, "JUNO-DS") == (3, "JUNO-DS")
+    assert _pick_hit(dv, "AX-09") is None
+    # 前缀重名口（"USB-Midi" 与 "USB-Midi 2" 并存）：全名精确优先不误配
+    pv = [(0, "USB-Midi 2"), (1, "USB-Midi")]
+    assert _pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
+    assert _pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
+    assert _pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")  # 宽 hint 回退
+    assert _norm_dev("1") == 0 and _norm_dev(True) == 0 and _norm_dev(2) == 2
+    assert _pick_hit(dv, "") is None and _pick_hit(dv, None) is None
+    assert _name_pos(dv, "USB-Midi", 2) == (2, 2)
+    assert _device_entries(["A", "B", "B"])[1:] == [
+        ("B（第1个）", "B", 0), ("B（第2个）", "B", 1)]
     with tempfile.TemporaryDirectory() as td:
         cpr = os.path.join(td, "s.cpr")
         save_slots(cpr, {60: {"msb": 85, "pc": 1}}, "slots")

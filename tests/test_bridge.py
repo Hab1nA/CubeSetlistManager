@@ -517,6 +517,69 @@ def test_kbd_auto():
     assert kbd_auto.describe_slot(None) == "未设置"
     assert kbd_auto.note_name(60) == "C3" and kbd_auto.note_name(69) == "A3"
 
+    # 同名多口消歧：两只同型号无线 MIDI 盒在 winmm 是两个完全同名的口，
+    # dev 序号决定落位（键盘自动化窗设备下拉选择即写此键）
+    devs = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
+    assert kbd_auto._pick_hit(devs, "USB-Midi") == (1, "USB-Midi")
+    assert kbd_auto._pick_hit(devs, "USB-Midi", 1) == (2, "USB-Midi")
+    assert kbd_auto._pick_hit(devs, "USB-Midi", 5) == (2, "USB-Midi")   # 越界收敛
+    assert kbd_auto._pick_hit(devs, "USB-Midi", -1) == (1, "USB-Midi")  # 负数钳0
+    assert kbd_auto._pick_hit(devs, "JUNO-DS") == (3, "JUNO-DS")   # 有线全名不误配
+    assert kbd_auto._pick_hit(devs, "AX-09") is None
+    # 前缀重名口（"USB-Midi" 与 "USB-Midi 2" 并存）：下拉存的全名必须
+    # 精确命中，不被子串语义抢到对方口上；宽 hint（JUNO）走子串回退
+    pv = [(0, "USB-Midi 2"), (1, "USB-Midi")]
+    assert kbd_auto._pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
+    assert kbd_auto._pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
+    assert kbd_auto._pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")
+    # 手编 config 的敌意 dev 收敛：脏类型不炸、不静默错绑（bool 排除——
+    # true 静默等于 1 会错绑第 2 个同名口）
+    assert kbd_auto._norm_dev("1") == 0 and kbd_auto._norm_dev(None) == 0
+    assert kbd_auto._norm_dev(True) == 0 and kbd_auto._norm_dev(0.5) == 0
+    assert kbd_auto._norm_dev(2) == 2
+    assert kbd_auto._pick_hit(devs, "USB-Midi", "1") == (1, "USB-Midi")
+    assert kbd_auto._pick_hit(devs, "USB-Midi", True) == (1, "USB-Midi")
+    # 空/非字符串 hint = 显式未配置，不命中任何口（"" 子串恒真曾打到第一个口）
+    assert kbd_auto._pick_hit(devs, "") is None
+    assert kbd_auto._pick_hit(devs, None) is None
+    assert kbd_auto._name_pos(devs, "USB-Midi", 2) == (2, 2)
+    assert kbd_auto._name_pos(devs, "JUNO-DS", 3) == (1, 1)
+    es = kbd_auto._device_entries(["Rubix24", "USB-Midi", "USB-Midi"])
+    assert [e[0] for e in es] == ["Rubix24", "USB-Midi（第1个）",
+                                  "USB-Midi（第2个）"]
+    assert [e[2] for e in es] == [0, 0, 1]
+    assert kbd_auto._device_entries([]) == []
+    # 默认值带 dev=0：旧 config 无此键时单设备行为不变
+    assert kbd_auto.DEFAULT_JUNO["dev"] == 0 and kbd_auto.DEFAULT_AX["dev"] == 0
+
+    # 踩钉学习候选按琴口位次精确排除（同名盒世界按名排除会连同名真踩钉
+    # 口一起误伤）：kb_ports=(inHint, dev) 在同一次枚举内经 _pick_hit
+    # 解析设备号排除；返回三元组（设备号, 名, 同名内位次）供 Learner
+    # 重开 RawMidiIn 时原位落位——重开丢位次会把排除原样打回（R2-P2）；
+    # EXCLUDE 兜底名单继续滤 JUNO/AX-09 系旧接法
+    orig_in = pedal.mb._in_devices
+    pedal.mb._in_devices = lambda: [(0, "USB-Midi"), (1, "USB-Midi"),
+                                    (2, "loopMIDI Port"), (3, "踩钉CC")]
+    try:
+        assert pedal.learning_candidates(
+            kb_ports=(("USB-Midi", 0), ("USB-Midi", 1))) == \
+            [(3, "踩钉CC", 0)]
+        assert pedal.learning_candidates() == \
+            [(0, "USB-Midi", 0), (1, "USB-Midi", 1), (3, "踩钉CC", 0)]
+        assert pedal.learning_candidates(
+            kb_ports=(("JUNO", 0),)) == \
+            [(0, "USB-Midi", 0), (1, "USB-Midi", 1), (3, "踩钉CC", 0)]
+        # 位次与 RawMidiIn._pick_hit 精确命中闭合：候选 (1,"USB-Midi",1)
+        # 重开时落到同一设备号
+        assert kbd_auto._pick_hit(pedal.mb._in_devices(), "USB-Midi", 1) \
+            == (1, "USB-Midi")
+    finally:
+        pedal.mb._in_devices = orig_in
+    # IN 侧位次：dev 只在与 outHint 同名（同一台盒）时作用于 IN 组；
+    # 异名手工配置退回首命中——一个序号不跨两组用（R2-P3）
+    assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
+    assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+
 
 def test_pedal():
     st = {}
@@ -1124,6 +1187,20 @@ def test_pedal():
     pl6.bridge._feed(0xB0, True, True)              # 纯单踩键：按下即发
     assert hits9 == ["play"]
     pl6.shutdown()
+
+    # Learner hint 分支三元组（R3-P1 回归：三元组改造漏改本分支时，
+    # 已选踩钉设备的学习主流程构造即 ValueError）。mock 枚举+open_in
+    # 不触真设备（假口开不成→PortNotFound→跳过）。
+    orig_in = pedal.mb._in_devices
+    orig_open = pedal.mb.open_in
+    pedal.mb._in_devices = lambda: [(0, "M-Vave"), (1, "loopMIDI Port")]
+    pedal.mb.open_in = lambda idx, cb: (None, "mocked")
+    try:
+        lr = pedal.Learner("M-Vave", "", kb_ports=(("JUNO", 0),))
+        assert lr.ports == []                # 构造本身不炸
+    finally:
+        pedal.mb._in_devices = orig_in
+        pedal.mb.open_in = orig_open
 
 
 def test_hotspot_logic():

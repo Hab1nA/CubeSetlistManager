@@ -20,6 +20,7 @@
   "juno": {
     "inHint": "JUNO",
     "outHint": "JUNO",
+    "dev": 0,
     "patchCh": 1,
     "perfCh": 16,
     "deviceId": 16
@@ -27,7 +28,8 @@
   "ax09": {
     "inHint": "AX-09",
     "outHint": "AX-09",
-    "ch": 1
+    "ch": 1,
+    "dev": 0
   },
   "pedal": {
     "deviceHint": "",

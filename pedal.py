@@ -21,7 +21,8 @@ from ctypes import wintypes
 
 import dpi
 import midi_bridge as mb
-from kbd_auto import RawMidiIn, PortNotFound
+from kbd_auto import (RawMidiIn, PortNotFound, _device_entries, _in_dev,
+                      _pick_hit)
 
 u32 = ctypes.windll.user32
 k32 = ctypes.windll.kernel32
@@ -30,7 +31,10 @@ ACTIONS = (("play", "开始"), ("stop", "停止"), ("rewind", "回零"),
            ("next", "下一首"), ("panic", "全停"), ("auto", "自动切换"))
 RISE = 64               # 上升沿阈值
 DEBOUNCE = 0.15         # 两次触发最小间隔（秒）
-EXCLUDE = ("JUNO", "AX-09", "Lucina")   # 已知硬件琴的 MIDI 口，学习时不当踩钉候选
+EXCLUDE = ("JUNO", "AX-09", "Lucina")   # 硬件琴口兜底排除名单：只按名字滤
+                                        #   JUNO/AX-09 系（覆盖 config 还是
+                                        #   出厂缺省的旧接法）；同名的无线盒
+                                        #   由 kb_ports 位次精确排除兜住
 GESTURES = ("single", "double", "long")  # 单踩/双踩/长踩
 LONG_PRESS = 0.45       # 长踩阈值（秒）：按住满此时长即触发，不等松脚
 DOUBLE_WINDOW = 0.35    # 双踩窗（秒）：松脚到此期限内来了第二踩=双踩
@@ -47,10 +51,25 @@ def _is_virtual(name):
     return name in mb.loopmidi_ports() or "loopMIDI" in name
 
 
-def learning_candidates():
-    """学习阶段的踩钉候选输入口：排除已知硬件琴与全部 loopMIDI 虚拟口。"""
-    return [(i, n) for i, n in mb._in_devices()
-            if not any(x in n for x in EXCLUDE) and not _is_virtual(n)]
+def learning_candidates(kb_ports=()):
+    """学习阶段的踩钉候选输入口：排除各琴正在占用的 MIDI 口与全部
+    loopMIDI 虚拟口。返回 **[(设备号, 端口名, 同名内位次 0 基)]**——位次
+    供重开 RawMidiIn(dev=…) 时原位落位（只按名重开+默认 0 会把位次排除
+    原样打回，同名盒场景学习监听落回被排除的琴口）。kb_ports=(inHint,
+    dev) 对：在同一次枚举内经 kbd_auto._pick_hit 解析出琴口设备号**按
+    位次精确排除**——同名盒世界里按名字排除会把同名的真踩钉口一起误伤；
+    解析不到（琴没上电/没接）自然无口可排。EXCLUDE 兜底名单继续按名滤
+    JUNO/AX-09 系，覆盖 config 还是出厂缺省的旧接法。"""
+    devs = mb._in_devices()
+    bound = set()
+    for hint, d in kb_ports:
+        hit = _pick_hit(devs, hint, d)
+        if hit:
+            bound.add(hit[0])
+    entries = _device_entries([n for _, n in devs])   # (显示名, 名, 同名位次)
+    return [(i, n, k) for (i, n), (_lbl, _nm, k) in zip(devs, entries)
+            if i not in bound and not _is_virtual(n)
+            and not any(x in n for x in EXCLUDE)]
 
 
 def fire(state, cc, val, now):
@@ -1185,7 +1204,7 @@ class Learner:
     _clock = staticmethod(time.monotonic)   # 同理：可注入假钟的类级默认
 
     def __init__(self, hint="", device_hint="", bridge=None,
-                 timing=None, clock=None):
+                 timing=None, clock=None, kb_ports=()):
         self.events = []               # (键, down, 时刻) 示范序列（已滤抖动、
                                        #   按压交替的干净事件流）
         self.cc = None                 # (通道, 来源名, 码, 手势)
@@ -1195,12 +1214,19 @@ class Learner:
         self._midi_name = None
         self.ports = []
         if hint:
-            cands = [(i, n) for i, n in mb._in_devices() if hint in n]
+            devs = mb._in_devices()
+            entries = _device_entries([n for _, n in devs])
+            cands = [(i, n, k) for (i, n), (_l, _nm, k) in zip(devs, entries)
+                     if hint in n]      # 与 kb_ports 分支同款三元组：下游统一
+                                        #   解包，位次语义（同名多口）也一致
         else:
-            cands = learning_candidates()
-        for _idx, name in cands:
+            cands = learning_candidates(kb_ports)
+        for _idx, name, dev in cands:
             try:
-                self.ports.append(RawMidiIn(name, self._make(name)))
+                # dev=同名内位次（learning_candidates 随候选返回）：按名
+                # 重开若丢位次（默认 0），同名盒场景下排除会被原样打回——
+                # 候选解析与实际开口必须同一位次
+                self.ports.append(RawMidiIn(name, self._make(name), dev=dev))
             except PortNotFound:
                 pass                   # 被其他程序占用的口跳过
         self._bridge = None
@@ -1489,12 +1515,20 @@ class PedalWindow(tk.Toplevel):
         p = self.app.pedal
         if p is not None:
             p.mute()                    # 学习期静音：不误触发旧绑定，让出 MIDI 口
-        self.learner = (action,
-                        Learner(self.app.pedal_hint,
-                                self.app.pedal_device_hint,
-                                p.bridge if p is not None else None,
-                                timing=self.app.pedal_timing),
-                        time.time() + LEARN_TIMEOUT)
+        try:
+            learner = Learner(self.app.pedal_hint,
+                              self.app.pedal_device_hint,
+                              p.bridge if p is not None else None,
+                              timing=self.app.pedal_timing,
+                              kb_ports=((self.app.jcfg["inHint"],
+                                         _in_dev(self.app.jcfg)),
+                                        (self.app.axcfg["inHint"],
+                                         _in_dev(self.app.axcfg))))
+        except BaseException:
+            if p is not None:
+                p.unmute()              # 构造失败必须解除静音，否则踩钉
+            raise                       #   监听滞留停摆到重启（R3-P1 后果链）
+        self.learner = (action, learner, time.time() + LEARN_TIMEOUT)
         where = ("设备「%s」的按键或 MIDI"
                  % device_display(self.app.pedal_device_hint)
                  if self.app.pedal_device_hint else "MIDI CC")
@@ -1677,7 +1711,7 @@ if __name__ == "__main__":
     assert not _is_virtual("Rubix USB")            # 硬件口不误伤
     mb._in_devices = lambda: [(0, "Keyboard Automation"), (1, "loopMIDI Port"),
                               (2, "JUNO-DS88"), (3, "Rubix USB"), (4, "踩钉")]
-    assert learning_candidates() == [(3, "Rubix USB"), (4, "踩钉")]
+    assert learning_candidates() == [(3, "Rubix USB", 0), (4, "踩钉", 0)]
     # HID 按键通道
     assert load_hid({}) == {}
     assert load_hid(

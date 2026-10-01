@@ -390,8 +390,10 @@ class App:
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
+        self.jcfg["dev"] = kbd_auto._norm_dev(self.jcfg.get("dev"))
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self.axcfg.update(cfg.get("ax09") or {})
+        self.axcfg["dev"] = kbd_auto._norm_dev(self.axcfg.get("dev"))
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件

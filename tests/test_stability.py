@@ -591,7 +591,7 @@ def test_out_devices_via_io_thread():
     """输出方向同走专线（send_slot 的 midiOutOpen/Close 曾直调 winmm，
     进程级锁挂死时发送线程无限挂死零日志，复审 P1-2）。"""
     ksrc = _src("kbd_auto.py")
-    assert "mb.open_out(hits[0][0])" in ksrc
+    assert "mb.open_out(hit[0])" in ksrc    # 锚随 2026-10-01 改名 hits[0]→hit
     assert "mb.close_out(h)" in ksrc
     assert "_winmm.midiOutOpen(ctypes.byref(h)" not in ksrc
     src = _src("midi_bridge.py")
