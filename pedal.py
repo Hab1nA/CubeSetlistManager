@@ -2,11 +2,14 @@
 """踩钉双通道快捷键：MIDI 踩钉（USB 直连或经声卡 MIDI IN，winmm 输入设备）
 发 CC；蓝牙键盘型踩钉（如 M-Vave CUBE TURNER PRO，蓝牙 HID 发多媒体键）
 走 Raw Input 设备桥——逐事件识别输入来源，只有所选设备能触发动作，且其按键
-可被系统级拦截。都是按下沿+去抖触发，踩钉无需改任何设置。绑定来自「学习」：
-双通道同时监听（MIDI 输入口排除 loopMIDI 虚拟口与两台琴；按键只录所选设备），
-先到先得，写 config.json 的 pedal 段（bindings=MIDI CC，hidBindings=虚拟键码，
-hidDeviceHint=所选设备身份，intercept=拦截开关）。热插拔：MIDI 口未连接时由
-GUI 轮询 try_open() 重连；蓝牙重连后句柄变化无需刷新（raw 侧逐事件解析
+可被系统级拦截。触发方式三选一（学习时踩出来自动分类）：单踩=按下沿即触发
+（零延迟快路径）；双踩=窗内第二踩落下触发；长踩=按住满阈值即触发（不等松
+脚，蓝牙中途掉线不丢）。判别延迟只落在绑了时序手势的键上，仅单踩键零延迟。
+绑定来自「学习」：双通道同时监听（MIDI 输入口排除 loopMIDI 虚拟口与两台琴；
+按键只录所选设备），先到先得，写 config.json 的 pedal 段（bindings=MIDI CC，
+hidBindings=虚拟键码，gestures=动作→手势，longPress/doubleWindow=阈值，
+hidDeviceHint=所选设备身份，intercept=拦截开关）。热插拔：MIDI 口未连接时
+由 GUI 轮询 try_open() 重连；蓝牙重连后句柄变化无需刷新（raw 侧逐事件解析
 设备路径，无缓存）。"""
 import ctypes
 import re
@@ -28,6 +31,13 @@ ACTIONS = (("play", "开始"), ("stop", "停止"), ("rewind", "回零"),
 RISE = 64               # 上升沿阈值
 DEBOUNCE = 0.15         # 两次触发最小间隔（秒）
 EXCLUDE = ("JUNO", "AX-09", "Lucina")   # 已知硬件琴的 MIDI 口，学习时不当踩钉候选
+GESTURES = ("single", "double", "long")  # 单踩/双踩/长踩
+LONG_PRESS = 0.45       # 长踩阈值（秒）：按住满此时长即触发，不等松脚
+DOUBLE_WINDOW = 0.35    # 双踩窗（秒）：松脚到此期限内来了第二踩=双踩
+BOUNCE_GATE = 0.03      # 触点抖动闸（秒）：闭合弹跳的密集重按下/假松开、
+                        #   以及分断弹跳的回弹重压（距上次被受理松开 <30ms）
+                        #   ——同一物理脚的爆发整体折算为一次按压
+_GNAME = {"single": "", "double": "·双踩", "long": "·长踩"}
 
 
 def _is_virtual(name):
@@ -92,6 +102,193 @@ LEARN_VKS = tuple(vk for vk in range(0x08, 0x100)
                   and vk not in range(0x5B, 0x5E)
                   and vk not in range(0x90, 0x92)
                   and vk not in range(0xA0, 0xA6))
+
+
+# ---- 时序手势引擎（单踩/双踩/长踩） ----
+
+class GestureEngine:
+    """每键独立小状态机：把「单击/快踩两下/踩住半秒」归一成动作。
+    键 = ("hid", VK) 或 ("midi", CC)；绑定表 {(键, 手势): 动作}——同一键
+    绑多个手势正是本引擎的存在意义。状态流转：
+      down(按下,等长踩阈值) --松脚--> wait2(等第二踩) --到期--> 触发单踩
+      down --按住满阈值--> 触发长踩（不等松脚，蓝牙中途掉线不丢）
+      wait2 --第二踩落下--> 触发双踩（此后按住视为已消费，等松开归位）
+    判别延迟只落在绑了时序手势的键上；仅单踩的键根本不进引擎（桥内
+    按下沿快路径零延迟）。同键+同手势只能属一个动作（载入期去重、
+    学习期改绑摘旧保证）。线程模型：HID 事件在桥线程、MIDI 在 winmm
+    线程、定时器在 Timer 线程，全部经 _lock 串行，动作在锁外回调；
+    token 让被新事件取代的过期定时器静默失效。"""
+
+    def __init__(self, on_action, spawn_timer=None, on_event=None):
+        self.on_action = on_action
+        self.on_event = on_event   # 可选：诊断上报（动作回调异常等）
+        self.binds = {}            # (键, 手势) → 动作
+        self.key_gestures = {}     # 键 → {已绑手势}
+        self.long_press = LONG_PRESS
+        self.double_window = DOUBLE_WINDOW
+        self._spawn = spawn_timer or self._spawn_real
+        self._lock = threading.Lock()
+        self._state = {}           # 键 → [相位, 起始时刻, token]
+        self._timers = {}          # 键 → 在途定时器句柄
+        self._last_down = {}       # 键 → 上次按下的引擎时刻（触点抖动闸）
+        self._last_up = {}         # 键 → 上次被受理松开的时刻（分断弹跳闸）
+        self._seq = 0              # token 发生器
+
+    @staticmethod
+    def _spawn_real(delay, cb):
+        t = threading.Timer(delay, cb)
+        t.daemon = True
+        t.start()
+        return t
+
+    def configure(self, binds, long_press=None, double_window=None):
+        with self._lock:
+            self.binds = dict(binds)
+            if long_press:
+                self.long_press = float(long_press)
+            if double_window:
+                self.double_window = float(double_window)
+            self.key_gestures = {}
+            for key, g in self.binds:
+                self.key_gestures.setdefault(key, set()).add(g)
+            self._cancel_all()     # 换绑：未决手势全作废（边界纪律）
+
+    def reset(self):
+        with self._lock:
+            self._cancel_all()
+
+    def _cancel_all(self):
+        for t in self._timers.values():
+            t.cancel()
+        self._timers.clear()
+        self._state.clear()
+
+    def is_temporal(self, key):
+        with self._lock:
+            return key in self.key_gestures
+
+    def temporal_keys(self, channel):
+        """某通道里走引擎（绑了双踩/长踩）的键集合，桥据此分流。"""
+        with self._lock:
+            return {k[1] for k in self.key_gestures if k[0] == channel}
+
+    def feed(self, key, down, now):
+        """喂入边沿。返回 False=被抖动闸拒收（调用方有镜像状态的——如
+        MIDI 迟滞层——须维持原态，不得跟随翻转）。"""
+        with self._lock:
+            st = self._state.get(key)
+            if down and (now - self._last_down.get(key, -1e9) < BOUNCE_GATE
+                         or now - self._last_up.get(key, -1e9) < BOUNCE_GATE):
+                # 触点抖动闸：距上次按下或上次被受理松开 <30ms 的按下沿
+                # =分断弹跳的回弹重压，整体拒收——wait2 窗保持武装（弹跳
+                # 爆发折算为一次按压；还原 down 相位的旧方案会在收尾弹开
+                # 沿上留僵尸 down=假长踩/单踩丢失，审计实测否决）
+                return False
+            if not down and st and st[0] == "down" \
+                    and now - st[1] < BOUNCE_GATE:
+                # 松开沿同龄闸：按下未满 30ms 的假 up 当没松。代价注记：
+                # 表达踏板擦阈值（<30ms 越阈即回）会计为一次持续按住，
+                # 长踩阈值后误发一次长踩——足部全周期 <30ms 超出生理，接受
+                return False             #   此代价（审计 R5a 量化）
+            fire = self._feed_locked(key, down, now)
+            if down:
+                self._last_down[key] = now
+            elif st is not None and st[0] in ("down", "held"):
+                # 锚只认真正的按压收尾释放沿（down 与 held 两个相位）：
+                # wait2/游离期的重复 up 是同一次释放的回声，不设锚；held
+                # 释放沿不设锚则长踩/双踩触发后的释放回弹会武装僵尸 down
+                # （幽灵长踩二连发+下一真踩被吞，审计实测）
+                self._last_up[key] = now
+        if fire:
+            self._emit(fire)
+        return True
+
+    def _feed_locked(self, key, down, now):
+        gs = self.key_gestures.get(key) or set()
+        st = self._state.get(key)
+        if down:
+            if st is None:                       # 新序列：等长踩阈值
+                self._arm(key, "down", now)
+                if "long" in gs:
+                    self._timer(key, self.long_press, "long")
+            elif st[0] == "wait2":               # 双踩窗内第二踩
+                self._stop_timer(key)
+                if "double" in gs:
+                    self._arm(key, "held", now)  # 已消费，按住到松开归位
+                    return (key, "double")
+                self._arm(key, "down", now)      # 无双踩绑：当新序列开头
+                if "long" in gs:
+                    self._timer(key, self.long_press, "long")
+            # down/held 期间的再次按下=固件按住重发或已消费：忽略（无长踩
+            # 绑定的悬挂 down——爆发吞 up 所致——由下一真踩的 up 保守折算
+            # 单踩自愈，动作无净丢失；审计 F4 接受不挂折算定时器）
+            return None
+        if st is None:
+            return None                          # 游离松开（边界残留）：忽略
+        if st[0] == "down":
+            self._stop_timer(key)                # 长踩定时器一并撤
+            if "double" in gs:
+                self._arm(key, "wait2", now)
+                self._timer(key, self.double_window, "single")
+                return None
+            self._state.pop(key, None)
+            # 单+长组合：松脚即排除长踩，单踩立即触发（不等窗）
+            return (key, "single") if "single" in gs else None
+        if st[0] == "held":
+            # 消费完毕归位。held 释放沿无同龄闸（学习器按武装时刻拒收、
+            # 引擎受理——双踩第二踩 <30ms 即松的触点抖动区才可达，示范
+            # 分类与运行期在该病态输入下允许分叉，审计 P3-1 文档化接受）
+            self._state.pop(key, None)
+        return None                              # wait2 不该有 up：容错忽略
+
+    def _arm(self, key, phase, now):
+        self._seq += 1
+        self._state[key] = [phase, now, self._seq]
+
+    def _timer(self, key, delay, kind):
+        token = self._state[key][2]
+        self._stop_timer(key)
+        self._timers[key] = self._spawn(
+            delay, lambda: self._on_timer(key, token, kind))
+
+    def _stop_timer(self, key):
+        old = self._timers.pop(key, None)
+        if old:
+            old.cancel()
+
+    def _on_timer(self, key, token, kind):
+        with self._lock:
+            st = self._state.get(key)
+            if not st or st[2] != token:
+                return                  # 已被新事件/reset 取代：过期静默
+            self._timers.pop(key, None)
+            gs = self.key_gestures.get(key) or set()
+            if kind == "long" and st[0] == "down" and "long" in gs:
+                self._arm(key, "held", time.monotonic())
+                fire = (key, "long")
+            elif kind == "single" and st[0] == "wait2":
+                self._state.pop(key, None)
+                fire = (key, "single") if "single" in gs else None
+            else:
+                return
+        if fire:
+            self._emit(fire)
+
+    def _emit(self, kg):
+        action = self.binds.get(kg)
+        if action:
+            try:
+                self.on_action(action)
+            except Exception as e:
+                # 动作链异常不得杀定时器/引擎线程，但也不能无声
+                self._report("手势动作回调异常：%s" % e)
+
+    def _report(self, msg):
+        try:
+            if self.on_event:
+                self.on_event(msg)
+        except Exception:
+            pass
 
 
 # ---- Raw Input 设备桥 ----
@@ -310,7 +507,9 @@ class RawInputBridge:
         self.device_hint = ""    # 所选设备身份子串（空=未选择）
         self.block = False       # 拦截开关
         self.learning = False    # 学习期：不触发不拦截，事件转投 capture
-        self.capture = None      # 学习回调 fn(vk)
+        self.capture = None      # 学习回调 fn((键, down, 时刻))
+        self.engine = None       # 手势引擎（监听器注入）；None=无时序绑定
+        self.temporal = frozenset()   # 走引擎的 HID 键（绑了双踩/长踩）
         self.pedal_keys = set()  # 踩钉已证实发过的键（未绑定的也拦）
         self._evidence = {}      # vk → [踩钉发过, 其他设备发过]
         self._state = {}         # vk → hid_fire 状态
@@ -334,7 +533,8 @@ class RawInputBridge:
         self._attempt = 0
         self._gen = 0            # 每次起线程自增：卡死后迟到的旧线程凭它自检退场
 
-    def configure(self, binds=None, device_hint=None, block=None):
+    def configure(self, binds=None, device_hint=None, block=None,
+                  engine=None, temporal=None):
         if binds is not None:
             if binds != self.binds:
                 self._swallowed.clear()  # 换绑：旧按住状态作废，防误吃 up
@@ -351,6 +551,10 @@ class RawInputBridge:
             if new != self.block:
                 self.reset_hold_state()    # mid-hold 切换：漏掉的 up 没人处理
             self.block = new
+        if engine is not None:
+            self.engine = engine
+        if temporal is not None:
+            self.temporal = frozenset(temporal)
 
     def reset_hold_state(self):
         """学习/拦截开关等边界切换后调用：吞单与按下态全作废——边界窗口期
@@ -440,17 +644,23 @@ class RawInputBridge:
         return self._thread is not None
 
     def _feed(self, vk, down, is_pedal):
-        """raw 事件 → 证据积累；所选设备的按下沿触发动作/学习捕获。"""
+        """raw 事件 → 证据积累；所选设备的按下沿触发动作/学习捕获（含
+        松开沿，手势学习要完整踩法）；时序手势键转投引擎，仅单踩键走
+        按下沿快路径。"""
         ev = self._evidence.setdefault(vk, [False, False])
         ev[0 if is_pedal else 1] = True
         if not is_pedal:
             return
         if down:
             self.pedal_keys.add(vk)
-            if self.learning and self.capture:
-                self.capture(vk)
-        if hid_fire(self._state, vk, down, time.monotonic()) and down \
-                and not self.learning:
+        if self.learning and self.capture:
+            self.capture((vk, down, time.monotonic()))
+        if self.learning:
+            return
+        if vk in self.temporal and self.engine is not None:
+            self.engine.feed(("hid", vk), down, time.monotonic())
+            return
+        if hid_fire(self._state, vk, down, time.monotonic()) and down:
             action = self.binds.get(vk)
             if action:
                 self.on_action(action)
@@ -600,13 +810,22 @@ class RawInputBridge:
         if down:
             repeat = vk in self._swallowed
             self._swallowed.add(vk)
-            if not repeat and hid_fire(self._state, vk, True, time.monotonic()):
+            if vk in self.temporal and self.engine is not None:
+                # 时序手势键：吞下但不即时触发，转投引擎判别（未决延迟
+                # 是双踩/长踩判别的物理必然，仅单踩键不受影响）
+                if not repeat:
+                    self.engine.feed(("hid", vk), True, time.monotonic())
+            elif not repeat and hid_fire(self._state, vk, True,
+                                         time.monotonic()):
                 action = self.binds.get(vk)
                 if action:
                     self.on_action(action)
             return True
         self._swallowed.discard(vk)
-        hid_fire(self._state, vk, False, time.monotonic())
+        if vk in self.temporal and self.engine is not None:
+            self.engine.feed(("hid", vk), False, time.monotonic())
+        else:
+            hid_fire(self._state, vk, False, time.monotonic())
         return True
 
     def _wndproc(self, h, m, w, l):
@@ -690,38 +909,58 @@ class RawInputBridge:
                          #   不清登记=running 永久 True、start 永久被拒
 
 
-def load_binding(cfg):
-    """完整 config dict → (设备名提示, {动作: cc 号})。JSON 的 true 是
-    int 子类，须一并挡掉（否则绑定成 CC 1）；pedal 段被手改成非 dict 时
-    按空段处理（启动路径，类型错不能炸开机）。"""
+def _pedal_dict(cfg, key=None):
+    """cfg → pedal 段（非 dict 按空段）；key 给定时再取子键（非 dict 按空）。"""
     p = cfg.get("pedal")
     if not isinstance(p, dict):
         p = {}
+    if key is None:
+        return p
+    sub = p.get(key)
+    return sub if isinstance(sub, dict) else {}
+
+
+def _gestures_of(p):
+    """pedal 段 → {动作: 手势}（只认合法动作名与手势名）。"""
+    g = p.get("gestures")
+    return {k: v for k, v in (g if isinstance(g, dict) else {}).items()
+            if k in dict(ACTIONS) and v in GESTURES}
+
+
+def load_binding(cfg):
+    """完整 config dict → (设备名提示, {动作: cc 号})。JSON 的 true 是
+    int 子类，须一并挡掉（否则绑定成 CC 1）；pedal 段/子键被手改成非
+    dict 时按空段处理（启动路径，类型错不能炸开机）。同码去重按
+    (码, 手势) 身份——同键不同手势是手势引擎的特性，不算冲突。"""
+    p = _pedal_dict(cfg)
+    gest = _gestures_of(p)
     binds = {}
     seen = set()
-    b = p.get("bindings")       # 子键同样只认 dict（手改 "junk" 不得炸启动）
-    for k, v in (b if isinstance(b, dict) else {}).items():
+    for k, v in _pedal_dict(cfg, "bindings").items():
         if k in dict(ACTIONS) and isinstance(v, int) \
                 and not isinstance(v, bool):
-            if v in seen:       # 同码双绑：反转时后者静默覆盖前者，载入期
-                continue        #   保首个，杜绝一条绑定静默失效
-            seen.add(v)
+            identity = (v, gest.get(k, "single"))
+            if identity in seen:    # 同码同手势：反转时后者静默覆盖前者，
+                continue            #   载入期保首个，杜绝绑定静默失效
+            seen.add(identity)
             binds[k] = v
     return str(p.get("deviceHint") or ""), binds
 
 
 def load_hid(cfg):
-    """完整 config dict → {动作: VK 码}（pedal.hidBindings 段）。"""
-    p = cfg.get("pedal")
-    hid = p.get("hidBindings") if isinstance(p, dict) else None
+    """完整 config dict → {动作: VK 码}（pedal.hidBindings 段）。去重
+    身份同 load_binding：(码, 手势)。"""
+    p = _pedal_dict(cfg)
+    gest = _gestures_of(p)
     out = {}
     seen = set()
-    for k, v in (hid if isinstance(hid, dict) else {}).items():
+    for k, v in _pedal_dict(cfg, "hidBindings").items():
         if k in dict(ACTIONS) and isinstance(v, int) \
                 and not isinstance(v, bool):
-            if v in seen:       # 同码双绑去重（同 load_binding）
+            identity = (v, gest.get(k, "single"))
+            if identity in seen:
                 continue
-            seen.add(v)
+            seen.add(identity)
             out[k] = v
     return out
 
@@ -729,53 +968,115 @@ def load_hid(cfg):
 def load_device_cfg(cfg):
     """完整 config dict → (所选设备身份子串, 拦截开关)。intercept 只认真
     bool：JSON 字符串 "false" 按 bool() 会变 True（手改配置实测踩过）。"""
-    p = cfg.get("pedal")
-    if not isinstance(p, dict):
-        p = {}
+    p = _pedal_dict(cfg)
     intercept = p.get("intercept", True)
     return str(p.get("hidDeviceHint") or ""), \
         intercept if isinstance(intercept, bool) else True
 
 
+def load_gestures(cfg):
+    """完整 config dict → (手势表, 长踩阈值, 双踩窗)。阈值只认真数字并
+    夹在合理区间（手改配置不能炸、不能设出负窗）。"""
+    p = _pedal_dict(cfg)
+
+    def num(key, dflt, lo, hi):
+        v = p.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                and lo <= v <= hi:
+            return float(v)
+        return dflt
+
+    return _gestures_of(p), num("longPress", LONG_PRESS, 0.15, 2.0), \
+        num("doubleWindow", DOUBLE_WINDOW, 0.12, 1.0)
+
+
 class PedalListener:
     """MIDI 口按 deviceHint 常驻监听（CC 上升沿）＋设备桥按所选设备监听
-    （HID 按下沿，来源判定+定向拦截）→ on_action(动作名)。MIDI 回调在
-    winmm 线程、按键在设备桥线程触发，GUI 侧自行转投主线程。"""
+    （HID 按下沿，来源判定+定向拦截）→ on_action(动作名)。仅单踩绑定走
+    各自通道的按下沿快路径；双踩/长踩绑定交给 GestureEngine 判别。MIDI
+    回调在 winmm 线程、按键在设备桥线程、手势定时器在 Timer 线程，GUI
+    侧经 calls 队列转投主线程。"""
 
     def __init__(self, on_action, on_event=None):
         self.on_action = on_action
         self.hint = ""
         self.binds = {}
         self.hid_binds = {}        # 动作 → VK
+        self.gestures = {}         # 动作 → 手势
+        self.timing = (LONG_PRESS, DOUBLE_WINDOW)
         self.device_hint = ""      # 所选设备身份子串
         self.intercept = True      # 拦截开关
         self.port = None
         self.name = ""
         self._state = {}
+        self._midi_on = {}         # 手势键迟滞：CC 当前是否在按下态
         self._lock = threading.Lock()
         self._muted = False        # 学习期静音：停触发、让出 MIDI 口
+        self.engine = GestureEngine(on_action, on_event=on_event)
         self.bridge = RawInputBridge(on_action, on_event)
 
     def apply(self, hint, binds, hid_binds=None, device_hint=None,
-              intercept=None):
+              intercept=None, gestures=None, timing=None):
+        timing = timing or (LONG_PRESS, DOUBLE_WINDOW)
+        if not (isinstance(timing, tuple) and len(timing) == 2):
+            timing = (LONG_PRESS, DOUBLE_WINDOW)    # 形状防御（锁内别炸）
         with self._lock:
             self.hint = hint
-            # binds 是 {动作: CC}；运行期按 CC 号查动作，须反转
-            self.binds = {cc: a for a, cc in binds.items()}
+            self.gestures = dict(gestures or {})
+            self.timing = timing
+            # 双通道归一分流：纯单踩键走按下沿快路径；绑了双踩/长踩的键，
+            # 其全部手势（含 single 兄弟绑定）都进引擎——否则单踩留在桥
+            # 快路径而桥把 temporal 键整体转投引擎，单踩即死绑（审计实测）
+            temporal_midi = {cc for a, cc in (binds or {}).items()
+                             if self.gestures.get(a, "single") != "single"}
+            eng = {}
+            midi_single = {}
+            for a, cc in (binds or {}).items():
+                g = self.gestures.get(a, "single")
+                if g == "single" and cc not in temporal_midi:
+                    midi_single[cc] = a
+                else:
+                    eng[("midi", cc), g] = a
+            self.binds = midi_single
             if hid_binds is not None:
                 self.hid_binds = dict(hid_binds)
+            # temporal_hid 必须与下方单踩循环同源（现值 self.hid_binds）：
+            # hid_binds=None 表示沿用现值，此时旧实参推导会让单踩错落
+            # 快路径而 temporal 键整体转投引擎=死绑（审计实测）
+            temporal_hid = {vk for a, vk in self.hid_binds.items()
+                            if self.gestures.get(a, "single") != "single"}
+            hid_single = {}
+            for a, vk in self.hid_binds.items():
+                g = self.gestures.get(a, "single")
+                if g == "single" and vk not in temporal_hid:
+                    hid_single[vk] = a
+                else:
+                    eng[("hid", vk), g] = a
             if device_hint is not None:
                 self.device_hint = device_hint
             if intercept is not None:
                 self.intercept = bool(intercept)
-        self.sync_bridge()
+            self.engine.configure(eng, *self.timing)   # 未决手势一并作废
+            self._midi_on.clear()                      # 迟滞态随重配归零
+            temporal = self.engine.temporal_keys("hid")
+        self.bridge.configure(binds=hid_single,
+                              device_hint=self.device_hint,
+                              block=self.intercept,
+                              engine=self.engine, temporal=temporal)
         self.close()
 
     def sync_bridge(self):
-        # hid_binds 是 {动作: VK}；桥内按 VK 触发，须反转
-        self.bridge.configure(binds={vk: a for a, vk in self.hid_binds.items()},
+        # 镜像 apply 的分流（只同步桥视图；引擎配置以最近一次 apply 为准）
+        temporal_hid = {vk for a, vk in self.hid_binds.items()
+                        if self.gestures.get(a, "single") != "single"}
+        singles = {vk: a for a, vk in self.hid_binds.items()
+                   if self.gestures.get(a, "single") == "single"
+                   and vk not in temporal_hid}
+        self.bridge.configure(binds=singles,
                               device_hint=self.device_hint,
-                              block=self.intercept)
+                              block=self.intercept,
+                              engine=self.engine,
+                              temporal=self.engine.temporal_keys("hid"))
 
     @property
     def muted(self):
@@ -788,13 +1089,17 @@ class PedalListener:
             self._muted = True
         self.bridge.learning = True
         self.bridge.reset_hold_state()   # 进出学习的边界同 mid-hold：不清则
-        self.close()                     #   学后第一脚被残留吞单吃掉
+        self.engine.reset()              #   学后第一脚被残留吞单/手势吃掉
+        self.close()
 
     def unmute(self):
         with self._lock:
             self._muted = False
         self.bridge.learning = False
         self.bridge.reset_hold_state()
+        self.engine.reset()
+        self._midi_on.clear()   # 学习期前的迟滞态不得吞掉恢复后第一脚
+        self.engine.reset()
 
     def try_open(self):
         with self._lock:
@@ -832,8 +1137,23 @@ class PedalListener:
     def _msg(self, status, d1, d2):
         if status & 0xF0 != 0xB0:
             return
+        if self._muted:
+            return                  # mute 瞬间在途回调：不得武装手势/触发
         # 单调钟：墙钟回拨会让去抖窗变负数，踏板整体冻结
-        if fire(self._state, d1, d2, time.monotonic()):
+        now = time.monotonic()
+        if self.engine.is_temporal(("midi", d1)):
+            # 迟滞边沿：≥64 压下、<44 释放，44-63 悬停区间维持原态——
+            # 表达踏板/开关在阈值附近振荡时不再产生假按下/松开边沿。
+            # 被引擎抖动闸拒收的边沿：迟滞层维持原态（与引擎不失步）
+            on = self._midi_on.get(d1, False)
+            if not on and d2 >= RISE:
+                if self.engine.feed(("midi", d1), True, now):
+                    self._midi_on[d1] = True
+            elif on and d2 < RISE - 20:
+                if self.engine.feed(("midi", d1), False, now):
+                    self._midi_on[d1] = False
+            return
+        if fire(self._state, d1, d2, now):
             action = self.binds.get(d1)
             if action:
                 self.on_action(action)
@@ -849,18 +1169,30 @@ class PedalListener:
     def shutdown(self):
         """程序退出：MIDI 口与设备桥一并停。"""
         self.close()
+        self.engine.reset()
         self.bridge.stop()
 
 
 class Learner:
-    """学习：MIDI 输入口与所选设备 raw 流双通道监听，先到先得。result() →
-    ("midi", 设备名, CC 号) 或 ("hid", 键名, VK 码)。未选设备时只学 MIDI。"""
+    """学习：双通道示范式捕获——点「学习」后用户踩出触发方式（单击/
+    快踩两下/踩住约半秒），_tick 轮询 result() 时按同一套阈值懒分类。
+    result() → ("midi", 设备名, CC, 手势) 或 ("hid", 键名, VK, 手势)。
+    未选设备时只学 MIDI。"""
 
-    _cc_lock = threading.Lock()    # winmm 线程与桥线程并发写 cc（类级：测试
+    _cc_lock = threading.RLock()   # winmm 线程与桥线程并发写（RLock：迟滞
+                                   #   读改写持锁后再调 _note 重入；类级：测试
                                    # 用 object.__new__ 绕过 __init__ 也得有锁）
+    _clock = staticmethod(time.monotonic)   # 同理：可注入假钟的类级默认
 
-    def __init__(self, hint="", device_hint="", bridge=None):
-        self.cc = None                 # (通道, 来源名, 码)
+    def __init__(self, hint="", device_hint="", bridge=None,
+                 timing=None, clock=None):
+        self.events = []               # (键, down, 时刻) 示范序列（已滤抖动、
+                                       #   按压交替的干净事件流）
+        self.cc = None                 # (通道, 来源名, 码, 手势)
+        self.long_press, self.double_window = timing or (LONG_PRESS,
+                                                         DOUBLE_WINDOW)
+        self._clock = clock or time.monotonic   # 可注入（测试假钟）
+        self._midi_name = None
         self.ports = []
         if hint:
             cands = [(i, n) for i, n in mb._in_devices() if hint in n]
@@ -879,24 +1211,104 @@ class Learner:
     def _make(self, name):
         def feed(status, d1, d2):
             if status & 0xF0 == 0xB0:
+                # 与引擎同款迟滞（≥64 压下、<44 释放）：CC 在阈值附近振荡
+                # 时不产生假边沿（否则长踩演示被学成双踩）。迟滞读改写与
+                # _note 入账同一把锁（多 MIDI 口 winmm 线程并发防丢更新）
                 with self._cc_lock:
-                    if self.cc is None:
-                        self.cc = ("midi", name, d1)
+                    on = getattr(self, "_on", None) or {}
+                    if not on.get(d1, False) and d2 >= RISE:
+                        self._on = {**on, d1: True}
+                        self._note(("midi", d1), True,
+                                   time.monotonic(), name)
+                    elif on.get(d1, False) and d2 < RISE - 20:
+                        self._on = {**on, d1: False}
+                        self._note(("midi", d1), False,
+                                   time.monotonic(), name)
         return feed
 
-    def _raw_capture(self, vk):
+    def _raw_capture(self, vk, down, t):
+        self._note(("hid", vk), down, t, None)
+
+    def _note(self, key, down, t, name):
         with self._cc_lock:
-            if self.cc is None:
-                self.cc = ("hid", hid_name(vk), vk)
+            if self.cc is not None:
+                return
+            # 镜像引擎边沿受理的小状态机：示范序列只留干净交替的按压
+            # 边界——与运行期分类永不分叉（模糊测试实测独立分类器必分叉）
+            held = getattr(self, "_held", None) or {}
+            arm = getattr(self, "_arm", None) or {}
+            down_t = getattr(self, "_down_t", None) or {}
+            up_t = getattr(self, "_up_t", None) or {}
+            if down:
+                ld, lu = down_t.get(key), up_t.get(key)
+                if (ld is not None and t - ld < BOUNCE_GATE) \
+                        or (lu is not None and t - lu < BOUNCE_GATE):
+                    return                # 触点抖动/分断回弹：同一脚延续
+                if held.get(key):
+                    return                # 按住重发：同一脚，不另记不后移锚
+                held = {**held, key: True}
+                arm = {**arm, key: t}     # up 闸锚=按压武装时刻（引擎同语义）
+            else:
+                if not held.get(key):
+                    return                # 游离松开（点学习时脚已在板上）：不学
+                a = arm.get(key)
+                if a is not None and t - a < BOUNCE_GATE:
+                    return                # 按下未满 30ms 的假 up：当没松
+                held = {**held, key: False}
+                up_t = {**up_t, key: t}
+            if down:
+                down_t = {**down_t, key: t}
+            self._held, self._arm, self._down_t, self._up_t = \
+                held, arm, down_t, up_t
+            self.events.append((key, down, t))
+            if name:
+                self._midi_name = name
 
     def result(self):
-        return self.cc
+        with self._cc_lock:
+            if self.cc is None and self.events:
+                r = self._classify(self._clock())
+                if r is not None:
+                    key, gesture = r
+                    self.cc = ("hid" if key[0] == "hid" else "midi",
+                               hid_name(key[1]) if key[0] == "hid"
+                               else (self._midi_name or ""),
+                               key[1], gesture)
+            return self.cc
+
+    def _classify(self, now):
+        """示范序列（干净交替边沿）→ (键, 手势) 或 None。双踩=第二按下
+        距首踩松开 ≤double_window；长踩=唯一按压持续满阈值（可能未松）；
+        单踩=松脚后 double_window 平静过期。"""
+        ev = self.events
+        key = ev[0][0]
+        downs = [t for k, d, t in ev if d and k == key]
+        ups = [t for k, d, t in ev if not d and k == key]
+        if not downs:
+            return None
+        if len(downs) >= 2:
+            # 干净交替流：ups[0] 必为首踩松开、downs[1] 必为第二踩。
+            # 长踩满阈即发、抢先一切（引擎同序）：首按压已满长踩阈值时
+            # 补踩折算为新序列，不得判双踩——否则学到的双踩运行期不可达
+            if ups[0] - downs[0] >= self.long_press:
+                return (key, "long")
+            gap = downs[1] - ups[0]
+            return (key, "double" if gap <= self.double_window else "single")
+        # 单按压：长踩判定用「按压持续时长」——已松开也成立（_tick 300ms
+        # 轮询可能整个错过「按住中」判定窗，松脚后时长不灭，审计实测
+        # 「踩住约半秒」提示在 hold=0.5~0.6s 段误学 single 达 50-83%）
+        dur = (now if len(ups) < len(downs) else ups[0]) - downs[0]
+        if dur >= self.long_press:
+            return (key, "long")
+        if len(ups) < len(downs):
+            return None                       # 还按着、未满阈值：继续等
+        return (key, "single") if now - ups[0] >= self.double_window else None
 
     def close(self):
-        if self._bridge is not None:
+        if getattr(self, "_bridge", None) is not None:
             self._bridge.end_capture()
             self._bridge = None
-        for p in self.ports:
+        for p in getattr(self, "ports", []):
             try:
                 p.close()
             except OSError:
@@ -1020,7 +1432,8 @@ class PedalWindow(tk.Toplevel):
         if p is not None:
             p.apply(self.app.pedal_hint, self.app.pedal_binds,
                     self.app.pedal_hid, self.app.pedal_device_hint,
-                    self.app.pedal_intercept)
+                    self.app.pedal_intercept, self.app.pedal_gestures,
+                    self.app.pedal_timing)
             p.try_open()
         self._update_device_menu()
         self._set_status("已选输入设备：%s" % (device_display(hint)
@@ -1035,18 +1448,20 @@ class PedalWindow(tk.Toplevel):
             # 用陈旧 listener.intercept 悄悄改回去（实测回滚）
             p.apply(self.app.pedal_hint, self.app.pedal_binds,
                     self.app.pedal_hid, self.app.pedal_device_hint,
-                    self.app.pedal_intercept)
+                    self.app.pedal_intercept, self.app.pedal_gestures,
+                    self.app.pedal_timing)
             p.try_open()
 
     def _refresh(self):
         for action, _name in ACTIONS:
             cc = self.app.pedal_binds.get(action)
             vk = self.app.pedal_hid.get(action)
+            g = _GNAME.get(self.app.pedal_gestures.get(action, "single"), "")
             texts = []
             if cc is not None:
-                texts.append("CC %d" % cc)
+                texts.append("CC %d%s" % (cc, g))
             if vk is not None:
-                texts.append("按键 %s" % hid_name(vk))
+                texts.append("按键 %s%s" % (hid_name(vk), g))
             if texts:
                 # 两通道都绑时同显（清除按钮会一起清，不展示会误导）
                 self._bind_lbl[action].config(text="＋".join(texts), fg=dpi.FG)
@@ -1063,7 +1478,10 @@ class PedalWindow(tk.Toplevel):
                         "bindings": self.app.pedal_binds,
                         "hidBindings": self.app.pedal_hid,
                         "hidDeviceHint": self.app.pedal_device_hint,
-                        "intercept": self.app.pedal_intercept}
+                        "intercept": self.app.pedal_intercept,
+                        "gestures": self.app.pedal_gestures,
+                        "longPress": self.app.pedal_timing[0],
+                        "doubleWindow": self.app.pedal_timing[1]}
         sg._save_config(cfg)
 
     def _learn(self, action):
@@ -1074,12 +1492,14 @@ class PedalWindow(tk.Toplevel):
         self.learner = (action,
                         Learner(self.app.pedal_hint,
                                 self.app.pedal_device_hint,
-                                p.bridge if p is not None else None),
+                                p.bridge if p is not None else None,
+                                timing=self.app.pedal_timing),
                         time.time() + LEARN_TIMEOUT)
         where = ("设备「%s」的按键或 MIDI"
                  % device_display(self.app.pedal_device_hint)
                  if self.app.pedal_device_hint else "MIDI CC")
-        self._set_status("学习「%s」：踩/按一下（%d 秒内，等待%s）"
+        self._set_status("学习「%s」：单击 / 快踩两下（双踩）/ 踩住约半秒"
+                         "（长踩）——%d 秒内，等待%s"
                          % (dict(ACTIONS)[action], LEARN_TIMEOUT, where),
                          dpi.C_ERR)
 
@@ -1093,7 +1513,8 @@ class PedalWindow(tk.Toplevel):
             p.unmute()
             p.apply(self.app.pedal_hint, self.app.pedal_binds,
                     self.app.pedal_hid, self.app.pedal_device_hint,
-                    self.app.pedal_intercept)
+                    self.app.pedal_intercept, self.app.pedal_gestures,
+                    self.app.pedal_timing)
             p.try_open()
         if msg:
             self._set_status(msg)
@@ -1103,12 +1524,14 @@ class PedalWindow(tk.Toplevel):
         vk = self.app.pedal_hid.pop(action, None)
         if cc is None and vk is None:
             return
+        self.app.pedal_gestures.pop(action, None)
         self._save()
         p = self.app.pedal
         if p is not None:
             p.apply(self.app.pedal_hint, self.app.pedal_binds,
                     self.app.pedal_hid, self.app.pedal_device_hint,
-                    self.app.pedal_intercept)
+                    self.app.pedal_intercept, self.app.pedal_gestures,
+                    self.app.pedal_timing)
             p.try_open()
         self._refresh()
         self._set_status("已清除「%s」" % dict(ACTIONS)[action])
@@ -1135,24 +1558,39 @@ class PedalWindow(tk.Toplevel):
             action, learner, deadline = self.learner
             res = learner.result()
             if res is not None:
-                kind, dev, code = res
+                kind, dev, code, gesture = res
                 learner.close()
                 self.learner = None
+                # 改绑身份=(码, 手势)：同键同手势只能属一个动作（摘旧），
+                # 同键不同手势共存正是手势引擎的特性
                 if kind == "hid":
                     moved = [a for a, v in self.app.pedal_hid.items()
-                             if v == code and a != action]
-                    for a in moved:          # 同码改绑：从旧动作摘下，防
-                        del self.app.pedal_hid[a]   #   一条绑定静默失效
+                             if v == code and a != action
+                             and self.app.pedal_gestures.get(a, "single")
+                             == gesture]
+                    for a in moved:
+                        del self.app.pedal_hid[a]
+                        # 该动作另一通道还有绑定时保留手势条目——跨通道
+                        # 偷绑不得把残留绑定的手势静默翻回单踩
+                        if self.app.pedal_binds.get(a) is None:
+                            self.app.pedal_gestures.pop(a, None)
                     self.app.pedal_hid[action] = code
-                    label = "按键「%s」" % dev
+                    self.app.pedal_gestures[action] = gesture
+                    label = "按键「%s」%s" % (dev, _GNAME.get(gesture, ""))
                 else:
                     self.app.pedal_hint = dev
                     moved = [a for a, v in self.app.pedal_binds.items()
-                             if v == code and a != action]
+                             if v == code and a != action
+                             and self.app.pedal_gestures.get(a, "single")
+                             == gesture]
                     for a in moved:
                         del self.app.pedal_binds[a]
+                        if self.app.pedal_hid.get(a) is None:
+                            self.app.pedal_gestures.pop(a, None)  # 同上
                     self.app.pedal_binds[action] = code
-                    label = "%s 的 CC %d" % (dev, code)
+                    self.app.pedal_gestures[action] = gesture
+                    label = "%s 的 CC %d%s" % (dev, code,
+                                               _GNAME.get(gesture, ""))
                 if moved:
                     label += "（自「%s」改绑）" % "、".join(
                         dict(ACTIONS)[a] for a in moved)
@@ -1162,7 +1600,8 @@ class PedalWindow(tk.Toplevel):
                     p.unmute()
                     p.apply(self.app.pedal_hint, self.app.pedal_binds,
                             self.app.pedal_hid, self.app.pedal_device_hint,
-                            self.app.pedal_intercept)
+                            self.app.pedal_intercept,
+                            self.app.pedal_gestures, self.app.pedal_timing)
                     p.try_open()
                 self._refresh()
                 self._set_status("「%s」已绑定 %s"
@@ -1299,13 +1738,76 @@ if __name__ == "__main__":
     br3.begin_capture(cap.append)
     assert br3.learning and br3.capture is not None
     br3._feed(0x0D, True, True)
-    assert cap == [0x0D]                           # 学习捕获
+    br3._feed(0x0D, False, True)                   # 手势学习要完整踩法
+    assert [(v, d) for v, d, _t in cap] == [(0x0D, True), (0x0D, False)]
     br3.end_capture()
     assert br3.capture is None
+    # 手势引擎（假定时器：手动推进，不真等时钟）
+    fired2 = []
+    spawned = []
+
+    class _FT:
+        def __init__(s, delay, cb):
+            s.delay, s.cb, s.dead = delay, cb, False
+
+        def cancel(s):
+            s.dead = True
+
+    def fake_spawn(delay, cb):
+        h = _FT(delay, cb)
+        spawned.append(h)
+        return h
+
+    eng = GestureEngine(fired2.append, spawn_timer=fake_spawn)
+    eng.configure({(("hid", 0xB0), "double"): "next",
+                   (("hid", 0xB0), "single"): "play"})
+    eng.feed(("hid", 0xB0), True, 100.0)
+    assert fired2 == []                            # 时序键不再按下即发
+    eng.feed(("hid", 0xB0), False, 100.1)
+    assert fired2 == []                            # 等双踩窗判定
+    eng.feed(("hid", 0xB0), True, 100.3)           # 窗内第二踩 → 双踩
+    assert fired2 == ["next"]
+    eng.feed(("hid", 0xB0), False, 100.4)          # 已消费，松开归位
+    eng.feed(("hid", 0xB0), True, 106.0)           # 新序列
+    eng.feed(("hid", 0xB0), False, 106.1)          # 松脚，等单踩窗到期
+    assert fired2 == ["next"] and len(spawned) == 2
+    assert abs(spawned[0].delay - DOUBLE_WINDOW) < 1e-9
+    assert spawned[0].dead                    # 消费双踩时窗定时器已显式取消
+    spawned[0].cb()                           # 即便误触发：token 过期静默
+    assert fired2 == ["next"]
+    assert not spawned[1].dead
+    spawned[1].cb()                           # 第二序列窗到期 → 单踩
+    assert fired2 == ["next", "play"]
+    # 单+长组合：松脚即单踩（无双踩窗可等）
+    fired3 = []
+    eng2 = GestureEngine(fired3.append, spawn_timer=lambda d, cb: None)
+    eng2.configure({(("midi", 4), "single"): "play",
+                    (("midi", 4), "long"): "panic"})
+    eng2.feed(("midi", 4), True, 200.0)
+    eng2.feed(("midi", 4), False, 200.12)
+    assert fired3 == ["play"]                      # 松脚即触发，不等窗
+    eng2.feed(("midi", 4), True, 201.0)
+    eng2._on_timer(("midi", 4), eng2._state[("midi", 4)][2], "long")
+    assert fired3 == ["play", "panic"]             # 按住满阈值即长踩
+    eng2.feed(("midi", 4), False, 201.5)           # 消费完毕归位
+    eng2.feed(("midi", 4), True, 202.0)            # 新序列不受影响
+    assert fired3 == ["play", "panic"]
+    # 示范式学习分类
     ln = object.__new__(Learner)                   # 绕过 __init__ 不开真端口
     ln.cc = None
-    ln._raw_capture(0xB0)
-    assert ln.result() == ("hid", "下一曲", 0xB0)
+    ln.events = []
+    ln.long_press, ln.double_window = LONG_PRESS, DOUBLE_WINDOW
+    ln._clock = lambda: 300.2                      # 假钟
+    ln._raw_capture(0xB0, True, 300.0)
+    assert ln.result() is None                     # 还按着、未满长踩阈值
+    ln._raw_capture(0xB0, False, 300.12)
+    assert ln.result() is None                     # 等双踩窗平静过期
+    ln._raw_capture(0xB0, True, 300.3)             # 窗内第二踩 → 双踩
+    assert ln.result() == ("hid", "下一曲", 0xB0, "double")
+    ln.cc = None
+    ln.events = [(("hid", 0x0D), True, 400.0)]      # 只按住未松
+    ln._clock = lambda: 400.55
+    assert ln.result() == ("hid", "回车", 0x0D, "long")   # 按住 0.5s=长踩
     # 设备桥真机冒烟：线程内注册成功、停止干净（仅本机诊断运行）
     brl = RawInputBridge(lambda a: None)
     brl.configure(device_hint="9DF17DA3C702", block=True)

@@ -563,6 +563,46 @@ def main():
     else:
         case.skip("T7 连踩压力", "raw 管道死")
 
+    # ---- T8 时序手势（双踩/长踩/单踩）：真注入时序端到端 ----
+    if env_raw:
+        fired = []
+        eng = pedal.GestureEngine(fired.append)
+        br = SimBridge(fired.append)
+        br.configure(binds={}, device_hint="SIMFACE", block=False,
+                     engine=eng, temporal={VK_NEXT})
+        eng.configure({(("hid", VK_NEXT), "double"): "next",
+                       (("hid", VK_NEXT), "long"): "panic",
+                       (("hid", VK_NEXT), "single"): "play"})
+        br.spoof = frozenset((VK_NEXT,))
+        br.start()
+        wait_running(br)
+        # 双踩：快踩两下（0.35s 窗内）
+        send_key(VK_NEXT)
+        time.sleep(0.06)
+        send_key(VK_NEXT, up=True)
+        time.sleep(0.15)
+        case.run("T8 双踩第一踩不即发", fired == [], str(fired))
+        send_key(VK_NEXT)
+        time.sleep(0.06)
+        send_key(VK_NEXT, up=True)
+        time.sleep(0.4)
+        case.run("T8 双踩触发", fired == ["next"], str(fired))
+        # 长踩：按住 0.6s（> 阈值 0.45s），按住中即触发
+        send_key(VK_NEXT)
+        time.sleep(0.6)
+        case.run("T8 长踩按住中触发", fired == ["next", "panic"], str(fired))
+        send_key(VK_NEXT, up=True)
+        time.sleep(0.2)
+        case.run("T8 长踩松开不重复", fired == ["next", "panic"])
+        # 单踩：完整一踩后等双踩窗平静过期（按压 80ms：越过松开沿同龄闸）
+        press(VK_NEXT, gap=0.08)
+        time.sleep(0.6)
+        case.run("T8 单踩窗后触发", fired == ["next", "panic", "play"],
+                 str(fired))
+        br.stop()
+    else:
+        case.skip("T8 时序手势", "raw 管道死")
+
     obs.stop()
     fails = [r for r in case.results if r[1] == "FAIL"]
     skips = [r for r in case.results if r[1] == "SKIP-ENV"]

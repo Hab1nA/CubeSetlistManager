@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.pyc
+
+# 打包产物与工作目录（build.bat 可重建）
+build/
+dist/
+
+# ⚠ 运行时真实数据（OBS 密码/歌单/时长/设置）——严禁入库
+config.json
+playlist.json
+_bak_dist/
+crash.log
+crash.log.*
+
+# 测试/渲染输出物（工具可再生）
+_render/
+夜测_results.json
+夜测_log.txt
+
+# 本机工具状态
+.mimosa/
+.zcode/
+debug.log
+
+# 安卓工程（gradle 可重建；local.properties 是本机 SDK 路径）
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/local.properties
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

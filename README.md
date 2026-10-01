@@ -241,7 +241,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | dawSettings | dawExe / projectsRoot / autoSave | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）、切换时自动保存 |
 | juno | inHint / outHint / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道 |
 | ax09 | inHint / outHint / ch | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改） |
-| pedal | deviceHint / bindings | 踩钉设备名提示、动作→CC 号 |
+| pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / longPress / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double/long，「学习」时踩出即自动分类）、长踩阈值（默认 0.45s）与双踩窗（默认 0.35s） |
 | webRemote | enabled / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |

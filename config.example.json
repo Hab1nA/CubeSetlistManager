@@ -31,7 +31,13 @@
   },
   "pedal": {
     "deviceHint": "",
-    "bindings": {}
+    "bindings": {},
+    "hidBindings": {},
+    "hidDeviceHint": "",
+    "intercept": true,
+    "gestures": {},
+    "longPress": 0.45,
+    "doubleWindow": 0.35
   },
   "webRemote": {
     "enabled": false,

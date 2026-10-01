@@ -400,6 +400,8 @@ class App:
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
+        self.pedal_gestures, pl_long, pl_double = pedal.load_gestures(cfg)
+        self.pedal_timing = (pl_long, pl_double)
         # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
@@ -407,7 +409,8 @@ class App:
                 lambda: self._pedal_action(a)),
             on_event=lambda m: self.q.put("踩钉桥：%s" % m))
         self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
-                         self.pedal_device_hint, self.pedal_intercept)
+                         self.pedal_device_hint, self.pedal_intercept,
+                         self.pedal_gestures, self.pedal_timing)
         self.pedal.try_open()
         self._pedal_retry = 0.0
         # 移动端遥控（webRemote 段；web 实例在 _startup 里起）
