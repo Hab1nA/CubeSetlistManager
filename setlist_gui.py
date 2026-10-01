@@ -402,8 +402,7 @@ class App:
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
-        self.pedal_gestures, pl_long, pl_double = pedal.load_gestures(cfg)
-        self.pedal_timing = (pl_long, pl_double)
+        self.pedal_gestures, self.pedal_double = pedal.load_gestures(cfg)
         # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
@@ -412,7 +411,7 @@ class App:
             on_event=lambda m: self.q.put("踩钉桥：%s" % m))
         self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
                          self.pedal_device_hint, self.pedal_intercept,
-                         self.pedal_gestures, self.pedal_timing)
+                         self.pedal_gestures, self.pedal_double)
         self.pedal.try_open()
         self._pedal_retry = 0.0
         # 移动端遥控（webRemote 段；web 实例在 _startup 里起）
@@ -1531,15 +1530,19 @@ class App:
     def _pedal_action(self, action):
         """踩钉触发（MIDI CC 上升沿或 HID 按键）→ 功能分发（经 calls 队列
         在主线程执行）。"""
-        if action in ("play", "stop", "rewind"):
+        if action == "pause":
+            # 暂停/继续一键切换（按走带态选发）：播放中→暂停、已暂停→继续；
+            # 已停止发「暂停」走互锁拦截——踩钉不意外起播（起播有「开始」）
+            self._transport("pause" if self._transport_state() != "paused"
+                            else "resume")
+        elif action in ("play", "rewind"):
             self._transport(action)
+        elif action == "prev":
+            self._prev()
         elif action == "next":
             self._next()
         elif action == "panic":
             self._panic()
-        elif action == "auto":
-            self.auto_var.set(not self.auto_var.get())
-            self._toggle_auto()
 
     def _open_pedal(self):
         if self.pedal_win is None or not self.pedal_win.winfo_exists():

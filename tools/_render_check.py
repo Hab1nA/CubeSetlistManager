@@ -587,6 +587,11 @@ try:
 except Exception as e:
     print("截图跳过：%r" % e)
 
+# --- 踩钉窗静音生命周期：打开即静音（页面期踩钉不触发动作）、关页恢复 ---
+check("踩钉窗打开即静音", app.pedal is None or app.pedal.muted)
+pw._close(); root.update_idletasks(); root.update()
+check("踩钉窗关闭恢复响应", app.pedal is None or not app.pedal.muted)
+
 print("FAILS:", fails if fails else "无")
 for w in (sw, pw, kw):
     try:

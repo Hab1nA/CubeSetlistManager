@@ -184,6 +184,7 @@ def test_watchdog_wired_both_guis():
 
 import midi_bridge as mb  # noqa: E402
 import kbd_auto  # noqa: E402
+import pedal  # noqa: E402
 
 
 class _FakeWinmm:
@@ -354,45 +355,37 @@ def test_queue_governance_wiring():
     assert "app.calls.put(app._panic)" not in src    # 旧同队写法不回归
 
 
-# ---- 修复9：LL 钩子运行期自愈（pedal） ----
+# ---- 输入核心重写（Raw Input + RegisterHotKey，无钩子）回归 ----
 
-def test_hook_selfheal_probe_and_rehook(monkeypatch):
-    """raw 见键而钩子探针滞后=钩子被系统静默摘除（LowLevelHooksTimeout）：
-    换独立常驻线程重装+拆旧钩，限频 15 秒，_live=False 不自愈。"""
-    import pedal
-    calls = []
-    br = pedal.RawInputBridge(on_action=lambda a: None,
-                              on_event=calls.append)
-    br._live = True
-    br._hook = "old-hook"
-    br._href = "trampoline-stub"    # 真桥由 _run 生成，测试桩不需要真回调
-    monkeypatch.setattr(pedal.u32, "SetWindowsHookExW",
-                        lambda *a: (calls.append("install"), 77)[1])
-    monkeypatch.setattr(pedal.u32, "UnhookWindowsHookEx",
-                        lambda h: calls.append("unhook"))
-    monkeypatch.setattr(pedal.k32, "GetCurrentThreadId", lambda: 99)
-    monkeypatch.setattr(pedal.u32, "GetMessageW", lambda *a: 0)  # 泵即退
-    br._probe(time.monotonic())          # 探针 None=钩子从未见键 → 自愈
-    br._probe(time.monotonic())          # 在途/限频：不二次触发
-    br._rehook(time.monotonic())         # 显式调用同样受限频
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "install" not in calls:
-        time.sleep(0.02)
-    assert "install" in calls
-    assert calls.count("install") == 1   # 15s 限频内只装一次
-    assert "unhook" in calls             # 旧钩子被拆
-    assert any(isinstance(c, str) and "已自动重装" in c for c in calls)
-    br._live = False
-    br._probe(time.monotonic())          # 非 live 不自愈
-    assert calls.count("install") == 1
-
-
-def test_hook_selfheal_wiring():
+def test_hotkey_intercept_wiring():
+    """拦截=系统热键注册（按下沿被 win32k 消费、松开沿带归属合成按压对）：
+    桥内注册/回执/合成三件套在位，on_event 上报接线不回归。"""
     src = _src("pedal.py")
-    assert "_hook_seen" in src and "_probe(" in src and "_rehook(" in src
-    assert "self._rehook_tids" in src    # stop 逐个收尾在途自愈泵
+    assert "RegisterHotKey" in src and "UnregisterHotKey" in src
+    assert "WM_HOTKEY" in src and "self._pending" in src
+    assert "_apply_hotkeys" in src
     src = _src("setlist_gui.py")
     assert 'on_event=lambda m: self.q.put("踩钉桥：%s" % m)' in src
+
+
+def test_bridge_thread_respawn():
+    """桥线程自然死亡（GetMessageW 返 -1 等异常路径）必须清登记并可重拉：
+    _run finally 清 _thread，start() 只在在跑时拒绝。"""
+    br = pedal.DeviceBridge(on_action=lambda a: None)
+    th = threading.Thread(target=lambda: None, daemon=True)
+    th.start()
+    th.join()
+    br._thread = th                      # 模拟死亡线程登记未清
+    assert br.running
+    br._thread = None                    # _run finally 等价：死亡清登记
+    assert not br.running
+    br.start()                           # 重拉不被拒
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not br.running:
+        time.sleep(0.02)
+    assert br.running
+    br.stop()
+    assert not br.running
 
 
 # ---- R1 复审 FAIL 清单（A-I）回归 ----
@@ -615,44 +608,21 @@ def test_cpr_read_duration_catches_oserror():
     assert cpr_meta.read_duration(str(pathlib.Path("Z:/nope/x.cpr"))) is None
 
 
-def test_rehook_hang_watchdog(monkeypatch):
-    """重装 SetWindowsHookExW 挂死：看门狗放行 _rehooking（自愈能力不得
-    单点失效，复审 L1；时长常量化供测试缩时）。"""
-    import pedal
-
-    calls = []
-    br = pedal.RawInputBridge(on_action=lambda a: None,
-                              on_event=calls.append)
-    br._live = True
-    br._hook = "old"
-    br._href = "trampoline-stub"
-
-    def hang(*a):                       # 永不返回（挂死模拟）
-        calls.append("hang")
-        time.sleep(30)
-
-    monkeypatch.setattr(pedal.u32, "SetWindowsHookExW", hang)
-    monkeypatch.setattr(pedal.k32, "GetCurrentThreadId", lambda: 99)
-    monkeypatch.setattr(pedal, "REHOOK_UNSTICK_SEC", 0.3)
-    br._rehook(time.monotonic())
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "hang" not in calls:
-        time.sleep(0.02)
-    assert br._rehooking                # 在途
-    deadline = time.monotonic() + 3.0   # 看门狗放行
-    while time.monotonic() < deadline and br._rehooking:
-        time.sleep(0.05)
-    assert not br._rehooking            # 自愈能力恢复（可再试）
-    assert any("超时未返回" in c for c in calls if isinstance(c, str))
-
-
-def test_bridge_start_gate_released():
-    """HID 桥成功启动后看门狗引用必须清空：泵线程日后自行死亡时 10s
-    重拉不被 start() 门槛永久拒绝（复审 P1-1）。"""
-    src = _slice(_src("pedal.py"), "def _start_watchdog", "def _retire")
-    assert "self._watchdog = None   # 成功即放行 start()" in src
-    body = _slice(_src("pedal.py"), "def _run(self)", "def _run_inner")
-    assert "self._retire()" in body     # 未捕异常死亡也清登记
+def test_bridge_pending_ttl_guard():
+    """拦截开启的合成按压对：失联保护——热键回执后久未松开（BT 掉线），
+    迟到的归属松开沿按压起点不采信（折算成当下的新按压）。"""
+    br = pedal.DeviceBridge(on_action=lambda a: None)
+    br.configure(binds={}, device_hint="X", block=True, temporal={0xB0})
+    br._hotkeys[1] = 0xB0
+    br._wndproc(None, pedal.WM_HOTKEY, 1, 0)     # 热键回执（真 down 被消费）
+    br._pending[0xB0] = time.monotonic() - 5.0   # 模拟 5 秒前的失联回执
+    cap = []
+    br.learning = True
+    br.capture = lambda vk, d, t: cap.append((vk, d, t))
+    br._feed(0xB0, False)                        # 迟到的归属松开沿
+    assert 0xB0 not in br._pending               # 回执已消费
+    # 起点不采信：合成按压对的起点折到当下（时长≈0，不是 5 秒）
+    assert 0 <= cap[1][2] - cap[0][2] < 0.2
 
 
 def test_generation_guard_locked():
@@ -674,6 +644,23 @@ def test_exit_stops_watchdog():
     for name in ("setlist_gui.py", "automator_gui.py"):
         src = _slice(_src(name), "def _on_exit", "def _exit_worker")
         assert "self._stall_wd.stop()" in src, name
+
+
+def test_pedal_window_page_mute():
+    """踩钉控制页存活期整体静音：打开即 mute（页面期踩钉不触发任何动作，
+    学习/调整绑定不误触发演出动作），唯一恢复点=关页 unmute+try_open；
+    学习启动失败/取消/成功分支都不得提前 unmute（此前只有学习期静音，
+    页面开着未学习时已绑动作照常触发=用户实测误触发）。"""
+    src = _src("pedal.py")
+    body = _slice(src, "class PedalWindow", "def pedal_list_devices_safe")
+    assert "p.mute()" in body                     # 打开即静音
+    assert body.count("p.unmute()") == 1          # 唯一恢复点=_close
+    close = _slice(src, "def _close(self)", "def pedal_list_devices_safe")
+    assert "p.unmute()" in close and "p.try_open()" in close
+    # 静音与学习通道正交（学习器 end_capture 只动 learning，不得复活触发）
+    assert "if self.silent:" in src
+    assert "self.bridge.silent = True" in src \
+        and "self.bridge.silent = False" in src
 
 
 # ---- R3 复审清单（R3-1/R3-2/R3-4/R3-5）回归 ----

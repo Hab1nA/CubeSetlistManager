@@ -4,20 +4,16 @@
     python tests/pedal_sim.py
 
 设计：SendInput 注入媒体键（下一曲 0xB0 / 上一曲 0xB1 / 停止 0xB2——无媒体
-程序在场时系统级惰性，不碰字母/空格/回车，零前台风险），观测三路真实 OS
-管道，三条证据链互相独立：
-  ① 观察者 WH_KEYBOARD_LL（先装，位于钩子链尾）：被测桥若拦截成功，
-     观察者收不到该事件；放行则收得到（含 LLKHF_INJECTED 注入标记）。
-  ② 独立 Raw Input 探针（不复用生产代码）：判定本机 INPUTSINK 管道死活，
-     环境死了的用例标 SKIP-ENV，不冒充通过也不冒充失败。
-  ③ 生产 RawInputBridge 真线程真窗口真注册：注入事件 hDevice=NULL，归属
-     判定天然 False——「未选设备/非踏板不触发」被真机负验证；归属匹配段
-     （hDevice→路径→比对）需要真实设备句柄，由 SimBridge 桩把指定 VK 的
-     is_pedal 伪造成 True 模拟，其余全真。
+程序在场时系统级惰性，不碰字母/空格/回车，零前台风险），观测真实 OS 管道：
 
-只注入媒体键；preflight 发现 CSM/媒体程序在场即中止（拦截失效也不误伤）。
-输出逐用例 PASS/FAIL/SKIP-ENV 与环境判定 JSON，退出码 0=全过。
-"""
+  ① Raw Input 通道：SimBridge（生产 DeviceBridge + 注入归属桩）真线程真
+     窗口真注册，验证归属过滤/触发/学习捕获/手势判别；
+  ② 热键拦截：桥注册系统热键后注入按键——断言 WM_INPUT 仍并行送达
+     （触发不丢）且前台探针窗收不到 WM_KEYDOWN（按键被 win32k 消费，
+     不漏给其它程序）；解除注册后反转。
+
+只注入媒体键；preflight 发现媒体程序在场即中止。输出逐用例 PASS/FAIL 与
+环境判定 JSON，退出码 0=全过。"""
 import ctypes
 import json
 import os
@@ -35,33 +31,13 @@ k32 = ctypes.windll.kernel32
 
 VK_NEXT = 0xB0          # 下一曲
 VK_PREV = 0xB1          # 上一曲
-VK_STOP = 0xB2          # 媒体停止（观察者标定用，无绑定不拦截）
-LLKHF_INJECTED = 0x10
+VK_STOP = 0xB2          # 媒体停止（无绑定对照键）
+WM_KEYDOWN = 0x0100
 WM_QUIT = 0x0012
-_HOOK_PROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int,
-                                wintypes.WPARAM, ctypes.c_ssize_t)
-u32.SetWindowsHookExW.restype = wintypes.HANDLE
-u32.SetWindowsHookExW.argtypes = (ctypes.c_int, _HOOK_PROC, wintypes.HANDLE,
-                                  wintypes.DWORD)
-u32.UnhookWindowsHookEx.argtypes = (wintypes.HANDLE,)
-u32.CallNextHookEx.restype = ctypes.c_ssize_t
-u32.CallNextHookEx.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.WPARAM,
-                               ctypes.c_ssize_t)
-u32.GetMessageW.argtypes = (ctypes.POINTER(wintypes.MSG), wintypes.HWND,
-                            wintypes.UINT, wintypes.UINT)
-u32.PostThreadMessageW.argtypes = (wintypes.DWORD, ctypes.c_uint,
-                                   wintypes.WPARAM, wintypes.LPARAM)
-k32.GetCurrentThreadId.restype = wintypes.DWORD
 
-_CSB_TITLES = ("Cube Setlist Manager", "Cube Automator", "踩钉控制")
 _MEDIA_BANNED = ("cubase", "studioone", "Cubase", "Studio One",
                  "spotify", "Spotify", "QQMusic", "Netease")
-
-
-class _KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD),
-                ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
-                ("dwExtraInfo", ctypes.c_size_t)]
+_CSB_TITLES = ("Cube Setlist Manager", "Cube Automator", "踩钉控制")
 
 
 class _MOUSEINPUT(ctypes.Structure):
@@ -77,69 +53,14 @@ class _KEYBDINPUT(ctypes.Structure):
                 ("dwExtraInfo", ctypes.c_size_t)]
 
 
-class _INPUTUNION(ctypes.Union):
-    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]   # mi 定 40 字节
-
-
 class _INPUT(ctypes.Structure):
     class U(ctypes.Union):
         _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
     _fields_ = [("type", wintypes.DWORD), ("U", U)]
 
 
-class Observer:
-    """独立观察者 LL 钩子：全系统键盘事件流水（vk, down, injected）。"""
-
-    def __init__(self):
-        self.events = []                 # (vk, down, injected, monotonic)
-        self.events_lock = threading.Lock()
-        self.installed = threading.Event()
-        self.tid = None
-        self._proc = _HOOK_PROC(self._cb)
-        self._hook = None
-        self._thread = threading.Thread(target=self._run,
-                                        name="sim-observer", daemon=True)
-        self._thread.start()
-        self.installed.wait(5)
-
-    def _cb(self, ncode, wp, lp):
-        try:
-            if ncode == 0:
-                down = wp in (0x0100, 0x0104)
-                up = wp in (0x0101, 0x0105)
-                if down or up:
-                    st = ctypes.cast(lp, ctypes.POINTER(
-                        _KBDLLHOOKSTRUCT)).contents
-                    with self.events_lock:
-                        self.events.append((st.vkCode, down,
-                                            bool(st.flags & LLKHF_INJECTED),
-                                            time.monotonic()))
-        except Exception:
-            pass
-        return u32.CallNextHookEx(None, ncode, wp, lp)
-
-    def _run(self):
-        self.tid = k32.GetCurrentThreadId()
-        self._hook = u32.SetWindowsHookExW(13, self._proc, None, 0)
-        self.installed.set()
-        msg = wintypes.MSG()
-        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            pass
-        if self._hook:
-            u32.UnhookWindowsHookEx(self._hook)
-
-    def seen(self, vk):
-        with self.events_lock:
-            return [e for e in self.events if e[0] == vk]
-
-    def clear(self):
-        with self.events_lock:
-            self.events = []
-
-    def stop(self):
-        if self.tid:
-            u32.PostThreadMessageW(self.tid, WM_QUIT, 0, 0)
-        self._thread.join(timeout=2)
+u32.SendInput.restype = wintypes.UINT
+u32.SendInput.argtypes = (wintypes.UINT, ctypes.c_void_p, ctypes.c_int)
 
 
 def send_key(vk, up=False):
@@ -159,29 +80,47 @@ def press(vk, gap=0.03):
     send_key(vk, up=True)
 
 
+def pump(sec):
+    """主线程泵消息（探针窗收键用）。"""
+    t0 = time.monotonic()
+    msg = wintypes.MSG()
+    while time.monotonic() - t0 < sec:
+        while u32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+            u32.TranslateMessage(ctypes.byref(msg))
+            u32.DispatchMessageW(ctypes.byref(msg))
+        time.sleep(0.01)
+
+
 def _csm_windows():
     """按窗口标题找在跑的 CSM 程序：程序必有主窗，比进程名可靠
     （开发态跑在 python.exe 下，tasklist 看不出是它）。"""
     titles = []
     _ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
                                    wintypes.LPARAM)
-    proc = _ENUMPROC(lambda h, l: (titles.append(_title(h)) or True))
+
+    def _title(hwnd):
+        n = u32.GetWindowTextLengthW(hwnd)
+        if not n:
+            return ""
+        b = ctypes.create_unicode_buffer(n + 1)
+        u32.GetWindowTextW(hwnd, b, n + 1)
+        return b.value
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def proc(h, l):
+        titles.append(_title(h))
+        return True
+
     u32.EnumWindows(proc, 0)
+    # 排除资源管理器窗口（文件夹名含产品名会被误判为程序在跑）
     return [t for t in titles
-            if any(b.lower() in t.lower() for b in _CSB_TITLES)]
-
-
-def _title(hwnd):
-    n = u32.GetWindowTextLengthW(hwnd)
-    if not n:
-        return ""
-    b = ctypes.create_unicode_buffer(n + 1)
-    u32.GetWindowTextW(hwnd, b, n + 1)
-    return b.value
+            if any(b.lower() in t.lower() for b in _CSB_TITLES)
+            and "文件资源管理器" not in t]
 
 
 def preflight():
-    """CSM/媒体程序在场即拒绝注入：拦截一旦失效也不误伤真程序。"""
+    """媒体/DAW 程序与在跑的 CSM 主窗在场即拒绝注入：拦截一旦失效也不
+    误伤真程序。"""
     out = subprocess.run(["tasklist"], capture_output=True, text=True,
                          encoding="utf-8", errors="replace").stdout
     bad = [ln.split()[0] for ln in out.splitlines()
@@ -193,94 +132,83 @@ def preflight():
     return True
 
 
-class _MiniSink:
-    """独立 Raw Input 探针（不用 pedal.py 任何代码）：INPUTSINK 注册 + 消息泵，
-    统计收到的键盘 WM_INPUT 数——本机管道死活的独立证人。"""
-
-    def __init__(self):
-        self.n = 0
-        self.ready = threading.Event()
-        self.tid = None
-        self._thread = threading.Thread(target=self._run,
-                                        name="sim-rawsink", daemon=True)
-        self._thread.start()
-        self.ready.wait(5)
-
-    def _run(self):
-        from ctypes import wintypes as _w
-        class HDR(ctypes.Structure):
-            _fields_ = [("dwType", _w.DWORD), ("dwSize", _w.DWORD),
-                        ("hDevice", _w.HANDLE), ("wParam", _w.WPARAM)]
-        class KB(ctypes.Structure):
-            _fields_ = [("MakeCode", _w.USHORT), ("Flags", _w.USHORT),
-                        ("Reserved", _w.USHORT), ("VKey", _w.USHORT),
-                        ("Message", _w.UINT), ("ExtraInformation", _w.ULONG)]
-        class DEV(ctypes.Structure):
-            _fields_ = [("usUsagePage", _w.USHORT), ("usUsage", _w.USHORT),
-                        ("dwFlags", _w.DWORD), ("hwndTarget", _w.HWND)]
-        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, _w.HWND, ctypes.c_uint,
-                                     _w.WPARAM, ctypes.c_ssize_t)
-        class WC(ctypes.Structure):
-            _fields_ = [("style", _w.UINT), ("lpfnWndProc", WNDPROC),
-                        ("cbClsExtra", ctypes.c_int),
-                        ("cbWndExtra", ctypes.c_int),
-                        ("hInstance", _w.HINSTANCE), ("hIcon", _w.HANDLE),
-                        ("hCursor", _w.HANDLE), ("hbrBackground", _w.HANDLE),
-                        ("lpszMenuName", _w.LPCWSTR),
-                        ("lpszClassName", _w.LPCWSTR)]
-        self.tid = k32.GetCurrentThreadId()
-        ref = WNDPROC(self._wnd)
-        wc = WC()
-        wc.lpfnWndProc = ref
-        wc.lpszClassName = "SimRawSink"
-        wc.hInstance = k32.GetModuleHandleW(None)
-        u32.RegisterClassW(ctypes.byref(wc))
-        hwnd = u32.CreateWindowExW(0, "SimRawSink", "x", 0, 0, 0, 0, 0,
-                                   None, None, wc.hInstance, None)
-        dev = DEV(1, 6, 0x00000100, hwnd)                # INPUTSINK
-        self.ok = bool(u32.RegisterRawInputDevices(
-            ctypes.byref(dev), 1, ctypes.sizeof(DEV)))
-        self.ready.set()
-        msg = _w.MSG()
-        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            u32.TranslateMessage(ctypes.byref(msg))
-            u32.DispatchMessageW(ctypes.byref(msg))
-        u32.DestroyWindow(hwnd)
-
-    def _wnd(self, h, m, w, l):
-        if m == 0x00FF:                                 # WM_INPUT
-            self.n += 1
-        return u32.DefWindowProcW(h, m, w, l)
-
-    def stop(self):
-        if self.tid:
-            u32.PostThreadMessageW(self.tid, WM_QUIT, 0, 0)
-        self._thread.join(timeout=2)
-
-
-class SimBridge(pedal.RawInputBridge):
-    """生产桥 + 模拟桩：
-    - raw 侧 spoof：指定 VK 伪造成所选设备发来的（模拟 hDevice→路径→
-      匹配段；那段需要真实蓝牙设备句柄，驱动级注入不做）；
-    - hook 侧 sim_hw：把注入当硬件事件（测拦截机制本身）。生产语义里
-      软件注入永远放行——该语义本身由 T4a/T4b 用纯生产桥单独验证。"""
+class SimBridge(pedal.DeviceBridge):
+    """生产桥 + 注入归属桩：spoof 非空时注入事件（无设备句柄）视为所选
+    设备（模拟 hDevice→路径→匹配段；那段需要真实设备，驱动级注入不做）。
+    raw_events 记录经归属过滤后到达 _feed 的全部事件。"""
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self.spoof = frozenset()
-        self.sim_hw = False
         self.raw_events = []
 
-    def _feed(self, vk, down, is_pedal):
-        self.raw_events.append((vk, down, is_pedal, time.monotonic()))
-        if vk in self.spoof and not is_pedal:
-            is_pedal = True
-        return pedal.RawInputBridge._feed(self, vk, down, is_pedal)
+    def _attr(self, name):
+        return bool(self.spoof) or pedal.DeviceBridge._attr(self, name)
 
-    def _hook_event(self, vk, down, injected=False):
-        if injected and self.sim_hw:
-            injected = False
-        return pedal.RawInputBridge._hook_event(self, vk, down, injected)
+    def _feed(self, vk, down):
+        self.raw_events.append((vk, down, time.monotonic()))
+        pedal.DeviceBridge._feed(self, vk, down)
+
+
+class LegacyProbe:
+    """前台探针窗：记录收到的 WM_KEYDOWN——热键注册后注入键应被 win32k
+    消费、永不到达本窗口（「不漏给其它程序」的离线证明）。须在主线程
+    创建并随测试 pump。"""
+
+    _WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND,
+                                  ctypes.c_uint, wintypes.WPARAM,
+                                  ctypes.c_ssize_t)
+
+    def __init__(self):
+        self.keys = []
+        self.hwnd = None
+        self._proc = self._WNDPROC(self._wnd)
+        self._cls = "SimLegacyProbe-%d" % time.monotonic_ns()
+
+        class WC(ctypes.Structure):
+            _fields_ = [("style", wintypes.UINT),
+                        ("lpfnWndProc", self._WNDPROC),
+                        ("cbClsExtra", ctypes.c_int),
+                        ("cbWndExtra", ctypes.c_int),
+                        ("hInstance", wintypes.HINSTANCE),
+                        ("hIcon", wintypes.HANDLE),
+                        ("hCursor", wintypes.HANDLE),
+                        ("hbrBackground", wintypes.HANDLE),
+                        ("lpszMenuName", wintypes.LPCWSTR),
+                        ("lpszClassName", wintypes.LPCWSTR)]
+        wc = WC()
+        wc.lpfnWndProc = self._proc
+        wc.lpszClassName = self._cls
+        wc.hInstance = k32.GetModuleHandleW(None)
+        assert u32.RegisterClassW(ctypes.byref(wc))
+        self.hwnd = u32.CreateWindowExW(0, self._cls, "sim probe", 0xC00000,
+                                        10, 10, 200, 100, None, None,
+                                        wc.hInstance, None)
+        u32.ShowWindow(self.hwnd, 5)                # SW_SHOW
+
+    def _wnd(self, h, m, w, l):
+        if m == WM_KEYDOWN:
+            self.keys.append(w)
+        return u32.DefWindowProcW(h, m, w, l)
+
+    def foreground(self):
+        u32.SetForegroundWindow(self.hwnd)
+        pump(0.1)
+        return u32.GetForegroundWindow() == self.hwnd
+
+    def close(self):
+        if self.hwnd:
+            u32.DestroyWindow(self.hwnd)
+            self.hwnd = None
+
+
+def wait_running(br, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if br.running and br.raw_ok:
+            return True
+        time.sleep(0.05)
+    return br.running and bool(br.raw_ok)
 
 
 class Case:
@@ -298,317 +226,199 @@ class Case:
         print("%-8s %-38s %s" % ("SKIP-ENV", name, why))
 
 
-def wait_running(br, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if br.running and br.raw_ok:
-            return True
-        time.sleep(0.05)
-    return br.running and bool(br.raw_ok)
-
-
 def main():
     if not preflight():
         return 2
     case = Case()
-    obs = Observer()
-    if not case.run("观察者钩子安装", obs.installed.is_set() and obs._hook):
-        return 2
 
-    # ---- 环境自分类（独立证人） ----
-    env_hook = env_raw = None
-    sink = _MiniSink()
-    obs.clear()
-    press(VK_STOP)
-    time.sleep(0.4)
-    got = obs.seen(VK_STOP)
-    env_hook = any(e[2] for e in got)               # 注入标记必须在场
-    case.run("ENV 注入→LL钩子", env_hook,
-             "%d 个事件" % len(got) if env_hook else "钩子管道死（历史已知降级）")
-    time.sleep(0.3)
-    base = sink.n
-    press(VK_NEXT)
-    time.sleep(0.5)
-    env_raw = sink.n > base
-    case.run("ENV 注入→RawInput", env_raw,
-             "WM_INPUT %d→%d" % (base, sink.n) if env_raw else "raw 管道死")
-    sink.stop()
-
-    # ---- T1 生产桥 raw 收到注入键；设备过滤负验证（hDevice=NULL≠踏板） ----
-    if env_raw:
-        br = SimBridge(lambda a: fired.append(a))
-        fired = []
-        br.configure(binds={VK_NEXT: "next"}, device_hint="SIMFACE", block=False)
-        br.start()
-        ok = wait_running(br)
-        case.run("T1 桥线程启动+注册", ok,
-                 "running=%s raw_ok=%s" % (br.running, br.raw_ok))
-        obs.clear()
-        press(VK_NEXT)
-        time.sleep(0.4)
-        raws = [e for e in br.raw_events if e[0] == VK_NEXT]
-        case.run("T1 raw 收到注入键", len(raws) >= 2,
-                 "down/up=%d" % len(raws))
-        case.run("T1 归属过滤：注入不冒充踏板",
-                 bool(raws) and not any(e[2] for e in raws)
-                 and fired == [],
-                 "动作触发=%d（应为 0）" % len(fired))
-        case.run("T1 钩子放行（block=off）", len(obs.seen(VK_NEXT)) >= 2)
-        br.stop()
-        time.sleep(0.2)
-        case.run("T1 stop 干净", not br.running)
-    else:
-        case.skip("T1 raw 收到注入键", "raw 管道死")
-        case.skip("T1 归属过滤", "raw 管道死")
-
-    # ---- T2 归属桩 + 触发全链（真 raw 管道 + 桩归属 + 去抖） ----
-    if env_raw:
-        fired = []
-        br = SimBridge(lambda a: fired.append(a))
-        br.configure(binds={VK_NEXT: "next", VK_PREV: "prev"},
-                     device_hint="SIMFACE", block=False)
-        br.spoof = frozenset((VK_NEXT, VK_PREV))
-        br.start()
-        wait_running(br)
-        press(VK_NEXT)
-        time.sleep(0.4)
-        case.run("T2 单踩单触发", fired == ["next"], str(fired))
-        press(VK_NEXT, gap=0.02)
-        send_key(VK_NEXT)                           # up 后 80ms 内再踩：去抖窗内
-        time.sleep(0.08)
-        send_key(VK_NEXT, up=True)
-        time.sleep(0.4)
-        case.run("T2 去抖窗内连踩只触发一次", fired == ["next", "next"],
-                 str(fired))
-        time.sleep(0.2)
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T2 独立键独立计数", fired == ["next", "next", "prev"],
-                 str(fired))
-        br.stop()
-    else:
-        case.skip("T2 归属+触发全链", "raw 管道死")
-
-    # ---- T3 键盘证据：注入键记为「他源」→ 开拦截后钩子仍放行 ----
-    #（block 必须先关：被钩子吞掉的键不产生 WM_INPUT，证据无从积累）
-    if env_raw:
-        br = SimBridge(lambda a: fired.append(a))
-        fired = []
-        br.configure(binds={VK_NEXT: "next"}, device_hint="SIMFACE",
-                     block=False)
-        br.start()
-        wait_running(br)
-        press(VK_NEXT)                              # 无 spoof：等于键盘发的
-        time.sleep(0.4)
-        ev = br._evidence.get(VK_NEXT)
-        case.run("T3 他源证据入账", bool(ev) and ev[1] is True, str(ev))
-        case.run("T3 不触发动作", fired == [], str(fired))
-        br.configure(block=True)                    # 开拦截后再验放行决策
-        case.run("T3 钩子放行他源键", br._hook_event(VK_NEXT, True) is False)
-        case.run("T3 放行不触发", fired == [], str(fired))
-        br.stop()
-    else:
-        case.skip("T3 键盘证据放行", "raw 管道死")
-
-    # ---- T4 拦截：生产行为（空证据/注入放行）+ 机制（模拟硬件事件） ----
-    if env_hook:
-        # T4a 空证据：来源不明 → 放行不触发。防键盘媒体键/耳机 AVRCP 误触发；
-        # 被吞键不产生 WM_INPUT、证据永无积累，所以误触发必须是「无」而非「一次」
-        fired = []
-        br = pedal.RawInputBridge(fired.append)
-        br.configure(binds={VK_PREV: "prev"}, device_hint="SIMFACE", block=True)
-        br.start()
-        wait_running(br)
-        obs.clear()
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T4a 空证据放行不误触发",
-                 len(obs.seen(VK_PREV)) >= 2 and fired == [],
-                 "放行 %d 触发 %d" % (len(obs.seen(VK_PREV)), len(fired)))
-        br.stop()
-        time.sleep(0.2)
-
-        # T4b 有证据但事件是软件注入：不是踩钉 → 放行
-        br = pedal.RawInputBridge(fired.append)
-        br.configure(binds={VK_PREV: "prev"}, device_hint="SIMFACE", block=True)
-        br._evidence[VK_PREV] = [True, False]       # 桩：踩钉已证实发过
-        br.pedal_keys.add(VK_PREV)
-        br.start()
-        wait_running(br)
-        obs.clear()
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T4b 注入键放行（非踩钉来源）",
-                 len(obs.seen(VK_PREV)) >= 2 and fired == [],
-                 "放行 %d 触发 %d" % (len(obs.seen(VK_PREV)), len(fired)))
-        br.stop()
-        time.sleep(0.2)
-
-        # T4c 机制：同状态、事件视作硬件 → 系统级拦截+触发+不牵连无关键
-        fired = []
-        brs = SimBridge(fired.append)
-        brs.configure(binds={VK_PREV: "prev"}, device_hint="SIMFACE", block=True)
-        brs._evidence[VK_PREV] = [True, False]
-        brs.pedal_keys.add(VK_PREV)
-        brs.sim_hw = True
-        brs.start()
-        wait_running(brs)
-        obs.clear()
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T4c 拦截：观察者收不到被吞键",
-                 len(obs.seen(VK_PREV)) == 0,
-                 "%d 个泄漏事件" % len(obs.seen(VK_PREV)))
-        case.run("T4c 拦截路径触发动作", fired == ["prev"], str(fired))
-        obs.clear()
+    # ---- 环境自检：注入事件能进 Raw Input 管道 ----
+    env_raw = False
+    br0 = SimBridge(lambda a: None)
+    br0.configure(binds={}, device_hint="SIMFACE")
+    br0.start()
+    if wait_running(br0):
+        br0.spoof = frozenset((VK_STOP,))
         press(VK_STOP)
         time.sleep(0.3)
-        case.run("T4c 无关键不牵连", len(obs.seen(VK_STOP)) >= 2)
-        brs.configure(block=False)
-        obs.clear()
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T4c 关拦截恢复放行", len(obs.seen(VK_PREV)) >= 2,
-                 "%d 个事件" % len(obs.seen(VK_PREV)))
-        brs.stop()
-        time.sleep(0.2)
+        env_raw = any(e[0] == VK_STOP for e in br0.raw_events)
+    br0.stop()
+    case.run("ENV 注入→RawInput", env_raw,
+             "管道活" if env_raw else "raw 管道死（历史降级）")
 
-        # T4f 首踩契约：空证据的踩钉键首踩放行一次但动作照触发（raw 侧），
-        # 第二踩起系统级拦截、动作照触发——只漏一次按键、不漏任何动作
-        fired = []
-        brf = SimBridge(fired.append)
-        brf.configure(binds={VK_NEXT: "next"}, device_hint="SIMFACE", block=True)
-        brf.spoof = frozenset((VK_NEXT,))
-        brf.sim_hw = True
-        brf.start()
-        wait_running(brf)
-        obs.clear()
-        press(VK_NEXT)
-        time.sleep(0.4)
-        ok1 = fired == ["next"] and len(obs.seen(VK_NEXT)) == 2
-        press(VK_NEXT)
-        time.sleep(0.4)
-        case.run("T4f 首踩漏一次动作不丢、再踩拦截照常",
-                 ok1 and fired == ["next", "next"]
-                 and len(obs.seen(VK_NEXT)) == 2,
-                 "触发 %s，首踩放行 %d 事件" % (fired, len(obs.seen(VK_NEXT))))
-        brf.stop()
-    else:
-        case.skip("T4 拦截语义与机制", "钩子管道死（历史降级）")
-
-    # ---- T5 stop 后钩子确实摘除（不再吞键） ----
-    if env_hook:
-        fired = []
-        br = SimBridge(fired.append)
-        br.configure(binds={VK_PREV: "prev"}, device_hint="SIMFACE", block=True)
-        br._evidence[VK_PREV] = [True, False]
-        br.pedal_keys.add(VK_PREV)
-        br.sim_hw = True
-        br.start()
-        wait_running(br)
-        br.stop()
-        time.sleep(0.2)
-        obs.clear()
-        press(VK_PREV)
-        time.sleep(0.4)
-        case.run("T5 stop 后不再拦截",
-                 len(obs.seen(VK_PREV)) >= 2 and fired == [],
-                 "%d 个事件" % len(obs.seen(VK_PREV)))
-    else:
-        case.skip("T5 stop 后摘钩", "钩子管道死")
-
-    # ---- T6 PedalListener 装配层（不注入，纯生命周期） ----
-    fired = []
-    pl = pedal.PedalListener(fired.append)
-    pl.apply("无此口", {"next": 4}, {"next": VK_NEXT}, "SIMFACE", True)
-    case.run("T6 apply 契约（VK 反转）",
-             pl.bridge.binds == {VK_NEXT: "next"}
-             and pl.bridge.device_hint == "SIMFACE"
-             and pl.bridge.block is True)
-    pl.try_open()
-    ok = wait_running(pl.bridge)
-    case.run("T6 try_open 拉起设备桥", ok and pl.hid_active,
-             "running=%s" % pl.bridge.running)
-    pl.mute()
-    case.run("T6 静音=学习让路",
-             pl.muted and pl.bridge.learning and not pl.try_open())
-    pl.unmute()
-    pl.try_open()
-    wait_running(pl.bridge)
-    case.run("T6 解除静音恢复", pl.hid_active)
-    pl.shutdown()
-    time.sleep(0.2)
-    case.run("T6 shutdown 停桥", not pl.bridge.running)
-
-    # ---- T7 连踩压力：20 次交替触发零丢失零重复 ----
+    # ---- T1 归属过滤：spoof=所选设备触发；无 spoof=注入不冒充踏板 ----
     if env_raw:
         fired = []
-        br = SimBridge(lambda a: fired.append(a))
-        br.configure(binds={VK_NEXT: "next", VK_PREV: "prev"},
-                     device_hint="SIMFACE", block=False)
-        br.spoof = frozenset((VK_NEXT, VK_PREV))
+        br = SimBridge(fired.append)
+        br.configure(binds={VK_NEXT: "next"}, device_hint="SIMFACE")
         br.start()
         wait_running(br)
-        seq = [VK_NEXT, VK_PREV] * 10
-        expect = ["next", "prev"] * 10
-        for vk in seq:
-            press(vk, gap=0.02)
-            time.sleep(0.16)                        # > 去抖 0.15s
-        time.sleep(0.6)
-        case.run("T7 连踩 20 次精确触发", fired == expect,
-                 "触发 %d 次（应 20）" % len(fired))
-        case.run("T7 顺序正确", fired == expect,
-                 str(fired[:6]) + ("…" if len(fired) > 6 else ""))
+        press(VK_NEXT)
+        time.sleep(0.3)
+        case.run("T1 归属过滤：注入不冒充踏板", fired == [], str(fired))
+        br.spoof = frozenset((VK_NEXT,))
+        press(VK_NEXT)
+        time.sleep(0.3)
+        case.run("T1 所选设备（桩归属）触发", fired == ["next"], str(fired))
         br.stop()
     else:
-        case.skip("T7 连踩压力", "raw 管道死")
+        case.skip("T1 归属过滤", "raw 管道死")
 
-    # ---- T8 时序手势（双踩/长踩/单踩）：真注入时序端到端 ----
+    # ---- T2 手势端到端（真注入时序） ----
     if env_raw:
         fired = []
         eng = pedal.GestureEngine(fired.append)
         br = SimBridge(fired.append)
-        br.configure(binds={}, device_hint="SIMFACE", block=False,
-                     engine=eng, temporal={VK_NEXT})
+        br.configure(binds={}, device_hint="SIMFACE", engine=eng,
+                     temporal={VK_NEXT})
         eng.configure({(("hid", VK_NEXT), "double"): "next",
-                       (("hid", VK_NEXT), "long"): "panic",
                        (("hid", VK_NEXT), "single"): "play"})
         br.spoof = frozenset((VK_NEXT,))
         br.start()
         wait_running(br)
-        # 双踩：快踩两下（0.35s 窗内）
-        send_key(VK_NEXT)
+        send_key(VK_NEXT)                           # 双踩
         time.sleep(0.06)
         send_key(VK_NEXT, up=True)
         time.sleep(0.15)
-        case.run("T8 双踩第一踩不即发", fired == [], str(fired))
+        case.run("T2 双踩第一踩不即发", fired == [], str(fired))
         send_key(VK_NEXT)
         time.sleep(0.06)
         send_key(VK_NEXT, up=True)
         time.sleep(0.4)
-        case.run("T8 双踩触发", fired == ["next"], str(fired))
-        # 长踩：按住 0.6s（> 阈值 0.45s），按住中即触发
-        send_key(VK_NEXT)
+        case.run("T2 双踩触发", fired == ["next"], str(fired))
+        send_key(VK_NEXT)                           # 按住：长踩已废除
         time.sleep(0.6)
-        case.run("T8 长踩按住中触发", fired == ["next", "panic"], str(fired))
+        case.run("T2 按住中零动作（无长踩手势）", fired == ["next"], str(fired))
         send_key(VK_NEXT, up=True)
-        time.sleep(0.2)
-        case.run("T8 长踩松开不重复", fired == ["next", "panic"])
-        # 单踩：完整一踩后等双踩窗平静过期（按压 80ms：越过松开沿同龄闸）
-        press(VK_NEXT, gap=0.08)
+        time.sleep(0.6)                             # 窗过期：按住松脚=单踩
+        case.run("T2 按住松脚窗后结算单踩", fired == ["next", "play"],
+                 str(fired))
+        press(VK_NEXT, gap=0.08)                    # 再来一次干净单踩
         time.sleep(0.6)
-        case.run("T8 单踩窗后触发", fired == ["next", "panic", "play"],
+        case.run("T2 单踩窗后触发", fired == ["next", "play", "play"],
                  str(fired))
         br.stop()
     else:
-        case.skip("T8 时序手势", "raw 管道死")
+        case.skip("T2 手势端到端", "raw 管道死")
 
-    obs.stop()
+    # ---- T3 学习捕获（mute 态走捕获不触发） ----
+    if env_raw:
+        cap = []
+        br = SimBridge(None)
+        br.configure(binds={}, device_hint="SIMFACE")
+        br.spoof = frozenset((VK_NEXT,))
+        br.begin_capture(lambda vk, d, t: cap.append((vk, d)))
+        br.start()
+        wait_running(br)
+        press(VK_NEXT, gap=0.08)
+        time.sleep(0.3)
+        case.run("T3 事件到达 raw 管道", len(br.raw_events) == 2,
+                 "raw=%s" % br.raw_events)
+        case.run("T3 学习捕获完整踩法",
+                 [(v, d) for v, d in cap] == [(VK_NEXT, True), (VK_NEXT, False)],
+                 str(cap))
+        br.end_capture()
+        br.stop()
+    else:
+        case.skip("T3 学习捕获", "raw 管道死")
+
+    # ---- T4 热键拦截：注册后键被 win32k 消费（前台窗收不到）且
+    #      WM_INPUT 仍并行送达（触发不丢）；解除后反转 ----
+    if env_raw:
+        fired = []
+        br = SimBridge(fired.append)
+        br.configure(binds={VK_NEXT: "next"}, device_hint="SIMFACE",
+                     block=True)
+        br.spoof = frozenset((VK_NEXT,))            # 注入视为所选设备
+        br.start()
+        wait_running(br)
+        time.sleep(0.2)                             # 热键注册落地
+        probe = LegacyProbe()
+        fg = probe.foreground()
+        if fg:
+            press(VK_NEXT)
+            pump(0.4)
+            case.run("T4 拦截：前台窗收不到被消费键", probe.keys == [],
+                     "legacy=%s" % probe.keys)
+            case.run("T4 拦截：热键回执已入 pending",
+                     VK_NEXT in br._pending or fired == ["next"],
+                     "pending=%s 触发=%s" % (br._pending, fired))
+            case.run("T4 拦截：松开沿归属合成对仍触发", fired == ["next"],
+                     "触发=%s" % fired)
+            # 拦截开启 + 时序手势：合成按压对（按下=热键回执，松开=归属）
+            eng = pedal.GestureEngine(fired.append)
+            br.configure(binds={}, engine=eng, temporal={VK_NEXT},
+                         block=True)
+            eng.configure({(("hid", VK_NEXT), "double"): "next"})
+            time.sleep(0.25)                        # 热键重注册落地
+            send_key(VK_NEXT)
+            time.sleep(0.06)
+            send_key(VK_NEXT, up=True)
+            time.sleep(0.1)
+            send_key(VK_NEXT)
+            time.sleep(0.06)
+            send_key(VK_NEXT, up=True)
+            time.sleep(0.3)
+            case.run("T4 拦截开启：双踩合成对正常判别", fired[-1] == "next",
+                     str(fired))
+            br.configure(block=False)               # 解除注册
+            time.sleep(0.3)
+            press(VK_NEXT)
+            pump(0.4)
+            case.run("T4 解除后按键恢复送达前台",
+                     VK_NEXT in probe.keys, "legacy=%s" % probe.keys)
+        else:
+            case.skip("T4 热键拦截（前台失败）", "SetForegroundWindow 被拒")
+        probe.close()
+        br.stop()
+    else:
+        case.skip("T4 热键拦截", "raw 管道死")
+
+    # ---- T5 监听器装配层（纯生命周期） ----
+    fired = []
+    pl = pedal.PedalListener(fired.append)
+    pl.apply("无此口", {"next": 4}, {"next": VK_NEXT}, "SIMFACE", True)
+    case.run("T5 apply 契约（VK 反转）",
+             pl.bridge.binds == {VK_NEXT: "next"}
+             and pl.bridge.device_hint == "SIMFACE"
+             and pl.bridge.block is True)
+    pl.try_open()
+    case.run("T5 try_open 拉起设备桥", wait_running(pl.bridge)
+             and pl.hid_active, "running=%s" % pl.bridge.running)
+    pl.mute()
+    case.run("T5 静音=学习让路",
+             pl.muted and pl.bridge.silent and not pl.try_open())
+    pl.unmute()
+    pl.try_open()
+    case.run("T5 解除静音恢复", pl.hid_active)
+    pl.shutdown()
+    time.sleep(0.2)
+    case.run("T5 shutdown 停桥", not pl.bridge.running)
+
+    # ---- T6 连踩压力：20 次交替触发零丢失零重复 ----
+    if env_raw:
+        fired = []
+        br = SimBridge(fired.append)
+        br.configure(binds={VK_NEXT: "next", VK_PREV: "prev"},
+                     device_hint="SIMFACE")
+        br.spoof = frozenset((VK_NEXT, VK_PREV))
+        br.start()
+        wait_running(br)
+        expect = ["next", "prev"] * 10
+        for vk in [VK_NEXT, VK_PREV] * 10:
+            press(vk, gap=0.02)
+            time.sleep(0.16)                        # > 去抖 0.15s
+        time.sleep(0.6)
+        case.run("T6 连踩 20 次精确触发", fired == expect,
+                 "触发 %d 次（应 20）%s" % (len(fired), fired))
+        br.stop()
+    else:
+        case.skip("T6 连踩压力", "raw 管道死")
+
     fails = [r for r in case.results if r[1] == "FAIL"]
     skips = [r for r in case.results if r[1] == "SKIP-ENV"]
     summary = {
         "verdict": "FAIL" if fails else "PASS",
-        "env": {"hook": env_hook, "raw": env_raw},
+        "env": {"raw": env_raw},
         "pass": sum(1 for r in case.results if r[1] == "PASS"),
         "fail": len(fails), "skip_env": len(skips),
         "details": [{"case": n, "verdict": v, "detail": d}

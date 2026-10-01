@@ -187,8 +187,11 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   （"slots"=JUNO 段，"ax"=AX-09 段）。AX-09 只能经 USB 接收（DIN 口 OUT-only）；
   BS+PC 直发 144 个常规音色（MSB 恒 87；1-128 号 LSB=0、129-144 号 LSB=1），
   Favorite/Special Tone 不在 MIDI 映射表里。
-- **踩钉**：MIDI CC 上升沿触发（瞬时/开关踩钉通吃）。窗口里点「学习」踩一下即完成绑定，
-  存 `config.json` 的 pedal 段；支持热插拔（断开每 10 秒自动重连）。
+- **踩钉**：MIDI CC 上升沿触发（瞬时/开关踩钉通吃）；蓝牙键盘型踩钉（HID 按键）
+  同套学习。可学动作六项：**暂停/继续**（按播放状态一键切换）、开始、回零、
+  全停、上一首、下一首；手法两种：单击、快踩两下（双踩）。窗口里点「学习」
+  踩一下即完成绑定，存 `config.json` 的 pedal 段；支持热插拔（断开每 10 秒
+  自动重连）。
 
 ### 移动端遥控 / 谱面自动翻页
 
@@ -241,7 +244,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | dawSettings | dawExe / projectsRoot / autoSave | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）、切换时自动保存 |
 | juno | inHint / outHint / dev / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道；dev=同名端口序号（两台同型号无线 MIDI 盒时在「键盘自动化」窗下拉选择，0 基，一般勿手改） |
 | ax09 | inHint / outHint / ch / dev | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改）；dev 同 juno |
-| pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / longPress / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double/long，「学习」时踩出即自动分类）、长踩阈值（默认 0.45s）与双踩窗（默认 0.35s） |
+| pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double，「学习」时踩出即自动分类）与双踩窗（默认 0.35s） |
 | webRemote | enabled / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
