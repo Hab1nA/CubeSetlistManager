@@ -532,15 +532,20 @@ class KeyboardAutoWindow(tk.Toplevel):
         tk.Label(self, text="录制：在琴上选好该音色；"
                             "触发：发送到琴上验证。").pack(
             anchor="w", padx=pad, pady=(pad, 4))
-        # 乐器分页：下拉切换，窗口只显示一台琴的内容
+        # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
+        # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮，
+        # direction=below）——两行下拉起点/宽度对齐；刷新=重枚举当前页
+        # 设备并复核端口状态，设备插回时不必切页即可一键复核
         self._sel = tk.StringVar(value=PAGE_NAMES[0])
         top = tk.Frame(self)
         top.pack(fill="x", padx=pad, pady=(0, 4))
-        tk.Label(top, text="乐器", anchor="w").pack(side="left")
+        tk.Label(top, text="乐器", width=15, anchor="w").pack(side="left")
         self._menu = tk.OptionMenu(top, self._sel, *PAGE_NAMES,
                                    command=self._show_page)
-        self._menu.config(anchor="w")
-        self._menu.pack(side="left", padx=8)
+        self._menu.config(anchor="w", direction="below")
+        self._menu.pack(side="left", fill="x", expand=True)
+        tk.Button(top, text="刷新", width=6,
+                  command=self._refresh_page).pack(side="left", padx=(6, 0))
         self._slot_lbl = {}
         self._rec_btn = {}
         self._pages = {}
@@ -894,6 +899,12 @@ class KeyboardAutoWindow(tk.Toplevel):
     def _port_row(self, key, text, ok):
         self._port_lbl[key].config(text=text,
                                    fg=dpi.C_OK if ok else dpi.C_ERR)
+
+    def _refresh_page(self):
+        """乐器行「刷新」：重枚举当前页设备下拉并复核端口状态——与页内
+        设备行刷新同效（设备插回时一键复核，不必切页/滚动）。"""
+        self._rebuild_device_menu(self._page_key)
+        self._poll_ports()
 
     def _rebuild_device_menu(self, key):
         """重建设备下拉项（开窗/点「刷新」/改选后调用）：枚举当前在线输出

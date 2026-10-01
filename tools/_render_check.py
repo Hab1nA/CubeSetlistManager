@@ -490,6 +490,18 @@ check("键盘窗绑定后状态行隐藏",
       not kw.status.winfo_ismapped()
       and kw.title() == "键盘自动化")
 
+# --- 乐器行与「MIDI 设备」行同款：下拉起点/宽度对齐 + 右侧刷新钮等宽 ---
+top_btns = [w for w in kw._menu.master.winfo_children()
+            if isinstance(w, tk.Button)]
+dev_btns = [w for w in kw._dev_menus["juno"].master.winfo_children()
+            if isinstance(w, tk.Button)]
+check("键盘窗乐器行与设备行同款",
+      len(top_btns) == 1 and len(dev_btns) == 1
+      and kw._menu.winfo_rootx() == kw._dev_menus["juno"].winfo_rootx()
+      and kw._menu.winfo_width() == kw._dev_menus["juno"].winfo_width()
+      and top_btns[0]["text"] == "刷新"
+      and top_btns[0].winfo_width() == dev_btns[0].winfo_width())
+
 # --- 两窗第二列表头与数据列文字左缘对齐（数据列有 padx=(8,8) 左缩进） ---
 kb_hdr = kw._slot_lbl[kbd_auto.SLOT_NOTES[0]].master.grid_slaves(
     row=0, column=1)[0]
