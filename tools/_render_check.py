@@ -149,6 +149,20 @@ def right_gap(btn):
 check("退出右边距与设置按钮一致 %d vs %d"
       % (right_gap(btns["退出"]), right_gap(btns["设置"])),
       abs(right_gap(btns["退出"]) - right_gap(btns["设置"])) <= 2)
+# --- 底栏按钮组对窗口居中（回归：旧方案以「状态右侧」为居中基准，
+# 状态列比退出列宽，按钮组整体偏右半个状态标签 ~163px@175%） ---
+root.update_idletasks()
+root.update()
+mid_f = btns["退出"].master.master.grid_slaves(row=0, column=2)[0]
+
+
+def mid_center():
+    return (mid_f.winfo_rootx() + mid_f.winfo_width() / 2
+            - root.winfo_rootx())
+
+
+dev = mid_center() - root.winfo_width() / 2
+check("底栏按钮组对窗口居中（偏差%+.0fpx）" % dev, abs(dev) <= 3)
 # --- 双列表间距 > 0 ---
 gap = app.pl.winfo_x() - (app.lib.winfo_x() + app.lib.winfo_width())
 check("素材库↔播放列表间距 %dpx" % gap, gap >= 6)
@@ -449,12 +463,15 @@ try:
                 reds += 1            # 全停红
     check("主窗含绿色主操作区（%d px）" % greens, greens > 40)
     check("主窗含红色全停区（%d px）" % reds, reds > 20)
-    # 双列表之间的间隔列应为窗口底色（#141518），证明两列表没有贴死
+    # 双列表之间的间隔列应为容器底色（PANEL），证明两列表没有贴死。
+    # 间隔在列表容器内部，窗口底色只在容器外出现——旧断言预期 #141518
+    # 是采样坐标混用的产物（winfo_x 父相对 vs 截图窗口坐标）
     gy = app.lib.winfo_rooty() - root.winfo_rooty() + app.lib.winfo_height() // 2
-    gx = app.pl.winfo_x() - 4        # pl 左缘往左 4px 落在间隔里
+    gx = app.pl.winfo_rootx() - root.winfo_rootx() - 4   # pl 左缘往左 4px 落在间隔里
     r, g, b = px[gx, gy]
-    dark_bg = abs(r - 0x14) < 10 and abs(g - 0x15) < 10 and abs(b - 0x18) < 10
-    check("列表间隔列=窗口底色 RGB(%d,%d,%d)" % (r, g, b), dark_bg)
+    pr, pg, pb = (int(sg.dpi.PANEL[i:i + 2], 16) for i in (1, 3, 5))
+    dark_bg = abs(r - pr) < 6 and abs(g - pg) < 6 and abs(b - pb) < 6
+    check("列表间隔列=容器底色 RGB(%d,%d,%d)" % (r, g, b), dark_bg)
 except Exception as e:
     print("像素断言跳过：%r" % e)
 
@@ -535,6 +552,24 @@ for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
     win.geometry(orig)
     win.update_idletasks()
     win.update()
+
+# --- 主窗最小尺寸：随内容需求（回归：写死 940 逻辑宽窄于底栏一行需求
+# （1848@175%），权重列被 grid 压没 → 退出按钮只剩 8px 点不到） ---
+mw, mh = root.wm_minsize()
+check("主窗最小尺寸已设 %dx%d" % (mw, mh), mw > 0 and mh > 0)
+check("主窗最小宽度≥内容需求（%d≥%d）" % (mw, root.winfo_reqwidth()),
+      mw >= root.winfo_reqwidth())
+orig_geo = root.geometry()
+root.geometry("%dx%d" % (mw, mh))
+root.update_idletasks(); root.update()
+ex = btns["退出"]
+ex_r = ex.winfo_rootx() - root.winfo_rootx() + ex.winfo_width()
+check("最小尺寸下退出完整可见（右缘%d≤%d）" % (ex_r, root.winfo_width()),
+      ex_r <= root.winfo_width())
+dev = mid_center() - root.winfo_width() / 2
+check("最小尺寸下按钮组仍居中（偏差%+.0fpx）" % dev, abs(dev) <= 3)
+root.geometry(orig_geo)
+root.update_idletasks(); root.update()
 
 # --- 三子窗口：四边留白随 DPI 缩放（回归：pack 裸像素边距高分屏下顶满） ---
 for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):

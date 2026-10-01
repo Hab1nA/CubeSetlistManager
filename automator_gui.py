@@ -277,7 +277,8 @@ class App:
         daw_ctrl.set_active(self.facts)
         root.title("Cube Automator " + self.facts["display_name"])
         root.geometry(dpi.scale(root, 860, 560))
-        root.minsize(dpi.scale(root, 820), dpi.scale(root, 520))
+        # 最小尺寸在 _build 尾按实际需求宽设（同完整版：写死值窄于内容
+        # 需求会把权重列压没）
         self.ccfg = daw_settings(cfg, self.daw)
         self.lite = True                # web_remote 简化版分流标志（页面/门禁）
         self.vj_hint = str(cfg.get("vjPortHint") or "")
@@ -402,8 +403,8 @@ class App:
                               font=("Microsoft YaHei UI", 9))
         self.log.pack(fill="both", expand=True, padx=6, pady=(0, 4))
         # 底：操作行（无走带控制），与完整版同构：「当前状态」在底栏最左，
-        # 「自动化」组在状态右侧剩余空间内居中（空列与右列等权重均分剩余
-        # 空间；状态 padx 收进本列，左右间隙严格对称），「退出」底边与
+        # 「自动化」组对窗口居中（退出列内左衬=状态列宽−退出列净宽 → 两侧
+        # 固定翼等宽，空列与右列等权重均分剩余空间），「退出」底边与
         # 组内按钮同一基线
         ctl = tk.Frame(self.root)
         ctl.pack(fill="x", padx=12, pady=(4, 10))
@@ -425,9 +426,21 @@ class App:
         self.btn_black.pack(side="left", padx=(10, 3), pady=3)
         right = tk.Frame(ctl)
         right.grid(row=0, column=3, sticky="ens")   # 纵向拉满、贴右
-        tk.Button(right, text="退出", width=5,
-                  command=self._on_exit).pack(side="bottom", padx=(0, 6),
-                                              pady=3)
+        # 左衬=状态列宽−退出列净宽（12/6=两侧 padx）→ 两侧固定翼等宽，
+        # mid 恒对窗口居中（原理同完整版；构造期先同步设一次，Configure
+        # 事件不投递于 update_idletasks，迟设会算小 minsize）
+        rpad = tk.Frame(right)
+        rpad.pack(side="left")
+
+        def _rpad(_e=None):
+            rpad.config(width=max(0, self.state_lbl.winfo_reqwidth() + 12
+                                  - exit_btn.winfo_reqwidth() - 6))
+
+        exit_btn = tk.Button(right, text="退出", width=5,
+                             command=self._on_exit)
+        exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
+        _rpad()
+        self.state_lbl.bind("<Configure>", _rpad)
         dpi.darkify(self.root)
         self.log.config(fg=dpi.LOG_FG)
         self.btn_black.config(bg="#a03030", fg="#ffffff",
@@ -435,6 +448,10 @@ class App:
         self.m_now = self.now_lbl
         self.m_map = self.rows[("kb", "音色映射")]
         self.m_last = self.rows[("kb", "最近切换")]
+        # 最小宽度=实际需求宽；高度维持原值（纵向压列表可接受，横向不行）
+        self.root.update_idletasks()
+        self.root.minsize(self.root.winfo_reqwidth(),
+                          dpi.scale(self.root, 520))
 
     # ---- 退出 ----
 

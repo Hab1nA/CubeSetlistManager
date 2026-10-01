@@ -369,7 +369,9 @@ class App:
         daw_ctrl.set_active(self.facts)
         root.title("Cube Setlist Manager" + self.facts["app_suffix"])
         root.geometry(dpi.scale(root, 980, 840))
-        root.minsize(dpi.scale(root, 940), dpi.scale(root, 760))
+        # 最小尺寸不在构造期写死：底栏一行（状态+三组按钮+退出）比任何
+        # 预估都宽，写死值窄于内容需求时 grid 会压缩权重列（退出列被压
+        # 没）——__init__ 尾按实际需求宽设置
         self.ccfg = daw_settings(cfg, self.daw)
         if self.ccfg["dawExe"] and not os.path.exists(self.ccfg["dawExe"]):
             # 配置钉的路径已不存在（升级 DAW/换机）→ 回退自动探测，防静默失效
@@ -620,20 +622,29 @@ class App:
         self.state_lbl = tk.Label(ctl, text="当前状态：未在播放",
                                   font=("Microsoft YaHei UI", 14, "bold"))
         self.state_lbl.grid(row=0, column=0, sticky="w", padx=(12, 10))
-        left_sp = tk.Frame(ctl)
-        left_sp.grid(row=0, column=1, sticky="e")
         right = tk.Frame(ctl)
         right.grid(row=0, column=3, sticky="ens")   # 纵向拉满、贴右
+        # 左衬=状态列宽−退出列净宽（22/6=两侧 padx）→ 右固定翼与左固定翼
+        # （状态列+空列）等宽，两权重列均分剩余空间后 mid 恒对窗口居中：
+        # 旧方案以「状态右侧」为居中基准，状态列比退出列宽，按钮组整体
+        # 偏右半个状态标签（175% 下实测 +163px）。构造期先同步设一次
+        # （Configure 事件不投递于 update_idletasks，迟设会算小 minsize）；
+        # 状态文案等长（当前状态：××××），绑定仅作文案变长后的自愈
+        rpad = tk.Frame(right)
+        rpad.pack(side="left")
+
+        def _rpad(_e=None):
+            rpad.config(width=max(0, self.state_lbl.winfo_reqwidth() + 22
+                                  - exit_btn.winfo_reqwidth() - 6))
+
         # 退出=底栏动作按钮：宽度与编排/播放组一致（5字符），底边与各组
         # 按钮同一基线（pady=3，不再整格垂直居中），右边距与上方「设置」
         # 按钮一致（距容器内右缘 6px）
-        tk.Button(right, text="退出", width=5,
-                  command=self._on_exit).pack(side="bottom", padx=(0, 6),
-                                              pady=3)
-        # 左占位与右列（退出）等宽同步 + 两侧列等权重 → mid 居中
-        # （状态标签占去 col0 后，居中基准是状态右侧的全部剩余空间）
-        right.bind("<Configure>",
-                   lambda _e: left_sp.config(width=right.winfo_reqwidth()))
+        exit_btn = tk.Button(right, text="退出", width=5,
+                             command=self._on_exit)
+        exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
+        _rpad()
+        self.state_lbl.bind("<Configure>", _rpad)
         mid = tk.Frame(ctl)
         mid.grid(row=0, column=2)
         g1 = tk.LabelFrame(mid, text="编排")
@@ -696,6 +707,11 @@ class App:
             pad = max(0, (h - f.winfo_reqheight()) // 2)
             if pad:
                 f.config(pady=pad)
+        # 最小宽度=实际需求宽：窗口窄于它时 grid 压缩权重列，退出按钮被
+        # 压到几像素点不到；高度维持原值（纵向压列表可接受，横向不行）
+        self.root.update_idletasks()
+        self.root.minsize(self.root.winfo_reqwidth(),
+                          dpi.scale(self.root, 760))
         self._update_buttons()
 
     def _update_buttons(self):
