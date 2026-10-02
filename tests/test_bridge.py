@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Cube Setlist Manager 自检：python test_bridge.py。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
+"""Cube Setlist Manager 自检：python -m pytest tests/。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
 import http.client
 import json
 import os

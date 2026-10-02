@@ -17,8 +17,7 @@
 
 [下载安装包](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
 · [安卓 APP](https://github.com/Hab1nA/CubeSetlistManager/releases/latest)
-· [移动端设计文档](docs/移动端遥控与翻谱设计.md)
-· [演出前检查清单](docs/M0_验证清单.md)
+· [演出验证清单](docs/演出验证清单.md)
 
 </div>
 
@@ -65,7 +64,7 @@ Win11 圆角）。全程本地通信，不经互联网。
 | **Cube Setlist Manager** | Windows · Cubase | 演出主程序：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主线） |
 | **Cube Setlist Manager Studio One** | Windows · Studio One 7 Pro | 同上功能的 Studio One 版 |
 | **Cube Automator Studio One** | Windows · Studio One 7 Pro | 自动化简化版：无歌单/切歌/走带遥控，保留其余全部自动化（见下节） |
-| **Cube Remote** | Android 8.0+ | 遥控/翻谱 APP：控制页 + 谱面自动翻页（详见[移动端设计文档](docs/移动端遥控与翻谱设计.md)） |
+| **Cube Remote** | Android 8.0+ | 遥控/翻谱 APP：控制页 + 谱面自动翻页（详见下文「移动端遥控 / 谱面自动翻页」） |
 
 对应 Release 资产：`CubeSetlistManager-Cubase-Setup-x.y.z.exe` /
 `CubeSetlistManager-StudioOne-Setup-x.y.z.exe` /
@@ -85,8 +84,7 @@ Win11 圆角）。全程本地通信，不经互联网。
 槽按工程路径旁挂 JSON、退出保存框按窗口样式判别自动确认。走带时钟链路已
 真机实证（S1 需以「**新建乐器**」类型建外部设备并勾 Send MIDI Clock，键盘类
 设备进不了音轨输出）；每首歌需有输出到 VJ/Keyboard/Score 外部设备的乐器轨
-（本机库内两首已接好，新歌接线方法见调研文档 §十）。真机校准过程见
-`docs/StudioOne迁移调研.md`。
+（本机库内两首已接好）。
 
 ### Cube Automator Studio One（S1 简化版）
 
@@ -144,8 +142,7 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
    任一后端拉起失败只记日志，不阻断其余功能（缺什么补什么）。
 4. **移动端遥控/自动翻谱**：设置页勾「启用移动端遥控」→ 平板/手机连热点 →
    浏览器遥控即开即用；翻谱则在平板安装 Cube Remote APP（网页右上角
-   「下载 APP」或 Release 下载），按[设计文档第十二节](docs/移动端遥控与翻谱设计.md)
-   完成认领/翻页方法/无障碍授权；
+   「下载 APP」或 Release 下载），在 APP 内完成认领/翻页方法/无障碍授权；
 5. **音色/踩钉绑定**：见下文[键盘自动化](#键盘自动化--踩钉)与[踩钉](#踩钉)两节。
 
 ## 界面与操作
@@ -203,7 +200,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   谱面 App 并回传诊断）；DAW 发翻谱音符即按本机方法自动翻页。
 - **翻谱音符协议**：C2/C#2（36/48）=上一/下一页，C3–A3=选设备槽位；推送语义
   指令到各设备，互不阻塞；端口全局统一（默认 8766，APP 内可改需两端同步）。
-- 首次配置/无障碍授权/翻页方法选择/常见问题：见[设计文档第十二节](docs/移动端遥控与翻谱设计.md)。
+- 首次配置顺序：APP 控制页认领设备 → 选翻页方法 → 手机系统设置里开启无障碍授权。
 
 ### 设置页
 
@@ -275,14 +272,13 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
 ├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
-└─ docs\                 移动端设计文档 / Studio One 迁移调研 / M0 赛前验证清单 / logo
+└─ docs\                 演出验证清单 / 调研文档（舞台射频频段·JUNO 延音·苹果端迁移）/ logo
 ```
 
 ## 开发与构建
 
 - 直接运行：`python setlist_gui.py`。
-- 验证链：`py tests\test_bridge.py`（离线自检，或
-  `py -m pytest tests\`）→ `py tools\_render_check.py`（版式断言+截图落
+- 验证链：`py -m pytest tests\`（离线自检）→ `py tools\_render_check.py`（版式断言+截图落
   `_render\`）；真机分阶段：`py tests\e2e_test.py`（Cubase）与
   `s1_*` 五阶段（Studio One，库根 `CUBE_S1_PROJECTS_ROOT`）。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
@@ -301,7 +297,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 
 ## 演出前
 
-看 **[docs/M0_验证清单.md](docs/M0_验证清单.md)**：赛前自检步骤 + 现场故障恢复路径 + 待真机验证项。
+看 **[docs/演出验证清单.md](docs/演出验证清单.md)**：赛前自检步骤 + 现场故障恢复路径 + 待真机验证项。
 
 ## 已知平台坑（改代码前先读）
 
