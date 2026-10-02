@@ -133,8 +133,9 @@ class TurnService : Service() {
             android.app.AppOpsManager.MODE_ALLOWED
     }
 
-    /** 诊断回传：POST 到电脑端 /diag（复用 APP 已知地址）。 */
-    private fun reportDiag(msg: String) {
+    /** 诊断回传：POST 到电脑端 /diag（复用 APP 已知地址）。
+     *  非 private：PedalForwarder 复用同一通道回传转发状态。 */
+    fun reportDiag(msg: String) {
         Thread {
             try {
                 val addr = getSharedPreferences("cube", MODE_PRIVATE)
@@ -192,6 +193,7 @@ class TurnService : Service() {
             CHANNEL_ID, "翻谱接收", NotificationManager.IMPORTANCE_LOW)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .createNotificationChannel(ch)
+        PedalForwarder.init(this)       // 有线踏板转发：读开关按需启停
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -202,6 +204,7 @@ class TurnService : Service() {
     }
 
     override fun onDestroy() {
+        PedalForwarder.shutdown()
         server?.stop()
         server = null
         try {

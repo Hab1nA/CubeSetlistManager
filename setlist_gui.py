@@ -405,6 +405,10 @@ class App:
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
         self.pedal_gestures, self.pedal_double = pedal.load_gestures(cfg)
+        self.pedal_remote_enabled = bool(        # 平板转发踩钉（HTTP 注入）
+            (cfg.get("pedal") or {}).get("remoteEnabled"))
+        self._pedal_seq = {}     # 转发包去重：device → 已见最大 seq
+        self._pedal_rate = {}    # 转发包限流：device → 上包时刻
         # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
@@ -1559,6 +1563,29 @@ class App:
             self._next()
         elif action == "panic":
             self._panic()
+
+    def pedal_remote_inject(self, payload):
+        """平板转发的踩钉事件包 → 桥注入（HTTP 线程直调：桥/引擎自带锁，
+        不碰 Tk）。结构校验已在端点做；这里做 usage 映射与时间戳重定基准
+        ——dt 为距包内最后事件的毫秒偏移，t_i = now − dt/1000 保持包内
+        边沿间距，网络抖动进不了弹跳闸/双踩窗；不采信平板绝对时钟。"""
+        p = getattr(self, "pedal", None)
+        if p is None:
+            return {"ok": False, "error": "踩钉服务未启动"}
+        if payload.get("hb"):
+            p.bridge.note_remote_hb()
+            return {"ok": True}
+        events = payload.get("events") or []
+        now = time.monotonic()
+        for e in events:
+            vk = pedal.remote_usage_to_vk(e.get("vk"))
+            if vk is None:
+                self.q.put("踩钉转发：未认识的键 usage=%r keyCode=%r（已丢弃）"
+                           % (e.get("vk"), e.get("kc")))
+                continue
+            dt = e.get("dt") or 0
+            p.bridge.inject(vk, bool(e.get("down")), now - dt / 1000.0)
+        return {"ok": True, "n": len(events)}
 
     def _open_pedal(self):
         if self.pedal_win is None or not self.pedal_win.winfo_exists():

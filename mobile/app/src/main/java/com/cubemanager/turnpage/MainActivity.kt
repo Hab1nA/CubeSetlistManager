@@ -354,6 +354,17 @@ class MainActivity : Activity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun pedalForward(): Boolean =
+            getSharedPreferences("cube", MODE_PRIVATE)
+                .getBoolean("pedalForward", false)
+
+        @android.webkit.JavascriptInterface
+        fun setPedalForward(v: Boolean): Boolean {
+            PedalForwarder.setEnabled(this@MainActivity, v)
+            return true
+        }
+
+        @android.webkit.JavascriptInterface
         fun accEnabled(): Boolean {
             // 读系统真实启用状态：进程内绑定会因切后台/ROM 省电短暂解绑，
             // 若据此显示会误报「关」

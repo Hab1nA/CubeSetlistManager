@@ -33,6 +33,19 @@ class TurnAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
+    /** 硬件按键全局捕获（flagRequestFilterKeyEvents）：转发开启时把踏板
+     *  键位白名单内的原始边沿交给 PedalForwarder 并拦截（return true）；
+     *  转发关闭一律 return false 放行——前台谱面 App 照常收键翻页。
+     *  DOWN/UP 同判据天然成对；repeat>0（按住自动重复）不是踏板脉冲，放行。 */
+    override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (event == null || event.repeatCount > 0) return false
+        val dev = event.device
+        return PedalForwarder.onKey(
+            event.keyCode, event.scanCode,
+            event.action == android.view.KeyEvent.ACTION_DOWN,
+            event.eventTime, dev == null || dev.isVirtual)
+    }
+
     /** 点按；count>=2 为双击（两次间隔约 100ms，与电脑端语义一致）。
      *  done=整串手势完成（或被系统取消）时回调，供耗时埋点。 */
     fun tap(x: Int, y: Int, count: Int, done: (Boolean) -> Unit = {}) {

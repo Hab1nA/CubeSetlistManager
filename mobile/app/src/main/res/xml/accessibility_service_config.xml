@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- canRequestFilterKeyEvents：硬件按键全局捕获（onKeyEvent）——有线踏板
+     （USB-C HID）转发的前提；转发关闭时 onKeyEvent 一律返回 false 放行。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/acc_desc"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="100"
-    android:canPerformGestures="true"/>
+    android:canPerformGestures="true"
+    android:canRequestFilterKeyEvents="true"
+    android:accessibilityFlags="flagRequestFilterKeyEvents"/>

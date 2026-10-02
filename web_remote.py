@@ -450,6 +450,23 @@ def build_snapshot(app, has_project, proj_name=None):
            if isinstance(cur, int) and 0 <= cur < len(app.pl_keys) else None)
     dur = float(app.durations.get(key) or 0.0) if key else 0.0
     pos = min(dur, max(0.0, w.active())) if (w is not None and dur > 0) else 0.0
+    # 平板转发踩钉路健康（远程注入；GIL 原子读桥上的 float 时间戳）。
+    # link：心跳/事件 15 秒内有=ok，从无=never，超时=stale。
+    br = getattr(getattr(app, "pedal", None), "bridge", None)
+    remote = None
+    if br is not None:
+        now = time.monotonic()
+        link_t = max(br.remote_event_t, br.remote_hb_t)
+        if link_t <= 0.0:
+            link = "never"
+        elif now - link_t > 15.0:
+            link = "stale"
+        else:
+            link = "ok"
+        remote = {"enabled": bool(getattr(app, "pedal_remote_enabled", False)),
+                  "link": link,
+                  "lastEventAge": (round(now - br.remote_event_t, 1)
+                                   if br.remote_event_t > 0.0 else None)}
     return {
         "ready": ctrl is not None or lite,
         "busy": bool(ctrl is not None and ctrl.busy),
@@ -462,6 +479,7 @@ def build_snapshot(app, has_project, proj_name=None):
         "dur": round(dur, 1),
         "cur": cur,
         "songs": songs,
+        "pedalRemote": remote,
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
         "appPort": getattr(getattr(app, "web", None), "app_port", None),
     }
@@ -895,6 +913,17 @@ DEV_PANEL_APP = """
             style="flex:1;text-align:center;padding:9px 0">媒体键</button>
         </div>
       </div>
+      <div class="fld" style="margin-top:10px"><label>踩钉转发</label>
+        <div id="m-pedal" class="btns" style="flex:1;margin-top:0;gap:6px">
+          <button class="btn p-opt" data-v="0"
+            style="flex:1;text-align:center;padding:9px 0">关</button>
+          <button class="btn p-opt" data-v="1"
+            style="flex:1;text-align:center;padding:9px 0">开</button>
+        </div>
+      </div>
+      <div class="sub" style="margin-top:8px">踏板用 USB-C 线连本机时，把按键
+        经 Wi-Fi 转发给电脑（蓝牙路径的备份）。电脑端「踩钉控制」页需同步
+        勾选「允许平板转发」。</div>
       <div class="fld" style="margin-top:10px"><label>谱面 App</label>
             <span id="t-target" class="mono">自动检测</span>
             <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
@@ -1012,6 +1041,25 @@ for(var _mi=0;_mi<_mbs.length;_mi++)(function(b){
     }else toast("设置失败");
   });
 })(_mbs[_mi]);
+/* 踩钉转发：有线踏板接本机时捕获按键转发给电脑（电脑端踩钉控制页
+   需同步勾选「允许平板转发」；两开关默认都关） */
+function renderPedal(){
+  if(!window.CubeApp)return;
+  var cur=false;try{cur=CubeApp.pedalForward()===true}catch(e){}
+  var bs=document.querySelectorAll(".p-opt");
+  for(var i=0;i<bs.length;i++)
+    bs[i].classList.toggle("on",bs[i].getAttribute("data-v")===(cur?"1":"0"));
+}
+var _pbs=document.querySelectorAll(".p-opt");
+for(var _pi=0;_pi<_pbs.length;_pi++)(function(b){
+  b.addEventListener("click",function(){
+    if(!window.CubeApp)return;
+    var on=b.getAttribute("data-v")==="1";
+    if(CubeApp.setPedalForward(on)){
+      renderPedal();toast(on?"踩钉转发：开":"踩钉转发：关");
+    }else toast("设置失败");
+  });
+})(_pbs[_pi]);
 // 触摸遮罩（面板区域以外）关闭：移动端标准交互
 $("m-dev").addEventListener("click",function(e){
   if(e.target===this)$("m-dev").classList.remove("show")});
@@ -1025,6 +1073,7 @@ function openDev(){
   refreshUsageTip();
   refreshTarget();
   renderMethod();
+  renderPedal();
   try{$("app-ver").textContent=CubeApp?CubeApp.version():"?"}catch(e){}
   fetch("/devices",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(d){renderDev(d);
@@ -1330,13 +1379,72 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_update, "/device/update"),
                           (self._h_unregister, "/device/unregister"),
                           (self._h_test, "/device/test"),
-                          (self._h_diag, "/diag")):
+                          (self._h_diag, "/diag"),
+                          (self._h_pedal, "/pedal/event")):
                 if path == p:
                     fn(body, ip)
                     return
             self._json(404, {"error": "未知路径"})
         except Exception as e:
             self._json(500, {"error": _err(e)})
+
+    def _h_pedal(self, body, _ip):
+        """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP
+        捕获 → HTTP → 注入本地踩钉桥。信任级别与 /cmd 相同（热点内网）；
+        开关默认关（踩钉控制页勾选），关闭时回 403——转发端识别后停发。
+        简化版无踩钉控制页，一并拒绝。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        if not getattr(app, "pedal_remote_enabled", False):
+            self._json(403, {"error": "电脑端未开启平板转发"})
+            return
+        device = body.get("device")
+        if not isinstance(device, str) or not device or len(device) > 64:
+            device = "remote"
+        seq = body.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int):
+            self._json(400, {"error": "seq 非法"})
+            return
+        events = None
+        if not body.get("hb"):
+            events = body.get("events")
+            if not isinstance(events, list) or not events or len(events) > 32:
+                self._json(400, {"error": "events 为空或超长"})
+                return
+            for e in events:
+                if not isinstance(e, dict) \
+                        or isinstance(e.get("vk"), bool) \
+                        or not isinstance(e.get("vk"), int) \
+                        or not isinstance(e.get("down"), bool):
+                    self._json(400, {"error": "事件结构非法"})
+                    return
+                dt = e.get("dt", 0)
+                if isinstance(dt, bool) or not isinstance(dt, int) \
+                        or not 0 <= dt <= 5000:
+                    self._json(400, {"error": "dt 非法"})
+                    return
+        # 重试导致的重复包：幂等确认，不再注入——判在限流之前，否则
+        # 立即重试（转发端策略）永远撞 20ms 包率闸
+        last = app._pedal_seq.get(device, -1)
+        if seq <= last:
+            self._ok(dup=True)
+            return
+        now = time.monotonic()
+        # 包率限流：人手踩踏 ≤10 包/秒，20ms 内的连发只可能是滥用/故障
+        if now - app._pedal_rate.get(device, 0.0) < 0.02:
+            self._json(429, {"error": "包率超限"})
+            return
+        app._pedal_rate[device] = now
+        app._pedal_seq[device] = seq
+        r = app.pedal_remote_inject(
+            {"hb": True} if events is None else
+            {"device": device, "events": events})
+        if not r.get("ok"):
+            self._json(503, {"error": r.get("error", "注入失败")})
+            return
+        self._ok(**{k: v for k, v in r.items() if k != "ok"})
 
     def _ok(self, **kw):
         self._json(200, dict(ok=True, **kw))

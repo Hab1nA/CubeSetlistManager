@@ -118,6 +118,42 @@ def hid_fire(state, vk, pressed, now):
     return False
 
 
+# ---- 远程转发（平板 USB 有线踩钉 → APP 捕获 → HTTP → 注入桥） ----
+
+# HID usage → Windows 虚拟键码。Android 的 KeyEvent.getScanCode() 对 USB
+# HID 键盘即 usage 值：consumer 页（媒体键）直接取值，keyboard 页是
+# 0x700xx 的低字节。表只收踏板真实会发的键；查不到=丢弃并记日志（包里带
+# Android keyCode 供排查）。映射与 Windows 原生映射对齐——蓝牙路径学的
+# VK 绑定对转发路径自动生效，学习流程零改动。
+_REMOTE_CONSUMER = {0xB0: 0xB3, 0xB1: 0xB3,   # Play/Pause → 播放/暂停
+                    0xB5: 0xB0, 0xB6: 0xB1, 0xB7: 0xB2,
+                    0xCD: 0xB3,               # Play/Pause 主用键
+                    0xE2: 0xAD, 0xE9: 0xAF, 0xEA: 0xAE}
+_REMOTE_KEYBOARD = {0x28: 0x0D, 0x29: 0x1B, 0x2A: 0x08, 0x2B: 0x09,
+                    0x2C: 0x20, 0x4A: 0x24, 0x4B: 0x21, 0x4C: 0x2E,
+                    0x4D: 0x23, 0x4E: 0x22, 0x4F: 0x27, 0x50: 0x25,
+                    0x51: 0x28, 0x52: 0x26}
+
+
+def remote_usage_to_vk(u):
+    """HID usage → Windows VK；None=不认识的键（调用方丢弃）。"""
+    if isinstance(u, bool) or not isinstance(u, int):
+        return None
+    if u in _REMOTE_CONSUMER:
+        return _REMOTE_CONSUMER[u]
+    if u in _REMOTE_KEYBOARD:
+        return _REMOTE_KEYBOARD[u]
+    if 0x3A <= u <= 0x45:            # F1-F12
+        return 0x70 + (u - 0x3A)
+    if 0x68 <= u <= 0x73:            # F13-F24
+        return 0x7C + (u - 0x68)
+    if 0x04 <= u <= 0x1D:            # A-Z
+        return 0x41 + (u - 0x04)
+    if 0x1E <= u <= 0x27:            # 0-9
+        return 0x30 + (u - 0x1E)
+    return None
+
+
 # 学习阶段的按键候选：排除鼠标键（0x01-0x06）、修饰键及其左右变体
 # （Shift/Ctrl/Alt 0x10-0x12 与 0xA0-0xA5）、Pause/CapsLock（0x13/0x14）、
 # Win/Menu（0x5B-0x5D）、NumLock/ScrollLock（0x90/0x91）——这些只会
@@ -518,6 +554,12 @@ class DeviceBridge:
         self.temporal = frozenset()   # 走引擎的 HID 键（绑了双踩）
         self._state = {}         # vk → hid_fire 状态（单踩去抖）
         self._pending = {}       # vk → 热键回执时刻（拦截开启时的按下沿）
+        self._io_lock = threading.RLock()  # 串行化桥线程 raw 路径与 HTTP 注入
+                                           #   （_state/_pending 原依赖单线程亲和；
+                                           #   RLock 因 inject→_feed 同线程嵌套）
+        self._last_hid_down = (None, 0.0)  # 最近本地按下沿 (vk, t)：跨源去重
+        self.remote_event_t = 0.0          # 最近远程事件到达时刻（健康显示）
+        self.remote_hb_t = 0.0             # 最近远程心跳到达时刻
         self.raw_ok = None           # 线程启动后回填：INPUTSINK 是否注册成功
         self._hotkeys = {}       # 热键 id → vk（桥线程私有）
         self._stop = threading.Event()
@@ -703,13 +745,38 @@ class DeviceBridge:
             name = b.value
         is_pedal = self._attr(name)
         if is_pedal:
+            self._last_hid_down = (kb.VKey, time.monotonic())
             self._feed(kb.VKey, kb.Message in _LL_KEYDOWN)
 
     def _attr(self, name):
         """设备归属：接口路径含所选设备身份子串。"""
         return bool(self.device_hint) and self.device_hint in name.upper()
 
-    def _feed(self, vk, down):
+    def note_remote_hb(self):
+        """远程心跳到达（平板转发路的健康显示数据源）。"""
+        self.remote_hb_t = time.monotonic()
+
+    def inject(self, vk, down, t=None):
+        """远程注入（平板 USB 有线踩钉经 HTTP 转发）：走 _feed 同层，
+        学习捕获/页面静音/手势分流全部继承。t 为重定基准后的本机
+        monotonic 时刻（包内边沿间距由转发端 dt 偏移保留，网络抖动进
+        不了弹跳闸/双踩窗）。跨源去重：TurnerPro 有线时蓝牙断开（实测
+        二选一），此闸仅为固件双输出场景的保险——同键 down 沿与本地
+        蓝牙沿相距 <0.15s 时丢弃远程份，防双触发。"""
+        rcv = time.monotonic()
+        if t is None:
+            t = rcv
+        self.remote_event_t = rcv
+        with self._io_lock:
+            lvk, lt = self._last_hid_down
+            if down and vk == lvk and 0.0 <= t - lt < 0.15:
+                self._report("远程按键与本地蓝牙重复（%s），已去重"
+                             % hid_name(vk))
+                return False
+            self._feed(vk, down, t)
+        return True
+
+    def _feed(self, vk, down, now=None):
         """所选设备的按键 → 学习捕获/手势引擎/单踩快路径。通道优先级：
         学习捕获（learning+capture 在场）> 页面静音（silent=丢弃一切，
         与 learning 正交——学习器 end_capture 只动 learning，页面静音
@@ -718,46 +785,50 @@ class DeviceBridge:
         归属，凭它补合成按压对（按下=热键回执时刻），学习与手势语义
         不变；非所选设备的按键在归属门即被丢弃、进不了 _feed，pending
         只会等真设备的松开沿（或边界 reset 作废）——键盘同名键不误
-        触发。capture 约定：三参数直传 fn(vk, down, 时刻)。"""
-        now = time.monotonic()
-        if self.learning and self.capture:
+        触发。capture 约定：三参数直传 fn(vk, down, 时刻)。now 供远程
+        注入重定基准（None=当下）；全程持 _io_lock——桥线程 raw 路径与
+        HTTP 注入路径共用 _state/_pending，必须串行。"""
+        if now is None:
+            now = time.monotonic()
+        with self._io_lock:
+            if self.learning and self.capture:
+                if not down and vk in self._pending:
+                    t0 = self._pending.pop(vk)
+                    if now - t0 > 2.0:
+                        t0 = now    # 失联保护：回执已陈旧（2 秒前的按下），
+                                    # 按压时长不采信，折算成当下的一次新按压
+                    self.capture(vk, True, t0)
+                    self.capture(vk, False, now)
+                    return
+                self.capture(vk, down, now)
+                return
+            if self.silent:
+                self._pending.clear()   # 静音期回执/松开沿全弃，不留陈旧配对
+                return
+            if self.learning:
+                return                  # 学习切换的过渡瞬间（capture 缺席）：丢弃
             if not down and vk in self._pending:
                 t0 = self._pending.pop(vk)
                 if now - t0 > 2.0:
-                    t0 = now    # 失联保护：回执已陈旧（2 秒前的按下），
-                                # 按压时长不采信，折算成当下的一次新按压
-                self.capture(vk, True, t0)
-                self.capture(vk, False, now)
+                    t0 = now        # 失联保护：回执已陈旧（2 秒前的按下），按
+                                    # 压时长不采信，折算成当下的一次新按压
+                if vk in self.temporal and self.engine is not None:
+                    self.engine.feed(("hid", vk), True, t0)    # 合成按压对
+                    self.engine.feed(("hid", vk), False, now)
+                    return
+                hid_fire(self._state, vk, True, t0)            # 单踩：松开沿触发
+                hid_fire(self._state, vk, False, now)
+                action = self.binds.get(vk)
+                if action:
+                    self.on_action(action)
                 return
-            self.capture(vk, down, now)
-            return
-        if self.silent:
-            self._pending.clear()   # 静音期回执/松开沿全弃，不留陈旧配对
-            return
-        if self.learning:
-            return                  # 学习切换的过渡瞬间（capture 缺席）：丢弃
-        if not down and vk in self._pending:
-            t0 = self._pending.pop(vk)
-            if now - t0 > 2.0:
-                t0 = now        # 失联保护：回执已陈旧（2 秒前的按下），按
-                                # 压时长不采信，折算成当下的一次新按压
             if vk in self.temporal and self.engine is not None:
-                self.engine.feed(("hid", vk), True, t0)    # 合成按压对
-                self.engine.feed(("hid", vk), False, now)
+                self.engine.feed(("hid", vk), down, now)
                 return
-            hid_fire(self._state, vk, True, t0)            # 单踩：松开沿触发
-            hid_fire(self._state, vk, False, now)
-            action = self.binds.get(vk)
-            if action:
-                self.on_action(action)
-            return
-        if vk in self.temporal and self.engine is not None:
-            self.engine.feed(("hid", vk), down, now)
-            return
-        if hid_fire(self._state, vk, down, now) and down:
-            action = self.binds.get(vk)
-            if action:
-                self.on_action(action)
+            if hid_fire(self._state, vk, down, now) and down:
+                action = self.binds.get(vk)
+                if action:
+                    self.on_action(action)
 
 
 def load_binding(cfg):
@@ -1215,6 +1286,13 @@ class PedalWindow(tk.Toplevel):
                        variable=self.intercept_var,
                        command=self._toggle_intercept).pack(
             anchor="w", padx=pad, pady=1)
+        self.remote_var = tk.BooleanVar(
+            value=getattr(self.app, "pedal_remote_enabled", False))
+        tk.Checkbutton(self, text="允许平板转发踩钉（踏板 USB-C 线连平板 → "
+                       "APP 经 WiFi 转发；平板端 APP 设置里也要开）",
+                       variable=self.remote_var,
+                       command=self._toggle_remote).pack(
+            anchor="w", padx=pad, pady=1)
         grid = tk.Frame(self)
         grid.pack(fill="both", expand=True, padx=pad)
         for c, t in enumerate(("功能", "绑定", "操作")):
@@ -1238,7 +1316,10 @@ class PedalWindow(tk.Toplevel):
                 side="left", padx=2)
             self._bind_lbl[action] = lbl
         self.status = tk.Label(self, text="…", anchor="w", fg=dpi.MUT)
-        self.status.pack(fill="x", padx=pad, pady=(6, dpi.scale(self, 8)))
+        self.status.pack(fill="x", padx=pad, pady=(6, 2))
+        self.remote_lbl = tk.Label(self, text="", anchor="w", fg=dpi.MUT)
+        self.remote_lbl.pack(fill="x", padx=pad,
+                             pady=(0, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.darkify(self)
@@ -1315,6 +1396,41 @@ class PedalWindow(tk.Toplevel):
                     self.app.pedal_double)
             p.try_open()
 
+    def _toggle_remote(self):
+        self.app.pedal_remote_enabled = bool(self.remote_var.get())
+        self._save()
+        self._remote_tick()
+
+    def _remote_tick(self):
+        """平板转发路状态行：开关态 + 心跳链路 + 最后事件年龄。
+        link 判据与 /state 快照的 pedalRemote 一致（15 秒无心跳=失联）。"""
+        p = self.app.pedal
+        if not getattr(self.app, "pedal_remote_enabled", False):
+            self.remote_lbl.config(text="平板转发：关闭", fg=dpi.MUT)
+            return
+        if p is None:
+            self.remote_lbl.config(text="平板转发：开启（服务启动中）",
+                                   fg=dpi.MUT)
+            return
+        now = time.monotonic()
+        br = p.bridge
+        link_t = max(br.remote_event_t, br.remote_hb_t)
+        if link_t <= 0.0:
+            self.remote_lbl.config(
+                text="平板转发：开启，等待平板（APP 设置里开「踩钉转发」）",
+                fg=dpi.MUT)
+        elif now - link_t > 15.0:
+            self.remote_lbl.config(
+                text="平板转发：开启，链路失联（%.0f 秒无心跳/事件）"
+                     % (now - link_t), fg=dpi.C_WARN)
+        elif br.remote_event_t > 0.0:
+            self.remote_lbl.config(
+                text="平板转发：链路正常，最后事件 %.0f 秒前"
+                     % (now - br.remote_event_t), fg=dpi.C_OK)
+        else:
+            self.remote_lbl.config(text="平板转发：链路正常（尚无按键事件）",
+                                   fg=dpi.C_OK)
+
     def _refresh(self):
         for action, _name in ACTIONS:
             cc = self.app.pedal_binds.get(action)
@@ -1343,7 +1459,9 @@ class PedalWindow(tk.Toplevel):
                         "hidDeviceHint": self.app.pedal_device_hint,
                         "intercept": self.app.pedal_intercept,
                         "gestures": self.app.pedal_gestures,
-                        "doubleWindow": self.app.pedal_double}
+                        "doubleWindow": self.app.pedal_double,
+                        "remoteEnabled": bool(
+                            getattr(self.app, "pedal_remote_enabled", False))}
         sg._save_config(cfg)
 
     def _learn(self, action):
@@ -1520,6 +1638,7 @@ class PedalWindow(tk.Toplevel):
                 else:
                     self._set_status("还没有任何绑定：点任一「学习」开始",
                                      dpi.MUT)
+        self._remote_tick()
 
     def _close(self):
         self._cancel_learn("")
