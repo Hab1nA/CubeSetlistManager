@@ -1273,6 +1273,8 @@ class _FakeWebApp:
         self.pedal_remote_enabled = False
         self._pedal_seq = {}
         self._pedal_rate = {}
+        self._pedal_gwin = [0.0, 0]
+        self._pedal_gwin_lock = threading.Lock()
         self.inj = []
 
     def pedal_remote_inject(self, payload):
@@ -1603,24 +1605,59 @@ def test_score_window():
 
 
 def test_pedal_remote():
-    """远程踩钉转发：usage→VK 映射 + DeviceBridge.inject（重定基准注入/
-    学习捕获/静音/跨源去重）+ HTTP /pedal/event 端点 + 快照 pedalRemote。"""
-    # ---- usage→VK 映射（与 Windows 原生对齐，蓝牙绑定自动生效） ----
-    assert pedal.remote_usage_to_vk(0xB5) == 0xB0    # Scan Next → 下一曲
-    assert pedal.remote_usage_to_vk(0xB6) == 0xB1    # Scan Prev → 上一曲
-    assert pedal.remote_usage_to_vk(0xCD) == 0xB3    # Play/Pause
-    assert pedal.remote_usage_to_vk(0xB0) == 0xB3    # consumer Play → 播放/暂停
-    assert pedal.remote_usage_to_vk(0xEA) == 0xAE    # 音量−
-    assert pedal.remote_usage_to_vk(0x4B) == 0x21    # keyboard PageUp
-    assert pedal.remote_usage_to_vk(0x4E) == 0x22    # PageDown
-    assert pedal.remote_usage_to_vk(0x28) == 0x0D    # Enter
-    assert pedal.remote_usage_to_vk(0x04) == 0x41    # A
-    assert pedal.remote_usage_to_vk(0x1E) == 0x30    # 1
-    assert pedal.remote_usage_to_vk(0x3A) == 0x70    # F1
-    assert pedal.remote_usage_to_vk(0x68) == 0x7C    # F13
-    assert pedal.remote_usage_to_vk(0x73) == 0x87    # F24
-    assert pedal.remote_usage_to_vk(True) is None    # JSON true 是 bool（int 子类）
-    assert pedal.remote_usage_to_vk(0x999) is None   # 未知 usage
+    """远程踩钉转发：LKC/AKC 双表映射 + DeviceBridge.inject（重定基准注入/
+    学习捕获/静音/跨源去重/pending 隔离）+ RemoteClock 跨包锚定 +
+    HTTP /pedal/event 端点 + /state 快照 pedalRemote。"""
+    # ---- 键码映射：期望值取自 AOSP《Keyboard devices》码表与 Windows VK
+    # 常量（外部知识），不取自被测表自身——表错测试必须红 ----
+    # scanCode = Linux 键码（getScanCode 实况）：
+    assert pedal.remote_key_to_vk(164, 85) == 0xB3   # KEY_PLAYPAUSE → 播放暂停
+    assert pedal.remote_key_to_vk(163, 87) == 0xB0   # KEY_NEXTSONG → 下一曲
+    assert pedal.remote_key_to_vk(165, 88) == 0xB1   # KEY_PREVIOUSSONG → 上一曲
+    assert pedal.remote_key_to_vk(166, 86) == 0xB2   # KEY_STOPCD → 停止
+    assert pedal.remote_key_to_vk(104, 92) == 0x21   # KEY_PAGEUP → 上翻页
+    assert pedal.remote_key_to_vk(109, 93) == 0x22   # KEY_PAGEDOWN → 下翻页
+    assert pedal.remote_key_to_vk(28, 66) == 0x0D    # KEY_ENTER → 回车
+    assert pedal.remote_key_to_vk(1, 111) == 0x1B    # KEY_ESC
+    assert pedal.remote_key_to_vk(14, 67) == 0x08    # KEY_BACKSPACE
+    assert pedal.remote_key_to_vk(15, 61) == 0x09    # KEY_TAB
+    assert pedal.remote_key_to_vk(57, 62) == 0x20    # KEY_SPACE
+    assert pedal.remote_key_to_vk(30, 29) == 0x41    # KEY_A → 'A'（LKC 30 非 usage '1'）
+    assert pedal.remote_key_to_vk(2, 8) == 0x31      # KEY_1 → '1'（LKC 2 非 usage '2'）
+    assert pedal.remote_key_to_vk(11, 7) == 0x30     # KEY_0 → '0'
+    assert pedal.remote_key_to_vk(59, 131) == 0x70   # F1
+    assert pedal.remote_key_to_vk(68, 140) == 0x79   # F10
+    assert pedal.remote_key_to_vk(87, 143) == 0x7A   # LKC 87=F11（≠AKC 87=下一曲）
+    assert pedal.remote_key_to_vk(183, 143) == 0x7C  # F13（kc=143 是 NumLock，
+    assert pedal.remote_key_to_vk(None, 143) is None  #   绝不映射成 F13——
+    assert pedal.remote_key_to_vk(None, 149) is None  #   小键盘键码非 F 键）
+    assert pedal.remote_key_to_vk(None, 326) == 0x7C  # AKC F13（Android 16+）
+    assert pedal.remote_key_to_vk(None, 337) == 0x87  # AKC F24
+    assert pedal.remote_key_to_vk(194, None) == 0x87  # LKC F24
+    assert pedal.remote_key_to_vk(113, 164) == 0xAD  # KEY_MUTE → 静音
+    assert pedal.remote_key_to_vk(115, 24) == 0xAF   # KEY_VOLUMEUP
+    assert pedal.remote_key_to_vk(119, 121) == 0x13  # KEY_PAUSE/BREAK → VK_PAUSE
+    # scanCode 不可用时按 Android keycode 兜底（个别栈 scanCode 报 0）：
+    assert pedal.remote_key_to_vk(None, 85) == 0xB3
+    assert pedal.remote_key_to_vk(None, 92) == 0x21
+    assert pedal.remote_key_to_vk(None, 29) == 0x41
+    assert pedal.remote_key_to_vk(None, 7) == 0x30
+    assert pedal.remote_key_to_vk(None, 131) == 0x70
+    # 命名空间隔离：LKC 87=F11，绝不能落进 AKC 87=下一曲的映射
+    assert pedal.remote_key_to_vk(87, None) == 0x7A
+    assert pedal.remote_key_to_vk(True, None) is None
+    assert pedal.remote_key_to_vk(0x999, 0x999) is None
+
+    # ---- RemoteClock：跨包锚定（APP 单调时戳差值外推，抖动/重试不进窗） ----
+    clk = pedal.RemoteClock()
+    t0 = 100.0
+    assert clk.anchor(10000, t0) == t0              # 首包锚在到达时刻
+    assert clk.anchor(10200, t0 + 0.5) == t0 + 0.2  # +200ms 外推（到达抖动 0.3s 被剔）
+    assert clk.anchor(10500, t0 + 1.0) == t0 + 0.5  # 累计单调
+    assert clk.anchor(4000, t0 + 2.0) == t0 + 2.0   # et 回跳=APP 重启：重锚在到达时刻
+    clk2 = pedal.RemoteClock()
+    assert clk2.anchor(None, 7.0) == 7.0            # et 缺失退回到达时刻
+    assert clk2.anchor(True, 8.0) == 8.0            # bool 拒收
 
     # ---- inject：单踩快路径（重定基准时间戳，去抖一致） ----
     hits = []
@@ -1645,10 +1682,10 @@ def test_pedal_remote():
     br4.configure(binds={0xB0: "next"}, device_hint="X")
     br4._last_hid_down = (0xB0, time.monotonic() - 0.05)
     assert not br4.inject(0xB0, True)
-    assert hits4 == []
+    assert hits4 == [] and br4.remote_event_t == 0.0  # 被去重不算事件（健康口径）
     br4._last_hid_down = (0xB0, time.monotonic() - 0.5)
     assert br4.inject(0xB0, True)
-    assert hits4 == ["next"]
+    assert hits4 == ["next"] and br4.remote_event_t > 0.0
 
     # 学习捕获：注入走 _feed 同层 → capture 直传（重定基准 t，包内间距保留）
     cap = []
@@ -1659,6 +1696,12 @@ def test_pedal_remote():
     br.inject(0x0D, False, base)
     assert [(v, d) for v, d, _t in cap] == [(0x0D, True), (0x0D, False)]
     assert 0.010 <= cap[1][2] - cap[0][2] <= 0.014  # 12ms 按压间距不被抹平
+    # pending 隔离：拦截开启时本地蓝牙按下沿留有回执配对，远程 up 绝不
+    # 消费它合成出从未发生的按压对（P2-7）
+    br.capture = lambda vk, d, t: cap.append((vk, d, t))
+    br._pending[0x0D] = time.monotonic()            # 伪造本地热键回执
+    br.inject(0x0D, False, base)
+    assert cap[-1] == (0x0D, False, base)           # 直传，未配对成按压对
     br.learning = False
     br.capture = None
 
@@ -1701,15 +1744,16 @@ def test_pedal_remote():
     threading.Thread(target=srv.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
     try:
-        pkt = {"device": "tp", "seq": 5,
-               "events": [{"vk": 0xB5, "down": True, "dt": 0},
-                          {"vk": 0xB5, "down": False, "dt": 12}]}
+        pkt = {"device": "tp", "seq": 5, "et": 12345,
+               "events": [{"vk": 163, "kc": 87, "down": True, "dt": 0},
+                          {"vk": 163, "kc": 87, "down": False, "dt": 12}]}
         # 开关关闭 → 403（转发端识别后停发）
         assert _http_post(port, "/pedal/event", pkt)[0] == 403
         app.pedal_remote_enabled = True
         code, j = _http_post(port, "/pedal/event", pkt)
         assert code == 200 and j["ok"] and len(app.inj) == 1
-        assert app.inj[0]["events"][0]["vk"] == 0xB5
+        assert app.inj[0]["events"][0]["vk"] == 163      # LKC 原样透传给 App 层
+        assert app.inj[0]["et"] == 12345
         app._pedal_rate.clear()         # 逐包隔离 20ms 限流（不赌真实连发间隔）
         code, j = _http_post(port, "/pedal/event", dict(pkt))
         assert code == 200 and j.get("dup") is True and len(app.inj) == 1
@@ -1718,29 +1762,111 @@ def test_pedal_remote():
                              {"device": "tp", "seq": 6, "hb": True})
         assert code == 200 and j["ok"] and len(app.inj) == 2
         app._pedal_rate.clear()
-        # 坏结构 400：vk 传 JSON true（bool 是 int 子类，必须显式拒）
+        # seq 回退=APP 进程重启：不判 dup，作为新会话照常收包
+        app._pedal_rate.clear()
+        code, j = _http_post(port, "/pedal/event",
+                             {"device": "tp", "seq": 2, "hb": True})
+        assert code == 200 and not j.get("dup") and len(app.inj) == 3
+        code, j = _http_post(port, "/pedal/event",
+                             {"device": "tp", "seq": 2, "hb": True})
+        assert code == 200 and j.get("dup") is True and len(app.inj) == 3
+        app._pedal_rate.clear()
+        # et 上界=JSON 安全整数 2^53（uptimeMillis 是 long）：长醒时设备
+        # （累计 >24.8 天后 et 超 2^31）不得被拒——否则每脚 400 静默丢弃
+        # 而心跳照常 200，链路绿灯踩钉全灭
+        code, j = _http_post(port, "/pedal/event",
+                             {"device": "tp", "seq": 13, "sid": "oldtab",
+                              "et": 2 ** 31,
+                              "events": [{"vk": 163, "kc": 87, "down": True,
+                                          "dt": 0}]})
+        assert code == 200 and j["ok"], (code, j)
+        app._pedal_rate.clear()
+        # 上界本身钉住：2^53（JSON 安全整数）放行、2^53+1 拒收
+        code, j = _http_post(port, "/pedal/event",
+                             {"device": "tp", "seq": 14, "sid": "oldtab",
+                              "et": 2 ** 53,
+                              "events": [{"vk": 163, "kc": 87, "down": True,
+                                          "dt": 0}]})
+        assert code == 200 and j["ok"], (code, j)
+        code, j = _http_post(port, "/pedal/event",
+                             {"device": "tp", "seq": 15, "sid": "oldtab",
+                              "et": 2 ** 53 + 1,
+                              "events": [{"vk": 163, "kc": 87, "down": True,
+                                          "dt": 0}]})
+        assert code == 400, (code, j)
+        # 坏结构 400：vk/et 传 JSON true（bool 是 int 子类，必须显式拒）
         code, _j = _http_post(port, "/pedal/event",
-                              {"device": "tp", "seq": 7,
-                               "events": [{"vk": True, "down": True}]})
+                              {"device": "tp", "seq": 7, "et": 1,
+                               "events": [{"vk": True, "kc": 87, "down": True}]})
         assert code == 400
         code, _j = _http_post(port, "/pedal/event",
-                              {"device": "tp", "seq": 8, "events": []})
+                              {"device": "tp", "seq": 8, "et": True,
+                               "events": [{"vk": 163, "kc": 87, "down": True}]})
         assert code == 400
         code, _j = _http_post(port, "/pedal/event",
-                              {"device": "tp", "seq": 9, "events":
-                               [{"vk": 0xB5, "down": 1}]})
+                              {"device": "tp", "seq": 9, "events": []})
+        assert code == 400
+        code, _j = _http_post(port, "/pedal/event",
+                              {"device": "tp", "seq": 10, "events":
+                               [{"vk": 163, "kc": 87, "down": 1}]})
         assert code == 400
         # 限流 429：伪造成 20ms 内刚发过包（确定性，不赌真实连发间隔）
         app._pedal_rate.clear()
         code, _j = _http_post(port, "/pedal/event",
-                              {"device": "tp", "seq": 10, "hb": True})
+                              {"device": "tp", "seq": 11, "hb": True})
         assert code == 200
         app._pedal_rate["tp"] = time.monotonic()
         code, _j = _http_post(port, "/pedal/event",
-                              {"device": "tp", "seq": 11, "hb": True})
+                              {"device": "tp", "seq": 12, "hb": True})
+        assert code == 429
+        # 设备数上限：填满 32 席后第 33 个 device 起 429（防未知设备名刷爆
+        # 去重/限流表）
+        time.sleep(1.05)                # 越过全局限流窗（40 包/秒），隔离断言
+        app._pedal_seq.clear()
+        for i in range(32):
+            code, _j = _http_post(port, "/pedal/event",
+                                  {"device": "d%d" % i, "seq": 1, "hb": True})
+            assert code == 200, i
+        code, _j = _http_post(port, "/pedal/event",
+                              {"device": "overflow", "seq": 1, "hb": True})
         assert code == 429
     finally:
         srv.shutdown()
+
+    # ---- 生产路径 App.pedal_remote_inject 直测（绕过 Tk 构造） ----
+    import setlist_gui as sg
+    app3 = object.__new__(sg.App)
+    app3.q = queue.Queue()
+    hits7 = []
+    br7 = pedal.DeviceBridge(hits7.append)
+    br7.configure(binds={0xB0: "next"}, device_hint="X")
+    app3.pedal = pedal.PedalListener.__new__(pedal.PedalListener)
+    app3.pedal.bridge = br7
+    # 媒体键实况值（LKC 163）→ VK_NEXT → next；et 锚定不抛错
+    r = app3.pedal_remote_inject({"device": "tp", "et": 5000, "events": [
+        {"vk": 163, "kc": 87, "down": True, "dt": 0},
+        {"vk": 163, "kc": 87, "down": False, "dt": 10}]})
+    assert r["ok"] and hits7 == ["next"]
+    hb_before = br7.remote_hb_t
+    app3.pedal_remote_inject({"device": "tp", "hb": True})
+    assert br7.remote_hb_t >= hb_before
+    n0 = br7.remote_unknown
+    app3.pedal_remote_inject({"device": "tp", "et": 9000, "events": [
+        {"vk": 555, "kc": 555, "down": True, "dt": 0},
+        {"vk": 555, "kc": 555, "down": False, "dt": 5}]})
+    assert br7.remote_unknown == n0 + 2 and hits7 == ["next"]   # 丢弃且计数
+    # 跨包锚定：包间到达隔 ≥300ms，但 APP 时差 250ms——捕获到的 down/up
+    # 间距=250ms（网络抖动/延迟不进手势窗）
+    cap2 = []
+    br7.learning = True
+    br7.capture = lambda vk, d, t: cap2.append((vk, d, t))
+    app3.pedal_remote_inject({"device": "tp", "et": 20000, "events": [
+        {"vk": 163, "kc": 87, "down": True, "dt": 0}]})
+    time.sleep(0.3)
+    app3.pedal_remote_inject({"device": "tp", "et": 20250, "events": [
+        {"vk": 163, "kc": 87, "down": False, "dt": 0}]})
+    gap = cap2[1][2] - cap2[0][2]
+    assert 0.24 <= gap <= 0.26, gap
 
     # ---- /state 快照 pedalRemote 三态 ----
     app2 = _FakeWebApp()
@@ -1749,12 +1875,13 @@ def test_pedal_remote():
     app2.pedal = type("P", (), {"bridge": pedal.DeviceBridge(None)})()
     snap = web_remote.build_snapshot(app2, True, "歌一")
     assert snap["pedalRemote"] == {"enabled": False, "link": "never",
-                                   "lastEventAge": None}
+                                   "unknown": 0, "lastEventAge": None}
     app2.pedal.bridge.note_remote_hb()
     app2.pedal.bridge.inject(0xB0, True)
     snap = web_remote.build_snapshot(app2, True, "歌一")
     pr = snap["pedalRemote"]
     assert pr["link"] == "ok" and 0.0 <= pr["lastEventAge"] <= 1.0
+    app2.pedal.bridge.remote_unknown = 3
     app2.pedal.bridge.remote_hb_t = time.monotonic() - 20.0
     app2.pedal.bridge.remote_event_t = time.monotonic() - 20.0
     assert web_remote.build_snapshot(app2, True,

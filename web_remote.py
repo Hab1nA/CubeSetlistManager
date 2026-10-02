@@ -87,6 +87,12 @@ def valid_push_ip(ip):
             or (a == 172 and 16 <= b <= 31) or a == 127)
 
 
+# 入站来源门与 valid_push_ip 同规则：/pedal/event 注入的是「按键」而非
+# 页面命令，PC 误接场馆/酒店共用 WiFi 时不得被 LAN 任意主机注入走带动作。
+# 既有端点（/cmd 等）未做来源门属存量行为，本端点不扩散它。
+_is_private_ip = valid_push_ip
+
+
 # ---- 翻谱推送：语义指令 + 持久连接 ----
 
 # 推送连接池：PC→APP 持久 HTTP 连接，每次翻页省一次 TCP 握手（热点上这是
@@ -465,6 +471,7 @@ def build_snapshot(app, has_project, proj_name=None):
             link = "ok"
         remote = {"enabled": bool(getattr(app, "pedal_remote_enabled", False)),
                   "link": link,
+                  "unknown": br.remote_unknown,
                   "lastEventAge": (round(now - br.remote_event_t, 1)
                                    if br.remote_event_t > 0.0 else None)}
     return {
@@ -923,7 +930,9 @@ DEV_PANEL_APP = """
       </div>
       <div class="sub" style="margin-top:8px">踏板用 USB-C 线连本机时，把按键
         经 Wi-Fi 转发给电脑（蓝牙路径的备份）。电脑端「踩钉控制」页需同步
-        勾选「允许平板转发」。</div>
+        勾选「允许平板转发」。APP 升级后若踩下无反应，请到系统设置把本 APP
+        的无障碍关闭再开启（按键捕获能力在升级后可能需重开生效）。电脑端
+        未开启时踏板键会透传给前台谱面 App。</div>
       <div class="fld" style="margin-top:10px"><label>谱面 App</label>
             <span id="t-target" class="mono">自动检测</span>
             <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
@@ -1388,18 +1397,36 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"error": _err(e)})
 
-    def _h_pedal(self, body, _ip):
+    def _h_pedal(self, body, ip):
         """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP
-        捕获 → HTTP → 注入本地踩钉桥。信任级别与 /cmd 相同（热点内网）；
-        开关默认关（踩钉控制页勾选），关闭时回 403——转发端识别后停发。
-        简化版无踩钉控制页，一并拒绝。"""
+        捕获 → HTTP → 注入本地踩钉桥。信任级别与 /cmd 相同（热点内网），
+        但本端点注入的是「按键」而非页面命令，加私网来源门——PC 若误接
+        场馆/酒店共用 WiFi，LAN 任意主机不得注入走带动作。开关默认关
+        （踩钉控制页勾选），关闭时回 403——转发端识别后停发。简化版无
+        踩钉控制页，一并拒绝。"""
         app = self.server.app
         if getattr(app, "lite", False):
             self._json(403, {"error": "简化版无踩钉"})
             return
+        if not _is_private_ip(ip):
+            self._json(403, {"error": "仅限私网来源"})
+            return
         if not getattr(app, "pedal_remote_enabled", False):
             self._json(403, {"error": "电脑端未开启平板转发"})
             return
+        # 全局限流兜底（per-device 桶可被设备名轮换绕过）：40 包/秒。
+        # 置于结构校验之前——LAN 垃圾包风暴同样受窗约束。非原子读改写
+        # 由 _pedal_gwin_lock 串行（HTTP handler 线程池并发）
+        now = time.monotonic()
+        gwin = app._pedal_gwin
+        with app._pedal_gwin_lock:
+            if now - gwin[0] >= 1.0:
+                gwin[0], gwin[1] = now, 1
+            else:
+                gwin[1] += 1
+                if gwin[1] > 40:
+                    self._json(429, {"error": "包率超限"})
+                    return
         device = body.get("device")
         if not isinstance(device, str) or not device or len(device) > 64:
             device = "remote"
@@ -1425,23 +1452,55 @@ class _Handler(BaseHTTPRequestHandler):
                         or not 0 <= dt <= 5000:
                     self._json(400, {"error": "dt 非法"})
                     return
-        # 重试导致的重复包：幂等确认，不再注入——判在限流之前，否则
-        # 立即重试（转发端策略）永远撞 20ms 包率闸
-        last = app._pedal_seq.get(device, -1)
-        if seq <= last:
+            et = body.get("et", 0)
+            # et=SystemClock.uptimeMillis（Java long，无上界）：上界取 JSON
+            # 安全整数 2^53——收紧到 2^31 会把累计醒时超 24.8 天的平板全部
+            # 拒之门外（每脚 400 静默丢弃而心跳照常 200=链路绿灯踩钉全灭）
+            if isinstance(et, bool) or not isinstance(et, int) \
+                    or not 0 <= et <= 2 ** 53:
+                self._json(400, {"error": "et 非法"})
+                return
+        # 会话去重：键=(device, sid)。sid 为 APP 每进程随机生成——同进程内
+        # 单 worker 串行发送，同包重发 seq 必相等（幂等确认）；进程重启 sid
+        # 更换即新会话，seq 归 1 不会被旧基准误吞（演出中途 APP 崩溃重启的
+        # 第一脚往往是救场动作，绝不能丢）。席位：device ≤32、每 device 的
+        # sid ≤4（淘汰最旧会话）——防未知设备名/轮换 sid 刷爆去重表
+        sid = body.get("sid")
+        if not isinstance(sid, str) or len(sid) > 32:
+            sid = ""
+        key = (device, sid)
+        if key not in app._pedal_seq:
+            devs = [k for k in app._pedal_seq if k[0] == device]
+            if not devs and len({k[0] for k in app._pedal_seq}) >= 32:
+                self._json(429, {"error": "设备数超限"})
+                return
+            if len(devs) >= 4:
+                del app._pedal_seq[devs[0]]     # dict 保序：最旧会话先出
+        last = app._pedal_seq.get(key)
+        if last is not None and seq == last:
+            # dup 查在 per-device 限流之前（刻意）：已送达包的重试拿到即时
+            # 幂等 ack，不耗限流窗；dup 不触碰任何状态
             self._ok(dup=True)
             return
-        now = time.monotonic()
-        # 包率限流：人手踩踏 ≤10 包/秒，20ms 内的连发只可能是滥用/故障
         if now - app._pedal_rate.get(device, 0.0) < 0.02:
             self._json(429, {"error": "包率超限"})
             return
+        if device not in app._pedal_rate and len(app._pedal_rate) >= 32:
+            del app._pedal_rate[next(iter(app._pedal_rate))]   # 淘汰最旧
         app._pedal_rate[device] = now
-        app._pedal_seq[device] = seq
-        r = app.pedal_remote_inject(
-            {"hb": True} if events is None else
-            {"device": device, "events": events})
+        app._pedal_seq[key] = seq
+        # 注入抛异常（→ dispatcher 500）同样回滚 seq：重试不被 dup 吞
+        try:
+            r = app.pedal_remote_inject(
+                {"hb": True} if events is None else
+                {"device": device, "events": events, "et": body.get("et", 0)})
+        except Exception:
+            app._pedal_seq.pop(key, None)
+            raise
         if not r.get("ok"):
+            # 注入失败不烧 seq：回滚记录，客户端同 seq 重试可再次注入
+            # （否则重试被 dup 收下=该批按键永久丢失）
+            app._pedal_seq.pop(key, None)
             self._json(503, {"error": r.get("error", "注入失败")})
             return
         self._ok(**{k: v for k, v in r.items() if k != "ok"})

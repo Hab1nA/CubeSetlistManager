@@ -405,10 +405,19 @@ class App:
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
         self.pedal_gestures, self.pedal_double = pedal.load_gestures(cfg)
-        self.pedal_remote_enabled = bool(        # 平板转发踩钉（HTTP 注入）
-            (cfg.get("pedal") or {}).get("remoteEnabled"))
-        self._pedal_seq = {}     # 转发包去重：device → 已见最大 seq
+        _ped = cfg.get("pedal")                  # 手改配置非 dict 时不炸启动
+        _ped = _ped if isinstance(_ped, dict) else {}
+        self.pedal_remote_enabled = bool(_ped.get("remoteEnabled"))
+        self._pedal_seq = {}     # 转发包去重：(device, sid) → 该会话已见最大 seq
         self._pedal_rate = {}    # 转发包限流：device → 上包时刻
+        # 两表无锁的并发边界：合法部署=单平板单 worker 串行发包（键冲突
+        # 不可达）；对抗性并发最坏 dict 迭代 RuntimeError→500→客户端重试
+        # 自愈——LAN 信任域（/cmd 同级）内不构成升级，不为它上锁
+        self._pedal_gwin = [0.0, 0]   # 全局限流窗：[窗起点, 窗内包数]
+        self._pedal_gwin_lock = threading.Lock()   # gwin 非原子读改写
+        self._rclock_note = ("单踏板设计：bridge._rclock 为全体转发源共享，"
+                             "多平板同开时 et 互跳会频繁重锚、安全退化为"
+                             "到达时刻锚定（无锚定收益但不产生错误动作）")
         # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
@@ -1566,9 +1575,12 @@ class App:
 
     def pedal_remote_inject(self, payload):
         """平板转发的踩钉事件包 → 桥注入（HTTP 线程直调：桥/引擎自带锁，
-        不碰 Tk）。结构校验已在端点做；这里做 usage 映射与时间戳重定基准
-        ——dt 为距包内最后事件的毫秒偏移，t_i = now − dt/1000 保持包内
-        边沿间距，网络抖动进不了弹跳闸/双踩窗；不采信平板绝对时钟。"""
+        不碰 Tk）。结构校验已在端点做；这里做键码映射与时间重定基准：
+        vk=scanCode（Linux 键码，主查）、kc=Android keycode（兜底）、
+        dt=距包内最后事件的毫秒偏移（保包内边沿间距）、et=本包最后事件的
+        APP 端单调时戳（跨包锚定——窗内间距不被到达抖动拉伸，事件序/
+        弹跳/去抖按真实间距判定；不采信平板绝对时钟，PC 侧只取相对差值
+        外推。超窗迟到包任何接收端无法补救，与蓝牙直连同构）。"""
         p = getattr(self, "pedal", None)
         if p is None:
             return {"ok": False, "error": "踩钉服务未启动"}
@@ -1577,14 +1589,14 @@ class App:
             return {"ok": True}
         events = payload.get("events") or []
         now = time.monotonic()
+        t_last = p.bridge.remote_anchor(payload.get("et"), now)
         for e in events:
-            vk = pedal.remote_usage_to_vk(e.get("vk"))
+            vk = pedal.remote_key_to_vk(e.get("vk"), e.get("kc"))
             if vk is None:
-                self.q.put("踩钉转发：未认识的键 usage=%r keyCode=%r（已丢弃）"
-                           % (e.get("vk"), e.get("kc")))
+                p.bridge.note_remote_unknown(e.get("vk"), e.get("kc"))
                 continue
             dt = e.get("dt") or 0
-            p.bridge.inject(vk, bool(e.get("down")), now - dt / 1000.0)
+            p.bridge.inject(vk, bool(e.get("down")), t_last - dt / 1000.0)
         return {"ok": True, "n": len(events)}
 
     def _open_pedal(self):

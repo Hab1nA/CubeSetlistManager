@@ -361,7 +361,44 @@ class MainActivity : Activity() {
         @android.webkit.JavascriptInterface
         fun setPedalForward(v: Boolean): Boolean {
             PedalForwarder.setEnabled(this@MainActivity, v)
+            if (v) checkKeyFilterCapability()
             return true
+        }
+
+        /** 按键捕获能力自检：无障碍服务的 capabilities 在服务启用时被系统
+         *  快照，APK 升级带来新 flag 后可能要求用户关闭再开启才生效（OEM
+         *  行为不一）——开启转发时即检测，当场引导，不留「踩了没反应」。 */
+        private fun checkKeyFilterCapability() {
+            runOnUiThread {
+                try {
+                    val am = getSystemService(ACCESSIBILITY_SERVICE) as
+                        android.view.accessibility.AccessibilityManager
+                    val svc = am.getEnabledAccessibilityServiceList(
+                        android.accessibilityservice.AccessibilityServiceInfo
+                            .FEEDBACK_ALL_MASK).firstOrNull {
+                        it.id?.contains(packageName) == true &&
+                            it.id.contains("TurnAccessibilityService")
+                    } ?: return@runOnUiThread
+                    val caps = svc.capabilities
+                    if (caps and android.accessibilityservice
+                        .AccessibilityServiceInfo
+                        .CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS == 0) {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("需要重新开启无障碍")
+                            .setMessage("本 APP 升级后新增了按键捕获能力，" +
+                                "但系统仍在使用旧的能力快照。请到系统设置把" +
+                                "本 APP 的无障碍关闭再开启，否则踏板按键不会" +
+                                "被捕获转发。")
+                            .setPositiveButton("去设置") { _, _ ->
+                                startActivity(Intent(
+                                    android.provider.Settings
+                                        .ACTION_ACCESSIBILITY_SETTINGS))
+                            }
+                            .setNegativeButton("稍后", null).show()
+                    }
+                } catch (_: Exception) {
+                }
+            }
         }
 
         @android.webkit.JavascriptInterface

@@ -120,38 +120,100 @@ def hid_fire(state, vk, pressed, now):
 
 # ---- 远程转发（平板 USB 有线踩钉 → APP 捕获 → HTTP → 注入桥） ----
 
-# HID usage → Windows 虚拟键码。Android 的 KeyEvent.getScanCode() 对 USB
-# HID 键盘即 usage 值：consumer 页（媒体键）直接取值，keyboard 页是
-# 0x700xx 的低字节。表只收踏板真实会发的键；查不到=丢弃并记日志（包里带
-# Android keyCode 供排查）。映射与 Windows 原生映射对齐——蓝牙路径学的
-# VK 绑定对转发路径自动生效，学习流程零改动。
-_REMOTE_CONSUMER = {0xB0: 0xB3, 0xB1: 0xB3,   # Play/Pause → 播放/暂停
-                    0xB5: 0xB0, 0xB6: 0xB1, 0xB7: 0xB2,
-                    0xCD: 0xB3,               # Play/Pause 主用键
-                    0xE2: 0xAD, 0xE9: 0xAF, 0xEA: 0xAE}
-_REMOTE_KEYBOARD = {0x28: 0x0D, 0x29: 0x1B, 0x2A: 0x08, 0x2B: 0x09,
-                    0x2C: 0x20, 0x4A: 0x24, 0x4B: 0x21, 0x4C: 0x2E,
-                    0x4D: 0x23, 0x4E: 0x22, 0x4F: 0x27, 0x50: 0x25,
-                    0x51: 0x28, 0x52: 0x26}
+# Android 的 KeyEvent.getScanCode() 实际上报的是 Linux input.h 键码（LKC），
+# 不是原始 HID usage——内核 hid-input 层把 usage 折算成 LKC 再进 evdev，
+# usage 本身不传给应用（AOSP《Keyboard devices》码表：Play/Pause 0xCD→164、
+# Scan Next 0xB5→163、PageUp 0x4B→104、F13 0x68→183）。本表按 LKC 建键，
+# 与 Windows 原生映射逐键对齐——蓝牙路径学的 VK 绑定对转发路自动生效。
+# 音量键也在此表（PC 侧无害），但 Android 白名单不放行（保平板音量控制）。
+_REMOTE_LKC = {
+    1: 0x1B, 14: 0x08, 15: 0x09, 28: 0x0D, 57: 0x20,   # Esc/退格/Tab/回车/空格
+    102: 0x24, 104: 0x21, 107: 0x23, 109: 0x22,        # Home/上翻页/End/下翻页
+    110: 0x2D, 111: 0x2E,                              # Insert/Delete
+    103: 0x26, 105: 0x25, 106: 0x27, 108: 0x28,        # 上/左/右/下
+    113: 0xAD, 114: 0xAE, 115: 0xAF,                   # 静音/音量−/音量＋
+    119: 0x13,                                         # KEY_PAUSE（consumer
+                                                       #   Pause 的实际落点）
+    163: 0xB0, 164: 0xB3, 165: 0xB1, 166: 0xB2,        # 下一曲/播放暂停/上一曲/停止
+    16: 0x51, 17: 0x57, 18: 0x45, 19: 0x52, 20: 0x54,  # Q W E R T（LKC 字母区非线性）
+    21: 0x59, 22: 0x55, 23: 0x49, 24: 0x4F, 25: 0x50,
+    30: 0x41, 31: 0x53, 32: 0x44, 33: 0x46, 34: 0x47,
+    35: 0x48, 36: 0x4A, 37: 0x4B, 38: 0x4C,
+    44: 0x5A, 45: 0x58, 46: 0x43, 47: 0x56, 48: 0x42,
+    49: 0x4E, 50: 0x4D,
+    2: 0x31, 3: 0x32, 4: 0x33, 5: 0x34, 6: 0x35,       # 1..9,0（LKC 2..11）
+    7: 0x36, 8: 0x37, 9: 0x38, 10: 0x39, 11: 0x30,
+}
+# Android keycode 兜底表（个别设备/栈 scanCode 报 0 时按 getKeyCode 映射；
+# 与 LKC 表对同一物理键映射一致——如 PageUp LKC104/AKC92 均→VK_PRIOR）。
+_REMOTE_AKC = {
+    85: 0xB3, 86: 0xB2, 87: 0xB0, 88: 0xB1,            # 播放暂停/停止/下一曲/上一曲
+    121: 0x13,                                         # BREAK（consumer Pause 的
+                                                       #   Generic.kl 实际落点）
+    126: 0xB3, 127: 0xB3,                              # PLAY/PAUSE → 播放暂停
+    164: 0xAD, 24: 0xAF, 25: 0xAE,                     # 静音/音量＋/音量−
+    92: 0x21, 93: 0x22, 122: 0x24, 123: 0x23,          # PageUp/Down/Home/End
+    19: 0x26, 20: 0x28, 21: 0x25, 22: 0x27,            # 上/下/左/右
+    66: 0x0D, 111: 0x1B, 62: 0x20, 61: 0x09, 67: 0x08,  # 回车/Esc/空格/Tab/退格
+}
 
 
-def remote_usage_to_vk(u):
-    """HID usage → Windows VK；None=不认识的键（调用方丢弃）。"""
-    if isinstance(u, bool) or not isinstance(u, int):
-        return None
-    if u in _REMOTE_CONSUMER:
-        return _REMOTE_CONSUMER[u]
-    if u in _REMOTE_KEYBOARD:
-        return _REMOTE_KEYBOARD[u]
-    if 0x3A <= u <= 0x45:            # F1-F12
-        return 0x70 + (u - 0x3A)
-    if 0x68 <= u <= 0x73:            # F13-F24
-        return 0x7C + (u - 0x68)
-    if 0x04 <= u <= 0x1D:            # A-Z
-        return 0x41 + (u - 0x04)
-    if 0x1E <= u <= 0x27:            # 0-9
-        return 0x30 + (u - 0x1E)
+def remote_key_to_vk(sc, kc):
+    """scanCode(LKC) 主查 + Android keycode 兜底 → Windows VK；
+    None=两个命名空间都不认识（调用方丢弃并记日志）。F 键/字母/数字的
+    区间映射按表作用域区分——两命名空间数值有交叉（LKC 87=F11 vs
+    AKC 87=下一曲），绝不可混用。"""
+    for u, tab in ((sc, _REMOTE_LKC), (kc, _REMOTE_AKC)):
+        if isinstance(u, bool) or not isinstance(u, int):
+            continue
+        if u in tab:
+            return tab[u]
+        if tab is _REMOTE_LKC:
+            if 59 <= u <= 68:            # LKC F1-F10
+                return 0x70 + (u - 59)
+            if u in (87, 88):            # LKC F11/F12
+                return 0x7A + (u - 87)
+            if 183 <= u <= 194:          # F13-F24
+                return 0x7C + (u - 183)
+        else:
+            if 131 <= u <= 142:          # AKC F1-F12
+                return 0x70 + (u - 131)
+            if 326 <= u <= 337:          # AKC F13-F24（API 30/Android 11 起有
+                                         #   键码；143-154 是 NumLock/小键盘，
+                                         #   绝不混入）
+                return 0x7C + (u - 326)
+            if 29 <= u <= 54:            # AKC A-Z 线性
+                return 0x41 + (u - 29)
+            if 7 <= u <= 16:             # AKC 0-9 线性
+                return 0x30 + (u - 7)
     return None
+
+
+class RemoteClock:
+    """跨包时间重定基准：以 APP 端单调时戳（事件 uptimeMillis，boot 毫秒）
+    的差值外推本包事件时刻——窗内间距不被到达抖动拉伸、跨包事件序/弹跳
+    闸/去抖窗按真实间距判定。能力边界：包到达本身晚于手势窗剩余时间时，
+    窗内定时器已触发结算，任何接收端无法回溯补救（蓝牙直连同款 RF 延迟
+    同样如此）——锚定不拯救超窗迟到包，只保证不比直连路径更差。
+    APP 重启（时戳回跳）自动重锚。"""
+
+    def __init__(self):
+        self.et = None               # 锚：APP 端时戳（ms）
+        self.t = None                # 锚：PC 端 monotonic 时刻
+
+    def anchor(self, et_ms, now):
+        """本包最后事件在 PC 时间轴上的时刻；et 缺失（旧客户端/心跳）退回
+        到达时刻。向前外推但不超过 now（trim 掉到达抖动的膨胀）。"""
+        if (isinstance(et_ms, bool) or not isinstance(et_ms, int)
+                or et_ms < 0):
+            self.et, self.t = None, now
+            return now
+        if self.et is None or et_ms < self.et:       # 首包 / APP 重启
+            self.et, self.t = et_ms, now
+            return now
+        self.t = min(self.t + (et_ms - self.et) / 1000.0, now)
+        self.et = et_ms
+        return self.t
 
 
 # 学习阶段的按键候选：排除鼠标键（0x01-0x06）、修饰键及其左右变体
@@ -560,6 +622,9 @@ class DeviceBridge:
         self._last_hid_down = (None, 0.0)  # 最近本地按下沿 (vk, t)：跨源去重
         self.remote_event_t = 0.0          # 最近远程事件到达时刻（健康显示）
         self.remote_hb_t = 0.0             # 最近远程心跳到达时刻
+        self.remote_unknown = 0            # 累计未识别键丢弃数（健康显示：
+                                           #   心跳只证链路活，此数证键路通）
+        self._rclock = RemoteClock()       # 跨包时间重定基准锚
         self.raw_ok = None           # 线程启动后回填：INPUTSINK 是否注册成功
         self._hotkeys = {}       # 热键 id → vk（桥线程私有）
         self._stop = threading.Event()
@@ -756,27 +821,42 @@ class DeviceBridge:
         """远程心跳到达（平板转发路的健康显示数据源）。"""
         self.remote_hb_t = time.monotonic()
 
+    def note_remote_unknown(self, sc, kc):
+        """未识别键丢弃计数：心跳只证链路活，此计数暴露「键路不通」
+        （如固件换了键位/映射表缺键），防健康显示被心跳买活。"""
+        with self._io_lock:
+            self.remote_unknown += 1
+        self._report("远程按键未识别（scanCode=%r keyCode=%r），已丢弃"
+                     % (sc, kc))
+
+    def remote_anchor(self, et_ms, now):
+        """跨包时间锚（RemoteClock 委托）：本包最后事件在 PC 时间轴上的
+        时刻。见 RemoteClock——网络抖动/重试延迟不进跨包手势窗。"""
+        return self._rclock.anchor(et_ms, now)
+
     def inject(self, vk, down, t=None):
         """远程注入（平板 USB 有线踩钉经 HTTP 转发）：走 _feed 同层，
         学习捕获/页面静音/手势分流全部继承。t 为重定基准后的本机
-        monotonic 时刻（包内边沿间距由转发端 dt 偏移保留，网络抖动进
-        不了弹跳闸/双踩窗）。跨源去重：TurnerPro 有线时蓝牙断开（实测
-        二选一），此闸仅为固件双输出场景的保险——同键 down 沿与本地
-        蓝牙沿相距 <0.15s 时丢弃远程份，防双触发。"""
+        monotonic 时刻（包内边沿间距由转发端 dt 偏移保留，跨包间距经
+        RemoteClock 按 APP 端单调时戳外推，网络抖动进不了弹跳闸/双踩窗）。
+        remote_event_t 只记**通过去重闸**的事件（P3-5：被去重的重试包
+        不算新事件）。跨源去重：TurnerPro 有线时蓝牙断开（实测二选一），
+        此闸仅为固件双输出场景的保险——同键 down 沿与本地蓝牙沿相距
+        <0.15s 时丢弃远程份，防双触发。"""
         rcv = time.monotonic()
         if t is None:
             t = rcv
-        self.remote_event_t = rcv
         with self._io_lock:
             lvk, lt = self._last_hid_down
             if down and vk == lvk and 0.0 <= t - lt < 0.15:
                 self._report("远程按键与本地蓝牙重复（%s），已去重"
                              % hid_name(vk))
                 return False
-            self._feed(vk, down, t)
+            self.remote_event_t = rcv
+            self._feed(vk, down, t, src="remote")
         return True
 
-    def _feed(self, vk, down, now=None):
+    def _feed(self, vk, down, now=None, src="hid"):
         """所选设备的按键 → 学习捕获/手势引擎/单踩快路径。通道优先级：
         学习捕获（learning+capture 在场）> 页面静音（silent=丢弃一切，
         与 learning 正交——学习器 end_capture 只动 learning，页面静音
@@ -786,13 +866,16 @@ class DeviceBridge:
         不变；非所选设备的按键在归属门即被丢弃、进不了 _feed，pending
         只会等真设备的松开沿（或边界 reset 作废）——键盘同名键不误
         触发。capture 约定：三参数直传 fn(vk, down, 时刻)。now 供远程
-        注入重定基准（None=当下）；全程持 _io_lock——桥线程 raw 路径与
-        HTTP 注入路径共用 _state/_pending，必须串行。"""
+        注入重定基准（None=当下）；src 区分来源——_pending 是本地热键
+        拦截的回执配对，只允许 hid 源消费（远程 down/up 自成对注入、
+        不经热键，若任由远程松开沿消费本地 pending 会合成从未发生的
+        按压对）；全程持 _io_lock——桥线程 raw 路径与 HTTP 注入路径
+        共用 _state/_pending，必须串行。"""
         if now is None:
             now = time.monotonic()
         with self._io_lock:
             if self.learning and self.capture:
-                if not down and vk in self._pending:
+                if (not down and src == "hid" and vk in self._pending):
                     t0 = self._pending.pop(vk)
                     if now - t0 > 2.0:
                         t0 = now    # 失联保护：回执已陈旧（2 秒前的按下），
@@ -807,7 +890,7 @@ class DeviceBridge:
                 return
             if self.learning:
                 return                  # 学习切换的过渡瞬间（capture 缺席）：丢弃
-            if not down and vk in self._pending:
+            if not down and src == "hid" and vk in self._pending:
                 t0 = self._pending.pop(vk)
                 if now - t0 > 2.0:
                     t0 = now        # 失联保护：回执已陈旧（2 秒前的按下），按
@@ -1402,8 +1485,11 @@ class PedalWindow(tk.Toplevel):
         self._remote_tick()
 
     def _remote_tick(self):
-        """平板转发路状态行：开关态 + 心跳链路 + 最后事件年龄。
-        link 判据与 /state 快照的 pedalRemote 一致（15 秒无心跳=失联）。"""
+        """平板转发路状态行：开关态 + 心跳链路 + 最后事件年龄 + 未识别键。
+        link 判据与 /state 快照的 pedalRemote 一致（15 秒无心跳=失联）；
+        未识别键>0 说明链路活但键路不通（固件换键位/表缺键），转警示色。
+        远程路不受「输入设备」选择约束（那是本地 raw HID 的归属门），
+        如实标注防误读。"""
         p = self.app.pedal
         if not getattr(self.app, "pedal_remote_enabled", False):
             self.remote_lbl.config(text="平板转发：关闭", fg=dpi.MUT)
@@ -1415,6 +1501,9 @@ class PedalWindow(tk.Toplevel):
         now = time.monotonic()
         br = p.bridge
         link_t = max(br.remote_event_t, br.remote_hb_t)
+        extra = ("，未识别键 %d 个" % br.remote_unknown
+                 if br.remote_unknown else "")
+        tail = "（远程路不受输入设备选择约束）"
         if link_t <= 0.0:
             self.remote_lbl.config(
                 text="平板转发：开启，等待平板（APP 设置里开「踩钉转发」）",
@@ -1425,11 +1514,14 @@ class PedalWindow(tk.Toplevel):
                      % (now - link_t), fg=dpi.C_WARN)
         elif br.remote_event_t > 0.0:
             self.remote_lbl.config(
-                text="平板转发：链路正常，最后事件 %.0f 秒前"
-                     % (now - br.remote_event_t), fg=dpi.C_OK)
+                text="平板转发：链路正常，最后事件 %.0f 秒前%s%s"
+                     % (now - br.remote_event_t, extra, tail),
+                fg=dpi.C_WARN if br.remote_unknown else dpi.C_OK)
         else:
-            self.remote_lbl.config(text="平板转发：链路正常（尚无按键事件）",
-                                   fg=dpi.C_OK)
+            self.remote_lbl.config(
+                text="平板转发：链路正常，尚无有效按键事件%s%s"
+                     % (extra, tail),
+                fg=dpi.C_WARN if br.remote_unknown else dpi.C_OK)
 
     def _refresh(self):
         for action, _name in ACTIONS:
