@@ -32,6 +32,18 @@
   线级黑盒 17 场景（PedalForwarder/PedalBatcher 逐行为镜像模拟器）+
   JVM 打包单测。
 
+### 变更
+
+- **全套界面迁移 ttk + sv-ttk dark（Win11 原生观感）**：四个窗口（曲库主窗
+  与设置页、自动化主窗与设置页、踩钉窗、键盘自动化窗）classic tk.* 控件
+  单路径整体换 ttk.*，9 个 tk.OptionMenu 下拉全部换只读 Combobox，跑马灯
+  输入框改 ttk.Entry 子类，强调按钮走命名 style（开始/保存并应用=绿底、
+  全停/熄屏=红底），动态状态色由 fg 直写改切命名 style；保留的 classic
+  部件（素材库/播放列表/日志 Listbox、歌曲进度 Canvas）显式配色对齐新
+  底色，逐行状态色与绑定体系不变。引入首个 UI 侧第三方运行时依赖 sv-ttk
+  （主题资产由 PyInstaller hooks-contrib 内置 hook 自动收集，打包配置
+  无需特判）。
+
 ## [0.12.1] - 2026-10-01
 
 ### 变更

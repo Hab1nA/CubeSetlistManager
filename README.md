@@ -117,8 +117,10 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
 
 ### 开发 / 构建
 
-- Python **3.14.x**（实测版本；零第三方运行时依赖是刻意设计——python-rtmidi
-  在 3.14 下 import 即崩，故 MIDI/OBS 协议均为标准库手写）；
+- Python **3.14.x**（实测版本）。第三方运行时依赖仅一项：UI 主题库 sv-ttk
+  （`py -m pip install sv_ttk`）——全套控件迁移 ttk 后以 sv-ttk dark 换取
+  Win11 原生深色观感（演出暗场远距离可读）；MIDI/OBS 协议仍为标准库手写
+  （python-rtmidi 在 3.14 下 import 即崩，协议层零依赖的初衷不变）；
 - 安卓 APP：Kotlin + Gradle（`mobile/` 工程，`gradlew assembleDebug`）；
 - 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
   Inno Setup 6 会顺带出按用户安装包并拷入最新 APK，版本取最近 git tag）；

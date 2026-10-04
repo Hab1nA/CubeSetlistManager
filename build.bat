@@ -1,6 +1,11 @@
 @echo off
 chcp 65001 >nul
 cd /d %~dp0
+rem sv-ttk: UI theme runtime dep introduced by the ttk migration; fail fast, no silent fallback
+py -c "import sv_ttk" 2>nul || (
+  echo ERROR: sv_ttk not installed - run: py -m pip install sv_ttk
+  exit /b 1
+)
 rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never overwritten
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
