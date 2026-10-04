@@ -503,13 +503,13 @@ class App:
         banner.columnconfigure(0, weight=1, uniform="b")   # NOW/NEXT 平分宽度
         banner.columnconfigure(1, weight=1, uniform="b")
         ttk.Label(banner, text="NOW",
-                  font=("Microsoft YaHei UI", 9, "bold"), anchor="w",
+                  font=("Microsoft YaHei UI", 10, "bold"), anchor="w",
                   style="Dim.TLabel").grid(row=0, column=0, sticky="w")
         self.now_lbl = Marquee(banner, max_chars=30,
                                font=("Microsoft YaHei UI", 20, "bold"))
         self.now_lbl.grid(row=1, column=0, sticky="ew")
         ttk.Label(banner, text="NEXT",
-                  font=("Microsoft YaHei UI", 9, "bold"), anchor="w",
+                  font=("Microsoft YaHei UI", 10, "bold"), anchor="w",
                   style="Dim.TLabel").grid(row=0, column=1, sticky="w",
                                            padx=(24, 0))
         self.next_lbl = Marquee(banner, max_chars=30,
@@ -584,20 +584,20 @@ class App:
         mons.columnconfigure(2, weight=1, uniform="m")
 
         def mon_grid(fid, frame, names, marquee=()):
-            # 非跑马灯普通 Label 显式同族同号字体（YaHei 9）：sv-ttk 默认
-            # Segoe 族与 Marquee 的 YaHei 混排会让同一值列字号不齐
-            yh9 = {"font": ("Microsoft YaHei UI", 9)}
+            # 非跑马灯普通 Label 显式同族同号字体（YaHei 10）：与 Marquee
+            # 同族同号，值列混排不齐
+            yh10 = {"font": ("Microsoft YaHei UI", 10)}
             for i, name in enumerate(names):
                 r, c = divmod(i, 2)
                 ttk.Label(frame, text=name, width=10, anchor="w",
-                          style="Dim.TLabel", **yh9).grid(
+                          style="Dim.TLabel", **yh10).grid(
                     row=r, column=c * 2, padx=(6, 0), pady=1, sticky="w")
                 if name in marquee:
                     lbl = Marquee(frame, max_chars=24,
-                                  font=("Microsoft YaHei UI", 9))
+                                  font=("Microsoft YaHei UI", 10))
                 else:
                     lbl = ttk.Label(frame, text="…", anchor="w", width=20,
-                                    style="Dim.TLabel", **yh9)
+                                    style="Dim.TLabel", **yh10)
                 lbl.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="we")
                 frame.columnconfigure(c * 2 + 1, weight=1)
                 self.rows[(fid, name)] = lbl
@@ -616,7 +616,7 @@ class App:
                    command=lambda: self.log.delete(0, "end")).pack(
             anchor="e", padx=6, pady=(2, 4))
         self.log = tk.Listbox(logf, height=7, activestyle="none",
-                              font=("Microsoft YaHei UI", 9),
+                              font=("Microsoft YaHei UI", 10),
                               bg=dpi.FIELD, fg=dpi.LOG_FG,
                               selectbackground=dpi.SELECT,
                               selectforeground=dpi.FG,
@@ -631,7 +631,7 @@ class App:
         # 独占整行后宽度充裕（minsize 下也有 2 倍余量），跑马灯弹性吸收
         # 中部剩余空间，右侧时长控件永不会被裁剪；行内间距统一 4
         self.tgt_lbl = Marquee(g4, max_chars=24,
-                               font=("Microsoft YaHei UI", 9))
+                               font=("Microsoft YaHei UI", 10))
         self.tgt_lbl.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self.auto_var = tk.BooleanVar(value=self.auto_advance)  # 设置页/踩钉共用
         ttk.Label(g4, text="时长", style="Dim.TLabel").pack(

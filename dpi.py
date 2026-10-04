@@ -137,10 +137,17 @@ def apply_theme(root):
     同一入口）。sv_ttk 缺失/初始化失败直接抛异常——单路径迁移。"""
     sv_ttk.set_theme("dark", root)
     s = ttk.Style(root)
-    # Labelframe 标题保持正文同族字号与弱化档（主题默认 Segoe 会跟
-    # 全窗 YaHei 混族）
+    # 全族默认字体：演出暗场/远距/余光可读，正文 10pt（9pt 实机观感
+    # 偏小）。ttk 主体经 "." 继承，ttk 默认西文字体（Segoe UI Variable
+    # 系）比雅黑窄小，统一钉回雅黑族防混族；Combobox 弹出列表是 classic
+    # Listbox，不吃 ttk style，走 option_add 同步。
+    base_font = ("Microsoft YaHei UI", 10)
+    s.configure(".", font=base_font)
+    root.option_add("*TCombobox*Listbox.font", base_font)
+    # Labelframe 标题与正文同族同档弱化色（sv-ttk 默认 SunValleyCaptionFont
+    # 为西文窄字体，与全窗 YaHei 混族且偏小）
     s.configure("TLabelframe.Label",
-                font=("Microsoft YaHei UI", 9), foreground=MUT)
+                font=base_font, foreground=MUT)
     # 状态文字：动态状态色的命名 style（语义族名/lookup 承担；实际绘制
     # 色由 widget 级 foreground 承担——TLabel 族 style fg 在 sv-ttk 下
     # 不参与绘制，见 paint_tree）
