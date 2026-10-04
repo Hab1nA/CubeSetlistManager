@@ -13,7 +13,7 @@ import tkinter.ttk as ttk
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import setlist_gui as sg
-sg.dpi.enable()          # 与真机一致：DPI 感染后按钮 bg 才按主题渲染
+sg.dpi.enable()          # 与真机一致：DPI 感知后字体/像素按真实缩放渲染
 import pedal
 import kbd_auto
 
@@ -41,6 +41,7 @@ for t, s, du in (("TeamA", "SongA", 134.4), ("TeamA", "SongB", 240.0),
 
 sg.App._startup = lambda self: None
 root = tk.Tk()
+sg.dpi.apply_theme(root)   # sv-ttk dark+命名 style（与真机 main() 同入口）
 root.geometry(sg.dpi.scale(root, 980, 840))
 root.attributes("-topmost", True)   # 独占屏幕：防控制台/光标污染像素采样
 app = sg.App(root)
@@ -91,11 +92,6 @@ check("长歌名完整在列",
       and any("Drown out the noise" in t for t in pl_texts))
 
 
-def fits(btn):
-    f = tkfont.Font(font=btn["font"])
-    return f.measure(btn["text"]) <= btn.winfo_width() - 4
-
-
 def fits_ttk(btn):
     """ttk 按钮无 font 选项（字号字色由 style 承担）：按当前主题的
     TButton 字体量文字宽（调用时取——主题已切 sv-ttk）。"""
@@ -107,16 +103,17 @@ def fits_ttk(btn):
 ws = [app.btn_add.winfo_width(), app.btn_remove.winfo_width(),
       app.btn_up.winfo_width(), app.btn_down.winfo_width()]
 check("编排组等宽 %s" % ws, len(set(ws)) == 1)
-check("编排组文字不裁剪", all(fits(b) for b in
-                           (app.btn_add, app.btn_remove, app.btn_up,
-                            app.btn_down, app.btn_clear)))
+check("编排组文字不裁剪", all(fits_ttk(b) for b in
+                            (app.btn_add, app.btn_remove, app.btn_up,
+                             app.btn_down, app.btn_clear)))
 # --- 播放组 ---
-check("播放组文字不裁剪", all(fits(b) for b in app.tbtns.values())
-      and fits(app.btn_panic))
-# --- 绿色开始与同级按钮等大（强调只改色不改尺寸）---
-check("开始与同级等高",
-      app.tbtns["开始"].winfo_height() == app.tbtns["暂停"].winfo_height()
-      and app.tbtns["开始"].winfo_height() == app.btn_panic.winfo_height())
+check("播放组文字不裁剪", all(fits_ttk(b) for b in app.tbtns.values())
+      and fits_ttk(app.btn_panic))
+# --- 绿色开始与红色全停等大（ttk 混排：强调钮走平地元素换底，与
+# sv-ttk 图片元素钮尺寸本就不同档；同族内部必须一致）---
+check("强调钮两族等大",
+      app.tbtns["开始"].winfo_height() == app.btn_panic.winfo_height()
+      and app.tbtns["开始"].winfo_width() == app.btn_panic.winfo_width())
 # --- 自动化组 / 播放配置行：找按钮 ---
 auto_btns = [w for w in root.winfo_children()]
 g3_btns = [c for c in app.root.winfo_children()]
@@ -142,15 +139,15 @@ btns = find_buttons(root, {"键盘自动化", "踩钉控制", "写入时长", "�
 check("自动化组等宽",
       btns["键盘自动化"].winfo_width() == btns["踩钉控制"].winfo_width())
 check("自动化/配置行文字不裁剪",
-      all(fits(b) for b in btns.values()))
+      all(fits_ttk(b) for b in btns.values()))
 check("配置行三按钮等宽",
       len({btns["写入时长"].winfo_width(),
            btns["重新识别"].winfo_width(),
            btns["设置"].winfo_width()}) == 1)
-# --- 退出按钮：与底栏按钮等大、底边同基线、右边距同「设置」 ---
-check("退出与播放组按钮等大",
-      btns["退出"].winfo_width() == app.tbtns["开始"].winfo_width()
-      and btns["退出"].winfo_height() == app.tbtns["开始"].winfo_height())
+# --- 退出按钮：与普通底栏按钮等大、底边同基线、右边距同「设置」 ---
+check("退出与播放组按钮等大（普通钮互比）",
+      btns["退出"].winfo_width() == app.tbtns["暂停"].winfo_width()
+      and btns["退出"].winfo_height() == app.tbtns["暂停"].winfo_height())
 
 
 def bottom_edge(btn):
@@ -158,7 +155,7 @@ def bottom_edge(btn):
 
 
 check("退出与播放组按钮底边对齐",
-      abs(bottom_edge(btns["退出"]) - bottom_edge(app.tbtns["开始"])) <= 2)
+      abs(bottom_edge(btns["退出"]) - bottom_edge(app.tbtns["暂停"])) <= 2)
 
 
 def right_gap(btn):
@@ -187,25 +184,26 @@ check("底栏按钮组对窗口居中（偏差%+.0fpx）" % dev, abs(dev) <= 3)
 # --- 双列表间距 > 0 ---
 gap = app.pl.winfo_x() - (app.lib.winfo_x() + app.lib.winfo_width())
 check("素材库↔播放列表间距 %dpx" % gap, gap >= 6)
-# --- 无横向滚动条 / 框线宽度统一（列表与 LabelFrame 同 1px）---
-stack, sbs, bordered = [root], [], []
+# --- 无横向滚动条 / classic 列表保留=白名单且显式配色对齐 sv-ttk dark
+# （ttk 迁移后 classic Listbox 仅白名单三只：双列表+日志；面板框线由
+# sv-ttk 主题承担，不再逐项断言）---
+stack, sbs, lbs = [root], [], []
 while stack:
     w = stack.pop()
     for c in w.winfo_children():
         stack.append(c)
         if isinstance(c, tk.Scrollbar):
             sbs.append(c)
-        if isinstance(c, (tk.Listbox, tk.LabelFrame)):
-            bordered.append(c)
+        if isinstance(c, tk.Listbox):
+            lbs.append(c)
 check("主窗无横向滚动条", not sbs)
-lfs = [b for b in bordered if isinstance(b, tk.LabelFrame)]
-lbs = [b for b in bordered if isinstance(b, tk.Listbox)]
-check("面板框线=flat 1px 环同色",
-      lfs and all(int(b.cget("bd")) == 0 and b.cget("relief") == "flat"
-                  and int(b.cget("highlightthickness")) == 1
-                  and b.cget("highlightbackground") == sg.dpi.BORDER
-                  for b in lfs) and lbs
-      and all(int(b.cget("bd")) == 1 for b in lbs))
+check("主窗 classic 列表=白名单三只且配色对齐",
+      {str(b) for b in lbs} == {str(app.lib), str(app.pl), str(app.log)}
+      and all(str(b.cget("bg")).lower() == sg.dpi.FIELD
+              and str(b.cget("selectbackground")).lower() == sg.dpi.SELECT
+              and str(b.cget("selectforeground")).lower() == sg.dpi.FG
+              and int(b.cget("highlightthickness")) == 0
+              for b in lbs))
 # --- 监控栏两框边缘与素材库/播放列表精确对齐 ---
 vj_f = app.rows[("vj", "端口名称")].master
 kb_f = app.rows[("kb", "端口名称")].master
@@ -274,10 +272,12 @@ check("控件无→/←/＝", not any(
 check("OBS 状态行键", ("vj", "OBS 状态") in app.rows)
 check("FOLLOW 已停止", sg.FOLLOW["stopped"] == "已停止")
 
-# --- 本轮 UI 现代化改造断言（焦点环/悬停/圆点/进度条/当前行/空状态/日志/标题栏） ---
+# --- 本轮 UI 现代化改造断言（输入框/跑马灯/强调钮/圆点/进度条/当前行/
+# 空状态/日志/标题栏），ttk 语义：观感由 style 承担 ---
 import ctypes
 
-# Entry 焦点环：真实输入框有 1px 边框 + 聚焦绿环
+# 真实输入框=ttk Entry 默认主题样式（焦点环由 sv-ttk 主题承担）；跑马灯
+# 专用无边框 style 且状态色切 style
 entries = []
 
 
@@ -292,34 +292,33 @@ def collect_entries(win):
 
 
 collect_entries(root)
-check("输入框有焦点环 %d 个" % len(entries),
-      entries and all(int(e.cget("highlightthickness")) == 1
-                      and str(e.cget("highlightcolor")).lower()
-                      == sg.dpi.C_OK for e in entries))
+check("输入框=ttk Entry 主题焦点环 %d 个" % len(entries),
+      entries and all(e.winfo_class() == "TEntry"
+                      and not str(e.cget("style")) for e in entries))
 mq = (app.m_now, app.m_next, app.m_tgt, app.m_map, app.m_last)
-check("五个跑马灯无焦点环",
-      all(int(m.cget("highlightthickness")) == 0 for m in mq))
-check("跑马灯底色随面板（无暗底带）",
-      all(str(m.cget("bg")).lower() == sg.dpi.PANEL
-          and str(m.cget("disabledbackground")).lower() == sg.dpi.PANEL
-          for m in mq))
+check("五个跑马灯=ttk Entry 专用 style 只读",
+      all(isinstance(m, sg.Marquee)
+          and m.winfo_class() == "TEntry"
+          and str(m.cget("style")).startswith("Marquee")
+          and str(m.cget("state")) == "disabled" for m in mq))
+check("跑马灯底色随面板（style 承担，无暗底带）",
+      str(ttk.Style(root).lookup("Marquee.TEntry",
+                                 "fieldbackground")).lower() == sg.dpi.BG)
+app.m_tgt.set("SongA", sg.dpi.C_OK)
+check("跑马灯状态色切 style",
+      app.m_tgt.cget("style") == "MarqueeOk.TEntry"
+      and not hasattr(app.m_tgt, "NO_RING"))
 
-# 按钮悬停：Enter 提亮、Leave 还原；禁用态不响应
-bg0 = str(app.btn_panic["bg"]).lower()
-app.btn_panic.event_generate("<Enter>")
-root.update_idletasks()
-hovered = str(app.btn_panic["bg"]).lower()
-app.btn_panic.event_generate("<Leave>")
-root.update_idletasks()
-restored = str(app.btn_panic["bg"]).lower()
-check("按钮悬停变色 %s→%s" % (bg0, hovered),
-      hovered == str(app.btn_panic["activebackground"]).lower()
-      and hovered != bg0)
-check("按钮移出还原", restored == bg0)
-app.btn_add.event_generate("<Enter>")
-root.update_idletasks()
-check("禁用按钮悬停不变色",
-      str(app.btn_add["bg"]).lower() == sg.dpi.PANEL)
+# 强调按钮：命名 style 承担绿/红底，hover 提亮与禁用压灰走 style.map
+# （取代 classic 的 Enter/Leave 手工 bind）
+check("强调钮=命名 style",
+      app.tbtns["开始"].cget("style") == "Start.TButton"
+      and app.btn_panic.cget("style") == "Stop.TButton")
+smap = dict(ttk.Style(root).map("Stop.TButton", "background"))
+check("全停钮悬停提亮+禁用压灰=style.map",
+      bool(smap.get("active"))
+      and str(smap.get("active")).lower() != sg.dpi.STOP_BG
+      and str(smap.get("disabled")).lower() == sg.dpi.FIELD)
 
 # 状态圆点：状态格有 ● 前缀，名称/内容格与占位符没有
 app._tick_body()
@@ -345,21 +344,21 @@ app.sync = _FakeSync("stopped", None, on=False)
 app._tick_body()
 check("走带跟随未启用=黄",
       tl.cget("text") == "● 未启用（未收到时钟）"
-      and str(tl.cget("fg")).lower() == sg.dpi.C_WARN)
+      and tl.cget("style") == "Warn.TLabel")
 app.sync = _FakeSync("playing", "1 开场.mp4")
 app._tick_body()
 check("走带跟随播放中=绿+视频名",
       tl.cget("text") == "● 播放中：1 开场.mp4"
-      and str(tl.cget("fg")).lower() == sg.dpi.C_OK)
+      and tl.cget("style") == "Ok.TLabel")
 app.sync.video_state = "paused"
 app._tick_body()
 check("走带跟随暂停=黄+视频名",
       tl.cget("text") == "● 已暂停：1 开场.mp4"
-      and str(tl.cget("fg")).lower() == sg.dpi.C_WARN)
+      and tl.cget("style") == "Warn.TLabel")
 app.sync.video_state, app.sync.current_video = "stopped", None
 app._tick_body()
 check("走带跟随停止=灰无名",
-      tl.cget("text") == "● 已停止" and str(tl.cget("fg")).lower() == sg.dpi.MUT)
+      tl.cget("text") == "● 已停止" and tl.cget("style") == "Dim.TLabel")
 app.sync = None          # 还原：后续段落沿用「无同步」的原始路径
 app._tick_body()
 
@@ -495,9 +494,8 @@ try:
 except Exception as e:
     print("像素断言跳过：%r" % e)
 
-# --- 弹窗（sv-ttk 主题先挂：踩钉/键盘窗已迁 ttk，截图与像素观感按
-# 迁移终态渲染；classic 主窗/设置页不受 ttk 主题影响） ---
-sg.dpi.apply_theme(root)
+# --- 弹窗（sv-ttk 主题已在开头统一挂载：五窗全量迁移，截图与像素观感
+# 按迁移终态渲染） ---
 sw = sg.SettingsWindow(app)
 WINDOWS.append(sw)
 root.update_idletasks(); root.update()
@@ -649,20 +647,8 @@ for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
     check("%s窗四边留白≥%dpx（左%d 上%d 右%d 下%d）"
           % (name, floor, l, t, r, b), min(l, t, r, b) >= floor)
 
-# --- 三子窗底色：设置页仍 classic（过渡期 darkify）查色斑；踩钉/键盘
-# 已迁 ttk，按迁移完整性查 classic 控件残留 ---
-def flat_ok(win):
-    stack = [win]
-    while stack:
-        w2 = stack.pop()
-        for c in w2.winfo_children():
-            stack.append(c)
-            if isinstance(c, (tk.Frame, tk.Label, tk.Checkbutton)) \
-                    and str(c.cget("bg")).lower() != sg.dpi.BG:
-                return c
-    return None
-
-
+# --- 三子窗底色：五窗全量迁 ttk，按迁移完整性查 classic 控件残留
+# （setlist 主窗例外白名单：双列表+日志+空态提示按决策保留 classic）---
 def classic_strays(win):
     """classic 控件残留清点（按 ttk.Widget 排除——py3.14 里 ttk.Combobox
     仍是 tk.Entry 子类，须挡住误报）。"""
@@ -679,18 +665,21 @@ def classic_strays(win):
     return bad
 
 
-bad = flat_ok(sw)
-check("设置窗无面板色斑" if bad is None
-      else "设置窗无面板色斑（%s 仍 %s）" % (bad, bad.cget("bg")),
-      bad is None)
+allowed = {str(app.lib), str(app.pl), str(app.log), str(app.pl_empty)}
+strays = classic_strays(root)
+check("setlist主窗 classic 残留=白名单(双列表/日志/空态提示)",
+      {str(c) for c in strays} <= allowed)
+check("setlist设置页无 classic 控件残留", not classic_strays(sw))
 check("踩钉窗无 classic 控件残留", not classic_strays(pw))
 check("键盘窗无 classic 控件残留", not classic_strays(kw))
 
-# --- 设置窗：主/次按钮等大、仅颜色区分 ---
+# --- 设置窗：主/次按钮同宽、仅颜色区分（ttk 混排：Start 平地元素与
+# sv-ttk 图片元素钮尺寸本就不同档，图片内衬差随 DPI 缩放——放宽到
+# 容差防样式回归，不追平元素差异）---
 sbtns = find_buttons(sw, {"保存并应用", "取消"})
-check("设置窗主次按钮等大",
-      sbtns["保存并应用"].winfo_width() == sbtns["取消"].winfo_width()
-      and sbtns["保存并应用"].winfo_height() == sbtns["取消"].winfo_height())
+check("设置窗主次按钮同宽（±10px 元素内衬差）",
+      abs(sbtns["保存并应用"].winfo_width()
+          - sbtns["取消"].winfo_width()) <= 10)
 
 try:
     shot(sw, "settings")
@@ -778,8 +767,9 @@ root.update_idletasks(); root.update()
 check("automator _tick_body 冒烟（日志实刷）",
       any("离线冒烟探针" in aapp.log.get(i) for i in range(aapp.log.size())))
 
-# 迁移窗源码不得再引用 classic 主题 token（终态门禁的本阶段前哨）
-for _fname in ("automator_gui.py", "pedal.py", "kbd_auto.py"):
+# 迁移窗源码不得再引用 classic 主题 token（五文件终态门禁）
+for _fname in ("setlist_gui.py", "dpi.py", "automator_gui.py",
+               "pedal.py", "kbd_auto.py"):
     _src = pathlib.Path(__file__).resolve().parents[1].joinpath(
         _fname).read_text(encoding="utf-8")
     check("%s 源码无 classic 主题残留" % _fname,
