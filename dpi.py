@@ -137,6 +137,26 @@ def apply_theme(root):
     同一入口）。sv_ttk 缺失/初始化失败直接抛异常——单路径迁移。"""
     sv_ttk.set_theme("dark", root)
     s = ttk.Style(root)
+    # sv-ttk 的命名字体全是 Segoe UI Variable 系：西文窄字形、中文无字
+    # 形回退宋体，且负像素字号不随 DPI 缩放；TEntry/TCombobox/TSpinbox
+    # 还在 <<ThemeChanged>> 时把 widget font 强制回 SunValleyBodyFont、
+    # style "." 也挂着它——style/widget 级配置都会被盖。断根处只有一
+    # 个：reconfigure 这批命名字体对象本身（点数字号随 tk scaling 缩放）。
+    for fname, size in (
+            ("SunValleyCaptionFont", 9),
+            ("SunValleyBodyFont", 10),
+            ("SunValleyBodyStrongFont", 10),
+            ("SunValleyBodyLargeFont", 13),
+            ("SunValleySubtitleFont", 14),
+            ("SunValleyTitleFont", 20),
+            ("SunValleyTitleLargeFont", 28),
+            ("SunValleyDisplayFont", 36),
+    ):
+        try:
+            root.tk.call("font", "configure", fname,
+                         "-family", "Microsoft YaHei UI", "-size", size)
+        except tk.TclError:
+            pass            # 版本演进字体名缺失：略过，style 已显式钉雅黑
     # 全族默认字体：演出暗场/远距/余光可读，正文 10pt（9pt 实机观感
     # 偏小）。ttk 主体经 "." 继承，ttk 默认西文字体（Segoe UI Variable
     # 系）比雅黑窄小，统一钉回雅黑族防混族；Combobox 弹出列表是 classic

@@ -445,7 +445,13 @@ WINDOWS = [root]
 def shot(win, name):
     from PIL import ImageGrab
     win.deiconify()
-    win.geometry("+80+60")
+    # Windows 上 wm geometry 只给 ±x±y 会把尺寸重置回自然需求尺寸
+    # （子窗 req 与二轮收敛后的实际尺寸可能差一截，底行被裁出截图）
+    # ——显式带上当前宽高，只挪位置
+    wh = win.geometry().split("+", 1)[0]
+    if "x" not in wh:
+        wh = "%dx%d" % (win.winfo_reqwidth(), win.winfo_reqheight())
+    win.geometry("%s+80+60" % wh)
     for other in WINDOWS:
         if other is not win and other.winfo_exists():
             other.withdraw()

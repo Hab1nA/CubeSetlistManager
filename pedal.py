@@ -1416,11 +1416,32 @@ class PedalWindow(tk.Toplevel):
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.setup_window(self)
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
-        self.update_idletasks()
-        w = max(dpi.scale(self, 560), self.winfo_reqwidth())
-        h = max(dpi.scale(self, 400), self.winfo_reqheight())
-        self.geometry("%dx%d" % (w, h))
-        self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
+        # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
+        # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
+        # 全量 update 让窗口完成首绘，req 才是真实值；minsize 与
+        # geometry 同源，防窗口停在偏小值裁掉底行
+        for _ in range(2):
+            self.update()
+            w = max(dpi.scale(self, 560), self.winfo_reqwidth())
+            h = max(dpi.scale(self, 400), self.winfo_reqheight())
+            self.minsize(w, h)
+            self.geometry("%dx%d" % (w, h))
+        # Map 后首绘让 ttk 图片元素高度定稿再抬 req（Entry 行
+        # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
+        # 防窗口停在 map 前的偏小值裁掉底部
+        def _refit(_e=None):
+            for _ in range(2):
+                self.update_idletasks()
+                w = max(dpi.scale(self, 560), self.winfo_reqwidth())
+                h = max(dpi.scale(self, 400), self.winfo_reqheight())
+                self.minsize(w, h)
+                if self.winfo_height() < h:
+                    self.geometry("%dx%d" % (w, h))
+        self.bind("<Map>", _refit, add="+")
+        # <Map> 在构建期 update 就触发，而首绘后的元素重算更晚：
+        # 再挂两次延迟校准兜底（_refit 幂等，只抬不缩）
+        for _ms in (120, 400):
+            self.after(_ms, _refit)
         p = self.app.pedal
         if p is not None:
             p.mute()        # 存活期静音：本页开着踩钉不触发任何动作

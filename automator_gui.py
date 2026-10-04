@@ -1110,6 +1110,9 @@ class SettingsWindow(tk.Toplevel):
         self.title("设置")
         self.geometry(dpi.scale(self, 600, 430))
         pad = dpi.scale(self, 12)
+        btns = ttk.Frame(self)   # 先打包沉底：内容增高时压 body 不裁按钮行
+        btns.pack(side="bottom", fill="x", padx=pad,
+                  pady=(0, dpi.scale(self, 10)))
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=pad,
                   pady=(pad, dpi.scale(self, 8)))
@@ -1230,8 +1233,6 @@ class SettingsWindow(tk.Toplevel):
         row("%s 工程库" % app.facts["display_name"], self.proj_var, browse=True)
         row("VJ 视频目录", self.vid_var, browse=True)
 
-        btns = ttk.Frame(self)
-        btns.pack(fill="x", padx=pad, pady=(0, dpi.scale(self, 10)))
         self.save_btn = ttk.Button(btns, text="保存并应用", width=10,
                                    style="Start.TButton",
                                    command=self._save)
@@ -1241,11 +1242,32 @@ class SettingsWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.attributes("-topmost", True)
         dpi.setup_window(self)
-        self.update_idletasks()
-        w = max(dpi.scale(self, 600), self.winfo_reqwidth())
-        h = max(dpi.scale(self, 430), self.winfo_reqheight())
-        self.geometry("%dx%d" % (w, h))
-        self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
+        # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
+        # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
+        # 全量 update 让窗口完成首绘，req 才是真实值；minsize 与
+        # geometry 同源，防窗口停在偏小值裁掉底行
+        for _ in range(2):
+            self.update()
+            w = max(dpi.scale(self, 600), self.winfo_reqwidth())
+            h = max(dpi.scale(self, 430), self.winfo_reqheight())
+            self.minsize(w, h)
+            self.geometry("%dx%d" % (w, h))
+        # Map 后首绘让 ttk 图片元素高度定稿再抬 req（Entry 行
+        # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
+        # 防窗口停在 map 前的偏小值裁掉底部
+        def _refit(_e=None):
+            for _ in range(2):
+                self.update_idletasks()
+                w = max(dpi.scale(self, 600), self.winfo_reqwidth())
+                h = max(dpi.scale(self, 430), self.winfo_reqheight())
+                self.minsize(w, h)
+                if self.winfo_height() < h:
+                    self.geometry("%dx%d" % (w, h))
+        self.bind("<Map>", _refit, add="+")
+        # <Map> 在构建期 update 就触发，而首绘后的元素重算更晚：
+        # 再挂两次延迟校准兜底（_refit 幂等，只抬不缩）
+        for _ms in (120, 400):
+            self.after(_ms, _refit)
 
     def _load_web_status(self):
         st = hotspot.state()
