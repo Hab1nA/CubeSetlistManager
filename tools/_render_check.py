@@ -93,9 +93,12 @@ check("长歌名完整在列",
 
 
 def fits_ttk(btn):
-    """ttk 按钮无 font 选项（字号字色由 style 承担）：按当前主题的
-    TButton 字体量文字宽（调用时取——主题已切 sv-ttk）。"""
-    f = tkfont.Font(font=ttk.Style(btn).lookup("TButton", "font"))
+    """ttk 按钮无 font 选项（字号字色由 style 承担）：按实际生效字体
+    量文字宽。TButton 自身 lookup 通常为空（继承 "."）——回落到根
+    style 的字体（apply_theme 钉雅黑 10）；用 TkDefaultFont（9pt）
+    会量小一档，10pt 下三字按钮被裁也判 PASS（假阴性已发生过）。"""
+    s = ttk.Style(btn)
+    f = tkfont.Font(font=s.lookup(".", "font") or "TkDefaultFont")
     return f.measure(btn.cget("text")) <= btn.winfo_width() - 4
 
 

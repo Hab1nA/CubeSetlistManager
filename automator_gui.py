@@ -432,7 +432,7 @@ class App:
         ttk.Button(g1, text="设置", width=8,
                    command=self._open_settings).pack(side="left", padx=3,
                                                      pady=3)
-        self.btn_black = ttk.Button(g1, text="熄屏", width=5,
+        self.btn_black = ttk.Button(g1, text="熄屏", width=7,
                                     style="Stop.TButton",
                                     command=self._blackout)
         self.btn_black.pack(side="left", padx=(10, 3), pady=3)
@@ -448,7 +448,7 @@ class App:
             rpad.config(width=max(0, self.state_lbl.winfo_reqwidth() + 12
                                   - exit_btn.winfo_reqwidth() - 6))
 
-        exit_btn = ttk.Button(right, text="退出", width=5,
+        exit_btn = ttk.Button(right, text="退出", width=7,
                               command=self._on_exit)
         exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
         _rpad()

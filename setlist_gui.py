@@ -677,7 +677,7 @@ class App:
         # 退出=底栏动作按钮：宽度与编排/播放组一致（5字符），底边与各组
         # 按钮同一基线（pady=3，不再整格垂直居中），右边距与上方「设置」
         # 按钮一致（距容器内右缘 6px）
-        exit_btn = ttk.Button(right, text="退出", width=5,
+        exit_btn = ttk.Button(right, text="退出", width=7,
                               command=self._on_exit)
         exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
         _rpad()
@@ -686,16 +686,16 @@ class App:
         mid.grid(row=0, column=2)
         g1 = ttk.LabelFrame(mid, text="编排")
         g1.pack(side="left", padx=(0, 8))
-        self.btn_add = ttk.Button(g1, text="加入", width=5,
+        self.btn_add = ttk.Button(g1, text="加入", width=7,
                                   command=self._add)
         self.btn_add.pack(side="left", padx=3, pady=3)
-        self.btn_remove = ttk.Button(g1, text="移除", width=5,
+        self.btn_remove = ttk.Button(g1, text="移除", width=7,
                                      command=self._remove)
         self.btn_remove.pack(side="left", padx=3, pady=3)
-        self.btn_up = ttk.Button(g1, text="上移", width=5,
+        self.btn_up = ttk.Button(g1, text="上移", width=7,
                                  command=lambda: self._move(-1))
         self.btn_up.pack(side="left", padx=3, pady=3)
-        self.btn_down = ttk.Button(g1, text="下移", width=5,
+        self.btn_down = ttk.Button(g1, text="下移", width=7,
                                    command=lambda: self._move(1))
         self.btn_down.pack(side="left", padx=3, pady=3)
         self.btn_clear = ttk.Button(g1, text="清空播放列表",
@@ -710,11 +710,11 @@ class App:
                           ("回零", lambda: self._transport("rewind")),
                           ("上一首", self._prev),
                           ("下一首", self._next)):
-            b = ttk.Button(g2, text=text, width=5, command=cmd)
+            b = ttk.Button(g2, text=text, width=7, command=cmd)
             b.pack(side="left", padx=3, pady=3)
             self.tbtns[text] = b
         self.tbtns["开始"].configure(style="Start.TButton")  # 主操作=绿底深字
-        self.btn_panic = ttk.Button(g2, text="全停", width=5,
+        self.btn_panic = ttk.Button(g2, text="全停", width=7,
                                     style="Stop.TButton",
                                     command=self._panic)
         self.btn_panic.pack(side="left", padx=(10, 3), pady=3)
