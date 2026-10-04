@@ -32,6 +32,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import tkinter.ttk as ttk
 from ctypes import wintypes
 
 import dpi
@@ -528,124 +529,119 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.ax_slots = {}          # AX-09 映射（音符 72-77）
         self._cap = None            # (note, SlotCapture, RawMidiIn, deadline)
         self.title("键盘自动化")
+        # 录制态按钮的警示字色（录制中=红字「停止」；随 apply_theme 全局
+        # 注册，此窗只此一处用；下阶段收编进 dpi）
+        ttk.Style(self).configure("Rec.TButton", foreground=dpi.C_ERR)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        tk.Label(self, text="录制：在琴上选好该音色；"
+        ttk.Label(self, text="录制：在琴上选好该音色；"
                             "触发：发送到琴上验证。").pack(
             anchor="w", padx=pad, pady=(pad, 4))
         # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
-        # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮，
-        # direction=below）——两行下拉起点/宽度对齐；刷新=重枚举当前页
-        # 设备并复核端口状态，设备插回时不必切页即可一键复核
+        # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮）
+        # ——两行下拉起点/宽度对齐；刷新=重枚举当前页设备并复核端口状态，
+        # 设备插回时不必切页即可一键复核
         self._sel = tk.StringVar(value=PAGE_NAMES[0])
-        top = tk.Frame(self)
+        top = ttk.Frame(self)
         top.pack(fill="x", padx=pad, pady=(0, 4))
-        tk.Label(top, text="乐器", width=15, anchor="w").pack(side="left")
-        self._menu = tk.OptionMenu(top, self._sel, *PAGE_NAMES,
-                                   command=self._show_page)
-        self._menu.config(anchor="w", direction="below")
+        ttk.Label(top, text="乐器", width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self._menu = ttk.Combobox(top, textvariable=self._sel,
+                                  values=list(PAGE_NAMES), state="readonly")
         self._menu.pack(side="left", fill="x", expand=True)
-        tk.Button(top, text="刷新", width=6,
-                  command=self._refresh_page).pack(side="left", padx=(6, 0))
+        self._menu.bind("<<ComboboxSelected>>",
+                        lambda _e: self._show_page(self._sel.get()))
+        ttk.Button(top, text="刷新", width=6,
+                   command=self._refresh_page).pack(side="left", padx=(6, 0))
         self._slot_lbl = {}
         self._rec_btn = {}
         self._pages = {}
         self._dev_vars = {}         # 每乐器页的设备下拉（key: juno/ax）
         self._dev_menus = {}
+        self._dev_items = {}        # 与各页 values 平行：(端口名, 同名序 0 基)
         for key, groups in (
                 ("juno", (("── 音色槽（C3 起 10 键）──", SLOT_NOTES),
                           ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)),
                           ("── 延音踏板 ──", [40]))),
                 ("ax", (("── 音色槽（C4 起 6 键）──", AX_NOTES),
                         ("── 延音踏板 ──", [45])))):
-            page = tk.Frame(self)
+            page = ttk.Frame(self)
             # MIDI 设备行：本页乐器走哪个端口，选在录/触发之前。下拉动态
             # 枚举当前在线端口——零写死设备名（无线盒今天枚举出 USB-Midi、
             # 明天换有线枚举出 JUNO-DS，同一套机制）；同名多口（两只同型号
             # 无线盒）以（第N个）区分，序号存 cfg["dev"]。行构成仿踩钉控制
             # 窗的设备行（宽 15 标签+下拉填充+宽 6 刷新）。
-            devrow = tk.Frame(page)
+            devrow = ttk.Frame(page)
             devrow.pack(fill="x", pady=(0, 4))
-            tk.Label(devrow, text="MIDI 设备", width=15,
-                     anchor="w").pack(side="left")
+            ttk.Label(devrow, text="MIDI 设备", width=15,
+                      anchor="w", style="Dim.TLabel").pack(side="left")
             self._dev_vars[key] = tk.StringVar(value="…")
-            opt = tk.OptionMenu(devrow, self._dev_vars[key], "…")
-            opt.config(anchor="w", direction="below")
+            opt = ttk.Combobox(devrow, textvariable=self._dev_vars[key],
+                               state="readonly")
             opt.pack(side="left", fill="x", expand=True)
             self._dev_menus[key] = opt
-            tk.Button(devrow, text="刷新", width=6,
-                      command=lambda k=key: self._rebuild_device_menu(k)
-                      ).pack(side="left", padx=(6, 0))
-            grid = tk.Frame(page)
+            self._dev_items[key] = []
+            opt.bind("<<ComboboxSelected>>",
+                     lambda _e, k=key: self._on_dev_selected(k))
+            ttk.Button(devrow, text="刷新", width=6,
+                       command=lambda k=key: self._rebuild_device_menu(k)
+                       ).pack(side="left", padx=(6, 0))
+            grid = ttk.Frame(page)
             grid.pack(fill="both", expand=True)
             for c, t in enumerate(("音符", "音色映射", "操作")):
-                tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
+                ttk.Label(grid, text=t, anchor="w", style="Dim.TLabel").grid(
                     row=0, column=c, sticky="w", pady=(0, 2),
                     padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
             row = 1
             for title, notes in groups:
-                tk.Label(grid, text=title, anchor="w", fg=dpi.MUT).grid(
+                ttk.Label(grid, text=title, anchor="w",
+                          style="Dim.TLabel").grid(
                     row=row, column=0, columnspan=3, sticky="w", pady=(8, 2))
                 row += 1
                 for note in notes:
-                    tk.Label(grid, text="%s（%d）" % (note_name(note), note),
-                             anchor="w").grid(row=row, column=0, sticky="w",
-                                              pady=2)
+                    ttk.Label(grid, text="%s（%d）" % (note_name(note), note),
+                              anchor="w").grid(row=row, column=0, sticky="w",
+                                               pady=2)
                     desc = SHIFT_DESC.get(note) or PEDAL_DESC.get(note)
                     if desc:        # 固定功能行：只显示，无录制/触发
-                        tk.Label(grid, text=desc, anchor="w",
-                                 fg=dpi.MUT).grid(row=row, column=1,
-                                                  sticky="we",
-                                                  padx=(8, 8), pady=2)
+                        ttk.Label(grid, text=desc, anchor="w",
+                                  style="Dim.TLabel").grid(
+                            row=row, column=1, sticky="we",
+                            padx=(8, 8), pady=2)
                         row += 1
                         continue
-                    lbl = tk.Label(grid, text="未设置", anchor="w", fg=dpi.MUT)
+                    lbl = ttk.Label(grid, text="未设置", anchor="w",
+                                    style="Dim.TLabel")
                     lbl.grid(row=row, column=1, sticky="we",
                              padx=(8, 8), pady=2)
                     grid.columnconfigure(1, weight=1)
-                    cell = tk.Frame(grid)
+                    cell = ttk.Frame(grid)
                     cell.grid(row=row, column=2, sticky="w", pady=2)
-                    self._rec_btn[note] = tk.Button(
+                    self._rec_btn[note] = ttk.Button(
                         cell, text="录制", width=8,
                         command=lambda n=note: self._toggle_record(n))
                     self._rec_btn[note].pack(side="left", padx=2)
-                    tk.Button(cell, text="触发", width=8,
-                              command=lambda n=note: self._trigger(n)).pack(
+                    ttk.Button(cell, text="触发", width=8,
+                               command=lambda n=note: self._trigger(n)).pack(
                         side="left", padx=2)
-                    tk.Button(cell, text="清除", width=8,
-                              command=lambda n=note: self._clear(n)).pack(
+                    ttk.Button(cell, text="清除", width=8,
+                               command=lambda n=note: self._clear(n)).pack(
                         side="left", padx=2)
                     self._slot_lbl[note] = lbl
                     row += 1
             self._pages[key] = page
         # 动作状态行：无消息时整行隐藏，不占位
-        self.status = tk.Label(self, text="", anchor="w", fg=dpi.MUT)
+        self.status = ttk.Label(self, text="", anchor="w", style="Dim.TLabel")
         # 端口状态行：每琴一行，只显示当前乐器页那行（_show_page 接管）；
         # 文案不带设备前缀——页已经表意
         self._port_lbl = {}
         for key, text in (("juno", "…"), ("ax", "…")):
-            lbl = tk.Label(self, text=text, anchor="w", fg=dpi.MUT)
+            lbl = ttk.Label(self, text=text, anchor="w", style="Dim.TLabel")
             self._port_lbl[key] = lbl
         self._port_lbl["juno"].pack(fill="x", padx=pad,
                                     pady=(0, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
-        dpi.darkify(self)
-        dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
-        m = self._menu          # 下拉不在 darkify 覆盖范围，仿设置页套同族色
-        m.config(bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
-                 activeforeground=dpi.FG, relief="flat", bd=0,
-                 highlightthickness=1, highlightbackground=dpi.BORDER,
-                 highlightcolor=dpi.C_OK, padx=8, pady=3)
-        m["menu"].config(bg=dpi.FIELD, fg=dpi.FG,
-                         activebackground=dpi.SELECT, activeforeground=dpi.FG)
-        for opt in self._dev_menus.values():    # 设备下拉同族色，同须 darkify 后套
-            opt.config(bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
-                       activeforeground=dpi.FG, relief="flat", bd=0,
-                       highlightthickness=1, highlightbackground=dpi.BORDER,
-                       highlightcolor=dpi.C_OK, padx=8, pady=3)
-            opt["menu"].config(bg=dpi.FIELD, fg=dpi.FG,
-                               activebackground=dpi.SELECT,
-                               activeforeground=dpi.FG)
+        dpi.setup_window(self)
         # 尺寸适配：按当前页内容定高（状态行动态出现也不会裁掉底部端口行）
         self.status.pack(fill="x", padx=pad, pady=(6, 0),
                          before=self._port_lbl["juno"])
@@ -743,13 +739,13 @@ class KeyboardAutoWindow(tk.Toplevel):
     def _refresh(self, note):
         slot = self._store(note).get(note)
         self._slot_lbl[note].config(text=self._describe(note),
-                                    fg=dpi.FG if slot else dpi.MUT)
+                                    style="TLabel" if slot else "Dim.TLabel")
 
     def set_status(self, text, color=dpi.MUT):
         if not text:
             self.status.pack_forget()
             return
-        self.status.config(text=text, fg=color)
+        self.status.config(text=text, style=dpi.tone(color) + ".TLabel")
         self.status.pack(fill="x", padx=dpi.scale(self, 12), pady=(6, 0),
                          before=self._port_lbl[getattr(self, "_page_key",
                                                        "juno")])
@@ -776,7 +772,7 @@ class KeyboardAutoWindow(tk.Toplevel):
             self.set_status(str(e), dpi.C_ERR)
             return
         self._cap = dict(note=note, cap=cap, port=port)
-        self._rec_btn[note].config(text="停止", fg=dpi.C_ERR)
+        self._rec_btn[note].config(text="停止", style="Rec.TButton")
         ask = ("请在 AX-09 上选中该槽位对应的音色（MIDI 设置 Bn 需已开启）"
                if ax else
                "请在 JUNO-DS 上调用该槽位对应的 Favorite")
@@ -784,7 +780,7 @@ class KeyboardAutoWindow(tk.Toplevel):
                         % (note_name(note), ask), dpi.C_ERR)
 
     def _reset_rec_btn(self, note):
-        self._rec_btn[note].config(text="录制", fg=dpi.FG)
+        self._rec_btn[note].config(text="录制", style="TButton")
 
     def _cancel_capture(self):
         if self._cap is None:
@@ -897,8 +893,9 @@ class KeyboardAutoWindow(tk.Toplevel):
         return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 
     def _port_row(self, key, text, ok):
-        self._port_lbl[key].config(text=text,
-                                   fg=dpi.C_OK if ok else dpi.C_ERR)
+        self._port_lbl[key].config(
+            text=text,
+            style=dpi.tone(dpi.C_OK if ok else dpi.C_ERR) + ".TLabel")
 
     def _refresh_page(self):
         """乐器行「刷新」：重枚举当前页设备下拉并复核端口状态——与页内
@@ -906,30 +903,37 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._rebuild_device_menu(self._page_key)
         self._poll_ports()
 
+    def _on_dev_selected(self, key):
+        """设备下拉选中：按位次映射回（端口名, 同名序）交给 _select_device。
+        显示值是组合态（含（第N个）/幽灵标注），不在 values 里时
+        current()=-1——只消费用户真选中的项。"""
+        i = self._dev_menus[key].current()
+        if 0 <= i < len(self._dev_items[key]):
+            name, k = self._dev_items[key][i]
+            self._select_device(key, name, k)
+
     def _rebuild_device_menu(self, key):
         """重建设备下拉项（开窗/点「刷新」/改选后调用）：枚举当前在线输出
         端口，唯一名显示全名、同名多口逐项「名（第N个）」；已选设备不在
         在线清单则追加幽灵项保住显示（设备可能只是没上电），改选其它项即
-        替换。收发两向同名同选——一台盒子双向口同名，dev 序号两向同用。"""
+        替换。收发两向同名同选——一台盒子双向口同名，dev 序号两向同用。
+        候选由 Combobox values 承载，选中语义=当前值（原 radiobutton
+        圆点改由当前显示值表达）。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
         outs = mb._out_devices()
         hit = _pick_hit(outs, cfg["outHint"], cfg.get("dev", 0))
-        menu = self._dev_menus[key]["menu"]
-        menu.delete(0, "end")
-        for label, name, k in _device_entries([n for _, n in outs]):
-            menu.add_radiobutton(
-                label=label, variable=self._dev_vars[key],
-                command=lambda d=key, nm=name, kk=k:
-                    self._select_device(d, nm, kk))
+        entries = _device_entries([n for _, n in outs])
+        items = [(name, k) for _label, name, k in entries]
+        labels = [label for label, _name, _k in entries]
         if hit is not None:
             pos, total = _name_pos(outs, hit[1], hit[0])
             shown = hit[1] if total == 1 else "%s（第%d个）" % (hit[1], pos)
         else:                       # 幽灵项：已选设备当前不在场，可点回它
             shown = cfg["outHint"] + ABSENT_MARK
-            menu.add_radiobutton(
-                label=shown, variable=self._dev_vars[key],
-                command=lambda d=key: self._select_device(
-                    d, cfg["outHint"], cfg.get("dev", 0)))
+            labels.append(shown)
+            items.append((cfg["outHint"], cfg.get("dev", 0)))
+        self._dev_items[key] = items
+        self._dev_menus[key].config(values=labels)
         self._dev_vars[key].set(shown)
 
     def _select_device(self, key, name, k):

@@ -27,6 +27,7 @@ import re
 import threading
 import time
 import tkinter as tk
+import tkinter.ttk as ttk
 import winreg
 from ctypes import wintypes
 
@@ -1345,78 +1346,75 @@ class PedalWindow(tk.Toplevel):
         self.learner = None
         self.title("踩钉控制")
         self.geometry(dpi.scale(self, 560, 400))
+        # 设备下拉离线警示的字色变体（随 apply_theme 全局注册，此页只此
+        # 一处用；下阶段收编进 dpi）
+        ttk.Style(self).configure("Warn.TCombobox", foreground=dpi.C_WARN)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        tk.Label(self, text="选择输入设备后，只有该设备的按键能触发动作；"
-                   "勾选拦截后，被绑定的按键经系统热键注册被截留，不会"
-                   "送达其它软件（学习不受影响）。").pack(
+        ttk.Label(self, text="选择输入设备后，只有该设备的按键能触发动作；"
+                  "勾选拦截后，被绑定的按键经系统热键注册被截留，不会"
+                  "送达其它软件（学习不受影响）。").pack(
             anchor="w", padx=pad, pady=(pad, 4))
         # 设备行与设置页严格同款（对照 SettingsWindow 的 menu_row 与
         # row(browse=True)：宽 15 标签 + 下拉填充 + 右侧 width=6 小按钮）；
         # 拦截勾选独立成行，同设置页复选框行（anchor="w", pady=1）
-        devrow = tk.Frame(self)
+        devrow = ttk.Frame(self)
         devrow.pack(fill="x", padx=pad, pady=2)
-        tk.Label(devrow, text="输入设备", width=15,
-                 anchor="w").pack(side="left")
+        ttk.Label(devrow, text="输入设备", width=15,
+                  anchor="w", style="Dim.TLabel").pack(side="left")
         self.dev_var = tk.StringVar(value="（未选择）")
-        self.dev_opt = tk.OptionMenu(devrow, self.dev_var, "（未选择）")
-        self.dev_opt.config(anchor="w", direction="below")
+        self.dev_opt = ttk.Combobox(devrow, textvariable=self.dev_var,
+                                    state="readonly")
         self.dev_opt.pack(side="left", fill="x", expand=True)
-        tk.Button(devrow, text="刷新", width=6,
-                  command=self._update_device_menu).pack(
+        self._dev_hints = [""]     # 与 values 平行：候选→身份子串（0=仅 MIDI）
+        self.dev_opt.bind("<<ComboboxSelected>>", self._on_dev_selected)
+        ttk.Button(devrow, text="刷新", width=6,
+                   command=self._update_device_menu).pack(
             side="left", padx=(6, 0))
         self.intercept_var = tk.BooleanVar(value=self.app.pedal_intercept)
-        tk.Checkbutton(self, text="拦截踏板按键",
-                       variable=self.intercept_var,
-                       command=self._toggle_intercept).pack(
+        ttk.Checkbutton(self, text="拦截踏板按键",
+                        variable=self.intercept_var,
+                        command=self._toggle_intercept).pack(
             anchor="w", padx=pad, pady=1)
         self.remote_var = tk.BooleanVar(
             value=getattr(self.app, "pedal_remote_enabled", False))
-        tk.Checkbutton(self, text="允许平板转发踩钉（踏板 USB-C 线连平板 → "
-                       "APP 经 WiFi 转发；平板端 APP 设置里也要开）",
-                       variable=self.remote_var,
-                       command=self._toggle_remote).pack(
+        ttk.Checkbutton(self, text="允许平板转发踩钉（踏板 USB-C 线连平板 → "
+                        "APP 经 WiFi 转发；平板端 APP 设置里也要开）",
+                        variable=self.remote_var,
+                        command=self._toggle_remote).pack(
             anchor="w", padx=pad, pady=1)
-        grid = tk.Frame(self)
+        grid = ttk.Frame(self)
         grid.pack(fill="both", expand=True, padx=pad)
         for c, t in enumerate(("功能", "绑定", "操作")):
-            tk.Label(grid, text=t, anchor="w", fg=dpi.MUT).grid(
+            ttk.Label(grid, text=t, anchor="w", style="Dim.TLabel").grid(
                 row=0, column=c, sticky="w", pady=(0, 2),
                 padx=(8, 0) if c == 1 else (0, 0))  # 对齐数据列左缩进
         self._bind_lbl = {}
         for r, (action, name) in enumerate(ACTIONS, start=1):
-            tk.Label(grid, text=name, anchor="w").grid(
+            ttk.Label(grid, text=name, anchor="w").grid(
                 row=r, column=0, sticky="w", pady=2)
-            lbl = tk.Label(grid, text="未设置", anchor="w", fg=dpi.MUT)
+            lbl = ttk.Label(grid, text="未设置", anchor="w",
+                            style="Dim.TLabel")
             lbl.grid(row=r, column=1, sticky="we", padx=(8, 8), pady=2)
             grid.columnconfigure(1, weight=1)
-            cell = tk.Frame(grid)
+            cell = ttk.Frame(grid)
             cell.grid(row=r, column=2, sticky="w", pady=2)
-            tk.Button(cell, text="学习", width=8,
-                      command=lambda a=action: self._learn(a)).pack(
+            ttk.Button(cell, text="学习", width=8,
+                       command=lambda a=action: self._learn(a)).pack(
                 side="left", padx=2)
-            tk.Button(cell, text="清除", width=8,
-                      command=lambda a=action: self._clear(a)).pack(
+            ttk.Button(cell, text="清除", width=8,
+                       command=lambda a=action: self._clear(a)).pack(
                 side="left", padx=2)
             self._bind_lbl[action] = lbl
-        self.status = tk.Label(self, text="…", anchor="w", fg=dpi.MUT)
+        self.status = ttk.Label(self, text="…", anchor="w",
+                                style="Dim.TLabel")
         self.status.pack(fill="x", padx=pad, pady=(6, 2))
-        self.remote_lbl = tk.Label(self, text="", anchor="w", fg=dpi.MUT)
+        self.remote_lbl = ttk.Label(self, text="", anchor="w",
+                                    style="Dim.TLabel")
         self.remote_lbl.pack(fill="x", padx=pad,
                              pady=(0, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
-        dpi.darkify(self)
-        dpi.flatten(self)       # 表单页文字直接坐窗口底色，去掉面板色斑
-        # 下拉不在 darkify 覆盖范围——设置页同款套色（SettingsWindow 尾部
-        # 对 _menus 的处理逐字一致，darkify 之后套才不会被盖掉）
-        self.dev_opt.config(
-            bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
-            activeforeground=dpi.FG, relief="flat", bd=0,
-            highlightthickness=1, highlightbackground=dpi.BORDER,
-            highlightcolor=dpi.C_OK, padx=8, pady=3)
-        self.dev_opt["menu"].config(
-            bg=dpi.FIELD, fg=dpi.FG, activebackground=dpi.SELECT,
-            activeforeground=dpi.FG)
+        dpi.setup_window(self)
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
         self.update_idletasks()
         w = max(dpi.scale(self, 560), self.winfo_reqwidth())
@@ -1430,27 +1428,34 @@ class PedalWindow(tk.Toplevel):
         self._refresh()
         self._update_device_menu()
 
+    def _on_dev_selected(self, _e=None):
+        """下拉选中：按位次映射回设备身份（0=仅 MIDI）。显示值是组合态
+        （「名（在线/离线）」），不在 values 里时 current()=-1——只消费
+        用户真选中的项。"""
+        i = self.dev_opt.current()
+        if 0 <= i < len(self._dev_hints):
+            self._set_device(self._dev_hints[i])
+
     def _update_device_menu(self):
-        """重建下拉项并刷新显示（打开窗口/点刷新/换设备后调用）。项用
-        radiobutton（绑定 dev_var）——选中项带圆点标记，与设置页下拉同款。"""
-        menu = self.dev_opt["menu"]
-        menu.delete(0, "end")
-        menu.add_radiobutton(label="（不区分来源，仅 MIDI 踩钉）",
-                             variable=self.dev_var,
-                             command=lambda: self._set_device(""))
-        for hint, disp in pedal_list_devices_safe():
-            menu.add_radiobutton(label=disp, variable=self.dev_var,
-                                 command=lambda h=hint: self._set_device(h))
+        """重建下拉项并刷新显示（打开窗口/点刷新/换设备后调用）。候选
+        清单由 Combobox values 承载，选中语义=当前值（原 radiobutton
+        圆点改由当前显示值表达）。显示值带在线/离线标注、不在候选里
+        ——readonly Combobox 允许显示 values 之外的值。"""
+        devs = pedal_list_devices_safe()
+        self._dev_hints = [""] + [h for h, _disp in devs]
+        self.dev_opt.config(values=["（不区分来源，仅 MIDI 踩钉）"]
+                            + [disp for _h, disp in devs])
         hint = self.app.pedal_device_hint
         if hint:
             online = self.app.pedal is not None and self.app.pedal.device_online()
             self.dev_var.set("%s（%s）" % (device_display(hint),
                                           "在线" if online else "离线"))
             # 唯一保留的状态色：设备离线=警示（设置页下拉无此状态概念）
-            self.dev_opt.config(fg=dpi.FG if online else dpi.C_WARN)
+            self.dev_opt.config(style="TCombobox" if online
+                                else "Warn.TCombobox")
         else:
             self.dev_var.set("（未选择）")
-            self.dev_opt.config(fg=dpi.FG)
+            self.dev_opt.config(style="TCombobox")
 
     def _set_device(self, hint):
         self.app.pedal_device_hint = hint
@@ -1492,11 +1497,12 @@ class PedalWindow(tk.Toplevel):
         如实标注防误读。"""
         p = self.app.pedal
         if not getattr(self.app, "pedal_remote_enabled", False):
-            self.remote_lbl.config(text="平板转发：关闭", fg=dpi.MUT)
+            self.remote_lbl.config(text="平板转发：关闭",
+                                   style=dpi.tone(dpi.MUT) + ".TLabel")
             return
         if p is None:
             self.remote_lbl.config(text="平板转发：开启（服务启动中）",
-                                   fg=dpi.MUT)
+                                   style=dpi.tone(dpi.MUT) + ".TLabel")
             return
         now = time.monotonic()
         br = p.bridge
@@ -1507,21 +1513,24 @@ class PedalWindow(tk.Toplevel):
         if link_t <= 0.0:
             self.remote_lbl.config(
                 text="平板转发：开启，等待平板（APP 设置里开「踩钉转发」）",
-                fg=dpi.MUT)
+                style=dpi.tone(dpi.MUT) + ".TLabel")
         elif now - link_t > 15.0:
             self.remote_lbl.config(
                 text="平板转发：开启，链路失联（%.0f 秒无心跳/事件）"
-                     % (now - link_t), fg=dpi.C_WARN)
+                     % (now - link_t),
+                     style=dpi.tone(dpi.C_WARN) + ".TLabel")
         elif br.remote_event_t > 0.0:
             self.remote_lbl.config(
                 text="平板转发：链路正常，最后事件 %.0f 秒前%s%s"
                      % (now - br.remote_event_t, extra, tail),
-                fg=dpi.C_WARN if br.remote_unknown else dpi.C_OK)
+                     style=dpi.tone(dpi.C_WARN if br.remote_unknown
+                                    else dpi.C_OK) + ".TLabel")
         else:
             self.remote_lbl.config(
                 text="平板转发：链路正常，尚无有效按键事件%s%s"
                      % (extra, tail),
-                fg=dpi.C_WARN if br.remote_unknown else dpi.C_OK)
+                     style=dpi.tone(dpi.C_WARN if br.remote_unknown
+                                    else dpi.C_OK) + ".TLabel")
 
     def _refresh(self):
         for action, _name in ACTIONS:
@@ -1535,12 +1544,14 @@ class PedalWindow(tk.Toplevel):
                 texts.append("按键 %s%s" % (hid_name(vk), g))
             if texts:
                 # 两通道都绑时同显（清除按钮会一起清，不展示会误导）
-                self._bind_lbl[action].config(text="＋".join(texts), fg=dpi.FG)
+                self._bind_lbl[action].config(text="＋".join(texts),
+                                              style="TLabel")
             else:
-                self._bind_lbl[action].config(text="未设置", fg=dpi.MUT)
+                self._bind_lbl[action].config(text="未设置",
+                                              style="Dim.TLabel")
 
     def _set_status(self, text, color=dpi.MUT):
-        self.status.config(text=text, fg=color)
+        self.status.config(text=text, style=dpi.tone(color) + ".TLabel")
 
     def _save(self):
         import setlist_gui as sg       # 延迟导入避免循环

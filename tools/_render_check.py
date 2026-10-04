@@ -8,6 +8,7 @@ import tempfile
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+import tkinter.ttk as ttk
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -95,6 +96,13 @@ def fits(btn):
     return f.measure(btn["text"]) <= btn.winfo_width() - 4
 
 
+def fits_ttk(btn):
+    """ttk 按钮无 font 选项（字号字色由 style 承担）：按当前主题的
+    TButton 字体量文字宽（调用时取——主题已切 sv-ttk）。"""
+    f = tkfont.Font(font=ttk.Style(btn).lookup("TButton", "font"))
+    return f.measure(btn.cget("text")) <= btn.winfo_width() - 4
+
+
 # --- 编排组：四按钮等宽且文字不裁剪 ---
 ws = [app.btn_add.winfo_width(), app.btn_remove.winfo_width(),
       app.btn_up.winfo_width(), app.btn_down.winfo_width()]
@@ -115,13 +123,16 @@ g3_btns = [c for c in app.root.winfo_children()]
 
 
 def find_buttons(win, texts):
+    """按文字找按钮（py3.14 起 ttk.Button 不再是 tk.Button 子类，
+    两类都要收）。"""
     out = {}
     stack = [win]
     while stack:
         w = stack.pop()
         for c in w.winfo_children():
             stack.append(c)
-            if isinstance(c, tk.Button) and c["text"] in texts:
+            if isinstance(c, (tk.Button, ttk.Button)) \
+                    and c["text"] in texts:
                 out[c["text"]] = c
     return out
 
@@ -484,7 +495,9 @@ try:
 except Exception as e:
     print("像素断言跳过：%r" % e)
 
-# --- 弹窗 ---
+# --- 弹窗（sv-ttk 主题先挂：踩钉/键盘窗已迁 ttk，截图与像素观感按
+# 迁移终态渲染；classic 主窗/设置页不受 ttk 主题影响） ---
+sg.dpi.apply_theme(root)
 sw = sg.SettingsWindow(app)
 WINDOWS.append(sw)
 root.update_idletasks(); root.update()
@@ -503,7 +516,7 @@ kbtns = find_buttons(kw, {"录制", "触发", "清除"})
 check("键盘窗三按钮等宽", len({b.winfo_width() for b in kbtns.values()}) == 1)
 check("两窗操作按钮同宽",
       pbtns["学习"].winfo_width() == kbtns["录制"].winfo_width())
-check("键盘窗文字不裁剪", all(fits(b) for b in kbtns.values()))
+check("键盘窗文字不裁剪", all(fits_ttk(b) for b in kbtns.values()))
 check("键盘窗提示语无 BS/PC", "BS/PC" not in kw.winfo_children()[0]["text"])
 port_texts = [l["text"] for l in kw._port_lbl.values()]
 check("键盘窗端口行无设备前缀",
@@ -516,11 +529,47 @@ check("键盘窗绑定后状态行隐藏",
       not kw.status.winfo_ismapped()
       and kw.title() == "键盘自动化")
 
+# --- pedal/kbd 迁移断言（ttk 语义：下拉/状态色全走 ttk 机制） ---
+check("踩钉窗设备下拉=readonly Combobox",
+      pw.dev_opt.winfo_class() == "TCombobox"
+      and str(pw.dev_opt.cget("state")) == "readonly")
+check("键盘窗三个下拉全 readonly Combobox",
+      all(c.winfo_class() == "TCombobox"
+          and str(c.cget("state")) == "readonly"
+          for c in (kw._menu, kw._dev_menus["juno"], kw._dev_menus["ax"])))
+check("键盘窗乐器下拉候选=两页名",
+      tuple(root.tk.splitlist(kw._menu.cget("values")))
+      == tuple(kbd_auto.PAGE_NAMES))
+check("踩钉窗下拉首项=仅 MIDI 候选",
+      tuple(root.tk.splitlist(pw.dev_opt.cget("values")))[0]
+      == "（不区分来源，仅 MIDI 踩钉）")
+pw._set_status("探针", sg.dpi.C_ERR)
+check("踩钉窗状态行改色=改 style",
+      pw.status.cget("style") == "Err.TLabel"
+      and all(str(l.cget("style")) == "Dim.TLabel"
+              for l in pw._bind_lbl.values()))
+kw._port_row("juno", "输入 ✓ ｜ 输出 ✓", True)
+kw._port_row("ax", "输入 ✗", False)
+check("键盘窗端口行改色=改 style",
+      kw._port_lbl["juno"].cget("style") == "Ok.TLabel"
+      and kw._port_lbl["ax"].cget("style") == "Err.TLabel")
+check("录制态红字 style 已注册",
+      str(ttk.Style(root).lookup("Rec.TButton", "foreground")).lower()
+      == sg.dpi.C_ERR)
+saved_hint = app.pedal_device_hint
+app.pedal_device_hint = "Z"     # 不在在线清单 → 离线警示态
+pw._update_device_menu()
+check("踩钉设备离线=下拉警示 style",
+      pw.dev_opt.cget("style") == "Warn.TCombobox"
+      and "（离线）" in pw.dev_var.get())
+app.pedal_device_hint = saved_hint
+pw._update_device_menu()
+
 # --- 乐器行与「MIDI 设备」行同款：下拉起点/宽度对齐 + 右侧刷新钮等宽 ---
 top_btns = [w for w in kw._menu.master.winfo_children()
-            if isinstance(w, tk.Button)]
+            if isinstance(w, (tk.Button, ttk.Button))]
 dev_btns = [w for w in kw._dev_menus["juno"].master.winfo_children()
-            if isinstance(w, tk.Button)]
+            if isinstance(w, (tk.Button, ttk.Button))]
 check("键盘窗乐器行与设备行同款",
       len(top_btns) == 1 and len(dev_btns) == 1
       and kw._menu.winfo_rootx() == kw._dev_menus["juno"].winfo_rootx()
@@ -600,7 +649,8 @@ for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
     check("%s窗四边留白≥%dpx（左%d 上%d 右%d 下%d）"
           % (name, floor, l, t, r, b), min(l, t, r, b) >= floor)
 
-# --- 三子窗：文字/容器底色=窗口底色（回归：darkify 的 PANEL 色斑） ---
+# --- 三子窗底色：设置页仍 classic（过渡期 darkify）查色斑；踩钉/键盘
+# 已迁 ttk，按迁移完整性查 classic 控件残留 ---
 def flat_ok(win):
     stack = [win]
     while stack:
@@ -612,11 +662,29 @@ def flat_ok(win):
                 return c
     return None
 
-for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
-    bad = flat_ok(win)
-    check("%s窗无面板色斑" % name if bad is None
-          else "%s窗无面板色斑（%s 仍 %s）" % (name, bad, bad.cget("bg")),
-          bad is None)
+
+def classic_strays(win):
+    """classic 控件残留清点（按 ttk.Widget 排除——py3.14 里 ttk.Combobox
+    仍是 tk.Entry 子类，须挡住误报）。"""
+    bad = []
+    stack = [win]
+    while stack:
+        w3 = stack.pop()
+        for c in w3.winfo_children():
+            stack.append(c)
+            if isinstance(c, (tk.Frame, tk.Label, tk.Button, tk.LabelFrame,
+                              tk.Entry, tk.Checkbutton, tk.OptionMenu)) \
+                    and not isinstance(c, ttk.Widget):
+                bad.append(c)
+    return bad
+
+
+bad = flat_ok(sw)
+check("设置窗无面板色斑" if bad is None
+      else "设置窗无面板色斑（%s 仍 %s）" % (bad, bad.cget("bg")),
+      bad is None)
+check("踩钉窗无 classic 控件残留", not classic_strays(pw))
+check("键盘窗无 classic 控件残留", not classic_strays(kw))
 
 # --- 设置窗：主/次按钮等大、仅颜色区分 ---
 sbtns = find_buttons(sw, {"保存并应用", "取消"})
@@ -636,10 +704,10 @@ check("踩钉窗打开即静音", app.pedal is None or app.pedal.muted)
 pw._close(); root.update_idletasks(); root.update()
 check("踩钉窗关闭恢复响应", app.pedal is None or not app.pedal.muted)
 
-# --- automator（ttk + sv-ttk 迁移窗）：真机 main() 同入口套主题后建窗 ---
+# --- automator（ttk + sv-ttk 迁移窗）：主题已在前文统一挂载（对本解释器
+# 全局生效），此处直接建窗 ---
 import json
 import automator_gui as am
-sg.dpi.apply_theme(root)     # 截图反映新主题（sv-ttk 对本解释器全局生效）
 am._HERE = d
 am.CONFIG_PATH = d / "config.json"
 am.App._startup = lambda self: None      # 离线：不起 OBS/网页/工程库扫描
@@ -650,24 +718,9 @@ aset = am.SettingsWindow(aapp)
 WINDOWS += [aw, aset]
 root.update_idletasks(); root.update()
 
-# 迁移完整性：除日志 Listbox 外不得残留任何 classic 控件（注意 ttk 的
-# Entry/Button/Checkbutton 在 Python 里是 classic 类的子类，须按
-# ttk.Widget 排除；OptionMenu/Listbox 无 ttk 混淆）
-from tkinter import ttk as _ttk
-
-
-def classic_strays(win):
-    bad = []
-    stack = [win]
-    while stack:
-        w3 = stack.pop()
-        for c in w3.winfo_children():
-            stack.append(c)
-            if isinstance(c, (tk.Frame, tk.Label, tk.Button, tk.LabelFrame,
-                              tk.Entry, tk.Checkbutton, tk.OptionMenu)) \
-                    and not isinstance(c, _ttk.Widget):
-                bad.append(c)
-    return bad
+# 迁移完整性：不得残留任何 classic 控件（py3.14 起 ttk 组件不再是
+# classic 类的子类，唯 Combobox 仍是 tk.Entry 子类——classic_strays 内
+# 已按 ttk.Widget 排除）
 
 
 check("automator主窗无 classic 控件残留",
@@ -726,13 +779,14 @@ check("automator _tick_body 冒烟（日志实刷）",
       any("离线冒烟探针" in aapp.log.get(i) for i in range(aapp.log.size())))
 
 # 迁移窗源码不得再引用 classic 主题 token（终态门禁的本阶段前哨）
-_src_am = pathlib.Path(__file__).resolve().parents[1].joinpath(
-    "automator_gui.py").read_text(encoding="utf-8")
-check("automator 源码无 classic 主题残留",
-      not any(t in _src_am for t in (
-          "darkify", "flatten(", "NO_RING", "tk.OptionMenu",
-          "activebackground", "selectcolor", "insertbackground",
-          "disabledforeground", "readonlybackground")))
+for _fname in ("automator_gui.py", "pedal.py", "kbd_auto.py"):
+    _src = pathlib.Path(__file__).resolve().parents[1].joinpath(
+        _fname).read_text(encoding="utf-8")
+    check("%s 源码无 classic 主题残留" % _fname,
+          not any(t in _src for t in (
+              "darkify", "flatten(", "NO_RING", "tk.OptionMenu",
+              "activebackground", "selectcolor", "insertbackground",
+              "disabledforeground", "readonlybackground")))
 
 try:
     shot(aw, "auto_main")
