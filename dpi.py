@@ -1,29 +1,51 @@
 # -*- coding: utf-8 -*-
 import ctypes
 import sys
+import sv_ttk
 import tkinter as tk
+import tkinter.ttk as ttk
 
 """Windows UI 环境适配：DPI 感知 + 深色演出主题。
 enable() 必须先于 tk.Tk() 调用；感知后 tkinter 按真实 DPI 自动放大
 点数字体，写死的像素尺寸用 scale() 换算。非 Windows 或声明失败时
-安全降级（维持旧的不缩放行为）。darkify() 在窗口构建完成后递归套
-深色主题（演出软件惯例：暗场、远距、余光可读），并对每个顶层窗口
-顺带启用深色标题栏与 Win11 圆角；之后再设置的动态
-状态色不受影响。"""
+安全降级（维持旧的不缩放行为）。
 
-# 深色主题调色板（各界面文件共用；状态色用亮化变体保深底对比度）
-BG = "#141518"        # 窗口底
-PANEL = "#1e2024"     # 面板/控件底
-FIELD = "#191b1f"     # 输入框/列表底
-FG = "#e6e6e6"        # 主文字
-MUT = "#9aa0a6"       # 弱化文字
+主题两代并存（过渡期，全部迁完后删旧代）：
+- 已迁移窗口：main() 建 root 后调 apply_theme(root)——sv-ttk dark
+  （Win11 观感）+ 集中命名 style；动态状态色不再 config(fg=)，改
+  config(style=tone(色)+族名)。sv_ttk 缺失/初始化失败直接抛异常，
+  单路径迁移，无任何回退。窗口级深色标题栏走 setup_window()。
+- 未迁移窗口：darkify()/flatten() 在窗口构建完成后递归套色（引用
+  同一调色板值），darkify 顺带做 setup_window 的事。"""
+
+# 深色主题调色板（各界面文件共用）。底色系=sv-ttk dark 原生值（取自
+# theme/dark.tcl 与 spritesheet_dark 实测采样），状态语义色保留原值。
+BG = "#1c1c1c"        # 窗口底（sv-ttk -bg；卡片同色=扁平设计）
+PANEL = "#1c1c1c"     # 面板/控件底（sv-ttk card 实测即 #1c1c1c）
+FIELD = "#292929"     # 输入框/列表底（sv-ttk textbox-rest 采样）
+FG = "#fafafa"        # 主文字（sv-ttk -fg）
+MUT = "#9e9e9e"       # 弱化文字（暗场远距仍可读的弱化档）
 C_OK = "#5ad469"      # 绿：正常/自动
 C_WARN = "#f5b944"    # 黄：警告/手动
 C_ERR = "#ff5c5c"     # 红：错误/未知
-SELECT = "#2d5d7a"    # 列表选中底
-BORDER = "#525457"    # 面板边线：与列表框 sunken 1px 边线同色（Tk 对 FIELD 的着色）
-LOG_FG = "#8a9096"    # 日志正文：比主文字暗一档（黑匣子不该抢视觉权重）
-CUR_BG = "#223648"    # 列表当前曲行底色：未选中也能一眼定位
+SELECT = "#2f60d8"    # 列表选中底（sv-ttk -selbg 原生）
+BORDER = "#4d4d4d"    # 面板边线：与列表框边线同档的中灰
+LOG_FG = "#b8b8b8"    # 日志正文：比主文字暗一档（黑匣子不该抢视觉权重）
+CUR_BG = "#28496e"    # 列表当前曲行底色：蓝系、暗于选中色，未选中可定位
+
+# 强调按钮配色（Start=绿底深字 / Stop=红底白字；hover 提亮一档）
+START_FG = "#101418"
+START_HOVER = "#7fe896"
+STOP_BG = "#a03030"
+STOP_HOVER = "#c04444"
+
+
+def tone(color):
+    """状态语义色 → 命名 style 词干（apply_theme 注册的
+    Ok/Warn/Err/Dim/Log）。标签族用法 config(style=tone(色)+".TLabel")，
+    跑马灯族用法 style="Marquee%s.TEntry" % tone(色)。"""
+    return {C_OK: "Ok", C_WARN: "Warn", C_ERR: "Err",
+            LOG_FG: "Log"}.get(color, "Dim")
 
 
 def enable():
@@ -76,6 +98,69 @@ def dark_title(win):
     win.bind("<Map>", apply, add="+")
 
 
+def setup_window(win):
+    """已迁移窗口的窗口级设置：深色标题栏 + Win11 圆角。各 Toplevel
+    构建尾部调用（主窗在 _build 尾，设置页等子窗在各自尾部）。"""
+    dark_title(win)
+
+
+def apply_theme(root):
+    """已迁移窗口的整主题入口：sv-ttk dark + 集中命名 style。在
+    tk.Tk() 建立后、控件构建前调用一次（各程序 main() 与离线渲染
+    同一入口）。sv_ttk 缺失/初始化失败直接抛异常——单路径迁移。"""
+    sv_ttk.set_theme("dark", root)
+    s = ttk.Style(root)
+    # Labelframe 标题保持正文同族字号与弱化档（主题默认 Segoe 会跟
+    # 全窗 YaHei 混族）
+    s.configure("TLabelframe.Label",
+                font=("Microsoft YaHei UI", 9), foreground=MUT)
+    # 状态文字：动态状态色的命名 style（替代 config(fg=)）
+    for name, color in (("Ok", C_OK), ("Warn", C_WARN), ("Err", C_ERR),
+                        ("Dim", MUT), ("Log", LOG_FG)):
+        s.configure("%s.TLabel" % name, foreground=color)
+    # 强调按钮：sv-ttk 的按钮是图片 element（-background 不生效），须换
+    # default 主题的素色 border element 才能上绿/红底；hover/按压提亮走
+    # style.map（取代 Enter/Leave 手工 bind），禁用态压灰保「不可点」语义
+    s.element_create("Flat.button", "from", "default", "Button.border")
+    flat_btn = [("Flat.button",
+                 {"sticky": "nsew",
+                  "children": [("Button.focus",
+                                {"sticky": "nsew",
+                                 "children": [("Button.padding",
+                                               {"sticky": "nsew",
+                                                "children": [("Button.label",
+                                                              {"sticky":
+                                                               "nswe"})]})]})]})]
+    for name, base, hover, txt in (("Start", C_OK, START_HOVER, START_FG),
+                                   ("Stop", STOP_BG, STOP_HOVER, "#ffffff")):
+        style = name + ".TButton"
+        s.layout(style, flat_btn)
+        s.configure(style, background=base, foreground=txt,
+                    borderwidth=0, relief="flat", anchor="center",
+                    padding=(8, 2, 8, 3))
+        s.map(style,
+              background=[("disabled", FIELD), ("pressed", hover),
+                          ("active", hover)],
+              foreground=[("disabled", MUT)])
+    # 跑马灯：平地 element（default 主题的素 field）换掉 sv-ttk 的
+    # 图片 field——展示型 Entry 不是输入区，无边框、底色随所在面板；
+    # 状态色变体族供 Marquee.set 动态切换（layout 须逐个注册：ttk 的
+    # 布局回退只剥前缀词，MarqueeOk.TEntry 不会命中 Marquee.TEntry）
+    s.element_create("Marquee.field", "from", "default", "Entry.field")
+    for name, color in (("", FG), ("Ok", C_OK), ("Warn", C_WARN),
+                        ("Err", C_ERR), ("Dim", MUT)):
+        style = "Marquee%s.TEntry" % name
+        s.layout(style, [("Marquee.field",
+                          {"sticky": "nsew",
+                           "children": [("Entry.textarea",
+                                         {"sticky": "nsew"})]})])
+        s.configure(style, fieldbackground=BG, foreground=color,
+                    padding=0)
+        s.map(style,
+              foreground=[("disabled", color)],
+              fieldbackground=[("disabled", BG)])
+
+
 def scale(root, w, h=None):
     """像素值按屏幕缩放率换算（96dpi = 100%）。h 为 None 时返回整数。"""
     s = root.winfo_fpixels("1i") / 96.0
@@ -87,9 +172,9 @@ def scale(root, w, h=None):
 def flatten(w):
     """无框线表单窗（设置/键盘自动化/踩钉）的内容底色统一为窗口底色：
     darkify 给 Frame/Label/Checkbutton 套 PANEL 面板色，在主窗里是有框
-    面板的底，在这些纯表单页里却呈现为一块块比窗口浅的色斑，看着像
-    误加的高亮——文字应直接坐在窗口底色上。只改容器/文字类底色，
-    控件（按钮/输入框/下拉）的底色不动。darkify 之后调用。"""
+    面板的底，在这些纯表单页里却呈现为一块块色斑——文字应直接坐在
+    窗口底色上。只改容器/文字类底色，控件（按钮/输入框/下拉）的底色
+    不动。递归套色之后调用。"""
     if isinstance(w, (tk.Frame, tk.Label, tk.Checkbutton)):
         w.config(bg=BG)
     for c in w.winfo_children():
@@ -97,9 +182,10 @@ def flatten(w):
 
 
 def darkify(w):
-    """递归套深色主题。在窗口构建完成后调用一次；此后的动态 fg（状态
-    色）覆盖不受影响。Label 默认弱色，动态更新的由各自逻辑覆写；
-    Entry 必须显式 insertbackground，否则深底下光标不可见。"""
+    """递归套深色主题（旧代：未迁移窗口专用，全部迁完后整体删除）。
+    在窗口构建完成后调用一次；此后的动态 fg（状态色）覆盖不受影响。
+    Label 默认弱色，动态更新的由各自逻辑覆写；Entry 必须显式
+    insertbackground，否则深底下光标不可见。"""
     if isinstance(w, (tk.Tk, tk.Toplevel)):
         dark_title(w)
         w.config(bg=BG)
@@ -123,7 +209,7 @@ def darkify(w):
                  activeforeground=FG, disabledforeground="#6a6f76")
 
         def _in(_e, b=w):
-            # 悬停提亮一档（取 activebackground：darkify 后改色的强调
+            # 悬停提亮一档（取 activebackground：递归套色后改色的强调
             # 按钮——绿开始/红全停——自动用各自的亮化变体）；存原色须在
             # Enter 时取，Leave 才能还原到改色后的底
             if str(b["state"]) == "normal":

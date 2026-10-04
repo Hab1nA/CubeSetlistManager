@@ -1810,12 +1810,14 @@ def test_pedal_remote():
                               {"device": "tp", "seq": 10, "events":
                                [{"vk": 163, "kc": 87, "down": 1}]})
         assert code == 400
-        # 限流 429：伪造成 20ms 内刚发过包（确定性，不赌真实连发间隔）
+        # 限流 429：伪造成 20ms 内刚发过包（确定性，不赌真实连发间隔）。
+        # 预支 60s：handler 侧 now-t 为负恒 <0.02——老写法 t=当前时刻，
+        # elapsed=HTTP 往返时延，机器负载一高超过 20ms 就偶发 200
         app._pedal_rate.clear()
         code, _j = _http_post(port, "/pedal/event",
                               {"device": "tp", "seq": 11, "hb": True})
         assert code == 200
-        app._pedal_rate["tp"] = time.monotonic()
+        app._pedal_rate["tp"] = time.monotonic() + 60
         code, _j = _http_post(port, "/pedal/event",
                               {"device": "tp", "seq": 12, "hb": True})
         assert code == 429

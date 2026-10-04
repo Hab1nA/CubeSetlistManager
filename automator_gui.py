@@ -22,6 +22,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+import tkinter.ttk as ttk
 from tkinter import messagebox, filedialog
 
 import advance
@@ -171,23 +172,19 @@ def scan_library(root, ext=".cpr"):
     return out
 
 
-class Marquee(tk.Entry):
-    """跑马灯：只读 Entry + xview 像素滚动（与完整版同款组件）。"""
+class Marquee(ttk.Entry):
+    """跑马灯：只读 Entry + xview 像素滚动（与完整版同款组件）。
+    无边框、底色随所在面板的观感由 "Marquee*.TEntry" style 族承担
+    （dpi.apply_theme 注册）；状态色变化切 style，不碰 fg。"""
 
-    NO_RING = True
     STEP_MS = 40
     SPEED = 3.0
     PAUSE_TICKS = 8
 
     def __init__(self, master, max_chars=30, **kw):
-        kw.setdefault("bd", 0)
-        kw.setdefault("highlightthickness", 0)
         kw.setdefault("justify", "left")
         kw.setdefault("takefocus", False)
-        kw.setdefault("bg", dpi.PANEL)
-        kw.setdefault("fg", dpi.FG)
-        kw.setdefault("disabledbackground", dpi.PANEL)
-        kw.setdefault("disabledforeground", dpi.FG)
+        kw.setdefault("style", "Marquee.TEntry")
         super().__init__(master, **kw)
         self.max_chars = max_chars
         self._full = ""
@@ -210,7 +207,7 @@ class Marquee(tk.Entry):
             self._dir = 1
             self._hold = self.PAUSE_TICKS
         if fg:
-            self.config(fg=fg, disabledforeground=fg)
+            self.config(style="Marquee%s.TEntry" % dpi.tone(fg))
         self._schedule()
 
     def _overflow(self):
@@ -350,22 +347,23 @@ class App:
     def _build(self):
         # 顶：当前工程横幅（与完整版 NOW/NEXT 横幅同构：已播与歌名同行右侧，
         # 无内容不占行=完整版进度条手法）。「当前状态」在底部栏最左=完整版同位
-        banner = tk.Frame(self.root)
+        banner = ttk.Frame(self.root)
         banner.pack(fill="x", padx=12, pady=(10, 4))
         banner.columnconfigure(0, weight=1)
-        tk.Label(banner, text="当前工程",
-                 font=("Microsoft YaHei UI", 9, "bold"),
-                 anchor="w").grid(row=0, column=0, sticky="w")
+        ttk.Label(banner, text="当前工程",
+                  font=("Microsoft YaHei UI", 9, "bold"), anchor="w",
+                  style="Dim.TLabel").grid(row=0, column=0, sticky="w")
         self.now_lbl = Marquee(banner, max_chars=30,
                                font=("Microsoft YaHei UI", 20, "bold"))
         self.now_lbl.grid(row=1, column=0, sticky="ew")
-        self.elapsed_lbl = tk.Label(banner, text="",
-                                    font=("Microsoft YaHei UI", 14, "bold"))
+        self.elapsed_lbl = ttk.Label(banner, text="",
+                                     font=("Microsoft YaHei UI", 14, "bold"),
+                                     style="Dim.TLabel")
         self.elapsed_lbl.grid(row=1, column=1, sticky="e", padx=(16, 0))
         self.elapsed_lbl.grid_remove()   # 无内容不占行（同完整版进度条手法）
         # 中：VJ / 键盘自动化 监控栏（与完整版同构）
         self.rows = {}
-        mons = tk.Frame(self.root)
+        mons = ttk.Frame(self.root)
         mons.pack(fill="x", padx=12, pady=4)
         mons.columnconfigure(0, weight=1, uniform="m")
         mons.columnconfigure(1, minsize=dpi.scale(self.root, 8))
@@ -374,77 +372,82 @@ class App:
         def mon_grid(fid, frame, names, marquee=()):
             for i, name in enumerate(names):
                 r, c = divmod(i, 2)
-                tk.Label(frame, text=name, width=10, anchor="w").grid(
+                ttk.Label(frame, text=name, width=10, anchor="w",
+                          style="Dim.TLabel").grid(
                     row=r, column=c * 2, padx=(6, 0), pady=1, sticky="w")
                 if name in marquee:
                     lbl = Marquee(frame, max_chars=24,
                                   font=("Microsoft YaHei UI", 9))
                 else:
-                    lbl = tk.Label(frame, text="…", anchor="w", fg=dpi.MUT,
-                                   width=20)
+                    lbl = ttk.Label(frame, text="…", anchor="w", width=20,
+                                    style="Dim.TLabel")
                 lbl.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="we")
                 frame.columnconfigure(c * 2 + 1, weight=1)
                 self.rows[(fid, name)] = lbl
 
-        vj = tk.LabelFrame(mons, text="VJ 自动化")
+        vj = ttk.LabelFrame(mons, text="VJ 自动化")
         vj.grid(row=0, column=0, sticky="nsew")
         mon_grid("vj", vj, ("端口名称", "端口状态", "OBS 状态", "走带跟随"))
-        kb = tk.LabelFrame(mons, text="键盘自动化")
+        kb = ttk.LabelFrame(mons, text="键盘自动化")
         kb.grid(row=0, column=2, sticky="nsew")
         mon_grid("kb", kb, ("端口名称", "端口状态", "音色映射", "最近切换"),
                  marquee=("音色映射", "最近切换"))
-        # 日志栏
-        logf = tk.LabelFrame(self.root, text="日志")
+        # 日志栏（日志 Listbox 保留 classic：逐行标错/选中色/索引体系）
+        logf = ttk.LabelFrame(self.root, text="日志")
         logf.pack(fill="both", expand=True, padx=12, pady=4)
-        tk.Button(logf, text="清空日志",
-                  command=lambda: self.log.delete(0, "end")).pack(
+        ttk.Button(logf, text="清空日志",
+                   command=lambda: self.log.delete(0, "end")).pack(
             anchor="e", padx=6, pady=(2, 4))
         self.log = tk.Listbox(logf, height=8, activestyle="none",
-                              font=("Microsoft YaHei UI", 9))
+                              font=("Microsoft YaHei UI", 9),
+                              bg=dpi.FIELD, fg=dpi.LOG_FG,
+                              selectbackground=dpi.SELECT,
+                              selectforeground=dpi.FG,
+                              highlightthickness=0)
         self.log.pack(fill="both", expand=True, padx=6, pady=(0, 4))
         # 底：操作行（无走带控制），与完整版同构：「当前状态」在底栏最左，
         # 「自动化」组对窗口居中（退出列内左衬=状态列宽−退出列净宽 → 两侧
         # 固定翼等宽，空列与右列等权重均分剩余空间），「退出」底边与
         # 组内按钮同一基线
-        ctl = tk.Frame(self.root)
+        ctl = ttk.Frame(self.root)
         ctl.pack(fill="x", padx=12, pady=(4, 10))
         ctl.columnconfigure(1, weight=1)
         ctl.columnconfigure(3, weight=1)
-        self.state_lbl = tk.Label(ctl, text="当前状态：未在播放",
-                                  font=("Microsoft YaHei UI", 14, "bold"))
+        self.state_lbl = ttk.Label(ctl, text="当前状态：未在播放",
+                                   font=("Microsoft YaHei UI", 14, "bold"),
+                                   style="Dim.TLabel")
         self.state_lbl.grid(row=0, column=0, sticky="w", padx=(12, 0))
-        mid = tk.Frame(ctl)
+        mid = ttk.Frame(ctl)
         mid.grid(row=0, column=2)
-        g1 = tk.LabelFrame(mid, text="自动化")
+        g1 = ttk.LabelFrame(mid, text="自动化")
         g1.pack(side="left")
-        tk.Button(g1, text="键盘自动化", width=9,
-                  command=self._open_kbd).pack(side="left", padx=3, pady=3)
-        tk.Button(g1, text="设置", width=8,
-                  command=self._open_settings).pack(side="left", padx=3, pady=3)
-        self.btn_black = tk.Button(g1, text="熄屏", width=5,
-                                   command=self._blackout)
+        ttk.Button(g1, text="键盘自动化", width=9,
+                   command=self._open_kbd).pack(side="left", padx=3, pady=3)
+        ttk.Button(g1, text="设置", width=8,
+                   command=self._open_settings).pack(side="left", padx=3,
+                                                     pady=3)
+        self.btn_black = ttk.Button(g1, text="熄屏", width=5,
+                                    style="Stop.TButton",
+                                    command=self._blackout)
         self.btn_black.pack(side="left", padx=(10, 3), pady=3)
-        right = tk.Frame(ctl)
+        right = ttk.Frame(ctl)
         right.grid(row=0, column=3, sticky="ens")   # 纵向拉满、贴右
         # 左衬=状态列宽−退出列净宽（12/6=两侧 padx）→ 两侧固定翼等宽，
         # mid 恒对窗口居中（原理同完整版；构造期先同步设一次，Configure
         # 事件不投递于 update_idletasks，迟设会算小 minsize）
-        rpad = tk.Frame(right)
+        rpad = ttk.Frame(right)
         rpad.pack(side="left")
 
         def _rpad(_e=None):
             rpad.config(width=max(0, self.state_lbl.winfo_reqwidth() + 12
                                   - exit_btn.winfo_reqwidth() - 6))
 
-        exit_btn = tk.Button(right, text="退出", width=5,
-                             command=self._on_exit)
+        exit_btn = ttk.Button(right, text="退出", width=5,
+                              command=self._on_exit)
         exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
         _rpad()
         self.state_lbl.bind("<Configure>", _rpad)
-        dpi.darkify(self.root)
-        self.log.config(fg=dpi.LOG_FG)
-        self.btn_black.config(bg="#a03030", fg="#ffffff",
-                              activebackground="#c04444")
+        dpi.setup_window(self.root)
         self.m_now = self.now_lbl
         self.m_map = self.rows[("kb", "音色映射")]
         self.m_last = self.rows[("kb", "最近切换")]
@@ -906,7 +909,7 @@ class App:
     def _set(self, name, text, color=dpi.MUT):
         if name in self.DOT_CELLS and text not in ("-", ""):
             text = "● " + text
-        self.rows[name].config(text=text, fg=color)
+        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel")
 
     def _on_ui_error(self, exc, val, _tb):
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
@@ -1041,7 +1044,8 @@ class App:
         st_t, st_c = {"playing": ("播放中", dpi.C_OK),
                       "paused": ("已暂停", dpi.C_WARN),
                       "stopped": ("未在播放", dpi.MUT)}[self._transport_state()]
-        self.state_lbl.config(text="当前状态：" + st_t, fg=st_c)
+        self.state_lbl.config(text="当前状态：" + st_t,
+                              style=dpi.tone(st_c) + ".TLabel")
         played = self.watch.active() if self.watch is not None else 0.0
         shown = played > 0
         self.elapsed_lbl.config(
@@ -1091,15 +1095,16 @@ class SettingsWindow(tk.Toplevel):
         self.title("设置")
         self.geometry(dpi.scale(self, 600, 430))
         pad = dpi.scale(self, 12)
-        body = tk.Frame(self)
+        body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=pad,
                   pady=(pad, dpi.scale(self, 8)))
 
         def row(label, var, browse=False):
-            f = tk.Frame(body)
+            f = ttk.Frame(body)
             f.pack(fill="x", pady=2)
-            tk.Label(f, text=label, width=15, anchor="w").pack(side="left")
-            tk.Entry(f, textvariable=var).pack(
+            ttk.Label(f, text=label, width=15, anchor="w",
+                      style="Dim.TLabel").pack(side="left")
+            ttk.Entry(f, textvariable=var).pack(
                 side="left", fill="x", expand=True)
             if browse:
                 def pick():
@@ -1109,19 +1114,17 @@ class SettingsWindow(tk.Toplevel):
                     if d:
                         var.set(d.replace("/", "\\"))
 
-                tk.Button(f, text="浏览…", width=6,
-                          command=pick).pack(side="left", padx=(6, 0))
-
-        self._menus = []
+                ttk.Button(f, text="浏览…", width=6,
+                           command=pick).pack(side="left", padx=(6, 0))
 
         def menu_row(label, var, values):
-            f = tk.Frame(body)
+            f = ttk.Frame(body)
             f.pack(fill="x", pady=2)
-            tk.Label(f, text=label, width=15, anchor="w").pack(side="left")
-            m = tk.OptionMenu(f, var, *values)
-            m.config(anchor="w", direction="below")
-            m.pack(side="left", fill="x", expand=True)
-            self._menus.append(m)
+            ttk.Label(f, text=label, width=15, anchor="w",
+                      style="Dim.TLabel").pack(side="left")
+            ttk.Combobox(f, textvariable=var, values=values,
+                         state="readonly").pack(side="left", fill="x",
+                                                expand=True)
 
         obs_cfg = (app.ctl.cfg if app.ctl is not None
                    else _load_config().get("obs") or {})
@@ -1135,11 +1138,11 @@ class SettingsWindow(tk.Toplevel):
         self.mon_var = tk.StringVar(value=mon_val)
         menu_row("VJ显示位置", self.mon_var, mon_opts)
         self.mute_var = tk.BooleanVar(value=bool(obs_cfg.get("vjMute", True)))
-        tk.Checkbutton(body, text="VJ静音播放（视频不出声）",
-                       variable=self.mute_var).pack(anchor="w", pady=1)
+        ttk.Checkbutton(body, text="VJ静音播放（视频不出声）",
+                        variable=self.mute_var).pack(anchor="w", pady=1)
 
-        tk.Label(body, text="联动端口",
-                 anchor="w").pack(fill="x", pady=(pad, 3))
+        ttk.Label(body, text="联动端口", anchor="w",
+                  style="Dim.TLabel").pack(fill="x", pady=(pad, 3))
         live = list(dict.fromkeys(n for _i, n in mb._in_devices()))
         ins = ["无"] + live
         for hint in dict.fromkeys(
@@ -1160,14 +1163,15 @@ class SettingsWindow(tk.Toplevel):
         menu_row("键盘端口名称", self.kb_var, ins)
         # 移动端遥控（翻谱）
         wcfg = app.web_cfg
-        tk.Label(body, text="移动端遥控",
-                 anchor="w").pack(fill="x", pady=(pad, 3))
-        wf = tk.Frame(body)
+        ttk.Label(body, text="移动端遥控", anchor="w",
+                  style="Dim.TLabel").pack(fill="x", pady=(pad, 3))
+        wf = ttk.Frame(body)
         wf.pack(fill="x", pady=1)
         self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
-        tk.Checkbutton(wf, text="启用移动端遥控（热点+网页+翻谱推送）",
-                       variable=self.web_var).pack(side="left")
-        self.web_status = tk.Label(wf, text="热点查询中…", fg=dpi.MUT)
+        ttk.Checkbutton(wf, text="启用移动端遥控（热点+网页+翻谱推送）",
+                        variable=self.web_var).pack(side="left")
+        self.web_status = ttk.Label(wf, text="热点查询中…",
+                                    style="Dim.TLabel")
         self.web_status.pack(side="right")
         self.web_ip = "192.168.137.1"
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
@@ -1175,60 +1179,53 @@ class SettingsWindow(tk.Toplevel):
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
         self.app_var = tk.StringVar(value=str(wcfg.get("appPort") or 8767))
         self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
-        wf2 = tk.Frame(body)
+        wf2 = ttk.Frame(body)
         wf2.pack(fill="x", pady=2)
-        tk.Label(wf2, text="网页地址", width=15, anchor="w").pack(side="left")
-        self.web_prefix = tk.Label(wf2, text="http://%s:" % self.web_ip,
-                                   width=23, anchor="w")
+        ttk.Label(wf2, text="网页地址", width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.web_prefix = ttk.Label(wf2, text="http://%s:" % self.web_ip,
+                                    width=23, anchor="w", style="Dim.TLabel")
         self.web_prefix.pack(side="left")
-        tk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
-        self.web_ok = tk.Label(wf2, text="…", fg=dpi.MUT)
+        ttk.Entry(wf2, textvariable=self.srv_var, width=6).pack(side="left")
+        self.web_ok = ttk.Label(wf2, text="…", style="Dim.TLabel")
         self.web_ok.pack(side="right")
-        wf3 = tk.Frame(body)
+        wf3 = ttk.Frame(body)
         wf3.pack(fill="x", pady=2)
-        tk.Label(wf3, text="APP 连接地址", width=15, anchor="w").pack(side="left")
-        self.app_prefix = tk.Label(wf3, text="http://%s:" % self.web_ip,
-                                   width=23, anchor="w")
+        ttk.Label(wf3, text="APP 连接地址", width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.app_prefix = ttk.Label(wf3, text="http://%s:" % self.web_ip,
+                                    width=23, anchor="w", style="Dim.TLabel")
         self.app_prefix.pack(side="left")
-        tk.Entry(wf3, textvariable=self.app_var, width=6).pack(side="left")
-        self.app_ok = tk.Label(wf3, text="…", fg=dpi.MUT)
+        ttk.Entry(wf3, textvariable=self.app_var, width=6).pack(side="left")
+        self.app_ok = ttk.Label(wf3, text="…", style="Dim.TLabel")
         self.app_ok.pack(side="right")
-        wf4 = tk.Frame(body)
+        wf4 = ttk.Frame(body)
         wf4.pack(fill="x", pady=2)
-        tk.Label(wf4, text="APP 翻谱地址", width=15, anchor="w").pack(side="left")
-        tk.Label(wf4, text="http://XXX.XXX.XXX.XXX:", width=23, anchor="w",
-                 fg=dpi.MUT).pack(side="left")
-        tk.Entry(wf4, textvariable=self.tsk_var, width=6).pack(side="left")
+        ttk.Label(wf4, text="APP 翻谱地址", width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        ttk.Label(wf4, text="http://XXX.XXX.XXX.XXX:", width=23, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        ttk.Entry(wf4, textvariable=self.tsk_var, width=6).pack(side="left")
         threading.Thread(target=self._load_web_status, daemon=True).start()
         # 目录
-        tk.Label(body, text="目录", anchor="w").pack(fill="x", pady=(pad, 3))
+        ttk.Label(body, text="目录", anchor="w",
+                  style="Dim.TLabel").pack(fill="x", pady=(pad, 3))
         self.proj_var = tk.StringVar(value=app.ccfg.get("projectsRoot", ""))
         self.vid_var = tk.StringVar(value=obs_cfg.get("videoRoot", ""))
         row("%s 工程库" % app.facts["display_name"], self.proj_var, browse=True)
         row("VJ 视频目录", self.vid_var, browse=True)
 
-        btns = tk.Frame(self)
+        btns = ttk.Frame(self)
         btns.pack(fill="x", padx=pad, pady=(0, dpi.scale(self, 10)))
-        self.save_btn = tk.Button(btns, text="保存并应用", width=10,
-                                  command=self._save)
+        self.save_btn = ttk.Button(btns, text="保存并应用", width=10,
+                                   style="Start.TButton",
+                                   command=self._save)
         self.save_btn.pack(side="right")
-        tk.Button(btns, text="取消", width=10,
-                  command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(btns, text="取消", width=10,
+                   command=self.destroy).pack(side="right", padx=6)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.attributes("-topmost", True)
-        dpi.darkify(self)
-        dpi.flatten(self)
-        for m in self._menus:
-            m.config(
-                bg=dpi.PANEL, fg=dpi.FG, activebackground="#33363d",
-                activeforeground=dpi.FG, relief="flat", bd=0,
-                highlightthickness=1, highlightbackground=dpi.BORDER,
-                highlightcolor=dpi.C_OK, padx=8, pady=3)
-            m["menu"].config(
-                bg=dpi.FIELD, fg=dpi.FG, activebackground=dpi.SELECT,
-                activeforeground=dpi.FG)
-        self.save_btn.config(bg=dpi.C_OK, fg="#101418",
-                             activebackground="#7fe896")
+        dpi.setup_window(self)
         self.update_idletasks()
         w = max(dpi.scale(self, 600), self.winfo_reqwidth())
         h = max(dpi.scale(self, 430), self.winfo_reqheight())
@@ -1245,12 +1242,12 @@ class SettingsWindow(tk.Toplevel):
             except tk.TclError:
                 return
             if not st.get("ok"):
-                txt, fg = "热点不可用", dpi.C_ERR
+                txt, tone = "热点不可用", dpi.C_ERR
             elif st.get("on"):
-                txt, fg = "热点已开", dpi.C_OK
+                txt, tone = "热点已开", dpi.C_OK
             else:
-                txt, fg = "热点未开（启用后自动开）", dpi.MUT
-            self.web_status.config(text=txt, fg=fg)
+                txt, tone = "热点未开（启用后自动开）", dpi.MUT
+            self.web_status.config(text=txt, style=dpi.tone(tone) + ".TLabel")
             ip = st.get("ip") or self.web_ip
             self.web_ip = ip
             self.web_prefix.config(text="http://%s:" % ip)
@@ -1275,14 +1272,15 @@ class SettingsWindow(tk.Toplevel):
                 except tk.TclError:
                     return
                 if not ok and left > 0:
-                    lbl.config(text="探测中…", fg=dpi.MUT)
+                    lbl.config(text="探测中…", style="Dim.TLabel")
                     t = threading.Timer(1.2, lambda: probe(port, lbl,
                                                            left - 1))
                     t.daemon = True
                     t.start()               # 复探在 Timer 线程：网络不占主线程
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
-                           fg=dpi.C_OK if ok else dpi.C_ERR)
+                           style=dpi.tone(dpi.C_OK if ok else dpi.C_ERR)
+                           + ".TLabel")
             self.app.calls.put(apply)
         for var, lbl in ((self.srv_var, self.web_ok),
                          (self.app_var, self.app_ok)):
@@ -1425,6 +1423,7 @@ def main():
     except OSError:
         pass
     root = tk.Tk()
+    dpi.apply_theme(root)   # ttk+sv-ttk dark（Win11 观感），建控件前挂主题
     ico = os.path.join(getattr(sys, "_MEIPASS", "") or ".", "app.ico")
     if os.path.exists(ico):
         root.iconbitmap(ico)

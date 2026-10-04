@@ -70,6 +70,16 @@ def warn(name, ok):
     print("%s %s" % ("PASS" if ok else "WARN", name))
 
 
+def rgb(hexstr):
+    """#RRGGBB → (R, G, B)，像素采样与调色板常量对齐用（不写死值）。"""
+    return tuple(int(hexstr[i:i + 2], 16) for i in (1, 3, 5))
+
+
+BG_RGB = rgb(sg.dpi.BG)
+PANEL_RGB = rgb(sg.dpi.PANEL)
+BORDER_RGB = rgb(sg.dpi.BORDER)
+
+
 # --- 长歌名不截断：两列表行内不出现省略号，完整歌名在列 ---
 lib_texts = [app.lib.get(i) for i in range(app.lib.size())]
 pl_texts = [app.pl.get(i) for i in range(app.pl.size())]
@@ -211,7 +221,7 @@ try:
                               w.winfo_rootx() + 4, y + 1))
         for i in range(4):
             p = img.getpixel((i, 0))
-            if p != (20, 21, 24):
+            if p != BG_RGB:
                 return p
         return None
 
@@ -232,8 +242,7 @@ try:
         for xx in range(80):
             for yy in range(14):
                 r, g, b = img.getpixel((xx, yy))[:3]
-                if (r, g, b) not in ((30, 32, 36), (82, 84, 87),
-                                     (20, 21, 24)):
+                if (r, g, b) not in (PANEL_RGB, BORDER_RGB, BG_RGB):
                     return xx
         return -1
 
@@ -627,6 +636,120 @@ check("踩钉窗打开即静音", app.pedal is None or app.pedal.muted)
 pw._close(); root.update_idletasks(); root.update()
 check("踩钉窗关闭恢复响应", app.pedal is None or not app.pedal.muted)
 
+# --- automator（ttk + sv-ttk 迁移窗）：真机 main() 同入口套主题后建窗 ---
+import json
+import automator_gui as am
+sg.dpi.apply_theme(root)     # 截图反映新主题（sv-ttk 对本解释器全局生效）
+am._HERE = d
+am.CONFIG_PATH = d / "config.json"
+am.App._startup = lambda self: None      # 离线：不起 OBS/网页/工程库扫描
+aw = tk.Toplevel(root)                   # automator 主窗（Toplevel 同根主题）
+aapp = am.App(aw)
+root.update_idletasks(); root.update()
+aset = am.SettingsWindow(aapp)
+WINDOWS += [aw, aset]
+root.update_idletasks(); root.update()
+
+# 迁移完整性：除日志 Listbox 外不得残留任何 classic 控件（注意 ttk 的
+# Entry/Button/Checkbutton 在 Python 里是 classic 类的子类，须按
+# ttk.Widget 排除；OptionMenu/Listbox 无 ttk 混淆）
+from tkinter import ttk as _ttk
+
+
+def classic_strays(win):
+    bad = []
+    stack = [win]
+    while stack:
+        w3 = stack.pop()
+        for c in w3.winfo_children():
+            stack.append(c)
+            if isinstance(c, (tk.Frame, tk.Label, tk.Button, tk.LabelFrame,
+                              tk.Entry, tk.Checkbutton, tk.OptionMenu)) \
+                    and not isinstance(c, _ttk.Widget):
+                bad.append(c)
+    return bad
+
+
+check("automator主窗无 classic 控件残留",
+      not classic_strays(aw)
+      and aapp.btn_black.winfo_class() == "TButton"
+      and aapp.state_lbl.winfo_class() == "TLabel")
+check("automator设置页无 classic 控件残留", not classic_strays(aset))
+check("保存钮=Start.TButton 熄屏钮=Stop.TButton",
+      aset.save_btn.cget("style") == "Start.TButton"
+      and aapp.btn_black.cget("style") == "Stop.TButton")
+
+# 下拉：全部 readonly Combobox（5 个：显示位置+三联动口+翻谱口；
+# py3.14 cget 返回 Tcl 对象，须 str() 归一）
+cbs = []
+stack = [aset]
+while stack:
+    w3 = stack.pop()
+    for c in w3.winfo_children():
+        stack.append(c)
+        if c.winfo_class() == "TCombobox":
+            cbs.append(c)
+check("设置页下拉 %d 个全 readonly" % len(cbs),
+      len(cbs) == 5 and all(str(c.cget("state")) == "readonly" for c in cbs))
+check("tone 状态色→词干",
+      sg.dpi.tone(sg.dpi.C_OK) == "Ok" and sg.dpi.tone(sg.dpi.C_WARN) == "Warn"
+      and sg.dpi.tone(sg.dpi.C_ERR) == "Err" and sg.dpi.tone(sg.dpi.MUT) == "Dim")
+aapp._set(("vj", "OBS 状态"), "未连接", sg.dpi.C_ERR)
+aapp._set(("vj", "端口名称"), "—")
+check("状态格改色=改 style",
+      aapp.rows[("vj", "OBS 状态")].cget("style") == "Err.TLabel"
+      and aapp.rows[("vj", "端口名称")].cget("style") == "Dim.TLabel")
+
+# 跑马灯：ttk Entry + 专用无边框 style；状态色切换 style 而非 fg
+check("跑马灯=ttk Entry 专用 style 只读",
+      isinstance(aapp.m_now, am.Marquee)
+      and aapp.m_now.winfo_class() == "TEntry"
+      and str(aapp.m_now.cget("style")).startswith("Marquee")
+      and str(aapp.m_now.cget("state")) == "disabled")
+aapp.m_now.set("SongA", sg.dpi.C_OK)
+check("跑马灯状态色切 style",
+      aapp.m_now.cget("style") == "MarqueeOk.TEntry"
+      and not hasattr(aapp.m_now, "NO_RING"))
+
+# 日志 Listbox 保留 classic，显式配色对齐新主题
+check("日志仍是 classic Listbox 显式配色",
+      isinstance(aapp.log, tk.Listbox)
+      and str(aapp.log.cget("bg")).lower() == sg.dpi.FIELD
+      and str(aapp.log.cget("fg")).lower() == sg.dpi.LOG_FG
+      and int(aapp.log.cget("highlightthickness")) == 0)
+
+# _tick_body 冒烟：q→日志排空路径确定性地走一遍（时序无关）
+aapp.q.put("离线冒烟探针")
+aapp._tick_body()
+root.update_idletasks(); root.update()
+check("automator _tick_body 冒烟（日志实刷）",
+      any("离线冒烟探针" in aapp.log.get(i) for i in range(aapp.log.size())))
+
+# 迁移窗源码不得再引用 classic 主题 token（终态门禁的本阶段前哨）
+_src_am = pathlib.Path(__file__).resolve().parents[1].joinpath(
+    "automator_gui.py").read_text(encoding="utf-8")
+check("automator 源码无 classic 主题残留",
+      not any(t in _src_am for t in (
+          "darkify", "flatten(", "NO_RING", "tk.OptionMenu",
+          "activebackground", "selectcolor", "insertbackground",
+          "disabledforeground", "readonlybackground")))
+
+try:
+    shot(aw, "auto_main")
+    shot(aset, "auto_settings")
+except Exception as e:
+    print("截图失败：%r" % e)
+    fails.append("automator 截图失败")
+
+# 截图清单：文件名 → 窗口中文名（人工核对索引）
+manifest = {"main": "setlist主窗", "settings": "setlist设置页",
+            "pedal": "踩钉窗", "kbd": "键盘窗",
+            "auto_main": "automator主窗", "auto_settings": "automator设置页"}
+pathlib.Path("_render", "manifest.json").write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8")
+print("SHOT _render/manifest.json")
+
 print("FAILS:", fails if fails else "无")
 for w in (sw, pw, kw):
     try:
@@ -634,3 +757,4 @@ for w in (sw, pw, kw):
     except Exception:
         pass
 root.destroy()
+sys.exit(1 if fails else 0)
