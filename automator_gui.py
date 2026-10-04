@@ -207,7 +207,10 @@ class Marquee(ttk.Entry):
             self._dir = 1
             self._hold = self.PAUSE_TICKS
         if fg:
-            self.config(style="Marquee%s.TEntry" % dpi.tone(fg))
+            # fg 必须落 widget 级（sv-ttk 下 TEntry 族 style fg 不参与
+            # 绘制，见 dpi.paint_tree 注）
+            self.config(style="Marquee%s.TEntry" % dpi.tone(fg),
+                        foreground=fg)
         self._schedule()
 
     def _overflow(self):
@@ -370,17 +373,20 @@ class App:
         mons.columnconfigure(2, weight=1, uniform="m")
 
         def mon_grid(fid, frame, names, marquee=()):
+            # 非跑马灯普通 Label 显式同族同号字体（YaHei 9）：sv-ttk 默认
+            # Segoe 族与 Marquee 的 YaHei 混排会让同一值列字号不齐
+            yh9 = {"font": ("Microsoft YaHei UI", 9)}
             for i, name in enumerate(names):
                 r, c = divmod(i, 2)
                 ttk.Label(frame, text=name, width=10, anchor="w",
-                          style="Dim.TLabel").grid(
+                          style="Dim.TLabel", **yh9).grid(
                     row=r, column=c * 2, padx=(6, 0), pady=1, sticky="w")
                 if name in marquee:
                     lbl = Marquee(frame, max_chars=24,
                                   font=("Microsoft YaHei UI", 9))
                 else:
                     lbl = ttk.Label(frame, text="…", anchor="w", width=20,
-                                    style="Dim.TLabel")
+                                    style="Dim.TLabel", **yh9)
                 lbl.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="we")
                 frame.columnconfigure(c * 2 + 1, weight=1)
                 self.rows[(fid, name)] = lbl
@@ -907,9 +913,12 @@ class App:
                  ("vj", "走带跟随"), ("kb", "端口状态")}
 
     def _set(self, name, text, color=dpi.MUT):
+        # foreground 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与
+        # 绘制（dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
         if name in self.DOT_CELLS and text not in ("-", ""):
             text = "● " + text
-        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel")
+        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel",
+                               foreground=color)
 
     def _on_ui_error(self, exc, val, _tb):
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
@@ -992,7 +1001,10 @@ class App:
             self._set(("vj", "端口名称"), "—")
             self._set(("vj", "端口状态"), "已停用")
         if self.ctl is None:
-            self._set(("vj", "OBS 状态"), self.start_err or "启动中…", dpi.C_ERR)
+            # 启动中=过渡态用警示黄，只有真实错误文本才红（暗场里「正在
+            # 启动」标红会被误读成故障；与下方「未连接」黄同族）
+            self._set(("vj", "OBS 状态"), self.start_err or "启动中…",
+                      dpi.C_ERR if self.start_err else dpi.C_WARN)
         else:
             ok = self.ctl.is_connected()
             extra = "（%s）" % self.ctl.last_error if self.ctl.last_error else ""
@@ -1032,7 +1044,9 @@ class App:
         elif self._cur_title:
             self.m_map.set("《%s》不在工程库" % self._cur_title, dpi.C_WARN)
         else:
-            self._set(("kb", "音色映射"), "（未匹配工程）", dpi.MUT)
+            # 音色映射格是 Marquee（ttk.Entry）：_set 的 config(text=) 对
+            # Entry 静默无效（内容恒空）——必须走 Marquee.set 专用 API
+            self.m_map.set("（未匹配工程）", dpi.MUT)
         text, color = self._kb_last
         self.m_last.set(text, color)
         # 横幅：歌名 + 状态 + 已播
@@ -1045,7 +1059,8 @@ class App:
                       "paused": ("已暂停", dpi.C_WARN),
                       "stopped": ("未在播放", dpi.MUT)}[self._transport_state()]
         self.state_lbl.config(text="当前状态：" + st_t,
-                              style=dpi.tone(st_c) + ".TLabel")
+                              style=dpi.tone(st_c) + ".TLabel",
+                              foreground=st_c)
         played = self.watch.active() if self.watch is not None else 0.0
         shown = played > 0
         self.elapsed_lbl.config(
@@ -1247,7 +1262,8 @@ class SettingsWindow(tk.Toplevel):
                 txt, tone = "热点已开", dpi.C_OK
             else:
                 txt, tone = "热点未开（启用后自动开）", dpi.MUT
-            self.web_status.config(text=txt, style=dpi.tone(tone) + ".TLabel")
+            self.web_status.config(text=txt, style=dpi.tone(tone) + ".TLabel",
+                                   foreground=tone)
             ip = st.get("ip") or self.web_ip
             self.web_ip = ip
             self.web_prefix.config(text="http://%s:" % ip)
@@ -1272,7 +1288,8 @@ class SettingsWindow(tk.Toplevel):
                 except tk.TclError:
                     return
                 if not ok and left > 0:
-                    lbl.config(text="探测中…", style="Dim.TLabel")
+                    lbl.config(text="探测中…", style="Dim.TLabel",
+                               foreground=dpi.MUT)
                     t = threading.Timer(1.2, lambda: probe(port, lbl,
                                                            left - 1))
                     t.daemon = True
@@ -1280,7 +1297,8 @@ class SettingsWindow(tk.Toplevel):
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
                            style=dpi.tone(dpi.C_OK if ok else dpi.C_ERR)
-                           + ".TLabel")
+                           + ".TLabel",
+                           foreground=dpi.C_OK if ok else dpi.C_ERR)
             self.app.calls.put(apply)
         for var, lbl in ((self.srv_var, self.web_ok),
                          (self.app_var, self.app_ok)):

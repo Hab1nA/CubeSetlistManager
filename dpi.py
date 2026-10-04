@@ -2,6 +2,7 @@
 import ctypes
 import sys
 import sv_ttk
+import tkinter as tk
 import tkinter.ttk as ttk
 
 """Windows UI 环境适配：DPI 感知 + 深色演出主题。
@@ -10,9 +11,9 @@ enable() 必须先于 tk.Tk() 调用；感知后 tkinter 按真实 DPI 自动放
 安全降级（维持旧的不缩放行为）。
 
 主题单路径：main() 建 root 后调 apply_theme(root)——sv-ttk dark
-（Win11 观感）+ 集中命名 style；动态状态色不 config(fg=)，改
-config(style=tone(色)+族名)。sv_ttk 缺失/初始化失败直接抛异常，
-无任何回退。窗口级深色标题栏走 setup_window()。"""
+（Win11 观感）+ 集中命名 style；动态状态色 config(style=tone(色)+族名)
+同时写 widget 级 foreground（实测见 paint_tree）。sv_ttk 缺失/初始化
+失败直接抛异常，无任何回退。窗口级深色标题栏走 setup_window()。"""
 
 # 深色主题调色板（各界面文件共用）。底色系=sv-ttk dark 原生值（取自
 # theme/dark.tcl 与 spritesheet_dark 实测采样），状态语义色保留原值。
@@ -38,8 +39,9 @@ STOP_HOVER = "#c04444"
 
 def tone(color):
     """状态语义色 → 命名 style 词干（apply_theme 注册的
-    Ok/Warn/Err/Dim/Log）。标签族用法 config(style=tone(色)+".TLabel")，
-    跑马灯族用法 style="Marquee%s.TEntry" % tone(色)。"""
+    Ok/Warn/Err/Dim/Log）。标签族用法 config(style=tone(色)+".TLabel",
+    foreground=色)（fg 必写，见 paint_tree），跑马灯族用法
+    style="Marquee%s.TEntry" % tone(色)。"""
     return {C_OK: "Ok", C_WARN: "Warn", C_ERR: "Err",
             LOG_FG: "Log"}.get(color, "Dim")
 
@@ -94,10 +96,39 @@ def dark_title(win):
     win.bind("<Map>", apply, add="+")
 
 
+def paint_tree(win):
+    """把命名 style 的前景色落到 widget 级（构建尾部一次性兜静态控件；
+    动态改色的 _set/Marquee.set 等在各自上色点直接写 foreground）。
+    根因（tools 探针实测，Tk 8.6.15 + sv-ttk 2.6.1，clam 下无此问题）：
+    TLabel/TEntry/TCombobox 族 style.configure(-foreground) 只进 lookup、
+    不参与绘制，文字恒为主题白；唯一实证可渲染路径是 widget 级
+    foreground。命名 style 仍同步保留——语义族名、lookup 与配置级断言
+    不受影响；TButton 族 style 路径实测正常（且 Button 拒收 widget 级
+    fg，TclError 静默跳过）。"""
+    s = ttk.Style(win)
+    stack = [win]
+    while stack:
+        w = stack.pop()
+        for c in w.winfo_children():
+            stack.append(c)
+        try:
+            style = str(w.cget("style"))
+            if not style:
+                continue
+            fg = s.lookup(style, "foreground")
+            if fg:
+                w.configure(foreground=fg)
+        except tk.TclError:
+            pass
+
+
 def setup_window(win):
-    """已迁移窗口的窗口级设置：深色标题栏 + Win11 圆角。各 Toplevel
-    构建尾部调用（主窗在 _build 尾，设置页等子窗在各自尾部）。"""
+    """已迁移窗口的窗口级设置：深色标题栏 + Win11 圆角 + 状态色落
+    widget 级（paint_tree）。各 Toplevel 构建尾部调用（主窗在 _build
+    尾，设置页等子窗在各自尾部）。"""
     dark_title(win)
+    win.update_idletasks()          # 先让构建期最后一次动态上色生效
+    paint_tree(win)
 
 
 def apply_theme(root):
@@ -110,7 +141,9 @@ def apply_theme(root):
     # 全窗 YaHei 混族）
     s.configure("TLabelframe.Label",
                 font=("Microsoft YaHei UI", 9), foreground=MUT)
-    # 状态文字：动态状态色的命名 style（替代 config(fg=)）
+    # 状态文字：动态状态色的命名 style（语义族名/lookup 承担；实际绘制
+    # 色由 widget 级 foreground 承担——TLabel 族 style fg 在 sv-ttk 下
+    # 不参与绘制，见 paint_tree）
     for name, color in (("Ok", C_OK), ("Warn", C_WARN), ("Err", C_ERR),
                         ("Dim", MUT), ("Log", LOG_FG)):
         s.configure("%s.TLabel" % name, foreground=color)
@@ -133,7 +166,7 @@ def apply_theme(root):
         s.layout(style, flat_btn)
         s.configure(style, background=base, foreground=txt,
                     borderwidth=0, relief="flat", anchor="center",
-                    padding=(8, 2, 8, 3))
+                    padding=(8, 5, 8, 6))
         s.map(style,
               background=[("disabled", FIELD), ("pressed", hover),
                           ("active", hover)],

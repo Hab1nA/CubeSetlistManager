@@ -491,6 +491,29 @@ try:
     pr, pg, pb = (int(sg.dpi.PANEL[i:i + 2], 16) for i in (1, 3, 5))
     dark_bg = abs(r - pr) < 6 and abs(g - pg) < 6 and abs(b - pb) < 6
     check("列表间隔列=容器底色 RGB(%d,%d,%d)" % (r, g, b), dark_bg)
+
+    # --- 状态语义色像素级抽查（sv-ttk 下 TLabel/TEntry 族 style fg 只进
+    # lookup 不参与绘制，配置级断言拦不住整层失效——必须看真实像素）。
+    # 统计控件区域内目标色核心像素（几何均值容差），零值=状态色没画出来。
+    def tone_px(w, hexcolor, tol=50):
+        x0 = w.winfo_rootx() - root.winfo_rootx()
+        y0 = w.winfo_rooty() - root.winfo_rooty()
+        tr, tg, tb = (int(hexcolor[i:i + 2], 16) for i in (1, 3, 5))
+        n = 0
+        for yy in range(max(0, y0), min(img.height, y0 + w.winfo_height())):
+            for xx in range(max(0, x0), min(img.width, x0 + w.winfo_width())):
+                r, g, b = px[xx, yy]
+                if (r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2 <= tol * tol:
+                    n += 1
+        return n
+
+    check("NOW 歌名绿（像素 %d）" % tone_px(app.now_lbl, sg.dpi.C_OK),
+          tone_px(app.now_lbl, sg.dpi.C_OK) >= 60)
+    check("当前状态灰（像素 %d）" % tone_px(app.state_lbl, sg.dpi.MUT),
+          tone_px(app.state_lbl, sg.dpi.MUT) >= 40)
+    check("OBS 启动中黄（像素 %d）"
+          % tone_px(app.rows[("vj", "OBS 状态")], sg.dpi.C_WARN),
+          tone_px(app.rows[("vj", "OBS 状态")], sg.dpi.C_WARN) >= 15)
 except Exception as e:
     print("像素断言跳过：%r" % e)
 
@@ -516,6 +539,7 @@ check("两窗操作按钮同宽",
       pbtns["学习"].winfo_width() == kbtns["录制"].winfo_width())
 check("键盘窗文字不裁剪", all(fits_ttk(b) for b in kbtns.values()))
 check("键盘窗提示语无 BS/PC", "BS/PC" not in kw.winfo_children()[0]["text"])
+kw._poll_ports()   # 文案由 300ms 轮询定时器驱动：离线直接驱动一次免赛跑
 port_texts = [l["text"] for l in kw._port_lbl.values()]
 check("键盘窗端口行无设备前缀",
       len(kw._port_lbl) == 2
@@ -673,13 +697,18 @@ check("setlist设置页无 classic 控件残留", not classic_strays(sw))
 check("踩钉窗无 classic 控件残留", not classic_strays(pw))
 check("键盘窗无 classic 控件残留", not classic_strays(kw))
 
-# --- 设置窗：主/次按钮同宽、仅颜色区分（ttk 混排：Start 平地元素与
-# sv-ttk 图片元素钮尺寸本就不同档，图片内衬差随 DPI 缩放——放宽到
-# 容差防样式回归，不追平元素差异）---
+# --- 设置窗：主/次按钮等宽等高、仅颜色区分（Start 平地元素的纵向
+# padding 已补齐到与 sv-ttk 图片元素钮等高；宽度仍有图片内衬差，放宽
+# 到容差防样式回归）---
 sbtns = find_buttons(sw, {"保存并应用", "取消"})
 check("设置窗主次按钮同宽（±10px 元素内衬差）",
       abs(sbtns["保存并应用"].winfo_width()
           - sbtns["取消"].winfo_width()) <= 10)
+check("设置窗主次按钮等高（差 %dpx）"
+      % abs(sbtns["保存并应用"].winfo_height()
+            - sbtns["取消"].winfo_height()),
+      abs(sbtns["保存并应用"].winfo_height()
+          - sbtns["取消"].winfo_height()) <= 2)
 
 try:
     shot(sw, "settings")
@@ -766,6 +795,10 @@ aapp._tick_body()
 root.update_idletasks(); root.update()
 check("automator _tick_body 冒烟（日志实刷）",
       any("离线冒烟探针" in aapp.log.get(i) for i in range(aapp.log.size())))
+# 音色映射格无标题识别时须有占位（该格是 Marquee：曾误走 _set 的
+# config(text=)，对 ttk.Entry 静默无效、格内恒空）
+check("音色映射空态占位（Marquee.set 路径）",
+      aapp.m_map.get() == "（未匹配工程）")
 
 # 迁移窗源码不得再引用 classic 主题 token（五文件终态门禁）
 for _fname in ("setlist_gui.py", "dpi.py", "automator_gui.py",

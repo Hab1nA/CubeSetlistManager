@@ -42,7 +42,9 @@ KB_PORT_HINT = "Keyboard Automation"
 SLOT_NOTES = list(range(60, 70))            # JUNO：C3 起十个半音（Cubase 音名 C3=60）
 AX_NOTES = list(range(72, 78))              # AX-09：C4 起六个半音（Cubase 音名 C4=72）
 SHIFT_NOTES = {36: -1, 37: 1, 38: -12, 39: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
-SHIFT_DESC = {36: "↓1 半音", 37: "↑1 半音", 38: "↓1 八度", 39: "↑1 八度"}
+SHIFT_DESC = {36: "降1半音", 37: "升1半音", 38: "降1八度", 39: "升1八度"}
+# ↑↑↓ 箭头字形竖线长箭头头小，暗场远距两行几乎同形（初看像 I1）——
+# 升/降改汉字直读，四行同款文案风格
 SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围 ±24 半音
 PEDAL_NOTES = {40: "juno", 45: "ax"}        # 延音踏板键：E2→JUNO、A2→AX-09
                                             # （41-44 留给以后 AX-09 音高移动）
@@ -738,14 +740,19 @@ class KeyboardAutoWindow(tk.Toplevel):
 
     def _refresh(self, note):
         slot = self._store(note).get(note)
-        self._slot_lbl[note].config(text=self._describe(note),
-                                    style="TLabel" if slot else "Dim.TLabel")
+        self._slot_lbl[note].config(
+            text=self._describe(note),
+            style="TLabel" if slot else "Dim.TLabel",
+            foreground=dpi.FG if slot else dpi.MUT)
 
     def set_status(self, text, color=dpi.MUT):
         if not text:
             self.status.pack_forget()
             return
-        self.status.config(text=text, style=dpi.tone(color) + ".TLabel")
+        # fg 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与绘制
+        # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
+        self.status.config(text=text, style=dpi.tone(color) + ".TLabel",
+                           foreground=color)
         self.status.pack(fill="x", padx=dpi.scale(self, 12), pady=(6, 0),
                          before=self._port_lbl[getattr(self, "_page_key",
                                                        "juno")])
@@ -893,9 +900,11 @@ class KeyboardAutoWindow(tk.Toplevel):
         return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 
     def _port_row(self, key, text, ok):
+        # fg 与 style 同写（dpi.paint_tree 注）
+        fg = dpi.C_OK if ok else dpi.C_ERR
         self._port_lbl[key].config(
             text=text,
-            style=dpi.tone(dpi.C_OK if ok else dpi.C_ERR) + ".TLabel")
+            style=dpi.tone(fg) + ".TLabel", foreground=fg)
 
     def _refresh_page(self):
         """乐器行「刷新」：重枚举当前页设备下拉并复核端口状态——与页内

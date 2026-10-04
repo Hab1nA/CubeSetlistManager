@@ -296,9 +296,12 @@ class Marquee(ttk.Entry):
             self._dir = 1
             self._hold = self.PAUSE_TICKS   # 起始停一拍，先看清开头
         if fg:
-            # 主文字色=族基样式（白字）；语义状态色→命名变体
+            # 主文字色=族基样式（白字）；语义状态色→命名变体。fg 必须落
+            # widget 级（sv-ttk 下 TEntry 族 style fg 不参与绘制，见
+            # dpi.paint_tree 注）
             self.config(style="Marquee.TEntry" if fg == dpi.FG
-                        else "Marquee%s.TEntry" % dpi.tone(fg))
+                        else "Marquee%s.TEntry" % dpi.tone(fg),
+                        foreground=fg)
         self._schedule()
 
     def _overflow(self):
@@ -581,17 +584,20 @@ class App:
         mons.columnconfigure(2, weight=1, uniform="m")
 
         def mon_grid(fid, frame, names, marquee=()):
+            # 非跑马灯普通 Label 显式同族同号字体（YaHei 9）：sv-ttk 默认
+            # Segoe 族与 Marquee 的 YaHei 混排会让同一值列字号不齐
+            yh9 = {"font": ("Microsoft YaHei UI", 9)}
             for i, name in enumerate(names):
                 r, c = divmod(i, 2)
                 ttk.Label(frame, text=name, width=10, anchor="w",
-                          style="Dim.TLabel").grid(
+                          style="Dim.TLabel", **yh9).grid(
                     row=r, column=c * 2, padx=(6, 0), pady=1, sticky="w")
                 if name in marquee:
                     lbl = Marquee(frame, max_chars=24,
                                   font=("Microsoft YaHei UI", 9))
                 else:
                     lbl = ttk.Label(frame, text="…", anchor="w", width=20,
-                                    style="Dim.TLabel")
+                                    style="Dim.TLabel", **yh9)
                 lbl.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="we")
                 frame.columnconfigure(c * 2 + 1, weight=1)
                 self.rows[(fid, name)] = lbl
@@ -1826,10 +1832,13 @@ class App:
 
     def _set(self, name, text, color=dpi.MUT):
         # 状态格加圆点：色块先行、文字冗余（色弱友好、远距易辨识）；
-        # 名称/内容格不加，占位符不加（保持列节奏）
+        # 名称/内容格不加，占位符不加（保持列节奏）。
+        # foreground 必须与 style 同写：sv-ttk 下 TLabel 族 style fg 不
+        # 参与绘制（dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
         if name in self.DOT_CELLS and text not in ("-", ""):
             text = "● " + text
-        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel")
+        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel",
+                               foreground=color)
 
     def _on_ui_error(self, exc, val, _tb):
         """Tk 回调异常统一进日志框：noconsole 下无 stderr，不接就"点了没反应"。"""
@@ -1934,7 +1943,10 @@ class App:
             self._set(("vj", "端口名称"), "—")
             self._set(("vj", "端口状态"), "已停用")
         if self.ctl is None:
-            self._set(("vj", "OBS 状态"), self.start_err or "启动中…", dpi.C_ERR)
+            # 启动中=过渡态用警示黄，只有真实错误文本才红（暗场里「正在
+            # 启动」标红会被误读成故障；与 995 行「未连接」黄同族）
+            self._set(("vj", "OBS 状态"), self.start_err or "启动中…",
+                      dpi.C_ERR if self.start_err else dpi.C_WARN)
         else:
             ok = self.ctl.is_connected()
             extra = "（%s）" % self.ctl.last_error if self.ctl.last_error else ""
@@ -1969,7 +1981,7 @@ class App:
                    and self.cur < len(self.pl_keys) else None)
         cur_song = self.by_key.get(cur_key) if cur_key else None
         if cur_song is None:
-            self._set(("kb", "音色映射"), "（未加载工程）", dpi.MUT)
+            self.m_map.set("（未加载工程）", dpi.MUT)
         else:
             n = len(self.slots)
             a = len(self.ax_slots)
@@ -2144,7 +2156,8 @@ class App:
                           "stopped": ("未在播放", dpi.MUT)}[
                 self._transport_state()]
         self.state_lbl.config(text="当前状态：" + st_t,
-                              style=dpi.tone(st_c) + ".TLabel")
+                              style=dpi.tone(st_c) + ".TLabel",
+                              foreground=st_c)
         self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
 
     def _progress(self, frac):
@@ -2168,7 +2181,8 @@ class App:
         self.m_next.set(nxt or "（无）", dpi.FG if nxt else dpi.MUT)
         self.remain_lbl.config(
             text=remain,
-            style="Warn.TLabel" if remain == "时长未知" else "TLabel")
+            style="Warn.TLabel" if remain == "时长未知" else "TLabel",
+            foreground=dpi.C_WARN if remain == "时长未知" else dpi.FG)
 
 
 _ABSENT = "（当前不可用）"   # 下拉幽灵项标注：已存设定名在当前环境不在场
@@ -2380,7 +2394,8 @@ class SettingsWindow(tk.Toplevel):
                 txt, fg = "热点已开", dpi.C_OK
             else:
                 txt, fg = "热点未开（启用后自动开）", dpi.MUT
-            self.web_status.config(text=txt, style=dpi.tone(fg) + ".TLabel")
+            self.web_status.config(text=txt, style=dpi.tone(fg) + ".TLabel",
+                                   foreground=fg)
             ip = st.get("ip") or self.web_ip
             self.web_ip = ip
             self.web_prefix.config(text="http://%s:" % ip)
@@ -2409,7 +2424,8 @@ class SettingsWindow(tk.Toplevel):
                 except tk.TclError:
                     return
                 if not ok and left > 0:     # 可能正在重建服务：稍后复探
-                    lbl.config(text="探测中…", style="Dim.TLabel")
+                    lbl.config(text="探测中…", style="Dim.TLabel",
+                               foreground=dpi.MUT)
                     t = threading.Timer(1.2, lambda: probe(port, lbl,
                                                            left - 1))
                     t.daemon = True
@@ -2417,7 +2433,8 @@ class SettingsWindow(tk.Toplevel):
                     return
                 lbl.config(text="端口可用" if ok else "未监听",
                            style=dpi.tone(dpi.C_OK if ok else dpi.C_ERR)
-                           + ".TLabel")
+                           + ".TLabel",
+                           foreground=dpi.C_OK if ok else dpi.C_ERR)
             self.app.calls.put(apply)
         for var, lbl in ((self.srv_var, self.web_ok),
                          (self.app_var, self.app_ok)):

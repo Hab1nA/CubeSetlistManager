@@ -1450,12 +1450,15 @@ class PedalWindow(tk.Toplevel):
             online = self.app.pedal is not None and self.app.pedal.device_online()
             self.dev_var.set("%s（%s）" % (device_display(hint),
                                           "在线" if online else "离线"))
-            # 唯一保留的状态色：设备离线=警示（设置页下拉无此状态概念）
+            # 唯一保留的状态色：设备离线=警示（设置页下拉无此状态概念）。
+            # fg 与 style 同写：sv-ttk 下 Combobox 的 style fg 不参与绘制
+            # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
             self.dev_opt.config(style="TCombobox" if online
-                                else "Warn.TCombobox")
+                                else "Warn.TCombobox",
+                                foreground=dpi.FG if online else dpi.C_WARN)
         else:
             self.dev_var.set("（未选择）")
-            self.dev_opt.config(style="TCombobox")
+            self.dev_opt.config(style="TCombobox", foreground=dpi.FG)
 
     def _set_device(self, hint):
         self.app.pedal_device_hint = hint
@@ -1496,13 +1499,17 @@ class PedalWindow(tk.Toplevel):
         远程路不受「输入设备」选择约束（那是本地 raw HID 的归属门），
         如实标注防误读。"""
         p = self.app.pedal
+        # fg 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与绘制
+        # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
         if not getattr(self.app, "pedal_remote_enabled", False):
             self.remote_lbl.config(text="平板转发：关闭",
-                                   style=dpi.tone(dpi.MUT) + ".TLabel")
+                                   style=dpi.tone(dpi.MUT) + ".TLabel",
+                                   foreground=dpi.MUT)
             return
         if p is None:
             self.remote_lbl.config(text="平板转发：开启（服务启动中）",
-                                   style=dpi.tone(dpi.MUT) + ".TLabel")
+                                   style=dpi.tone(dpi.MUT) + ".TLabel",
+                                   foreground=dpi.MUT)
             return
         now = time.monotonic()
         br = p.bridge
@@ -1513,24 +1520,25 @@ class PedalWindow(tk.Toplevel):
         if link_t <= 0.0:
             self.remote_lbl.config(
                 text="平板转发：开启，等待平板（APP 设置里开「踩钉转发」）",
-                style=dpi.tone(dpi.MUT) + ".TLabel")
+                style=dpi.tone(dpi.MUT) + ".TLabel", foreground=dpi.MUT)
         elif now - link_t > 15.0:
             self.remote_lbl.config(
                 text="平板转发：开启，链路失联（%.0f 秒无心跳/事件）"
                      % (now - link_t),
-                     style=dpi.tone(dpi.C_WARN) + ".TLabel")
-        elif br.remote_event_t > 0.0:
-            self.remote_lbl.config(
-                text="平板转发：链路正常，最后事件 %.0f 秒前%s%s"
-                     % (now - br.remote_event_t, extra, tail),
-                     style=dpi.tone(dpi.C_WARN if br.remote_unknown
-                                    else dpi.C_OK) + ".TLabel")
+                     style=dpi.tone(dpi.C_WARN) + ".TLabel",
+                     foreground=dpi.C_WARN)
         else:
-            self.remote_lbl.config(
-                text="平板转发：链路正常，尚无有效按键事件%s%s"
-                     % (extra, tail),
-                     style=dpi.tone(dpi.C_WARN if br.remote_unknown
-                                    else dpi.C_OK) + ".TLabel")
+            fg = dpi.C_WARN if br.remote_unknown else dpi.C_OK
+            if br.remote_event_t > 0.0:
+                self.remote_lbl.config(
+                    text="平板转发：链路正常，最后事件 %.0f 秒前%s%s"
+                         % (now - br.remote_event_t, extra, tail),
+                     style=dpi.tone(fg) + ".TLabel", foreground=fg)
+            else:
+                self.remote_lbl.config(
+                    text="平板转发：链路正常，尚无有效按键事件%s%s"
+                         % (extra, tail),
+                     style=dpi.tone(fg) + ".TLabel", foreground=fg)
 
     def _refresh(self):
         for action, _name in ACTIONS:
@@ -1545,13 +1553,18 @@ class PedalWindow(tk.Toplevel):
             if texts:
                 # 两通道都绑时同显（清除按钮会一起清，不展示会误导）
                 self._bind_lbl[action].config(text="＋".join(texts),
-                                              style="TLabel")
+                                              style="TLabel",
+                                              foreground=dpi.FG)
             else:
                 self._bind_lbl[action].config(text="未设置",
-                                              style="Dim.TLabel")
+                                              style="Dim.TLabel",
+                                              foreground=dpi.MUT)
 
     def _set_status(self, text, color=dpi.MUT):
-        self.status.config(text=text, style=dpi.tone(color) + ".TLabel")
+        # fg 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与绘制
+        # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
+        self.status.config(text=text, style=dpi.tone(color) + ".TLabel",
+                           foreground=color)
 
     def _save(self):
         import setlist_gui as sg       # 延迟导入避免循环
