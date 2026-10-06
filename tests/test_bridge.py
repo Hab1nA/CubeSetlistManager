@@ -454,8 +454,8 @@ def test_automator_lite():
     assert wr.PAGE_LITE_APP.find('id="m-dev"') \
         < wr.PAGE_LITE_APP.find('id="acc-ind"')  # 位于面板 HTML 内
     # 网页端 lite 页=极简提示页（一行标题+下载 APP，不带控制页公共 JS）
-    assert "电脑端正在运行Cube Automator" in wr.PAGE_LITE_BROWSER
-    assert "下载Cube Remote APP" in wr.PAGE_LITE_BROWSER
+    assert "电脑端正在运行 Cube Automator" in wr.PAGE_LITE_BROWSER
+    assert "下载 Cube Remote APP" in wr.PAGE_LITE_BROWSER
     assert "/app.apk" in wr.PAGE_LITE_BROWSER
     assert "render()" not in wr.PAGE_LITE_BROWSER
 

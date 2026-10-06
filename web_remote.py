@@ -837,7 +837,7 @@ function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(j){st=j;setConn(true);render();renderLive()},
           function(e){setConn(false);
-            try{toast("刷新失败:"+e)}catch(_){}});
+            try{toast("刷新失败："+e)}catch(_){}});
   try{if(window.updateAcc)updateAcc()}catch(e){}
   try{if(window.refreshUsageTip)refreshUsageTip()}catch(e){}
   try{if(window.refreshTarget)refreshTarget()}catch(e){}
@@ -1283,8 +1283,8 @@ a.dl{display:inline-block;background:var(--acc);color:#10130f;
 </style>
 </head>
 <body>
-<h1>电脑端正在运行Cube Automator</h1>
-<a class="dl" href="/app.apk">下载Cube Remote APP</a>
+<h1>电脑端正在运行 Cube Automator</h1>
+<a class="dl" href="/app.apk">下载 Cube Remote APP</a>
 </body>
 </html>
 """

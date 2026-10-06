@@ -275,7 +275,7 @@ class ObsController:
             ws.request("TriggerMediaInputAction", {
                 "inputName": self.cfg.get("mediaInput", "舞台视频"),
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
-        return self._act(file_rel + ("(循环)" if loop else ""), do)
+        return self._act(file_rel + ("（循环）" if loop else ""), do)
 
     def _stop_and_forget(self, ws):
         """停媒体源并清空其文件。OBS 媒体源只要存着文件，随场景激活就会

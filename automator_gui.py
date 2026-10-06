@@ -774,8 +774,8 @@ class App:
 
     def _open_kbd(self):
         if self.cur_song is None:
-            self.q.put("当前没有匹配到的工程（在 %s 里载入 .song 后自动识别）"
-                       % self.facts["display_name"])
+            self.q.put("当前没有匹配到的工程（在 %s 里载入 %s 后自动识别）"
+                       % (self.facts["display_name"], self.facts["song_ext"]))
             return
         if self.kbd_win is None or not self.kbd_win.winfo_exists():
             self.kbd_win = kbd_auto.KeyboardAutoWindow(self)
