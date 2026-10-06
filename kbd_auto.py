@@ -535,16 +535,14 @@ class KeyboardAutoWindow(tk.Toplevel):
         # 注册，此窗只此一处用；下阶段收编进 dpi）
         ttk.Style(self).configure("Rec.TButton", foreground=dpi.C_ERR)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        ttk.Label(self, text="录制：在琴上选好该音色，"
-                            "触发：发送到琴上验证。").pack(
-            anchor="w", padx=pad, pady=(pad, 4))
         # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
         # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮）
         # ——两行下拉起点/宽度对齐；刷新=重枚举当前页设备并复核端口状态，
-        # 设备插回时不必切页即可一键复核
+        # 设备插回时不必切页即可一键复核。窗级说明段零保留（规范五）：
+        # 录制/触发的用法在各自按钮的悬停提示里
         self._sel = tk.StringVar(value=PAGE_NAMES[0])
         top = ttk.Frame(self)
-        top.pack(fill="x", padx=pad, pady=(0, 4))
+        top.pack(fill="x", padx=pad, pady=(pad, 4))
         ttk.Label(top, text="乐器", width=15, anchor="w",
                   style="Dim.TLabel").pack(side="left")
         self._menu = ttk.Combobox(top, textvariable=self._sel,
@@ -658,7 +656,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.status.pack(side="bottom", fill="x", padx=pad,
                          pady=(6, dpi.scale(self, 8)))
         dpi.bind_hint(self.status, self._hint,
-                      "✗ 后括号内是 config 键名，检查该键是否匹配到接入设备")
+                      "❌=未找到设备；查 config 当前乐器页的 inHint/outHint")
         self._show_page(PAGE_NAMES[0])
         self.after(300, self._tick)
 
@@ -923,10 +921,10 @@ class KeyboardAutoWindow(tk.Toplevel):
     @staticmethod
     def _side_line(devs, hint, dev, cfg_key, hint_key):
         """单向（输入或输出）端口状态文案：✓（同名多口时标注实际绑定的
-        「第N个」）或 ✗＋config 键引用（键名含义见底栏行悬停提示）。"""
+        「第N个」）或 ❌（主界面状态格同款极简式；含义见底栏行悬停提示）。"""
         hit = _pick_hit(devs, hint, dev)
         if hit is None:
-            return ("✗（%s.%s）" % (cfg_key, hint_key)), False
+            return "❌", False
         pos, total = _name_pos(devs, hit[1], hit[0])
         return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 

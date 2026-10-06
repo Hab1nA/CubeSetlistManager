@@ -546,7 +546,6 @@ check("键盘窗三按钮等宽", len({b.winfo_width() for b in kbtns.values()})
 check("两窗操作按钮同宽",
       pbtns["学习"].winfo_width() == kbtns["录制"].winfo_width())
 check("键盘窗文字不裁剪", all(fits_ttk(b) for b in kbtns.values()))
-check("键盘窗提示语无 BS/PC", "BS/PC" not in kw.winfo_children()[0]["text"])
 kw._poll_ports()   # 文案由 300ms 轮询定时器驱动：离线直接驱动一次免赛跑
 check("键盘窗端口状态=合并底栏行",
       len(kw._port_state) == 2

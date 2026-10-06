@@ -1353,13 +1353,12 @@ class PedalWindow(tk.Toplevel):
         # 一处用；下阶段收编进 dpi）
         ttk.Style(self).configure("Warn.TCombobox", foreground=dpi.C_WARN)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        ttk.Label(self, text="只有所选设备的按键会触发动作").pack(
-            anchor="w", padx=pad, pady=(pad, 4))
         # 设备行与设置页严格同款（对照 SettingsWindow 的 menu_row 与
         # row(browse=True)：宽 15 标签 + 下拉填充 + 右侧 width=6 小按钮）；
-        # 拦截勾选独立成行，同设置页复选框行（anchor="w", pady=1）
+        # 拦截勾选独立成行，同设置页复选框行（anchor="w", pady=1）。
+        # 窗级说明段零保留（规范五）：用前必知在设备下拉悬停提示里
         devrow = ttk.Frame(self)
-        devrow.pack(fill="x", padx=pad, pady=2)
+        devrow.pack(fill="x", padx=pad, pady=(pad, 2))
         ttk.Label(devrow, text="输入设备", width=15,
                   anchor="w", style="Dim.TLabel").pack(side="left")
         self.dev_var = tk.StringVar(value="（未选择）")
