@@ -33,6 +33,7 @@ from ctypes import wintypes
 
 import dpi
 import midi_bridge as mb
+import ui_text
 from kbd_auto import (RawMidiIn, PortNotFound, _device_entries, _in_dev,
                       _pick_hit)
 
@@ -1422,6 +1423,9 @@ class PedalWindow(tk.Toplevel):
                                 style="Dim.TLabel")
         self.status.pack(side="bottom", fill="x", padx=pad,
                          pady=(6, dpi.scale(self, 8)))
+        dpi.bind_hint(self.status, self._hint,
+                      "打开本页期间踩钉整体静音；设备在线与拦截态"
+                      "见上方设备行与勾选")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.setup_window(self)
@@ -1577,37 +1581,21 @@ class PedalWindow(tk.Toplevel):
             self._set_status(*self._state_text())
 
     def _state_text(self):
-        """常驻状态：监听/静音态＋平板转发短态（未启用则不拼）。"""
+        """常驻状态：主界面状态格同款极简式（设备在线与拦截态在上方
+        设备行、勾选框可见，不在此重复；调试细节进底栏行悬停提示）。"""
         p = self.app.pedal
         if p is None:
-            return "服务启动中…", dpi.MUT
+            return ui_text.STARTING, dpi.MUT
         if not self.app.pedal_binds and not self.app.pedal_hid:
             base = ("还没有任何绑定：点任一「学习」开始", dpi.MUT)
+        elif not p.device_hint and self.app.pedal_hid:
+            # 未选设备时 HID 踏板被整体忽略（学习与触发都不抓），桥仍在跑
+            base = ("踩钉已暂停（关闭本页恢复）：未选输入设备", dpi.C_WARN)
+        elif p.hint and not (p.connected or p.hid_active):
+            base = ("踩钉口「%s」未连（关闭本页重试）" % p.hint, dpi.C_WARN)
         else:
             # 页面存活期整体静音——「监听中」在此是说谎，如实标注
-            parts = ([p.name] if p.connected else []) \
-                + (["键盘按键"] if p.hid_active else [])
-            dead_hid = False
-            if p.device_hint:
-                online = p.device_online()
-                parts.append("%s %s·拦截%s" % (
-                    device_display(p.device_hint),
-                    "在线" if online else "离线",
-                    "开" if self.app.pedal_intercept else "关"))
-            elif self.app.pedal_hid:
-                # 未选设备时 HID 踏板被整体忽略（学习与触发都不抓），
-                # 但桥仍在跑——状态栏若只写「键盘按键」=绑定死了看不见
-                dead_hid = True
-                parts.append("按键绑定未生效：未选择输入设备"
-                             "（点「输入设备」选踏板）")
-            if parts:
-                base = ("已暂停响应（关闭本页恢复）：%s" % "、".join(parts),
-                        dpi.C_WARN if dead_hid else dpi.MUT)
-            elif p.hint:
-                base = ("未找到踩钉口「%s」（关闭本页后自动重试）" % p.hint,
-                        dpi.C_WARN)
-            else:
-                base = ("还没有任何绑定：点任一「学习」开始", dpi.MUT)
+            base = ("踩钉已暂停（关闭本页恢复）", dpi.MUT)
         remote = self._remote_state()
         if remote is None:
             return base
