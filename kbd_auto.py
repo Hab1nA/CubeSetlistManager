@@ -922,13 +922,13 @@ class KeyboardAutoWindow(tk.Toplevel):
 
     @staticmethod
     def _side_line(devs, hint, dev, cfg_key, hint_key):
-        """单向（输入或输出）端口状态文案：✓（同名多口时标注实际绑定的
+        """单向（输入或输出）端口状态文案：✔（同名多口时标注实际绑定的
         「第N个」）或 ❌（主界面状态格同款极简式；含义见底栏行悬停提示）。"""
         hit = _pick_hit(devs, hint, dev)
         if hit is None:
             return "❌", False
         pos, total = _name_pos(devs, hit[1], hit[0])
-        return ("✓ 第%d个" % pos) if total > 1 else "✓", True
+        return ("✔ 第%d个" % pos) if total > 1 else "✔", True
 
     def _port_row(self, key, text, ok):
         self._port_state[key] = (text, ok)

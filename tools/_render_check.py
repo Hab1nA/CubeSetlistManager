@@ -577,7 +577,7 @@ pw._hint("测试提示")
 check("踩钉窗悬停提示=灰字直显",
       pw.status.cget("text") == "测试提示")
 pw._hint(None)
-kw._port_row("juno", "输入 ✓ ｜ 输出 ✓", True)
+kw._port_row("juno", "输入 ✔ ｜ 输出 ✔", True)
 check("键盘窗端口行改色=合并行 style",
       kw.status.cget("style") == "Ok.TLabel")
 kw._port_row("ax", "输入 ✗", False)
