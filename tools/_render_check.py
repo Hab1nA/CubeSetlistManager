@@ -273,7 +273,7 @@ check("控件无→/←/＝", not any(
     for ch in ("→", "←")) and "→" not in app.btn_add["text"])
 # --- 监控行键 ---
 check("OBS 状态行键", ("vj", "OBS 状态") in app.rows)
-check("FOLLOW 已停止", sg.FOLLOW["stopped"] == "已停止")
+check("FOLLOW stopped=未在播放", sg.FOLLOW["stopped"] == "未在播放")
 
 # --- 本轮 UI 现代化改造断言（输入框/跑马灯/强调钮/圆点/进度条/当前行/
 # 空状态/日志/标题栏），ttk 语义：观感由 style 承担 ---
@@ -345,7 +345,7 @@ tl = app.rows[("vj", "走带跟随")]
 app.sync = _FakeSync("stopped", None, on=False)
 app._tick_body()
 check("走带跟随未启用=黄",
-      tl.cget("text") == "● 未启用（未收到时钟）"
+      tl.cget("text") == "● 未启用，未收到时钟"
       and tl.cget("style") == "Warn.TLabel")
 app.sync = _FakeSync("playing", "1 开场.mp4")
 app._tick_body()
@@ -360,7 +360,7 @@ check("走带跟随暂停=黄+视频名",
 app.sync.video_state, app.sync.current_video = "stopped", None
 app._tick_body()
 check("走带跟随停止=灰无名",
-      tl.cget("text") == "● 已停止" and tl.cget("style") == "Dim.TLabel")
+      tl.cget("text") == "● 未在播放" and tl.cget("style") == "Dim.TLabel")
 app.sync = None          # 还原：后续段落沿用「无同步」的原始路径
 app._tick_body()
 
@@ -806,7 +806,7 @@ check("automator _tick_body 冒烟（日志实刷）",
 # 音色映射格无标题识别时须有占位（该格是 Marquee：曾误走 _set 的
 # config(text=)，对 ttk.Entry 静默无效、格内恒空）
 check("音色映射空态占位（Marquee.set 路径）",
-      aapp.m_map.get() == "（未匹配工程）")
+      aapp.m_map.get() == "（未加载工程）")
 
 # 迁移窗源码不得再引用 classic 主题 token（五文件终态门禁）
 for _fname in ("setlist_gui.py", "dpi.py", "automator_gui.py",

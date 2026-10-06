@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cpr_meta
 import hotspot
 import kbd_auto
+import ui_text
 
 CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
 CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
@@ -756,7 +757,7 @@ function render(){
   // （当前状态行已提示「切换中…」，这里不再重复），切完刷成新值
   if(!st.busy){
     $("now").textContent=st.projName?st.projName:
-      (st.ready?"（无打开的工程）":"主程序启动中…");
+      (st.ready?"（无打开的工程）":"启动中…");
     var n=st.songs?st.songs[cur+1]:null;
     $("next").textContent=n?n.name:(s?"（末尾）":"—");
   }
@@ -785,8 +786,7 @@ function fmtT(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+":"+
 function renderLive(){
   if(!st)return;
   var ts=st.busy?"busy":(st.tstate||"stopped");
-  var txt={playing:"播放中",paused:"已暂停",stopped:"未在播放",
-    busy:"切换中…"}[ts];
+  var txt={__TSTATE_MAP__,busy:"切换中…"}[ts];
   var cls="tstate "+(ts==="busy"?"paused":ts);
   var tes=document.querySelectorAll(".tstate");
   for(var i=0;i<tes.length;i++){
@@ -1203,13 +1203,18 @@ function renderDev(d){
 }
 """
 
+_TSTATE_JS = ",".join('%s:"%s"' % (k, v)
+                      for k, v in ui_text.FOLLOW.items())
+
 PAGE_BROWSER = (PAGE_COMMON
+                .replace("__TSTATE_MAP__", _TSTATE_JS)
                 .replace("__PAGE_TYPE__", "browser")
                 .replace("__RIGHT_BTN__", BTN_BROWSER)
                 .replace("__ACC_IND__", "")
                 .replace("__DEV_PANEL__", "")
                 .replace("__DEV_JS__", ""))
 PAGE_APP = (PAGE_COMMON
+            .replace("__TSTATE_MAP__", _TSTATE_JS)
             .replace("__PAGE_TYPE__", "app")
             .replace("__RIGHT_BTN__", BTN_APP)
             .replace("__ACC_IND__",
@@ -1250,6 +1255,7 @@ LITE_ACC_H2 = ('<h2 style="display:flex;align-items:center">设置'
 LITE_DEV_PANEL = DEV_PANEL_APP.replace("<h2>设置</h2>", LITE_ACC_H2, 1)
 
 PAGE_LITE_APP = (PAGE_COMMON
+                 .replace("__TSTATE_MAP__", _TSTATE_JS)
                  .replace("__PAGE_TYPE__", "applite")
                  .replace("__RIGHT_BTN__", "")
                  .replace("__ACC_IND__", "")

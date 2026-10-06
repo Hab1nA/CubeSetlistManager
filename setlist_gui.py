@@ -39,11 +39,12 @@ import midi_bridge as mb
 import pedal
 import song_meta
 import stallguard
+import ui_text
 import web_remote
 from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
 
-FOLLOW = {"playing": "播放中", "paused": "已暂停", "stopped": "已停止"}
+FOLLOW = ui_text.FOLLOW
 TX_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
             "stop": "停止", "rewind": "回零"}
 
@@ -1214,7 +1215,7 @@ class App:
                     self.juno_shift,
                     why="JUNO 全局移调 %+d 半音" % self.juno_shift)
             else:
-                self.q.put("JUNO 移调 %+d 半音（输出未就绪，未发送）"
+                self.q.put(ui_text.TRANSPOSE_NOT_READY
                            % self.juno_shift)
             return
         if d1 in kbd_auto.PEDAL_NOTES:
@@ -1226,7 +1227,7 @@ class App:
             ax = kbd_auto.PEDAL_NOTES[d1] == "ax"
             switcher = self.ax_switcher if ax else self.switcher
             if switcher is None:
-                self.q.put("%s 延音踏板（输出未就绪，未发送）"
+                self.q.put(ui_text.SUSTAIN_NOT_READY
                            % ("AX-09" if ax else "JUNO"))
                 return
             switcher.submit_msgs(
@@ -1444,9 +1445,8 @@ class App:
             self.ax_slots = ax_slots
             self.cur_song_path = song["path"]
         if self.slots or self.ax_slots:
-            self.q.put("音色映射已载入：JUNO %d 个 + AX-09 %d 个音符（%s）"
-                       % (len(self.slots), len(self.ax_slots),
-                          kbd_auto.SLOT_FILE))
+            self.q.put(ui_text.MAP_LOADED_LOG
+                       % (song["name"], len(slots), len(ax_slots)))
         if play_after:
             # 等待加载的循环放后台线程，别堵主线程的状态轮询
             self.calls.put(lambda: threading.Thread(
@@ -1945,7 +1945,7 @@ class App:
         if self.ctl is None:
             # 启动中=过渡态用警示黄，只有真实错误文本才红（暗场里「正在
             # 启动」标红会被误读成故障；与 995 行「未连接」黄同族）
-            self._set(("vj", "OBS 状态"), self.start_err or "启动中…",
+            self._set(("vj", "OBS 状态"), self.start_err or ui_text.STARTING,
                       dpi.C_ERR if self.start_err else dpi.C_WARN)
         else:
             ok = self.ctl.is_connected()
@@ -1955,7 +1955,7 @@ class App:
         if self.sync is None:
             self._set(("vj", "走带跟随"), "-")
         elif not self.sync.is_following():
-            self._set(("vj", "走带跟随"), "未启用（未收到时钟）", dpi.C_WARN)
+            self._set(("vj", "走带跟随"), ui_text.FOLLOW_OFF, dpi.C_WARN)
         else:
             vs = self.sync.video_state
             name = self.sync.current_video
@@ -1976,12 +1976,12 @@ class App:
             self._set(("kb", "端口状态"), "未启动", dpi.C_ERR)
         else:
             self._set(("kb", "端口名称"), "…", dpi.MUT)
-            self._set(("kb", "端口状态"), "启动中…", dpi.MUT)
+            self._set(("kb", "端口状态"), ui_text.STARTING, dpi.MUT)
         cur_key = (self.pl_keys[self.cur] if self.cur is not None
                    and self.cur < len(self.pl_keys) else None)
         cur_song = self.by_key.get(cur_key) if cur_key else None
         if cur_song is None:
-            self.m_map.set("（未加载工程）", dpi.MUT)
+            self.m_map.set(ui_text.MAP_EMPTY, dpi.MUT)
         else:
             n = len(self.slots)
             a = len(self.ax_slots)
@@ -2091,7 +2091,7 @@ class App:
         has_proj = False                    # 同步给网页 /state 快照
         proj_name = None                    # 工程真实名（网页 NOW/弹窗用）
         if self.ctrl is None:
-            now, color = "启动中…", dpi.C_ERR
+            now, color = ui_text.STARTING, dpi.C_ERR
         elif self.ctrl.busy:
             # NOW/NEXT/进度保持切歌前的画面不闪「切换中…」（当前状态标签
             # 已提示，横幅不再重复）；首次启动即忙没有可保持的，才显示提示
@@ -2147,7 +2147,7 @@ class App:
         self._progress(frac)
         # 播放状态指示（移动端 /state 的 tstate 与此同源同语义）
         if self.ctrl is None:
-            st_t, st_c = "启动中…", dpi.C_ERR
+            st_t, st_c = ui_text.STARTING, dpi.C_ERR
         elif self.ctrl.busy:
             st_t, st_c = "切换中…", dpi.C_WARN
         else:
@@ -2284,7 +2284,7 @@ class SettingsWindow(tk.Toplevel):
         wf = ttk.Frame(body)
         wf.pack(fill="x", pady=1)
         self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
-        ttk.Checkbutton(wf, text="启用移动端遥控（热点+网页控制+翻谱推送）",
+        ttk.Checkbutton(wf, text=ui_text.REMOTE_CHECKBOX,
                         variable=self.web_var).pack(side="left")
         self.web_status = ttk.Label(wf, text="热点查询中…",
                                     style="Dim.TLabel")
@@ -2415,7 +2415,7 @@ class SettingsWindow(tk.Toplevel):
             elif st.get("on"):
                 txt, fg = "热点已开", dpi.C_OK
             else:
-                txt, fg = "热点未开（启用后自动开）", dpi.MUT
+                txt, fg = ui_text.HOTSPOT_OFF, dpi.MUT
             self.web_status.config(text=txt, style=dpi.tone(fg) + ".TLabel",
                                    foreground=fg)
             ip = st.get("ip") or self.web_ip
