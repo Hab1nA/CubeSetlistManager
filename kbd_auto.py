@@ -783,7 +783,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         ask = ("请在 AX-09 上选中该槽位对应的音色（MIDI 设置 Bn 需已开启）"
                if ax else
                "请在 JUNO-DS 上调用该槽位对应的 Favorite")
-        self.set_status("录制 %s：%s（选好后按「停止」保存当前音色）"
+        self.set_status("录制 %s 中：%s（选好后按「停止」保存当前音色）"
                         % (note_name(note), ask), dpi.C_ERR)
 
     def _reset_rec_btn(self, note):
@@ -895,7 +895,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         「第N个」）或 ✗ 未找到（提示 config 键）。"""
         hit = _pick_hit(devs, hint, dev)
         if hit is None:
-            return ("✗ 未找到（查 config %s.%s）" % (cfg_key, hint_key)), False
+            return ("✗ 未找到，查 config %s.%s" % (cfg_key, hint_key)), False
         pos, total = _name_pos(devs, hit[1], hit[0])
         return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 

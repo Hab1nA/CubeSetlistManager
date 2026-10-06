@@ -329,7 +329,7 @@ check("状态格有圆点",
       and app.rows[("vj", "OBS 状态")].cget("text").startswith("● "))
 check("名称/内容/占位格无圆点",
       not app.rows[("vj", "端口名称")].cget("text").startswith("● ")
-      and app.rows[("vj", "走带跟随")].cget("text") == "-"
+      and app.rows[("vj", "走带跟随")].cget("text") == "—"
       and not app.m_map.get().startswith("● "))
 
 # 走带跟随：状态色 + 播放中带视频名（假 sync 走真实 _tick_body 渲染路径）

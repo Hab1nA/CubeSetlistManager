@@ -885,7 +885,7 @@ class App:
                         raise SystemExit("拉起 loopMIDI 失败")
                     self.q.put("loopMIDI 已拉起（端口联动已停用）")
             except SystemExit as e:      # 单项降级：缺 loopMIDI 不拖垮其余服务
-                self.q.put("loopMIDI 未就绪：%s（VJ 触发/走带跟随不可用）" % e)
+                self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用" % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
                 if not find_processes_by_prefix("obs64"):   # 这里只补一条状态
                     self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
@@ -926,11 +926,11 @@ class App:
                                               self.watch.on_clock()))
                         self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用（未设时钟端口：走带三态/"
-                                   "已播/自动推进与停止键不可用）")
+                        self.q.put("时钟监听已停用：未设时钟端口，走带三态/"
+                                   "已播/自动推进与停止键不可用")
                 except SystemExit as e:
                     self.clock_port = None
-                    self.q.put("时钟监听未启动：%s（走带三态/自动推进不可用）" % e)
+                    self.q.put("时钟监听未启动：%s，走带三态/自动推进不可用" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -945,7 +945,7 @@ class App:
                     self.facts, self.ccfg["dawExe"],
                     auto_save=self.ccfg["autoSave"], log=self.q.put)
             except Exception as e:
-                self.q.put("%s 控制未启动：%s（切歌/走带不可用）"
+                self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
             # 键盘自动化：发送线程（JUNO + AX-09）+ 联动端口
             try:
@@ -1707,8 +1707,8 @@ class App:
                 and self.watch is not None:
             if not self.clock_hint:
                 if clock_changed:
-                    self.q.put("时钟监听已停用（未设时钟端口：走带三态/已播/"
-                               "自动推进与停止键不可用）")
+                    self.q.put("时钟监听已停用：未设时钟端口，走带三态/已播/"
+                               "自动推进与停止键不可用")
             elif clock_changed:
                 try:
                     self.clock_port = mb.MidiIn(
@@ -1836,7 +1836,7 @@ class App:
         # 名称/内容格不加，占位符不加（保持列节奏）。
         # foreground 必须与 style 同写：sv-ttk 下 TLabel 族 style fg 不
         # 参与绘制（dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
-        if name in self.DOT_CELLS and text not in ("-", ""):
+        if name in self.DOT_CELLS and text not in ("-", "", "—"):
             text = "● " + text
         self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel",
                                foreground=color)
@@ -1954,7 +1954,7 @@ class App:
             self._set(("vj", "OBS 状态"), "已连接" if ok else "未连接" + extra,
                       dpi.C_OK if ok else dpi.C_WARN)
         if self.sync is None:
-            self._set(("vj", "走带跟随"), "-")
+            self._set(("vj", "走带跟随"), "—")
         elif not self.sync.is_following():
             self._set(("vj", "走带跟随"), ui_text.FOLLOW_OFF, dpi.C_WARN)
         else:

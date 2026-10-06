@@ -176,7 +176,7 @@ def _bind_web(app, registry, tport, ip, port, page, report=None):
             if time.monotonic() >= deadline:
                 raise
             if report and not reported:
-                report("热点网卡地址配置中，等待绑定 %s:%d …" % (ip, port))
+                report("热点网卡地址配置中，等待绑定 %s:%d…" % (ip, port))
                 reported = True
             time.sleep(1.0)
 

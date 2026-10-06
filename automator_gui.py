@@ -558,11 +558,11 @@ class App:
                                               self.watch.on_clock()))
                         self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用（未设时钟端口：走带三态/"
-                                   "已播不可用）")
+                        self.q.put("时钟监听已停用：未设时钟端口，走带三态/"
+                                   "已播不可用")
                 except SystemExit as e:
                     self.clock_port = None
-                    self.q.put("时钟监听未启动：%s（走带三态不可用）" % e)
+                    self.q.put("时钟监听未启动：%s，走带三态不可用" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -836,8 +836,8 @@ class App:
                 and self.watch is not None:
             if not self.clock_hint:
                 if clock_changed:
-                    self.q.put("时钟监听已停用（未设时钟端口：走带三态/已播"
-                               "不可用）")
+                    self.q.put("时钟监听已停用：未设时钟端口，走带三态/已播"
+                               "不可用")
             elif clock_changed:
                 try:
                     self.clock_port = mb.MidiIn(
@@ -916,7 +916,7 @@ class App:
     def _set(self, name, text, color=dpi.MUT):
         # foreground 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与
         # 绘制（dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
-        if name in self.DOT_CELLS and text not in ("-", ""):
+        if name in self.DOT_CELLS and text not in ("-", "", "—"):
             text = "● " + text
         self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel",
                                foreground=color)
@@ -1012,7 +1012,7 @@ class App:
             self._set(("vj", "OBS 状态"), "已连接" if ok else "未连接" + extra,
                       dpi.C_OK if ok else dpi.C_WARN)
         if self.sync is None:
-            self._set(("vj", "走带跟随"), "-")
+            self._set(("vj", "走带跟随"), "—")
         elif not self.sync.is_following():
             self._set(("vj", "走带跟随"), ui_text.FOLLOW_OFF, dpi.C_WARN)
         else:

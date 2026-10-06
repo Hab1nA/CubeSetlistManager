@@ -1633,7 +1633,7 @@ class PedalWindow(tk.Toplevel):
             where = "MIDI CC（未选输入设备，踏板按键不会被抓取）"
         else:
             where = "MIDI CC"
-        self._set_status("学习「%s」：单击 / 快踩两下（双踩）——%d 秒内，"
+        self._set_status("学习「%s」：单击 / 快踩两下（双踩），%d 秒内"
                          "等待%s"
                          % (dict(ACTIONS)[action], LEARN_TIMEOUT, where),
                          dpi.C_ERR)
@@ -1744,7 +1744,7 @@ class PedalWindow(tk.Toplevel):
                 if self.app.pedal_device_hint:
                     self._cancel_learn("学习超时：所选设备没发按键（踏板连接/模式请检查）")
                 else:
-                    self._cancel_learn("学习超时：没等到 MIDI CC（未选择输入设备）")
+                    self._cancel_learn("学习超时：未选输入设备，没等到 MIDI CC")
             else:
                 self._set_status("学习「%s」中（剩 %.0f 秒），请踩一下踩钉"
                                  % (dict(ACTIONS)[action],
