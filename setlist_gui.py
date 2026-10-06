@@ -738,7 +738,7 @@ class App:
         for f in groups:
             pad = max(0, (h - f.winfo_reqheight()) // 2)
             if pad:
-                f.config(pady=pad)
+                f.config(padding=(0, pad))   # ttk.LabelFrame 无 pady
         # 最小宽度=实际需求宽：窗口窄于它时 grid 压缩权重列，退出按钮被
         # 压到几像素点不到；高度维持原值（纵向压列表可接受，横向不行）
         self.root.update_idletasks()

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import ctypes
+import os
 import sys
 import sv_ttk
 import tkinter as tk
@@ -30,11 +31,9 @@ BORDER = "#4d4d4d"    # 面板边线：与列表框边线同档的中灰
 LOG_FG = "#b8b8b8"    # 日志正文：比主文字暗一档（黑匣子不该抢视觉权重）
 CUR_BG = "#28496e"    # 列表当前曲行底色：蓝系、暗于选中色，未选中可定位
 
-# 强调按钮配色（Start=绿底深字 / Stop=红底白字；hover 提亮一档）
+# 强调按钮前景（Start=绿底深字 / Stop=红底白字）；底色在 assets/ 官方
+# 精灵图色相变体里（make_accent_assets.py 生成），不在代码中配
 START_FG = "#101418"
-START_HOVER = "#7fe896"
-STOP_BG = "#a03030"
-STOP_HOVER = "#c04444"
 
 
 def tone(color):
@@ -174,11 +173,31 @@ def apply_theme(root):
     for name, color in (("Ok", C_OK), ("Warn", C_WARN), ("Err", C_ERR),
                         ("Dim", MUT), ("Log", LOG_FG)):
         s.configure("%s.TLabel" % name, foreground=color)
-    # 强调按钮：sv-ttk 的按钮是图片 element（-background 不生效），须换
-    # default 主题的素色 border element 才能上绿/红底；hover/按压提亮走
-    # style.map（取代 Enter/Leave 手工 bind），禁用态压灰保「不可点」语义
-    s.element_create("Flat.button", "from", "default", "Button.border")
-    flat_btn = [("Flat.button",
+    # 强调按钮：sv-ttk 的按钮外观烘焙在精灵图里（image element 运行时
+    # 不可换色，官方 Accent.TButton 只有固定蓝）——assets/ 下的绿/红
+    # 按钮图由 tools/make_accent_assets.py 从官方精灵图切片做色相重映射
+    # 一次性生成（圆角/抗锯齿/九宫格全保真），tk 原生读 PNG 零自绘；
+    # 悬停/按压/禁用 = 图片态切换（照官方 dark.tcl 的状态表），文字色走
+    # style configure/map。frozen 时资产在 _MEIPASS。
+    asset_dir = getattr(sys, "_MEIPASS", "") or "."
+    imgs = []
+    for name, txt, dkey in (("Start", START_FG, "start"),
+                            ("Stop", "#ffffff", "stop")):
+        ph = {st: tk.PhotoImage(file=os.path.join(
+            asset_dir, "assets", "btn_%s_%s.png" % (dkey, st)), master=root)
+            for st in ("rest", "hover", "pressed", "focus", "focus-hover",
+                       "dis")}
+        imgs.extend(ph.values())
+        s.element_create(name + ".round", "image", ph["rest"],
+                         ("selected disabled", ph["dis"]),
+                         ("disabled", ph["dis"]),
+                         ("selected", ph["rest"]),
+                         ("pressed", ph["pressed"]),
+                         ("active focus", ph["focus-hover"]),
+                         ("active", ph["hover"]),
+                         ("focus", ph["focus"]),
+                         border=4, sticky="nsew")
+        s.layout(name + ".TButton", [(name + ".round",
                  {"sticky": "nsew",
                   "children": [("Button.focus",
                                 {"sticky": "nsew",
@@ -186,18 +205,11 @@ def apply_theme(root):
                                                {"sticky": "nsew",
                                                 "children": [("Button.label",
                                                               {"sticky":
-                                                               "nswe"})]})]})]})]
-    for name, base, hover, txt in (("Start", C_OK, START_HOVER, START_FG),
-                                   ("Stop", STOP_BG, STOP_HOVER, "#ffffff")):
-        style = name + ".TButton"
-        s.layout(style, flat_btn)
-        s.configure(style, background=base, foreground=txt,
-                    borderwidth=0, relief="flat", anchor="center",
-                    padding=(8, 5, 8, 6))
-        s.map(style,
-              background=[("disabled", FIELD), ("pressed", hover),
-                          ("active", hover)],
-              foreground=[("disabled", MUT)])
+                                                               "nswe"})]})]})]})])
+        s.configure(name + ".TButton", foreground=txt, anchor="center",
+                    padding=(8, 2, 8, 3))
+        s.map(name + ".TButton", foreground=[("disabled", MUT)])
+    root._round_btn_imgs = imgs      # PhotoImage 保活（Tcl 侧不防 GC）
     # 跑马灯：平地 element（default 主题的素 field）换掉 sv-ttk 的
     # 图片 field——展示型 Entry 不是输入区，无边框、底色随所在面板；
     # 状态色变体族供 Marquee.set 动态切换（layout 须逐个注册：ttk 的

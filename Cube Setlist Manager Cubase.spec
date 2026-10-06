@@ -5,7 +5,7 @@ a = Analysis(
     ['setlist_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('app.ico', '.')],       # 窗口/任务栏图标（exe 图标见 EXE.icon）
+    datas=[('app.ico', '.'), ('assets', 'assets')],       # 窗口/任务栏图标（exe 图标见 EXE.icon）
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

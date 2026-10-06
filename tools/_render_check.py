@@ -317,11 +317,10 @@ check("跑马灯状态色切 style",
 check("强调钮=命名 style",
       app.tbtns["开始"].cget("style") == "Start.TButton"
       and app.btn_panic.cget("style") == "Stop.TButton")
-smap = dict(ttk.Style(root).map("Stop.TButton", "background"))
-check("全停钮悬停提亮+禁用压灰=style.map",
-      bool(smap.get("active"))
-      and str(smap.get("active")).lower() != sg.dpi.STOP_BG
-      and str(smap.get("disabled")).lower() == sg.dpi.FIELD)
+fmap = dict(ttk.Style(root).map("Stop.TButton", "foreground"))
+check("全停钮悬停/禁用=图片态元素+禁用前景 map",
+      "Stop.round" in ttk.Style(root).element_names()
+      and str(fmap.get("disabled")).lower() == sg.dpi.MUT)
 
 # 状态圆点：状态格有 ● 前缀，名称/内容格与占位符没有
 app._tick_body()
