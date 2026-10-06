@@ -14,12 +14,16 @@ SPRITES = {  # 来自 sv_ttk sprites_dark.tcl 的 accent 子图坐标
     "hover": (40, 152), "focus": (20, 152), "focus-hover": (0, 152),
 }
 TARGETS = {"start": "#5ad469", "stop": "#a03030"}
+# 精灵图底色与官方 accent 纯色（色相重映射的锚点）
+BASE = (28, 28, 28)
+ACCENT = (0x57, 0xC8, 0xFF)
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def hue_of(hexstr):
     r, g, b = (int(hexstr[i:i + 2], 16) / 255 for i in (1, 3, 5))
-    return colorsys.rgb_to_hsv(r, g, b)[0]
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    return h, s, v
 
 
 def main():
@@ -30,22 +34,31 @@ def main():
     out_dir = os.path.join(HERE, "assets")
     os.makedirs(out_dir, exist_ok=True)
     for target, hexstr in TARGETS.items():
-        th = hue_of(hexstr)
+        th = hue_of(hexstr)[0]
         for state, (x, y) in SPRITES.items():
             img = sheet.crop((x, y, x + 20, y + 20))
             if state != "dis":   # dis 本身灰色不换色
                 px = img.load()
+                # 每个像素 = α×accent纯色 + (1-α)×底色 的混合。按 G 通道
+                # 解 α（accent G=200、底色 G=28，区分度最大），accent 分量
+                # 的 hue 换成目标语义色、S/V 保留，再按 α 回混——渐变边缘
+                # 与普通钮的灰渐变完全同构，不再出现着色区外扩 1px（整图
+                # hue 平移会把边缘混合像素也染色，形状外扩）
+                acc_g, base_g = ACCENT[1], BASE[1]
                 for j in range(20):
                     for i in range(20):
                         r, g, b, a = px[i, j]
                         if a == 0:
                             continue
+                        alpha = max(0.0, min(1.0, (g - base_g)
+                                             / (acc_g - base_g)))
                         h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255,
                                                       b / 255)
-                        if s > 0.25 and 0.47 < h < 0.68:  # 只换蓝色系 hue
-                            r2, g2, b2 = colorsys.hsv_to_rgb(th, s, v)
-                            px[i, j] = (round(r2 * 255), round(g2 * 255),
-                                        round(b2 * 255), a)
+                        r2, g2, b2 = colorsys.hsv_to_rgb(th, s, v)
+                        acc2 = (r2 * 255, g2 * 255, b2 * 255)
+                        px[i, j] = tuple(round(alpha * acc2[k]
+                                               + (1 - alpha) * BASE[k])
+                                         for k in range(3)) + (a,)
             img.save(os.path.join(out_dir, "btn_%s_%s.png" % (target,
                                                               state)))
     print("generated:", sorted(f for f in os.listdir(out_dir)
