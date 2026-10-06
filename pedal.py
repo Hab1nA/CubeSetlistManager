@@ -1563,7 +1563,7 @@ class PedalWindow(tk.Toplevel):
     def _present(self):
         """底栏三方优先级：悬停提示 > 学习倒计时/瞬时反馈 > 常驻状态。"""
         if self._hover is not None:
-            self._set_status("？%s" % self._hover, dpi.MUT)
+            self._set_status(self._hover, dpi.MUT)
         elif self.learner is not None:
             action, learner, deadline = self.learner
             extra = ("：未选输入设备，踏板按键不会被抓取"

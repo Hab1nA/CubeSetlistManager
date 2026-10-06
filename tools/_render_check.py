@@ -575,8 +575,8 @@ check("踩钉窗状态行改色=改 style",
       and all(str(l.cget("style")) == "Dim.TLabel"
               for l in pw._bind_lbl.values()))
 pw._hint("测试提示")
-check("踩钉窗悬停提示=？前缀",
-      pw.status.cget("text") == "？测试提示")
+check("踩钉窗悬停提示=灰字直显",
+      pw.status.cget("text") == "测试提示")
 pw._hint(None)
 kw._port_row("juno", "输入 ✓ ｜ 输出 ✓", True)
 check("键盘窗端口行改色=合并行 style",
@@ -586,8 +586,8 @@ check("键盘窗非当前页端口=存态不打扰当前行",
       kw._port_state["ax"] == ("输入 ✗", False)
       and kw.status.cget("style") == "Ok.TLabel")
 kw._hint("测试提示")
-check("键盘窗悬停提示=？前缀",
-      kw.status.cget("text") == "？测试提示")
+check("键盘窗悬停提示=灰字直显",
+      kw.status.cget("text") == "测试提示")
 kw._hint(None)
 check("录制态红字 style 已注册",
       str(ttk.Style(root).lookup("Rec.TButton", "foreground")).lower()

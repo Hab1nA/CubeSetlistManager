@@ -772,7 +772,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         except tk.TclError:
             return
         if self._hover is not None:
-            self._write("？%s" % self._hover, dpi.MUT)
+            self._write(self._hover, dpi.MUT)
         elif self._transient[0] and time.time() < self._transient_until:
             self._write(*self._transient)
         else:
