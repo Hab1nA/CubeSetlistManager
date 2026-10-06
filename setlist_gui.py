@@ -761,13 +761,14 @@ class App:
             btn.config(state=tk.NORMAL if on else tk.DISABLED)
 
     def _on_exit(self):
-        """退出确认（切换中需二次确认）→ 关 MIDI 口/停后台线程。"""
-        if (self.ctrl is not None and self.ctrl.busy
-                and not messagebox.askyesno(
-                    "退出", "正在切换工程，退出会中断切换流程。确定退出？")):
-            return
-        if not messagebox.askyesno(
-                "退出", "确定退出Cube Setlist Manager？"):
+        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。"""
+        if self.ctrl is not None and self.ctrl.busy:
+            ok = messagebox.askyesno(
+                "退出", "正在切换工程，退出会中断切换流程。确定退出？")
+        else:
+            ok = messagebox.askyesno(
+                "退出", "确定退出 Cube Setlist Manager？")
+        if not ok:
             return
         self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
         for closer in ((lambda: self.port.close()),

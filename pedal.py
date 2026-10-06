@@ -1344,6 +1344,7 @@ class PedalWindow(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.learner = None
+        self._transient_until = 0.0  # 结果类反馈展示窗（_set_transient）
         self.title("踩钉控制")
         self.geometry(dpi.scale(self, 560, 400))
         # 设备下拉离线警示的字色变体（随 apply_theme 全局注册，此页只此
@@ -1492,8 +1493,8 @@ class PedalWindow(tk.Toplevel):
                     self.app.pedal_double)
             p.try_open()
         self._update_device_menu()
-        self._set_status("已选输入设备：%s" % (device_display(hint)
-                                          if hint else "未选择"))
+        self._set_transient("已选输入设备：%s" % (device_display(hint)
+                                              if hint else "未选择"))
 
     def _toggle_intercept(self):
         self.app.pedal_intercept = bool(self.intercept_var.get())
@@ -1587,6 +1588,12 @@ class PedalWindow(tk.Toplevel):
         self.status.config(text=text, style=dpi.tone(color) + ".TLabel",
                            foreground=color)
 
+    def _set_transient(self, text, color=dpi.MUT, hold=5.0):
+        # 结果类反馈展示 hold 秒：_tick_once 的常驻状态刷新在此期间让位，
+        # 到时回落（对齐 kbd 窗「结果驻留、状态常驻」的分工）
+        self._transient_until = time.time() + hold
+        self._set_status(text, color)
+
     def _save(self):
         import setlist_gui as sg       # 延迟导入避免循环
         cfg = sg._load_config()
@@ -1614,7 +1621,7 @@ class PedalWindow(tk.Toplevel):
                                         (self.app.axcfg["inHint"],
                                          _in_dev(self.app.axcfg))))
         except BaseException:
-            self._set_status("学习启动失败（口被占用？）", dpi.C_WARN)
+            self._set_transient("学习启动失败（口被占用？）", dpi.C_WARN)
             return
         self.learner = (action, learner, time.time() + LEARN_TIMEOUT)
         if self.app.pedal_device_hint:
@@ -1645,7 +1652,7 @@ class PedalWindow(tk.Toplevel):
                     self.app.pedal_intercept, self.app.pedal_gestures,
                     self.app.pedal_double)
         if msg:
-            self._set_status(msg)
+            self._set_transient(msg)
 
     def _clear(self, action):
         cc = self.app.pedal_binds.pop(action, None)
@@ -1662,7 +1669,7 @@ class PedalWindow(tk.Toplevel):
                     self.app.pedal_double)
             p.try_open()
         self._refresh()
-        self._set_status("已清除「%s」" % dict(ACTIONS)[action])
+        self._set_transient("已清除「%s」" % dict(ACTIONS)[action])
 
     def _tick(self):
         """轮询：学习进度与监听状态。单轮故障不得终结轮询（否则状态栏
@@ -1731,8 +1738,8 @@ class PedalWindow(tk.Toplevel):
                             self.app.pedal_intercept,
                             self.app.pedal_gestures, self.app.pedal_double)
                 self._refresh()
-                self._set_status("「%s」已绑定 %s"
-                                 % (dict(ACTIONS)[action], label), dpi.C_OK)
+                self._set_transient("「%s」已绑定 %s"
+                                    % (dict(ACTIONS)[action], label), dpi.C_OK)
             elif time.time() > deadline:
                 if self.app.pedal_device_hint:
                     self._cancel_learn("学习超时：所选设备没发按键（踏板连接/模式请检查）")
@@ -1742,6 +1749,8 @@ class PedalWindow(tk.Toplevel):
                 self._set_status("学习「%s」中（剩 %.0f 秒），请踩一下踩钉"
                                  % (dict(ACTIONS)[action],
                                     deadline - time.time()), dpi.C_ERR)
+        elif time.time() < self._transient_until:
+            pass                    # 瞬时结果消息展示中，状态刷新让位
         else:
             p = self.app.pedal
             if p is None:

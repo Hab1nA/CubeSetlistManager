@@ -810,7 +810,7 @@ function onRow(i){
     // 「从」名与 PC 弹窗同源：真实工程名优先（cur 为空也拿得到）
     var a=st.projName||(st.songs[st.cur]&&st.songs[st.cur].name),
         b=st.songs[i];
-    $("c-text").textContent="从《"+(a||"？")+"》切换到《"+
+    $("c-text").textContent="确定从《"+(a||"？")+"》切换到《"+
       b.name+"》？当前工程将被关闭（自动保存）。";
     $("m-confirm").classList.add("show");
   }else cmd("switch",i);
