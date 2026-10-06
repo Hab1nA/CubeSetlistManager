@@ -539,7 +539,7 @@ def test_kbd_auto():
     assert kbd_auto.describe_slot({"msb": 93, "pc": 4}) == "EXP:0005"
     assert kbd_auto.describe_slot({"msb": 0, "pc": 0}) == "GM:0001"
     assert kbd_auto.describe_slot(None) == "未设置"
-    assert kbd_auto.note_name(60) == "C3" and kbd_auto.note_name(69) == "A3"
+    assert kbd_auto.note_name(60) == "C4" and kbd_auto.note_name(69) == "A4"
 
     # 同名多口消歧：两只同型号无线 MIDI 盒在 winmm 是两个完全同名的口，
     # dev 序号决定落位（键盘自动化窗设备下拉选择即写此键）
@@ -1536,10 +1536,10 @@ def test_webremote_lifecycle():
 def test_score_combo():
     """判定矩阵（设计第五节）：恰一命令+≥1设备=合法；其余非法。"""
     f = web_remote.combo_evaluate
-    assert f({36, 48}) == (36, [48])
-    assert f({37, 50, 57}) == (37, [50, 57])
-    assert f({36, 48, 49, 57}) == (36, [48, 49, 57])   # 窗口内多设备
-    for bad in ({36}, {48, 57}, {36, 37, 48}, {37, 60}):
+    assert f({36, 60}) == (36, [60])
+    assert f({37, 62, 69}) == (37, [62, 69])
+    assert f({36, 60, 61, 69}) == (36, [60, 61, 69])   # 窗口内多设备
+    for bad in ({36}, {60, 69}, {36, 37, 60}, {37, 70}):
         try:
             f(bad)
             raise AssertionError("应判非法：%r" % bad)
@@ -1573,25 +1573,25 @@ def test_score_window():
     web_remote.push_async = lambda dev, d, port, rep: pushed.append(
         (dev["name"], d))
     try:
-        # 同窗 36+48+49 → A 上一页；B（音符49/槽位2）停用跳过
+        # 同窗 36+60+61 → A 上一页；B（音符61/槽位2）停用跳过
         hub.submit(36)
         time.sleep(0.04)
         now[0] = 0.05
-        hub.submit(48)
-        hub.submit(49)
+        hub.submit(60)
+        hub.submit(61)
         time.sleep(0.25)
         assert pushed == [("A", "prev")], pushed
         assert any("停用" in m for m in reports)
         # 窗口外重复命令 = 新组合；37 → 下一页
         now[0] = 0.5
         hub.submit(37)
-        hub.submit(48)              # 去重：同窗重复设备音符只发一次
-        hub.submit(48)
+        hub.submit(60)              # 去重：同窗重复设备音符只发一次
+        hub.submit(60)
         time.sleep(0.25)
         assert pushed == [("A", "prev"), ("A", "next")], pushed
         # 非法：仅设备音符 / 36+37 同发
         now[0] = 1.0
-        hub.submit(48)
+        hub.submit(60)
         time.sleep(0.25)
         now[0] = 1.5
         hub.submit(36)

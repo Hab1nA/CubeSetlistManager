@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""键盘音色自动化：监听 loopMIDI「Keyboard Automation」端口，C3(=60)起十个
-音符按当前工程映射向 JUNO-DS、C4(=72)起六个音符向 AX-09 Lucina 发
+"""键盘音色自动化：监听 loopMIDI「Keyboard Automation」端口，C4(=60)起十个
+音符按当前工程映射向 JUNO-DS、C5(=72)起六个音符向 AX-09 Lucina 发
 Bank Select+Program Change 切音色。
 映射来自「录制」：JUNO 按面板 Favorite（V2 固件会 TX 出 BS/PC）、AX-09 在
 面板选中音色（需先把 MIDI 设置 Bn 开为 ON，否则只发 PC）时软件从各自 MIDI
@@ -39,8 +39,8 @@ import dpi
 import midi_bridge as mb
 
 KB_PORT_HINT = "Keyboard Automation"
-SLOT_NOTES = list(range(60, 70))            # JUNO：C3 起十个半音（Cubase 音名 C3=60）
-AX_NOTES = list(range(72, 78))              # AX-09：C4 起六个半音（Cubase 音名 C4=72）
+SLOT_NOTES = list(range(60, 70))            # JUNO：C4 起十个半音
+AX_NOTES = list(range(72, 78))              # AX-09：C5 起六个半音
 SHIFT_NOTES = {36: -1, 37: 1, 38: -12, 39: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
 SHIFT_DESC = {36: "降1半音", 37: "升1半音", 38: "降1八度", 39: "升1八度"}
 # ↑↑↓ 箭头字形竖线长箭头头小，暗场远距两行几乎同形（初看像 I1）——
@@ -52,9 +52,9 @@ PEDAL_DESC = {40: "按住踩下延音，松开抬起", 45: "按住踩下延音�
 PAGE_NAMES = ("JUNO DS-88", "AX-09 Lucina")     # 配置窗口的乐器分页
 NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2", 40: "E2",
               45: "A2",
-              60: "C3", 61: "C#3", 62: "D3", 63: "D#3", 64: "E3",
-              65: "F3", 66: "F#3", 67: "G3", 68: "G#3", 69: "A3",
-              72: "C4", 73: "C#4", 74: "D4", 75: "D#4", 76: "E4", 77: "F4"}
+              60: "C4", 61: "C#4", 62: "D4", 63: "D#4", 64: "E4",
+              65: "F4", 66: "F#4", 67: "G4", 68: "G#4", 69: "A4",
+              72: "C5", 73: "C#5", 74: "D5", 75: "D#5", 76: "E5", 77: "F5"}
 MSG_GAP = 0.05                              # BS→PC 间隔
 SYSEX_GAP = 0.1                             # 模式 SysEx→BS 间隔
 SLOT_FILE = "keyboard_automation.json"      # 存在工程（歌）文件夹里
@@ -563,10 +563,10 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._dev_menus = {}
         self._dev_items = {}        # 与各页 values 平行：(端口名, 同名序 0 基)
         for key, groups in (
-                ("juno", (("── 音色槽（C3 起 10 键）──", SLOT_NOTES),
+                ("juno", (("── 音色槽（C4 起 10 键）──", SLOT_NOTES),
                           ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)),
                           ("── 延音踏板 ──", [40]))),
-                ("ax", (("── 音色槽（C4 起 6 键）──", AX_NOTES),
+                ("ax", (("── 音色槽（C5 起 6 键）──", AX_NOTES),
                         ("── 延音踏板 ──", [45])))):
             page = ttk.Frame(self)
             # MIDI 设备行：本页乐器走哪个端口，选在录/触发之前。下拉动态
@@ -1033,7 +1033,7 @@ if __name__ == "__main__":
     assert p[0][1] == 0xB0 | 0 | 64 << 8 | 0x7F << 16      # B0 40 7F 踩下
     q = pedal_msgs(False, 16)
     assert q[0][1] >> 16 & 0xFF == 0 and q[0][1] & 0x0F == 15   # BF 40 00 抬起
-    assert note_name(69) == "A3" and note_name(72) == "C4"
+    assert note_name(69) == "A4" and note_name(72) == "C5"
     assert note_name(36) == "C2" and note_name(39) == "D#2"
     assert note_name(40) == "E2" and note_name(45) == "A2"
     assert PEDAL_NOTES == {40: "juno", 45: "ax"}

@@ -24,7 +24,7 @@ import ui_text
 
 CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
 CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
-DEV_NOTES = tuple(range(48, 58))   # C3–A3 → 设备槽位 1–10
+DEV_NOTES = tuple(range(60, 70))   # C4–A4 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 1.5           # 推送短超时：连接池省掉了握手，但平板 Wi-Fi
@@ -67,7 +67,7 @@ def combo_evaluate(notes):
     if not cmd:
         raise ValueError("只有设备音符、没有命令音符（C2/C#2）")
     if not devs:
-        raise ValueError("命令音符没有配对设备音符（C3–A3）")
+        raise ValueError("命令音符没有配对设备音符（C4–A4）")
     return cmd.pop(), devs
 
 
