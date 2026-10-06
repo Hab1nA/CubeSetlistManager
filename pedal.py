@@ -1416,6 +1416,8 @@ class PedalWindow(tk.Toplevel):
             clr.pack(side="left", padx=2)
             dpi.bind_hint(clr, self._hint, "删除该动作的绑定")
             self._bind_lbl[action] = lbl
+        for r in range(len(ACTIONS) + 1):
+            grid.rowconfigure(r, uniform="rows")  # 表头与数据行等高（行距统一）
         # 底栏唯一一行：三方优先级（悬停提示>瞬时反馈>常驻状态）由
         # _present 统一裁决；平板转发短态并入常驻文本（_remote_state）；
         # side=bottom 停靠，后续 pack 次序变化不再挤动底栏

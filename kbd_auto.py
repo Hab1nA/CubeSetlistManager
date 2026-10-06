@@ -640,6 +640,8 @@ class KeyboardAutoWindow(tk.Toplevel):
                     dpi.bind_hint(clr, self._hint, "删除该音符的音色映射")
                     self._slot_lbl[note] = lbl
                     row += 1
+            for r in range(row):
+                grid.rowconfigure(r, uniform="rows")  # 全行等高=按钮行距统一
             self._pages[key] = page
         # 底栏唯一一行：三方优先级（悬停提示>瞬时反馈>端口状态）由
         # _present 统一裁决；端口状态按乐器页存 _port_state（_port_row）
