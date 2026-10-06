@@ -548,15 +548,11 @@ check("两窗操作按钮同宽",
 check("键盘窗文字不裁剪", all(fits_ttk(b) for b in kbtns.values()))
 check("键盘窗提示语无 BS/PC", "BS/PC" not in kw.winfo_children()[0]["text"])
 kw._poll_ports()   # 文案由 300ms 轮询定时器驱动：离线直接驱动一次免赛跑
-port_texts = [l["text"] for l in kw._port_lbl.values()]
-check("键盘窗端口行无设备前缀",
-      len(kw._port_lbl) == 2
-      and all(t.startswith("输入") for t in port_texts))
-check("键盘窗只显示当前乐器端口行",
-      kw._port_lbl["juno"].winfo_ismapped()
-      and not kw._port_lbl["ax"].winfo_ismapped())
-check("键盘窗绑定后状态行隐藏",
-      not kw.status.winfo_ismapped()
+check("键盘窗端口状态=合并底栏行",
+      len(kw._port_state) == 2
+      and all(t[0].startswith("输入") for t in kw._port_state.values())
+      and kw.status.cget("text").startswith("输入")
+      and kw.status.winfo_ismapped()
       and kw.title() == "键盘自动化")
 
 # --- pedal/kbd 迁移断言（ttk 语义：下拉/状态色全走 ttk 机制） ---
@@ -578,11 +574,21 @@ check("踩钉窗状态行改色=改 style",
       pw.status.cget("style") == "Err.TLabel"
       and all(str(l.cget("style")) == "Dim.TLabel"
               for l in pw._bind_lbl.values()))
+pw._hint("测试提示")
+check("踩钉窗悬停提示=？前缀",
+      pw.status.cget("text") == "？测试提示")
+pw._hint(None)
 kw._port_row("juno", "输入 ✓ ｜ 输出 ✓", True)
+check("键盘窗端口行改色=合并行 style",
+      kw.status.cget("style") == "Ok.TLabel")
 kw._port_row("ax", "输入 ✗", False)
-check("键盘窗端口行改色=改 style",
-      kw._port_lbl["juno"].cget("style") == "Ok.TLabel"
-      and kw._port_lbl["ax"].cget("style") == "Err.TLabel")
+check("键盘窗非当前页端口=存态不打扰当前行",
+      kw._port_state["ax"] == ("输入 ✗", False)
+      and kw.status.cget("style") == "Ok.TLabel")
+kw._hint("测试提示")
+check("键盘窗悬停提示=？前缀",
+      kw.status.cget("text") == "？测试提示")
+kw._hint(None)
 check("录制态红字 style 已注册",
       str(ttk.Style(root).lookup("Rec.TButton", "foreground")).lower()
       == sg.dpi.C_ERR)

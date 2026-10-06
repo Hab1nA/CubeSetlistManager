@@ -535,7 +535,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         # 注册，此窗只此一处用；下阶段收编进 dpi）
         ttk.Style(self).configure("Rec.TButton", foreground=dpi.C_ERR)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        ttk.Label(self, text="录制：在琴上选好该音色；"
+        ttk.Label(self, text="录制：在琴上选好该音色，"
                             "触发：发送到琴上验证。").pack(
             anchor="w", padx=pad, pady=(pad, 4))
         # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
@@ -552,8 +552,12 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._menu.pack(side="left", fill="x", expand=True)
         self._menu.bind("<<ComboboxSelected>>",
                         lambda _e: self._show_page(self._sel.get()))
-        ttk.Button(top, text="刷新", width=6,
-                   command=self._refresh_page).pack(side="left", padx=(6, 0))
+        dpi.bind_hint(self._menu, self._hint,
+                      "切换琴型页：JUNO DS-88 / AX-09")
+        ref = ttk.Button(top, text="刷新", width=6,
+                         command=self._refresh_page)
+        dpi.bind_hint(ref, self._hint, "重新枚举设备并复核端口状态")
+        ref.pack(side="left", padx=(6, 0))
         self._slot_lbl = {}
         self._rec_btn = {}
         self._pages = {}
@@ -584,9 +588,12 @@ class KeyboardAutoWindow(tk.Toplevel):
             self._dev_items[key] = []
             opt.bind("<<ComboboxSelected>>",
                      lambda _e, k=key: self._on_dev_selected(k))
-            ttk.Button(devrow, text="刷新", width=6,
-                       command=lambda k=key: self._rebuild_device_menu(k)
-                       ).pack(side="left", padx=(6, 0))
+            dpi.bind_hint(opt, self._hint,
+                          "当前琴型的 MIDI 口；「当前不可用」即设备未接入")
+            ref = ttk.Button(devrow, text="刷新", width=6,
+                             command=lambda k=key: self._rebuild_device_menu(k))
+            dpi.bind_hint(ref, self._hint, "重新枚举设备并复核端口状态")
+            ref.pack(side="left", padx=(6, 0))
             grid = ttk.Frame(page)
             grid.pack(fill="both", expand=True)
             for c, t in enumerate(("音符", "音色映射", "操作")):
@@ -622,33 +629,37 @@ class KeyboardAutoWindow(tk.Toplevel):
                         cell, text="录制", width=8,
                         command=lambda n=note: self._toggle_record(n))
                     self._rec_btn[note].pack(side="left", padx=2)
-                    ttk.Button(cell, text="触发", width=8,
-                               command=lambda n=note: self._trigger(n)).pack(
-                        side="left", padx=2)
-                    ttk.Button(cell, text="清除", width=8,
-                               command=lambda n=note: self._clear(n)).pack(
-                        side="left", padx=2)
+                    dpi.bind_hint(self._rec_btn[note], self._hint,
+                                  "按下后到琴上选好音色，回来按「停止」保存")
+                    trig = ttk.Button(cell, text="触发", width=8,
+                                      command=lambda n=note: self._trigger(n))
+                    trig.pack(side="left", padx=2)
+                    dpi.bind_hint(trig, self._hint,
+                                  "向琴发送该音色的 PC 消息，验证映射生效")
+                    clr = ttk.Button(cell, text="清除", width=8,
+                                     command=lambda n=note: self._clear(n))
+                    clr.pack(side="left", padx=2)
+                    dpi.bind_hint(clr, self._hint, "删除该音符的音色映射")
                     self._slot_lbl[note] = lbl
                     row += 1
             self._pages[key] = page
-        # 动作状态行：无消息时整行隐藏，不占位
-        self.status = ttk.Label(self, text="", anchor="w", style="Dim.TLabel")
-        # 端口状态行：每琴一行，只显示当前乐器页那行（_show_page 接管）；
-        # 文案不带设备前缀——页已经表意
-        self._port_lbl = {}
-        for key, text in (("juno", "…"), ("ax", "…")):
-            lbl = ttk.Label(self, text=text, anchor="w", style="Dim.TLabel")
-            self._port_lbl[key] = lbl
-        self._port_lbl["juno"].pack(fill="x", padx=pad,
-                                    pady=(0, dpi.scale(self, 8)))
+        # 底栏唯一一行：三方优先级（悬停提示>瞬时反馈>端口状态）由
+        # _present 统一裁决；端口状态按乐器页存 _port_state（_port_row）
+        self.status = ttk.Label(self, text="…", anchor="w", style="Dim.TLabel")
+        self._hover = None
+        self._transient = ("", dpi.MUT)
+        self._transient_until = 0.0
+        self._port_state = {}
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.setup_window(self)
-        # 尺寸适配：按当前页内容定高（状态行动态出现也不会裁掉底部端口行）
-        self.status.pack(fill="x", padx=pad, pady=(6, 0),
-                         before=self._port_lbl["juno"])
+        # side=bottom 停靠：页框架 fill=both expand 在 _show_page 才 pack，
+        # 普通次序会把本行挤出窗底（四边留白回归抓过）
+        self.status.pack(side="bottom", fill="x", padx=pad,
+                         pady=(6, dpi.scale(self, 8)))
+        dpi.bind_hint(self.status, self._hint,
+                      "✗ 后括号内是 config 键名，检查该键是否匹配到接入设备")
         self._show_page(PAGE_NAMES[0])
-        self.status.pack_forget()
         self.after(300, self._tick)
 
     def _show_page(self, name):
@@ -660,16 +671,13 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._sel.set(name)
         for p in self._pages.values():
             p.pack_forget()
-        for lbl in self._port_lbl.values():
-            lbl.pack_forget()
         self._pages[key].pack(fill="both", expand=True,
                               padx=dpi.scale(self, 12))
         # 切页即重枚举当前页下拉（开窗首次也走这里）：另一页在看不见的
         # 期间设备可能插拔，陈旧菜单误导选——枚举走 io 专线（1s 限时+
         # last-good 缓存）不担心主线程挂死
         self._rebuild_device_menu(key)
-        self._port_lbl[key].pack(fill="x", padx=dpi.scale(self, 12),
-                                 pady=(0, dpi.scale(self, 8)))
+        self._present()             # 底栏切显示当前页端口状态
         self.update_idletasks()
         # 先降 minsize 再改尺寸——顺序反了会被上一页的 minsize 钳住缩不回去
         self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
@@ -746,16 +754,39 @@ class KeyboardAutoWindow(tk.Toplevel):
             foreground=dpi.FG if slot else dpi.MUT)
 
     def set_status(self, text, color=dpi.MUT):
-        if not text:
-            self.status.pack_forget()
+        """瞬时反馈：展示至下一条消息或 5 秒后回落端口状态（_tick 驱动
+        _present）；空文本=清除。悬停提示优先级更高（_hint）。"""
+        self._transient = (text, color)
+        self._transient_until = time.time() + 5.0
+        self._present()
+
+    def _hint(self, text):
+        self._hover = text
+        self._present()
+
+    def _present(self):
+        """底栏三方优先级：悬停提示 > 瞬时反馈 > 当前页端口状态。"""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
             return
+        if self._hover is not None:
+            self._write("？%s" % self._hover, dpi.MUT)
+        elif self._transient[0] and time.time() < self._transient_until:
+            self._write(*self._transient)
+        else:
+            text, ok = self._port_state.get(
+                getattr(self, "_page_key", "juno"), ("…", None))
+            fg = dpi.C_OK if ok else (dpi.C_ERR if ok is not None
+                                      else dpi.MUT)
+            self._write(text, fg)
+
+    def _write(self, text, color=dpi.MUT):
         # fg 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与绘制
         # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
         self.status.config(text=text, style=dpi.tone(color) + ".TLabel",
                            foreground=color)
-        self.status.pack(fill="x", padx=dpi.scale(self, 12), pady=(6, 0),
-                         before=self._port_lbl[getattr(self, "_page_key",
-                                                       "juno")])
 
     # ---- 录制 ----
 
@@ -892,19 +923,17 @@ class KeyboardAutoWindow(tk.Toplevel):
     @staticmethod
     def _side_line(devs, hint, dev, cfg_key, hint_key):
         """单向（输入或输出）端口状态文案：✓（同名多口时标注实际绑定的
-        「第N个」）或 ✗ 未找到（提示 config 键）。"""
+        「第N个」）或 ✗＋config 键引用（键名含义见底栏行悬停提示）。"""
         hit = _pick_hit(devs, hint, dev)
         if hit is None:
-            return ("✗ 未找到，查 config %s.%s" % (cfg_key, hint_key)), False
+            return ("✗（%s.%s）" % (cfg_key, hint_key)), False
         pos, total = _name_pos(devs, hit[1], hit[0])
         return ("✓ 第%d个" % pos) if total > 1 else "✓", True
 
     def _port_row(self, key, text, ok):
-        # fg 与 style 同写（dpi.paint_tree 注）
-        fg = dpi.C_OK if ok else dpi.C_ERR
-        self._port_lbl[key].config(
-            text=text,
-            style=dpi.tone(fg) + ".TLabel", foreground=fg)
+        self._port_state[key] = (text, ok)
+        if key == getattr(self, "_page_key", "juno"):
+            self._present()
 
     def _refresh_page(self):
         """乐器行「刷新」：重枚举当前页设备下拉并复核端口状态——与页内

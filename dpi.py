@@ -130,6 +130,14 @@ def setup_window(win):
     paint_tree(win)
 
 
+def bind_hint(widget, on_hint, text):
+    """悬停提示接线：鼠标进入控件→on_hint(text)，离开→on_hint(None)。
+    on_hint 由窗口实现（底栏三方优先级：悬停提示>瞬时反馈>常驻状态）。
+    add=\"+\" 不覆盖控件既有绑定。"""
+    widget.bind("<Enter>", lambda _e: on_hint(text), add="+")
+    widget.bind("<Leave>", lambda _e: on_hint(None), add="+")
+
+
 def apply_theme(root):
     """已迁移窗口的整主题入口：sv-ttk dark + 集中命名 style。在
     tk.Tk() 建立后、控件构建前调用一次（各程序 main() 与离线渲染

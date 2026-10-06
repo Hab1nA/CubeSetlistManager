@@ -1345,15 +1345,15 @@ class PedalWindow(tk.Toplevel):
         self.app = app
         self.learner = None
         self._transient_until = 0.0  # 结果类反馈展示窗（_set_transient）
+        self._transient = ("", dpi.MUT)
+        self._hover = None           # 悬停提示（bind_hint→_hint）
         self.title("踩钉控制")
         self.geometry(dpi.scale(self, 560, 400))
         # 设备下拉离线警示的字色变体（随 apply_theme 全局注册，此页只此
         # 一处用；下阶段收编进 dpi）
         ttk.Style(self).configure("Warn.TCombobox", foreground=dpi.C_WARN)
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
-        ttk.Label(self, text="选择输入设备后，只有该设备的按键能触发动作；"
-                  "勾选拦截后，被绑定的按键经系统热键注册被截留，不会"
-                  "送达其它软件（学习不受影响）。").pack(
+        ttk.Label(self, text="只有所选设备的按键会触发动作").pack(
             anchor="w", padx=pad, pady=(pad, 4))
         # 设备行与设置页严格同款（对照 SettingsWindow 的 menu_row 与
         # row(browse=True)：宽 15 标签 + 下拉填充 + 右侧 width=6 小按钮）；
@@ -1368,21 +1368,28 @@ class PedalWindow(tk.Toplevel):
         self.dev_opt.pack(side="left", fill="x", expand=True)
         self._dev_hints = [""]     # 与 values 平行：候选→身份子串（0=仅 MIDI）
         self.dev_opt.bind("<<ComboboxSelected>>", self._on_dev_selected)
-        ttk.Button(devrow, text="刷新", width=6,
-                   command=self._update_device_menu).pack(
-            side="left", padx=(6, 0))
+        dpi.bind_hint(self.dev_opt, self._hint,
+                      "只有所选设备的按键会触发动作；未选则按键绑定不生效")
+        ref_btn = ttk.Button(devrow, text="刷新", width=6,
+                             command=self._update_device_menu)
+        dpi.bind_hint(ref_btn, self._hint, "重新枚举设备并复核在线状态")
+        ref_btn.pack(side="left", padx=(6, 0))
         self.intercept_var = tk.BooleanVar(value=self.app.pedal_intercept)
-        ttk.Checkbutton(self, text="拦截踏板按键",
-                        variable=self.intercept_var,
-                        command=self._toggle_intercept).pack(
-            anchor="w", padx=pad, pady=1)
+        cb = ttk.Checkbutton(self, text="拦截踏板按键",
+                             variable=self.intercept_var,
+                             command=self._toggle_intercept)
+        cb.pack(anchor="w", padx=pad, pady=1)
+        dpi.bind_hint(cb, self._hint,
+                      "勾选后被绑定按键经系统热键截留，不送达其它软件；"
+                      "学习不受影响")
         self.remote_var = tk.BooleanVar(
             value=getattr(self.app, "pedal_remote_enabled", False))
-        ttk.Checkbutton(self, text="允许平板转发踩钉（踏板 USB-C 线连平板 → "
-                        "APP 经 WiFi 转发；平板端 APP 设置里也要开）",
-                        variable=self.remote_var,
-                        command=self._toggle_remote).pack(
-            anchor="w", padx=pad, pady=1)
+        cb = ttk.Checkbutton(self, text="允许平板转发踩钉",
+                             variable=self.remote_var,
+                             command=self._toggle_remote)
+        cb.pack(anchor="w", padx=pad, pady=1)
+        dpi.bind_hint(cb, self._hint,
+                      "踏板 USB-C 连平板经 APP 转发；平板端 APP 设置里也要开")
         grid = ttk.Frame(self)
         grid.pack(fill="both", expand=True, padx=pad)
         for c, t in enumerate(("功能", "绑定", "操作")):
@@ -1399,20 +1406,23 @@ class PedalWindow(tk.Toplevel):
             grid.columnconfigure(1, weight=1)
             cell = ttk.Frame(grid)
             cell.grid(row=r, column=2, sticky="w", pady=2)
-            ttk.Button(cell, text="学习", width=8,
-                       command=lambda a=action: self._learn(a)).pack(
-                side="left", padx=2)
-            ttk.Button(cell, text="清除", width=8,
-                       command=lambda a=action: self._clear(a)).pack(
-                side="left", padx=2)
+            learn = ttk.Button(cell, text="学习", width=8,
+                               command=lambda a=action: self._learn(a))
+            learn.pack(side="left", padx=2)
+            dpi.bind_hint(learn, self._hint,
+                          "单踩为单踩手势，快踩两下为双踩；超时自动取消")
+            clr = ttk.Button(cell, text="清除", width=8,
+                             command=lambda a=action: self._clear(a))
+            clr.pack(side="left", padx=2)
+            dpi.bind_hint(clr, self._hint, "删除该动作的绑定")
             self._bind_lbl[action] = lbl
+        # 底栏唯一一行：三方优先级（悬停提示>瞬时反馈>常驻状态）由
+        # _present 统一裁决；平板转发短态并入常驻文本（_remote_state）；
+        # side=bottom 停靠，后续 pack 次序变化不再挤动底栏
         self.status = ttk.Label(self, text="…", anchor="w",
                                 style="Dim.TLabel")
-        self.status.pack(fill="x", padx=pad, pady=(6, 2))
-        self.remote_lbl = ttk.Label(self, text="", anchor="w",
-                                    style="Dim.TLabel")
-        self.remote_lbl.pack(fill="x", padx=pad,
-                             pady=(0, dpi.scale(self, 8)))
+        self.status.pack(side="bottom", fill="x", padx=pad,
+                         pady=(6, dpi.scale(self, 8)))
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.setup_window(self)
@@ -1512,55 +1522,7 @@ class PedalWindow(tk.Toplevel):
     def _toggle_remote(self):
         self.app.pedal_remote_enabled = bool(self.remote_var.get())
         self._save()
-        self._remote_tick()
-
-    def _remote_tick(self):
-        """平板转发路状态行：开关态 + 心跳链路 + 最后事件年龄 + 未识别键。
-        link 判据与 /state 快照的 pedalRemote 一致（15 秒无心跳=失联）；
-        未识别键>0 说明链路活但键路不通（固件换键位/表缺键），转警示色。
-        远程路不受「输入设备」选择约束（那是本地 raw HID 的归属门），
-        如实标注防误读。"""
-        p = self.app.pedal
-        # fg 与 style 同写：sv-ttk 下 TLabel 族 style fg 不参与绘制
-        # （dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
-        if not getattr(self.app, "pedal_remote_enabled", False):
-            self.remote_lbl.config(text="平板转发：关闭",
-                                   style=dpi.tone(dpi.MUT) + ".TLabel",
-                                   foreground=dpi.MUT)
-            return
-        if p is None:
-            self.remote_lbl.config(text="平板转发：开启（服务启动中）",
-                                   style=dpi.tone(dpi.MUT) + ".TLabel",
-                                   foreground=dpi.MUT)
-            return
-        now = time.monotonic()
-        br = p.bridge
-        link_t = max(br.remote_event_t, br.remote_hb_t)
-        extra = ("，未识别键 %d 个" % br.remote_unknown
-                 if br.remote_unknown else "")
-        tail = "（远程路不受输入设备选择约束）"
-        if link_t <= 0.0:
-            self.remote_lbl.config(
-                text="平板转发：开启，等待平板（APP 设置里开「踩钉转发」）",
-                style=dpi.tone(dpi.MUT) + ".TLabel", foreground=dpi.MUT)
-        elif now - link_t > 15.0:
-            self.remote_lbl.config(
-                text="平板转发：开启，链路失联（%.0f 秒无心跳/事件）"
-                     % (now - link_t),
-                     style=dpi.tone(dpi.C_WARN) + ".TLabel",
-                     foreground=dpi.C_WARN)
-        else:
-            fg = dpi.C_WARN if br.remote_unknown else dpi.C_OK
-            if br.remote_event_t > 0.0:
-                self.remote_lbl.config(
-                    text="平板转发：链路正常，最后事件 %.0f 秒前%s%s"
-                         % (now - br.remote_event_t, extra, tail),
-                     style=dpi.tone(fg) + ".TLabel", foreground=fg)
-            else:
-                self.remote_lbl.config(
-                    text="平板转发：链路正常，尚无有效按键事件%s%s"
-                         % (extra, tail),
-                     style=dpi.tone(fg) + ".TLabel", foreground=fg)
+        self._present()
 
     def _refresh(self):
         for action, _name in ACTIONS:
@@ -1589,10 +1551,95 @@ class PedalWindow(tk.Toplevel):
                            foreground=color)
 
     def _set_transient(self, text, color=dpi.MUT, hold=5.0):
-        # 结果类反馈展示 hold 秒：_tick_once 的常驻状态刷新在此期间让位，
-        # 到时回落（对齐 kbd 窗「结果驻留、状态常驻」的分工）
+        # 结果类反馈展示 hold 秒后回落常驻状态（_tick 驱动 _present）
+        self._transient = (text, color)
         self._transient_until = time.time() + hold
-        self._set_status(text, color)
+        self._present()
+
+    def _hint(self, text):
+        self._hover = text
+        self._present()
+
+    def _present(self):
+        """底栏三方优先级：悬停提示 > 学习倒计时/瞬时反馈 > 常驻状态。"""
+        if self._hover is not None:
+            self._set_status("？%s" % self._hover, dpi.MUT)
+        elif self.learner is not None:
+            action, learner, deadline = self.learner
+            extra = ("：未选输入设备，踏板按键不会被抓取"
+                     if not self.app.pedal_device_hint
+                     and self.app.pedal_hid else "")
+            self._set_status("学习「%s」中（剩 %.0f 秒），请踩一下踩钉%s"
+                             % (dict(ACTIONS)[action],
+                                deadline - time.time(), extra), dpi.C_ERR)
+        elif time.time() < self._transient_until:
+            self._set_status(*self._transient)
+        else:
+            self._set_status(*self._state_text())
+
+    def _state_text(self):
+        """常驻状态：监听/静音态＋平板转发短态（未启用则不拼）。"""
+        p = self.app.pedal
+        if p is None:
+            return "服务启动中…", dpi.MUT
+        if not self.app.pedal_binds and not self.app.pedal_hid:
+            base = ("还没有任何绑定：点任一「学习」开始", dpi.MUT)
+        else:
+            # 页面存活期整体静音——「监听中」在此是说谎，如实标注
+            parts = ([p.name] if p.connected else []) \
+                + (["键盘按键"] if p.hid_active else [])
+            dead_hid = False
+            if p.device_hint:
+                online = p.device_online()
+                parts.append("%s %s·拦截%s" % (
+                    device_display(p.device_hint),
+                    "在线" if online else "离线",
+                    "开" if self.app.pedal_intercept else "关"))
+            elif self.app.pedal_hid:
+                # 未选设备时 HID 踏板被整体忽略（学习与触发都不抓），
+                # 但桥仍在跑——状态栏若只写「键盘按键」=绑定死了看不见
+                dead_hid = True
+                parts.append("按键绑定未生效：未选择输入设备"
+                             "（点「输入设备」选踏板）")
+            if parts:
+                base = ("已暂停响应（关闭本页恢复）：%s" % "、".join(parts),
+                        dpi.C_WARN if dead_hid else dpi.MUT)
+            elif p.hint:
+                base = ("未找到踩钉口「%s」（关闭本页后自动重试）" % p.hint,
+                        dpi.C_WARN)
+            else:
+                base = ("还没有任何绑定：点任一「学习」开始", dpi.MUT)
+        remote = self._remote_state()
+        if remote is None:
+            return base
+        rank = {dpi.MUT: 0, dpi.C_OK: 0, dpi.C_WARN: 1, dpi.C_ERR: 2}
+        worse = rank.get(remote[1], 0) > rank.get(base[1], 0)
+        return "%s · %s" % (base[0], remote[0]), \
+            (remote[1] if worse else base[1])
+
+    def _remote_state(self):
+        """平板转发短态（未启用=None，不占常驻文本）。link 判据与 /state
+        快照的 pedalRemote 一致（15 秒无心跳=失联）；未识别键>0=链路活
+        但键路不通，转警示。远程路不受「输入设备」选择约束（那是本地
+        raw HID 的归属门），故不随设备选择变化。"""
+        if not getattr(self.app, "pedal_remote_enabled", False):
+            return None
+        p = self.app.pedal
+        if p is None:
+            return "平板转发 启动中", dpi.MUT
+        now = time.monotonic()
+        br = p.bridge
+        link_t = max(br.remote_event_t, br.remote_hb_t)
+        if link_t <= 0.0:
+            return "平板转发 待平板", dpi.MUT
+        if now - link_t > 15.0:
+            return "平板转发 失联%.0f秒" % (now - link_t), dpi.C_WARN
+        if br.remote_unknown:
+            return "平板转发 未识别键%d个" % br.remote_unknown, dpi.C_WARN
+        if br.remote_event_t > 0.0:
+            return ("平板转发 正常·%.0fs前" % (now - br.remote_event_t),
+                    dpi.C_OK)
+        return "平板转发 正常·无事件", dpi.C_OK
 
     def _save(self):
         import setlist_gui as sg       # 延迟导入避免循环
@@ -1624,19 +1671,7 @@ class PedalWindow(tk.Toplevel):
             self._set_transient("学习启动失败（口被占用？）", dpi.C_WARN)
             return
         self.learner = (action, learner, time.time() + LEARN_TIMEOUT)
-        if self.app.pedal_device_hint:
-            where = "设备「%s」的按键或 MIDI" % device_display(
-                self.app.pedal_device_hint)
-        elif self.app.pedal_hid:
-            # 有按键绑定却没选设备：踏板按键不会被抓取（学习只录所选设备），
-            # 不点破用户会把「等待 MIDI CC」理解成也能学踏板
-            where = "MIDI CC（未选输入设备，踏板按键不会被抓取）"
-        else:
-            where = "MIDI CC"
-        self._set_status("学习「%s」：单击 / 快踩两下（双踩），%d 秒内"
-                         "等待%s"
-                         % (dict(ACTIONS)[action], LEARN_TIMEOUT, where),
-                         dpi.C_ERR)
+        self._present()
 
     def _cancel_learn(self, msg):
         if self.learner is None:
@@ -1744,47 +1779,9 @@ class PedalWindow(tk.Toplevel):
                 if self.app.pedal_device_hint:
                     self._cancel_learn("学习超时：所选设备没发按键（踏板连接/模式请检查）")
                 else:
-                    self._cancel_learn("学习超时：未选输入设备，没等到 MIDI CC")
-            else:
-                self._set_status("学习「%s」中（剩 %.0f 秒），请踩一下踩钉"
-                                 % (dict(ACTIONS)[action],
-                                    deadline - time.time()), dpi.C_ERR)
-        elif time.time() < self._transient_until:
-            pass                    # 瞬时结果消息展示中，状态刷新让位
-        else:
-            p = self.app.pedal
-            if p is None:
-                self._set_status("服务启动中…")
-            elif not self.app.pedal_binds and not self.app.pedal_hid:
-                self._set_status("还没有任何绑定：点任一「学习」开始", dpi.MUT)
-            else:
-                # 页面存活期整体静音——「监听中」在此是说谎，如实标注
-                parts = ([p.name] if p.connected else []) \
-                    + (["键盘按键"] if p.hid_active else [])
-                dead_hid = False
-                if p.device_hint:
-                    online = p.device_online()
-                    parts.append("%s（%s，拦截%s）" % (
-                        device_display(p.device_hint),
-                        "在线" if online else "离线",
-                        "开" if self.app.pedal_intercept else "关"))
-                elif self.app.pedal_hid:
-                    # 未选设备时 HID 踏板被整体忽略（学习与触发都不抓），
-                    # 但桥仍在跑——状态栏若只写「键盘按键」=绑定死了看不见
-                    dead_hid = True
-                    parts.append("按键绑定未生效：未选择输入设备"
-                                 "（点「输入设备」选踏板）")
-                if parts:
-                    self._set_status("踩钉已暂停响应（关闭本页恢复）：%s"
-                                     % "，".join(parts),
-                                     dpi.C_WARN if dead_hid else dpi.MUT)
-                elif p.hint:
-                    self._set_status("未找到踩钉口「%s」（关闭本页后自动重试）"
-                                     % p.hint, dpi.C_WARN)
-                else:
-                    self._set_status("还没有任何绑定：点任一「学习」开始",
-                                     dpi.MUT)
-        self._remote_tick()
+                    self._cancel_learn(
+                        "学习超时：未选输入设备，没等到 MIDI CC")
+        self._present()
 
     def _close(self):
         self._cancel_learn("")
