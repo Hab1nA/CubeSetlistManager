@@ -199,13 +199,10 @@ def apply_theme(root):
                          border=4, sticky="nsew")
         s.layout(name + ".TButton", [(name + ".round",
                  {"sticky": "nsew",
-                  "children": [("Button.focus",
+                  "children": [("Button.padding",
                                 {"sticky": "nsew",
-                                 "children": [("Button.padding",
-                                               {"sticky": "nsew",
-                                                "children": [("Button.label",
-                                                              {"sticky":
-                                                               "nswe"})]})]})]})])
+                                 "children": [("Button.label",
+                                               {"sticky": "nswe"})]})]})])
         s.configure(name + ".TButton", foreground=txt, anchor="center",
                     padding=(8, 2, 8, 3))
         s.map(name + ".TButton", foreground=[("disabled", MUT)])
