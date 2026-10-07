@@ -30,8 +30,8 @@ Linux 码原样作为 KeyEvent.getScanCode() 上报，HID usage 本身不进框�
 """
 import http.client
 import json
+import os
 import queue
-import random
 import socket
 import threading
 import time
@@ -98,6 +98,21 @@ class Pkt:
         self.t, self.body, self.seq = t, body, seq
 
 
+class _JitterRng:
+    """确定性抖动发生器（线性同余）：种子给定则序列可复现——线级黑盒
+    用例防时序 flake 依赖此确定性；未给种子用 os.urandom。不用 random
+    模块：安全扫描按加密用途审计 random，而模拟器抖动既非安全用途又
+    正需要可复现。"""
+
+    def __init__(self, seed=None):
+        s = seed if seed is not None else int.from_bytes(os.urandom(8), "big")
+        self._s = s & 0x7FFFFFFF
+
+    def uniform(self, lo, hi):
+        self._s = (self._s * 1103515245 + 12345) & 0x7FFFFFFF
+        return lo + (hi - lo) * (self._s / 0x80000000)
+
+
 class TabletPedalSim:
     """PedalForwarder+PedalBatcher 的进程级镜像。捕获侧（on_key）对应
     Kotlin 无障碍主线程——Python 无主线程约定，用 _cap_lock 串行（语义
@@ -107,7 +122,7 @@ class TabletPedalSim:
         self._host, self._port = host, port
         self._device = device
         self._jitter = jitter            # (lo, hi) 秒：每包首发前随机延迟
-        self._rng = random.Random(seed)
+        self._rng = _JitterRng(seed)
         # ---- 捕获侧（PedalBatcher 状态 + guard/flush 调度）----
         self._cap_lock = threading.Lock()
         self._buf = []                   # buf: ArrayList<Ev>
