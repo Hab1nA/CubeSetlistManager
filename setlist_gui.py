@@ -491,6 +491,7 @@ class App:
             path=_HERE / "stall.log",
             notify=self.q.put)
         self._stall_wd.start()
+        self._stack_sent = stallguard.StackSentinel(_HERE / "stall_stack.log")
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
         root.after(50, self._drain_calls)
@@ -771,6 +772,7 @@ class App:
         if not ok:
             return
         self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
+        self._stack_sent.stop()     # 同理断掉栈哨兵计时窗
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close()),
@@ -1884,6 +1886,7 @@ class App:
         恢复后全停必须先于陈旧普通指令；普通批次先合流（幂等回调恢复后
         成批重复，只执行最后一次）。"""
         self._hb = time.monotonic()     # 喂看门狗心跳
+        self._stack_sent.feed()         # 续 C 级栈哨兵计时窗
         while self.calls_urgent:
             self._run_call(self.calls_urgent.popleft())
         batch = []
@@ -1903,6 +1906,7 @@ class App:
 
     def _tick(self):
         self._hb = time.monotonic()     # 喂看门狗心跳
+        self._stack_sent.feed()         # 续 C 级栈哨兵计时窗
         self._hb_tag = "_tick_body"
         try:
             self._tick_body()

@@ -178,6 +178,56 @@ def test_watchdog_wired_both_guis():
         assert "StallWatchdog(" in src, name
         assert 'self._hb = time.monotonic()' in src, name
         assert '_hb_tag = getattr(fn, "__name__", "<lambda>")' in src, name
+        assert "StackSentinel(" in src, name
+        assert src.count("_stack_sent.feed()") == 2, name  # _drain_calls+_tick
+
+
+# ---- 黑匣子升级：C 级栈哨兵（faulthandler 计时窗） ----
+
+def test_stack_sentinel_dumps_on_stall(tmp_path):
+    """主线程停喂 → 到窗落全部线程栈且按窗连拍（repeat）。转储在 C 级
+    看门狗线程完成、不取 GIL：主线程持 GIL 卡死导致 Python 看门狗饿死时
+    此哨兵照样开火——恰为前者盲区。断言用跨版本稳定标记（py3.14 转储头
+    为 Timeout! + Thread 0x…，无 Current thread）。"""
+    import stallguard
+    log = tmp_path / "stall_stack.log"
+    sent = stallguard.StackSentinel(log, window=0.2)
+    try:
+        sent.feed()
+        time.sleep(1.0)                 # 心跳冻结：0.2/0.4/0.6/0.8 连拍
+        text = log.read_text(encoding="utf-8")
+        assert "Timeout" in text
+        assert text.count("(most recent call first)") >= 2
+    finally:
+        sent.stop()
+
+
+def test_stack_sentinel_silent_while_fed(tmp_path):
+    """健康心跳每窗内续窗：文件建成但恒空（feed 续窗不落盘）。"""
+    import stallguard
+    log = tmp_path / "stall_stack.log"
+    sent = stallguard.StackSentinel(log, window=0.2)
+    try:
+        t_end = time.monotonic() + 1.0  # 覆盖 5 个窗的持续喂活
+        while time.monotonic() < t_end:
+            sent.feed()
+            time.sleep(0.05)
+        assert not log.exists() or log.stat().st_size == 0
+    finally:
+        sent.stop()
+
+
+def test_stack_sentinel_stop_cancels(tmp_path):
+    """退出期 stop() 断窗：此后心跳冻结也不落盘（防拆栈噪声）；stop 后
+    句柄置空，feed 恒 no-op（防重装已关闭 fd）。"""
+    import stallguard
+    log = tmp_path / "stall_stack.log"
+    sent = stallguard.StackSentinel(log, window=0.2)
+    sent.feed()
+    sent.stop()
+    sent.feed()                         # stop 后必须 no-op
+    time.sleep(0.5)
+    assert not log.exists() or log.stat().st_size == 0
 
 
 # ---- 修复7：winmm 专线（open/close 收敛专职线程，主线程限时等待） ----
@@ -644,6 +694,7 @@ def test_exit_stops_watchdog():
     for name in ("setlist_gui.py", "automator_gui.py"):
         src = _slice(_src(name), "def _on_exit", "def _exit_worker")
         assert "self._stall_wd.stop()" in src, name
+        assert "self._stack_sent.stop()" in src, name
 
 
 def test_pedal_window_page_mute():

@@ -315,7 +315,8 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   （含「投影」/Projector）匹配后发 WM_CLOSE
 - Cubase 窗口标题版本名随工程最后保存版本变（`Cubase Pro 工程 - 名` / `Cubase Version 13.0.40 工程 - 名`），
   匹配只认固定标记 `" 工程 - "`+后缀全等
-- 无 console 的 exe 崩溃栈落 exe 同目录 `crash.log`（faulthandler）
+- 无 console 的 exe 崩溃栈落 exe 同目录 `crash.log`（faulthandler）；主线程停摆现场与
+  全线程栈分别落 `stall.log` / `stall_stack.log`（栈哨兵按窗连拍，卡点一次停摆即裁决）
 - WinRT 热点 API 实名（PS 5.1 投影实测）：能力查询=`GetTetheringCapabilityFromConnectionProfile`
   （不是文档里的 `TetheringCapability`，那个在投影类型上不存在）；热点需本机有
   已连接的网络作共享来源；热点空闲一段时间会被 Windows 自动关闭；HTTP 服务

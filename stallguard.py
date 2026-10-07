@@ -7,6 +7,7 @@ WM_PAINT=深色窗黑面、不泵 after=50ms 指令排水停）→ APP 指令全
 出了事只有用户肉眼，没有日志能回答「当时卡在哪个调用、队列里压了多少」——
 黑匣子把每次停摆的现场（时长/正在执行的回调/队列深度/丢弃数）落盘。
 """
+import faulthandler
 import pathlib
 import queue
 import threading
@@ -91,6 +92,50 @@ class StallWatchdog:
                                  % total)
                 except Exception:
                     pass
+
+
+class StackSentinel:
+    """C 级主线程栈哨兵（faulthandler 计时窗）：主线程每次喂心跳即取消旧
+    窗重装新窗；真停摆=不再喂，C 级看门狗线程到窗即把全部线程栈落盘并按
+    窗连拍，恢复喂心跳即断。与 StallWatchdog 互补：后者出墙钟时间线与
+    队列现场，但它是 Python 线程——主线程若持 GIL 卡死会一并饿死且拿不
+    到栈；本哨兵转储不取 GIL，恰补该盲区（一次停摆即裁决卡点）。窗宽与
+    watchdog 阈值对齐，两份日志时间线互照。"""
+
+    def __init__(self, path, window=3.0):
+        self._window = window
+        self._f = None
+        try:
+            # 启动期轮转（crash.log 同款）：运行期句柄常驻，Windows 下
+            # replace 会失败，故只在本构造点轮转；停摆连拍为 KB 级，够用
+            p = pathlib.Path(path)
+            if p.exists() and p.stat().st_size > 512 * 1024:
+                p.replace(p.with_name(p.name + ".1"))
+            self._f = open(p, "a", encoding="utf-8")
+        except OSError:
+            self._f = None            # 与 watchdog 同哲学：黑匣子自坏不伤主程序
+
+    def feed(self):
+        if self._f is None:
+            return
+        try:
+            faulthandler.cancel_dump_traceback_later()
+            faulthandler.dump_traceback_later(self._window, file=self._f,
+                                              repeat=True)
+        except Exception:
+            pass
+
+    def stop(self):
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
+        f, self._f = self._f, None    # 置空在前：stop 后 feed 恒 no-op，
+        try:                          # 防重装已关闭 fd（fd 号会被系统复用）
+            if f is not None:
+                f.close()
+        except Exception:
+            pass
 
 
 class BoundedCallQueue(queue.Queue):

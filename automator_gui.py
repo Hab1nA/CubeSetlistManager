@@ -342,6 +342,7 @@ class App:
             path=_HERE / "stall.log",
             notify=self.q.put)
         self._stall_wd.start()
+        self._stack_sent = stallguard.StackSentinel(_HERE / "stall_stack.log")
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
         root.after(50, self._drain_calls)
@@ -469,6 +470,7 @@ class App:
         if not messagebox.askyesno("退出", "确定退出 Cube Automator？"):
             return
         self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
+        self._stack_sent.stop()     # 同理断掉栈哨兵计时窗
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close())):
@@ -948,6 +950,7 @@ class App:
         原来搭在 400ms 状态轮询车上且逐条无兜底）。紧急队列优先+普通批次
         合流（幂等回调恢复后成批重复，只执行最后一次）。"""
         self._hb = time.monotonic()     # 喂看门狗心跳
+        self._stack_sent.feed()         # 续 C 级栈哨兵计时窗
         while self.calls_urgent:
             self._run_call(self.calls_urgent.popleft())
         batch = []
@@ -967,6 +970,7 @@ class App:
 
     def _tick(self):
         self._hb = time.monotonic()     # 喂看门狗心跳
+        self._stack_sent.feed()         # 续 C 级栈哨兵计时窗
         self._hb_tag = "_tick_body"
         try:
             self._tick_body()
