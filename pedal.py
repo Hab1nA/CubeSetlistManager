@@ -1343,6 +1343,7 @@ class PedalWindow(tk.Toplevel):
 
     def __init__(self, app):
         super().__init__(app.root)
+        self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
         self.app = app
         self.learner = None
         self._transient_until = 0.0  # 结果类反馈展示窗（_set_transient）
@@ -1437,17 +1438,6 @@ class PedalWindow(tk.Toplevel):
         # 「踩钉控制」时 _open_pedal 的 winfo_exists 守卫须已能看到本窗，
         # 否则重入双开、两窗先后关页会让踩钉提前 unmute（破坏静音不变式）
         self.app.pedal_win = self
-        # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
-        # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
-        # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
-        # 全量 update 让窗口完成首绘，req 才是真实值；minsize 与
-        # geometry 同源，防窗口停在偏小值裁掉底行
-        for _ in range(2):
-            self.update()
-            w = max(dpi.scale(self, 560), self.winfo_reqwidth())
-            h = max(dpi.scale(self, 400), self.winfo_reqheight())
-            self.minsize(w, h)
-            self.geometry("%dx%d" % (w, h))
         # Map 后首绘让 ttk 图片元素高度定稿再抬 req（Entry 行
         # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
         # 防窗口停在 map 前的偏小值裁掉底部
@@ -1462,7 +1452,7 @@ class PedalWindow(tk.Toplevel):
                 if self.winfo_height() < h:
                     self.geometry("%dx%d" % (w, h))
         self.bind("<Map>", _refit, add="+")
-        # <Map> 在构建期 update 就触发，而首绘后的元素重算更晚：
+        # <Map> 在显形首绘的 update 即触发，而首绘后的元素重算更晚：
         # 再挂两次延迟校准兜底（_refit 幂等，只抬不缩）
         for _ms in (120, 400):
             self.after(_ms, _refit)
@@ -1471,6 +1461,19 @@ class PedalWindow(tk.Toplevel):
             p.mute()        # 存活期静音：本页开着踩钉不触发任何动作
         self.after(300, self._tick)
         self._refresh()
+        # 幕后首绘定稿再显形：透明状态亮窗完成首绘——<Map> 触发 DWM
+        # 深色标题栏重写、ttk 图片元素高度定稿（+2px/行），此刻 req
+        # 才是真实值；收敛 minsize/geometry（同源，防停在偏小值裁掉
+        # 底行）后恢复不透明，一次性以终态出现、构建不再逐块上屏
+        self.attributes("-alpha", 0)
+        self.deiconify()
+        for _ in range(2):
+            self.update()
+            w = max(dpi.scale(self, 560), self.winfo_reqwidth())
+            h = max(dpi.scale(self, 400), self.winfo_reqheight())
+            self.minsize(w, h)
+            self.geometry("%dx%d" % (w, h))
+        self.attributes("-alpha", 1)
         self._update_device_menu()
 
     def _on_dev_selected(self, _e=None):

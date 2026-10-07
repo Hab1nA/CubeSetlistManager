@@ -525,6 +525,7 @@ class KeyboardAutoWindow(tk.Toplevel):
 
     def __init__(self, app):
         super().__init__(app.root)
+        self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
         self.app = app
         self.song = None
         self.slots = {}             # JUNO 映射（音符 60-69）
@@ -663,6 +664,13 @@ class KeyboardAutoWindow(tk.Toplevel):
                       "❌=未找到设备；查 config 当前乐器页的 inHint/outHint")
         self._show_page(PAGE_NAMES[0])
         self.after(300, self._tick)
+        # 幕后首绘定稿再显形（同设置/踩钉两窗）：透明状态亮窗完成首绘
+        # ——<Map> 触发 DWM 深色标题栏重写、ttk 元素高度定稿——恢复
+        # 不透明时一次性以终态出现，构建不再逐块上屏
+        self.attributes("-alpha", 0)
+        self.deiconify()
+        self.update()
+        self.attributes("-alpha", 1)
 
     def _show_page(self, name):
         """乐器分页切换；窗口尺寸随页内容重定，minsize 同步允许缩小。

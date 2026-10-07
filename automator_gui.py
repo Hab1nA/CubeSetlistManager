@@ -1112,6 +1112,7 @@ class SettingsWindow(tk.Toplevel):
 
     def __init__(self, app):
         super().__init__(app.root)
+        self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
         self.app = app
         self.title("设置")
         self.geometry(dpi.scale(self, 600, 430))
@@ -1250,16 +1251,6 @@ class SettingsWindow(tk.Toplevel):
         # 「设置」时 _open_settings 守卫须已能看到本窗（防重入双开、
         # 两窗各持一套 var 后保存者静默覆盖先保存者）
         self.app.settings_win = self
-        # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
-        # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
-        # 全量 update 让窗口完成首绘，req 才是真实值；minsize 与
-        # geometry 同源，防窗口停在偏小值裁掉底行
-        for _ in range(2):
-            self.update()
-            w = max(dpi.scale(self, 600), self.winfo_reqwidth())
-            h = max(dpi.scale(self, 430), self.winfo_reqheight())
-            self.minsize(w, h)
-            self.geometry("%dx%d" % (w, h))
         # Map 后首绘让 ttk 图片元素高度定稿再抬 req（Entry 行
         # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
         # 防窗口停在 map 前的偏小值裁掉底部
@@ -1274,10 +1265,23 @@ class SettingsWindow(tk.Toplevel):
                 if self.winfo_height() < h:
                     self.geometry("%dx%d" % (w, h))
         self.bind("<Map>", _refit, add="+")
-        # <Map> 在构建期 update 就触发，而首绘后的元素重算更晚：
+        # <Map> 在显形首绘的 update 即触发，而首绘后的元素重算更晚：
         # 再挂两次延迟校准兜底（_refit 幂等，只抬不缩）
         for _ms in (120, 400):
             self.after(_ms, _refit)
+        # 幕后首绘定稿再显形：透明状态亮窗完成首绘——<Map> 触发 DWM
+        # 深色标题栏重写、ttk 图片元素高度定稿（+2px/行），此刻 req
+        # 才是真实值；收敛 minsize/geometry（同源，防停在偏小值裁掉
+        # 底行）后恢复不透明，一次性以终态出现、构建不再逐块上屏
+        self.attributes("-alpha", 0)
+        self.deiconify()
+        for _ in range(2):
+            self.update()
+            w = max(dpi.scale(self, 600), self.winfo_reqwidth())
+            h = max(dpi.scale(self, 430), self.winfo_reqheight())
+            self.minsize(w, h)
+            self.geometry("%dx%d" % (w, h))
+        self.attributes("-alpha", 1)
 
     def _load_web_status(self):
         st = hotspot.state()
@@ -1473,6 +1477,7 @@ def main():
     except OSError:
         pass
     root = tk.Tk()
+    root.withdraw()     # 幕后建窗：Tk 窗口创建即上屏，不撤下则构建过程逐块浮现
     dpi.apply_theme(root)   # ttk+sv-ttk dark（Win11 观感），建控件前挂主题
     ico = os.path.join(getattr(sys, "_MEIPASS", "") or ".", "app.ico")
     if os.path.exists(ico):
@@ -1487,6 +1492,12 @@ def main():
             u32.SendMessageW(hwnd, 0x80, 1, hicon)   # ICON_BIG
             u32.SendMessageW(hwnd, 0x80, 0, hicon)   # ICON_SMALL
     App(root)
+    # 幕后首绘定稿再显形：透明状态亮窗完成首绘——<Map> 触发 DWM 深色
+    # 标题栏重写、ttk 图片元素高度定稿——恢复不透明时一次性以终态出现
+    root.attributes("-alpha", 0)
+    root.deiconify()
+    root.update()
+    root.attributes("-alpha", 1)
     root.mainloop()
 
 
