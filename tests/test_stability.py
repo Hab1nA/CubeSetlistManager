@@ -206,10 +206,10 @@ def test_stack_sentinel_silent_while_fed(tmp_path):
     """健康心跳每窗内续窗：文件建成但恒空（feed 续窗不落盘）。"""
     import stallguard
     log = tmp_path / "stall_stack.log"
-    sent = stallguard.StackSentinel(log, window=0.2)
+    sent = stallguard.StackSentinel(log, window=0.5)
     try:
-        t_end = time.monotonic() + 1.0  # 覆盖 5 个窗的持续喂活
-        while time.monotonic() < t_end:
+        t_end = time.monotonic() + 1.5  # 覆盖 3 个窗的持续喂活；0.5s 窗
+        while time.monotonic() < t_end:  # 给负载 CI 留 10 倍喂距余量
             sent.feed()
             time.sleep(0.05)
         assert not log.exists() or log.stat().st_size == 0

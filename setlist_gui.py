@@ -2096,7 +2096,7 @@ class App:
         has_proj = False                    # 同步给网页 /state 快照
         proj_name = None                    # 工程真实名（网页 NOW/弹窗用）
         if self.ctrl is None:
-            now, color = ui_text.STARTING, dpi.C_ERR
+            now, color = ui_text.STARTING, dpi.C_WARN
         elif self.ctrl.busy:
             # NOW/NEXT/进度保持切歌前的画面不闪「切换中…」（当前状态标签
             # 已提示，横幅不再重复）；首次启动即忙没有可保持的，才显示提示
@@ -2152,14 +2152,14 @@ class App:
         self._progress(frac)
         # 播放状态指示（移动端 /state 的 tstate 与此同源同语义）
         if self.ctrl is None:
-            st_t, st_c = ui_text.STARTING, dpi.C_ERR
+            st_t, st_c = ui_text.STARTING, dpi.C_WARN
         elif self.ctrl.busy:
             st_t, st_c = "切换中…", dpi.C_WARN
         else:
-            st_t, st_c = {"playing": ("播放中", dpi.C_OK),
-                          "paused": ("已暂停", dpi.C_WARN),
-                          "stopped": ("未在播放", dpi.MUT)}[
-                self._transport_state()]
+            ts = self._transport_state()
+            st_t = ui_text.FOLLOW[ts]       # 三态词唯一来源（ui_text）
+            st_c = {"playing": dpi.C_OK, "paused": dpi.C_WARN,
+                    "stopped": dpi.MUT}[ts]
         self.state_lbl.config(text="当前状态：" + st_t,
                               style=dpi.tone(st_c) + ".TLabel",
                               foreground=st_c)
@@ -2371,6 +2371,10 @@ class SettingsWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.attributes("-topmost", True)
         dpi.setup_window(self)
+        # 先占守卫槽再进事件泵：下方 update() 派发输入事件，用户此刻再点
+        # 「设置」时 _open_settings 守卫须已能看到本窗（防重入双开、
+        # 两窗各持一套 var 后保存者静默覆盖先保存者）
+        self.app.settings_win = self
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
         # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
         # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
@@ -2386,6 +2390,8 @@ class SettingsWindow(tk.Toplevel):
         # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
         # 防窗口停在 map 前的偏小值裁掉底部
         def _refit(_e=None):
+            if not self.winfo_exists():     # 秒关后延迟回调不再触窗
+                return
             for _ in range(2):
                 self.update_idletasks()
                 w = max(dpi.scale(self, 600), self.winfo_reqwidth())

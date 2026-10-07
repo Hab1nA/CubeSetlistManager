@@ -580,9 +580,9 @@ pw._hint(None)
 kw._port_row("juno", "输入 ✔ ｜ 输出 ✔", True)
 check("键盘窗端口行改色=合并行 style",
       kw.status.cget("style") == "Ok.TLabel")
-kw._port_row("ax", "输入 ✗", False)
+kw._port_row("ax", "输入 ❌", False)
 check("键盘窗非当前页端口=存态不打扰当前行",
-      kw._port_state["ax"] == ("输入 ✗", False)
+      kw._port_state["ax"] == ("输入 ❌", False)
       and kw.status.cget("style") == "Ok.TLabel")
 kw._hint("测试提示")
 check("键盘窗悬停提示=灰字直显",

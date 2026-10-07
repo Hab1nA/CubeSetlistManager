@@ -531,9 +531,11 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.ax_slots = {}          # AX-09 映射（音符 72-77）
         self._cap = None            # (note, SlotCapture, RawMidiIn, deadline)
         self.title("键盘自动化")
-        # 录制态按钮的警示字色（录制中=红字「停止」；随 apply_theme 全局
-        # 注册，此窗只此一处用；下阶段收编进 dpi）
-        ttk.Style(self).configure("Rec.TButton", foreground=dpi.C_ERR)
+        # 录制态按钮的警示字色（录制中=红字「停止」；本窗局部注册——
+        # TButton 族 style 路径可渲染，map 须钉红防 pressed 态继承主题灰）
+        st = ttk.Style(self)
+        st.configure("Rec.TButton", foreground=dpi.C_ERR)
+        st.map("Rec.TButton", foreground=[("pressed", dpi.C_ERR)])
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
         # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮）

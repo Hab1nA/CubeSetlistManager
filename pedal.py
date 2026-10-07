@@ -1350,9 +1350,11 @@ class PedalWindow(tk.Toplevel):
         self._hover = None           # 悬停提示（bind_hint→_hint）
         self.title("踩钉控制")
         self.geometry(dpi.scale(self, 560, 400))
-        # 设备下拉离线警示的字色变体（随 apply_theme 全局注册，此页只此
-        # 一处用；下阶段收编进 dpi）
-        ttk.Style(self).configure("Warn.TCombobox", foreground=dpi.C_WARN)
+        # 设备下拉离线警示的字色变体（本页局部注册；fg 渲染走 widget 级，
+        # 此处钉 map 防 pressed 态继承主题灰盖掉黄字）
+        st = ttk.Style(self)
+        st.configure("Warn.TCombobox", foreground=dpi.C_WARN)
+        st.map("Warn.TCombobox", foreground=[("pressed", dpi.C_WARN)])
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         # 设备行与设置页严格同款（对照 SettingsWindow 的 menu_row 与
         # row(browse=True)：宽 15 标签 + 下拉填充 + 右侧 width=6 小按钮）；
@@ -1431,6 +1433,10 @@ class PedalWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.attributes("-topmost", True)   # 与主窗一致保持可见
         dpi.setup_window(self)
+        # 先占守卫槽再进事件泵：下方 update() 派发输入事件，用户此刻再点
+        # 「踩钉控制」时 _open_pedal 的 winfo_exists 守卫须已能看到本窗，
+        # 否则重入双开、两窗先后关页会让踩钉提前 unmute（破坏静音不变式）
+        self.app.pedal_win = self
         # 尺寸适配：最小=内容自然需求；初始不低于规划值与需求值
         # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
         # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
@@ -1446,6 +1452,8 @@ class PedalWindow(tk.Toplevel):
         # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
         # 防窗口停在 map 前的偏小值裁掉底部
         def _refit(_e=None):
+            if not self.winfo_exists():     # 秒关后延迟回调不再触窗
+                return
             for _ in range(2):
                 self.update_idletasks()
                 w = max(dpi.scale(self, 560), self.winfo_reqwidth())

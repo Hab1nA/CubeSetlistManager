@@ -1060,9 +1060,10 @@ class App:
                            dpi.C_OK if self.cur_song else dpi.C_WARN)
         else:
             self.m_now.set("（无打开的工程）", dpi.MUT)
-        st_t, st_c = {"playing": ("播放中", dpi.C_OK),
-                      "paused": ("已暂停", dpi.C_WARN),
-                      "stopped": ("未在播放", dpi.MUT)}[self._transport_state()]
+        ts = self._transport_state()
+        st_t = ui_text.FOLLOW[ts]           # 三态词唯一来源（ui_text）
+        st_c = {"playing": dpi.C_OK, "paused": dpi.C_WARN,
+                "stopped": dpi.MUT}[ts]
         self.state_lbl.config(text="当前状态：" + st_t,
                               style=dpi.tone(st_c) + ".TLabel",
                               foreground=st_c)
@@ -1245,8 +1246,10 @@ class SettingsWindow(tk.Toplevel):
         ttk.Button(btns, text="取消", width=10,
                    command=self.destroy).pack(side="right", padx=6)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.attributes("-topmost", True)
-        dpi.setup_window(self)
+        # 先占守卫槽再进事件泵：下方 update() 派发输入事件，用户此刻再点
+        # 「设置」时 _open_settings 守卫须已能看到本窗（防重入双开、
+        # 两窗各持一套 var 后保存者静默覆盖先保存者）
+        self.app.settings_win = self
         # 收敛窗口尺寸到内容需求：update_idletasks 不做 map，ttk 元素
         # 高度在首绘后才定稿（sv-ttk Entry 行 map 后 +2px/行），只有
         # 全量 update 让窗口完成首绘，req 才是真实值；minsize 与
@@ -1261,6 +1264,8 @@ class SettingsWindow(tk.Toplevel):
         # +2px/行）——照 dark_title 的 <Map> 先例再收敛一轮，
         # 防窗口停在 map 前的偏小值裁掉底部
         def _refit(_e=None):
+            if not self.winfo_exists():     # 秒关后延迟回调不再触窗
+                return
             for _ in range(2):
                 self.update_idletasks()
                 w = max(dpi.scale(self, 600), self.winfo_reqwidth())

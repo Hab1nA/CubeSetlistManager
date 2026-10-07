@@ -40,7 +40,8 @@ def tone(color):
     """状态语义色 → 命名 style 词干（apply_theme 注册的
     Ok/Warn/Err/Dim/Log）。标签族用法 config(style=tone(色)+".TLabel",
     foreground=色)（fg 必写，见 paint_tree），跑马灯族用法
-    style="Marquee%s.TEntry" % tone(色)。"""
+    style="Marquee%s.TEntry" % tone(色)——Marquee 族未注册 Log 档，
+    勿传 LOG_FG。"""
     return {C_OK: "Ok", C_WARN: "Warn", C_ERR: "Err",
             LOG_FG: "Log"}.get(color, "Dim")
 
@@ -187,7 +188,9 @@ def apply_theme(root):
     # 一次性生成（圆角/抗锯齿/九宫格全保真），tk 原生读 PNG 零自绘；
     # 悬停/按压/禁用 = 图片态切换（照官方 dark.tcl 的状态表），文字色走
     # style configure/map。frozen 时资产在 _MEIPASS。
-    asset_dir = getattr(sys, "_MEIPASS", "") or "."
+    # 非冻结锚模块目录（仓库根），不随 CWD 漂移
+    asset_dir = getattr(sys, "_MEIPASS", "") or os.path.dirname(
+        os.path.abspath(__file__))
     imgs = []
     for name, txt, dkey in (("Start", START_FG, "start"),
                             ("Stop", "#ffffff", "stop")):
