@@ -28,3 +28,6 @@ mobile/.gradle/
 mobile/build/
 mobile/app/build/
 mobile/local.properties
+
+# APK 构建产物副本（源头 mobile/app/build；dist 内由 build.bat 拷入）
+/CubeRemote.apk
