@@ -385,7 +385,8 @@ def test_winmm_io_thread_wiring():
         assert "_enum_n" in src, name               # 枚举降频 ~2s
         assert 'mb._pick(mb._in_devices(), self.vj_hint)' in src, name
     ksrc = _src("kbd_auto.py")
-    assert "mb.open_in(idx, self._cb)" in ksrc
+    assert "mb.open_in(tok, self._cb)" in ksrc     # tok=int=winmm 序号
+    assert "midi_ble.open_in(tok, on_msg)" in ksrc  # str=BLE 端点 id
     assert "mb.close_in(h)" in ksrc
     assert "midiInOpen(ctypes.byref(self._h)" not in ksrc  # 旧直连不回归
 

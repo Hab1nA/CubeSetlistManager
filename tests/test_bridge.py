@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Cube Setlist Manager 自检：python -m pytest tests/。全 assert，无需 OBS/loopMIDI/Cubase 在场。"""
+import ctypes
 import http.client
 import json
 import os
@@ -17,6 +18,7 @@ import cpr_meta
 import daw_ctrl
 import hotspot
 import kbd_auto
+import midi_ble
 import midi_bridge as mb
 import obs_ctrl
 import pedal
@@ -603,6 +605,326 @@ def test_kbd_auto():
     # 异名手工配置退回首命中——一个序号不跨两组用（R2-P3）
     assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
     assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+
+
+def test_midi_ble():
+    """BLE（WinRT）后端：全部替身化，CI 无 winrt 也跑。
+    parse_short 全表 / 合成后缀 / GUID+.BLE10 过滤 / 打开弃单回收 /
+    挂起上限 / 枚举缓存 / 降级 / RawMidiIn·send_slot 后端分派。"""
+    # parse_short：winmm MIM_DATA 短消息口径（3字节/2字节/实时/MTC）
+    assert midi_ble.parse_short(b"\x90\x3c\x40") == (0x90, 0x3C, 0x40)
+    assert midi_ble.parse_short(b"\x80\x3c\x00") == (0x80, 0x3C, 0x00)
+    assert midi_ble.parse_short(b"\xE0\x00\x40") == (0xE0, 0x00, 0x40)
+    assert midi_ble.parse_short(b"\xC5\x07") == (0xC5, 0x07, 0)
+    assert midi_ble.parse_short(b"\xD0\x33") == (0xD0, 0x33, 0)
+    assert midi_ble.parse_short(b"\xF8") == (0xF8, 0, 0)
+    assert midi_ble.parse_short(b"\xF1\x27") == (0xF1, 0x27, 0)
+    assert midi_ble.parse_short(b"\xF0\x41\xF7") is None       # SysEx 不收
+    assert midi_ble.parse_short(b"\xF7") is None
+    assert midi_ble.parse_short(b"\x3c\x40") is None           # <0x80 防御
+    assert midi_ble.parse_short(b"\x90\x3c") is None           # 截断防御
+    assert midi_ble.parse_short(b"") is None
+    # 合成后缀防重（后缀即后端标识）
+    assert midi_ble._mark("JUNO-DS") == "JUNO-DS（BLE）"
+    assert midi_ble._mark("JUNO-DS（BLE）") == "JUNO-DS（BLE）"
+
+    # scan：GUID+.BLE10 双条件（KSA 字节桥同带 GUID 但必须排除——WinRT
+    # 打开它会无限挂起）+ 大小写不敏感 + 按合成名稳定排序 + 空名兜底
+    class _D:
+        def __init__(self, i, n):
+            self.id, self.name = i, n
+    orig_scan_raw = midi_ble._scan_raw
+    midi_ble._scan_raw = lambda g: [
+        _D(r"\\?\SWD#MMDEVAPI#MIDII_2.BLE10#{" + g + "}", "AX-09"),
+        _D(r"\\?\SWD#MMDEVAPI#MIDII_1.BLE10#{" + g.upper() + "}", "JUNO-DS"),
+        _D(r"\\?\SWD#MMDEVAPI#MIDIU_x#{ffffffff-0000-0000-0000-000000000000}",
+          "非MIDI口"),
+        _D(r"\\?\SWD#MMDEVAPI#MIDIU_KSA_x_0_0#{" + g + "}", "Keyboard Auto"),
+        _D(r"\\?\SWD#MMDEVAPI#MIDII_3.BLE10#{" + g + "}", "")]
+    try:
+        ins = midi_ble.scan("in")
+        assert [n for _, n in ins] == ["AX-09（BLE）", "JUNO-DS（BLE）",
+                                       "（未命名设备）（BLE）"]
+    finally:
+        midi_ble._scan_raw = orig_scan_raw
+
+    # 打开弃单回收：挂起的打开限时返回（主线程不陪葬），迟到完成自查
+    # 弃单即关（不泄漏已打开端口）
+    opened = []
+
+    class _Port:
+        def __init__(self):
+            self.closed = False
+            self.handlers = []
+
+        def add_message_received(self, h):
+            self.handlers.append(h)
+            return ("t", len(self.handlers))
+
+        def remove_message_received(self, tok):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    def hang_open(dev_id):
+        time.sleep(0.8)                 # 远超测试限时：模拟 GATT 无应答
+        p = _Port()
+        opened.append(p)
+        return p
+
+    orig_raw_in, orig_flag = midi_ble._open_raw_in, midi_ble._HAS_WINRT
+    midi_ble._open_raw_in = hang_open
+    midi_ble._HAS_WINRT = True
+    try:
+        t0 = time.time()
+        port, err = midi_ble.open_in("DEV", lambda *a: None, timeout=0.2)
+        assert port is None and "超时" in err
+        assert time.time() - t0 < 0.7               # 按时返回
+        time.sleep(1.0)                             # 等迟到完成
+        assert opened and opened[0].closed          # 弃单自回收
+    finally:
+        midi_ble._open_raw_in = orig_raw_in
+        midi_ble._HAS_WINRT = orig_flag
+
+    # 并发挂起上限：2 个挂起期间第 3 个快速拒绝；释放后名额归还
+    release = threading.Event()
+
+    def block_open(dev_id):
+        release.wait(5)
+        return _Port()
+
+    midi_ble._open_raw_in = block_open
+    midi_ble._HAS_WINRT = True
+    try:
+        for _ in range(2):          # 各自 0.1s 超时弃单，线程仍占名额
+            midi_ble.open_in("D", lambda *a: None, timeout=0.1)
+        port, err = midi_ble.open_in("D", lambda *a: None, timeout=0.1)
+        assert port is None and "挂起过多" in err
+        release.set()
+        deadline = time.time() + 6
+        while time.time() < deadline and midi_ble._pend:
+            time.sleep(0.05)
+        assert midi_ble._pend == 0
+    finally:
+        release.set()
+        midi_ble._open_raw_in = orig_raw_in
+        midi_ble._HAS_WINRT = orig_flag
+
+    # 正常打开 + 事件派发：注册的处理器解析字节后调 on_msg（winmm 同语义）
+    p = _Port()
+    orig_buf = midi_ble._buf_bytes
+    midi_ble._open_raw_in = lambda dev_id: p
+    midi_ble._buf_bytes = lambda b: b"\x90\x3c\x40"
+    got = []
+    try:
+        port, err = midi_ble.open_in("DEV", lambda *a: got.append(a),
+                                     timeout=1)
+        assert err is None and port is not None
+
+        class _Evt:
+            class message:
+                raw_data = object()
+
+        port._on_event(None, _Evt())
+        assert got == [(0x90, 0x3C, 0x40)]
+        port.close()
+        assert p.closed
+    finally:
+        midi_ble._buf_bytes = orig_buf
+        midi_ble._open_raw_in = orig_raw_in
+
+    # 枚举缓存：_refresh_once 写缓存（CI 无后台线程，同步驱动）；
+    # 扫描异常保旧清单（last-good）。本机有真刷新线程并发扫同一缓存——
+    # 在途位被占时 _refresh_once 会早退，故清位重驱至生效为止
+    orig_scan_raw = midi_ble._scan_raw
+    fake_id = r"\\?\SWD#MMDEVAPI#MIDII_1.BLE10#{" + midi_ble.IN_GUID + "}"
+    midi_ble._scan_raw = lambda g: [
+        _D(fake_id, "JUNO-DS")]
+    devs = []
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            with midi_ble._cache_lock:
+                midi_ble._scanning = {"in": False, "out": False}
+            midi_ble._refresh_once("in")
+            devs = midi_ble.in_devices()
+            if devs == [(fake_id, "JUNO-DS（BLE）")]:
+                break
+            time.sleep(0.05)
+        assert devs == [(fake_id, "JUNO-DS（BLE）")]
+        midi_ble._scan_raw = lambda g: (_ for _ in ()).throw(OSError("断电"))
+        midi_ble._refresh_once("in")
+        assert midi_ble.in_devices() == devs        # 扫描异常保旧清单
+    finally:
+        midi_ble._scan_raw = orig_scan_raw
+        with midi_ble._cache_lock:
+            midi_ble._cache = {"in": [], "out": []}
+            midi_ble._cache_at = {"in": 0.0, "out": 0.0}
+
+    # 降级：_HAS_WINRT=False → 清单空、打开给安装指引（CI 无 winrt 口径）
+    orig_flag = midi_ble._HAS_WINRT
+    midi_ble._HAS_WINRT = False
+    try:
+        assert midi_ble.in_devices() == [] and midi_ble.out_devices() == []
+        port, err = midi_ble.open_in("x", lambda *a: None)
+        assert port is None and "winrt" in err
+    finally:
+        midi_ble._HAS_WINRT = orig_flag
+
+    # send_short 映射：B0 三参 / C1 两参 / 表外状态拒绝且不发送
+    rec = []
+
+    class _Msg:
+        def __init__(self, *a):
+            rec.append(a)
+
+    class _P:
+        def __init__(self):
+            self.n = 0
+
+        def send_message(self, m):
+            self.n += 1
+
+    orig_map = dict(midi_ble._SHORT_MSG)
+    midi_ble._SHORT_MSG.clear()
+    midi_ble._SHORT_MSG.update({0xB0: (_Msg, 2), 0xC0: (_Msg, 1)})
+    try:
+        out = midi_ble.BleOut(_P())
+        assert out.send_short(0xB0 | 0 | 85 << 16) is None
+        assert rec[-1] == (0, 0, 85)                # CC0 通道0 MSB85
+        assert out.send_short(0xC1 | 2 << 8) is None
+        assert rec[-1] == (1, 2)                    # PC 通道1 音色2
+        assert "不支持" in out.send_short(0xF0)
+        assert out._port.n == 2                     # 拒绝的不发送
+    finally:
+        midi_ble._SHORT_MSG.clear()
+        midi_ble._SHORT_MSG.update(orig_map)
+
+    # 合并清单：winmm 在前 + BLE（合成名）在后；同名跨后端 dev 序号消歧
+    orig_mi, orig_mo = mb._in_devices, mb._out_devices
+    orig_bi, orig_bo = midi_ble.in_devices, midi_ble.out_devices
+    mb._in_devices = lambda: [(0, "JUNO-DS")]
+    mb._out_devices = lambda: [(0, "JUNO-DS")]
+    midi_ble.in_devices = lambda: [("SWD1", "JUNO-DS（BLE）")]
+    midi_ble.out_devices = lambda: [("SWD2", "JUNO-DS（BLE）")]
+    try:
+        dv = kbd_auto._all_in_devices()
+        assert dv == [(0, "JUNO-DS"), ("SWD1", "JUNO-DS（BLE）")]
+        assert kbd_auto._pick_hit(dv, "JUNO-DS（BLE）") == \
+            ("SWD1", "JUNO-DS（BLE）")
+        assert kbd_auto._pick_hit(dv, "JUNO") == (0, "JUNO-DS")  # 宽 hint 恒先 USB
+        assert kbd_auto._pick_hit(dv, "JUNO", 1) == \
+            ("SWD1", "JUNO-DS（BLE）")                           # 第2个=BLE
+
+        # RawMidiIn 后端分派：BLE 全名命中走 midi_ble.open_in，close 落句柄
+        ble_closed = []
+
+        class _Ble:
+            def close(self):
+                ble_closed.append(1)
+
+        orig_oin = midi_ble.open_in
+        midi_ble.open_in = lambda dev_id, cb, timeout=None: (_Ble(), None)
+        try:
+            r = kbd_auto.RawMidiIn("JUNO-DS（BLE）", lambda *a: None)
+            assert r._ble is not None and r._h is None
+            r.close()
+            assert ble_closed == [1]
+        finally:
+            midi_ble.open_in = orig_oin
+    finally:
+        mb._in_devices, mb._out_devices = orig_mi, orig_mo
+        midi_ble.in_devices, midi_ble.out_devices = orig_bi, orig_bo
+
+    # send_slot BLE 分支：同一 msgs 序列走 BleOut，SysEx/短消息/关闭次序
+    # 与通道语义（MSB87→patchCh-1=0）和 winmm 版一致
+    sent = []
+
+    class _BleOut:
+        def send_short(self, p):
+            sent.append(("short", p))
+            return None
+
+        def send_long(self, d):
+            sent.append(("long", bytes(d)))
+            return False
+
+        def close(self):
+            sent.append(("close",))
+
+    orig_mo = mb._out_devices
+    orig_bo = midi_ble.out_devices
+    orig_oot = midi_ble.open_out
+    mb._out_devices = lambda: []
+    midi_ble.out_devices = lambda: [("SWD2", "JUNO-DS（BLE）")]
+    midi_ble.open_out = lambda dev_id, timeout=None: (_BleOut(), None)
+    try:
+        cfg = dict(kbd_auto.DEFAULT_JUNO, outHint="JUNO-DS（BLE）")
+        err = kbd_auto.send_slot({"msb": 87, "lsb": 0, "pc": 3}, cfg)
+        assert err is None
+        assert [e[0] for e in sent] == ["long", "short", "short", "short",
+                                        "close"]
+        assert sent[0][1] == kbd_auto.mode_sysex(0, cfg["deviceId"])
+        assert sent[1] == ("short", 0xB0 | 0 | 87 << 16)
+        assert sent[2] == ("short", 0xB0 | 0 | 32 << 8)
+        assert sent[3] == ("short", 0xC0 | 0 | 3 << 8)
+    finally:
+        mb._out_devices = orig_mo
+        midi_ble.out_devices = orig_bo
+        midi_ble.open_out = orig_oot
+
+    # winmm 分支回归：int 设备号走 mb.open_out + midiOutShortMsg 原路径
+    # （经 mb._winmm 运行时解析——别名根修让替身首次能打进发送路径）
+    class _FakeWinmm:
+        def __init__(self):
+            self.shorts = []
+            self.longs = []
+
+        def midiOutShortMsg(self, h, p):
+            self.shorts.append(p)
+
+        def midiOutPrepareHeader(self, h, ph, sz):
+            # 模拟驱动即刻标 DONE：_send_long 的等待循环零耗时
+            getattr(ph, "_obj", ph).dwFlags = 0x1
+            return 0
+
+        def midiOutLongMsg(self, h, ph, sz):
+            hdr = getattr(ph, "_obj", ph)
+            # 从结构体偏移直取指针：hdr.lpData 属性访问会转成遇 NUL 截断的
+            # bytes，SysEx 里的 0x00 地址字节读不全
+            ptr = ctypes.c_void_p.from_buffer(hdr, kbd_auto._MIDIHDR.lpData.offset)
+            self.longs.append(ctypes.string_at(ptr.value, hdr.dwBufferLength))
+
+        def midiOutUnprepareHeader(self, h, ph, sz):
+            return 0
+
+    orig_oo, orig_co, orig_fw = mb.open_out, mb.close_out, mb._winmm
+    orig_mo = mb._out_devices
+    fw = _FakeWinmm()
+    closed = []
+    mb._out_devices = lambda: [(7, "JUNO-DS")]
+    mb.open_out = lambda idx, timeout=None: (idx, None)
+    mb.close_out = lambda h: closed.append(h)
+    mb._winmm = fw
+    try:
+        cfg = dict(kbd_auto.DEFAULT_JUNO, outHint="JUNO-DS")
+        err = kbd_auto.send_slot({"msb": 87, "lsb": 0, "pc": 3}, cfg)
+        assert err is None
+        assert fw.shorts == [0xB0 | 87 << 16, 0xB0 | 32 << 8, 0xC0 | 3 << 8]
+        assert fw.longs == [kbd_auto.mode_sysex(0, cfg["deviceId"])]
+        assert closed == [7]
+    finally:
+        mb._out_devices = orig_mo
+        mb.open_out, mb.close_out, mb._winmm = orig_oo, orig_co, orig_fw
+
+
+def test_midi_ble_architecture():
+    """源码锚：WinRT 只进 midi_ble；kbd_auto 不出现 winrt 符号、不剩模块级
+    _winmm 别名（monkeypatch 盲区）——防旧写法复学。"""
+    src = pathlib.Path(kbd_auto.__file__).read_text(encoding="utf-8")
+    assert "winrt" not in src
+    assert "_winmm = mb._winmm" not in src
 
 
 def test_pedal():
@@ -1898,6 +2220,8 @@ if __name__ == "__main__":
     test_advance_watch()
     test_project_title()
     test_kbd_auto()
+    test_midi_ble()
+    test_midi_ble_architecture()
     test_pedal()
     test_pedal_remote()
     test_score_combo()

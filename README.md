@@ -117,10 +117,13 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
 
 ### 开发 / 构建
 
-- Python **3.14.x**（实测版本）。第三方运行时依赖仅一项：UI 主题库 sv-ttk
+- Python **3.14.x**（实测版本）。第三方运行时依赖两项：UI 主题库 sv-ttk
   （`py -m pip install sv_ttk`）——全套控件迁移 ttk 后以 sv-ttk dark 换取
-  Win11 原生深色观感（演出暗场远距离可读）；MIDI/OBS 协议仍为标准库手写
-  （python-rtmidi 在 3.14 下 import 即崩，协议层零依赖的初衷不变）；
+  Win11 原生深色观感（演出暗场远距离可读）；BLE MIDI 后端 pywinrt 系
+  （`py -m pip install winrt-runtime winrt-Windows.Foundation winrt-Windows.Foundation.Collections
+  winrt-Windows.Devices.Enumeration winrt-Windows.Devices.Midi winrt-Windows.Storage.Streams`，
+  键盘自动化走蓝牙 MIDI 用，包缺失自动降级纯 winmm）；MIDI/OBS 协议仍为
+  标准库手写（python-rtmidi 在 3.14 下 import 即崩，协议层零依赖的初衷不变）；
 - 安卓 APP：Kotlin + Gradle（`mobile/` 工程，`gradlew assembleDebug`）；
 - 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
   Inno Setup 6 会顺带出按用户安装包并拷入最新 APK，版本取最近 git tag）；
@@ -186,6 +189,12 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   （"slots"=JUNO 段，"ax"=AX-09 段）。AX-09 只能经 USB 接收（DIN 口 OUT-only）；
   BS+PC 直发 144 个常规音色（MSB 恒 87；1-128 号 LSB=0、129-144 号 LSB=1），
   Favorite/Special Tone 不在 MIDI 映射表里。
+  琴侧 MIDI 口在窗口「MIDI 设备」下拉里选（收发两向同名同选，在线枚举
+  零写死；同名多口以（第N个）区分）。蓝牙无线接法（BLE MIDI，如琴上插
+  CME WIDI U-Host 连电脑内置蓝牙）：BLE 端点以「名（BLE）」出现在同一
+  下拉里，选中即收发全走 BLE（`midi_ble.py`，走 Windows WinRT，winmm
+  看不到 BLE 端点）；有线的同名 USB 口恒排在前，手写宽 hint（如 JUNO）
+  优先落 USB。
 - **踩钉**：MIDI CC 上升沿触发（瞬时/开关踩钉通吃）；蓝牙键盘型踩钉（HID 按键）
   同套学习。可学动作六项：**暂停/继续**（按播放状态一键切换）、开始、回零、
   全停、上一首、下一首；手法两种：单击、快踩两下（双踩）。窗口里点「学习」

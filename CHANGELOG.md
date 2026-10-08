@@ -6,6 +6,26 @@
 
 ## [未发布]
 
+### 新增
+
+- **键盘自动化支持 BLE MIDI（蓝牙无线接琴）**：新增 `midi_ble.py`（全仓库
+  唯一 WinRT 后端，pywinrt 投影包，缺失自动降级纯 winmm）。Windows 只把
+  BLE MIDI 端点暴露给 WinRT（winmm 看不到），琴上插 CME WIDI U-Host 等
+  BLE 盒连电脑内置蓝牙时，收发双向（切音色/移调/延音 + 录制捕获）现可
+  全走蓝牙——BLE 端点以「名（BLE）」出现在键盘自动化窗口既有「MIDI 设备」
+  下拉里，选中即用，config 与纯有线用法完全同构。稳定性三支柱（PoC 实测
+  约束）：`from_id_async` 对无应答设备无限期挂起且不可取消→打开走一次性
+  线程限时 3s+弃单自回收（挂起只废自己的线程，重试永远可用，并发挂起
+  上限 2）；枚举走后台刷新+5s TTL 缓存（UI 300ms 轮询只读缓存绝不阻塞，
+  断连在状态行自然翻 ❌）；回调线程只做字节解析+直调（与 winmm 回调同款
+  纪律）。过滤按接口类 GUID+`.BLE10` 双条件——Windows MIDI 2.0 给每个
+  winmm 口发布的 KSA 字节桥（WinRT 打开会挂）一律排除。配套：
+  `tools/probe_winrt_ble.py` 真机验收探针（默认只读枚举，`--send` 显式
+  发送）；`kbd_auto` 顺带根修 `_winmm` 模块级别名（monkeypatch 盲区，
+  源码锚钉住）；build.bat 对 winrt 包 fail-fast（运行时仍优雅降级）。
+  遗留：真机收发验收待活体 BLE MIDI 设备（本机 TurnerPro 的 GATT 不
+  应答已实证，不作验收设备）。
+
 ## [0.12.2] - 2026-10-08
 
 ### 新增

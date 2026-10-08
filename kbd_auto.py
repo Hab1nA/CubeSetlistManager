@@ -36,6 +36,7 @@ import tkinter.ttk as ttk
 from ctypes import wintypes
 
 import dpi
+import midi_ble
 import midi_bridge as mb
 
 KB_PORT_HINT = "Keyboard Automation"
@@ -342,23 +343,47 @@ def _device_entries(names):
     return out
 
 
+def _all_in_devices():
+    """winmm 输入口 + BLE 端点（合成「名（BLE）」后缀，见 midi_ble.BLE_MARK）。
+    winmm 恒在前：手写宽 hint（如「JUNO」）先落 USB 口，行为与旧版一致；
+    BLE 追加使同名跨后端口以 dev 序号消歧——与两只同型号无线盒同款语义。
+    两向都用缓存读（BLE 侧后台刷新），主线程绝不阻塞。"""
+    return mb._in_devices() + midi_ble.in_devices()
+
+
+def _all_out_devices():
+    """winmm 输出口 + BLE 端点，同 _all_in_devices。"""
+    return mb._out_devices() + midi_ble.out_devices()
+
+
 class RawMidiIn:
     """按名字子串打开 MIDI 输入口；on_msg(status, d1, d2) 只收短消息。
     open/close 走 midi_bridge 的 winmm 专线（限时+弃单回收）——主线程
-    （热切换/录制/学习期）不再被进程级 close 锁挂死。"""
+    （热切换/录制/学习期）不再被进程级 close 锁挂死。
+    后端分派：命中设备的设备号是 int=winmm 序号（原路径），str=BLE 端点
+    id（走 midi_ble，一次性线程限时打开+弃单自回收）。"""
 
     def __init__(self, hint, on_msg, dev=0):
         """dev：名字命中多个端口时取第 dev 个（见 _pick_hit）——录槽捕获
-        从 cfg["dev"] 传入，保证收发落在同一序号的那只盒子上。"""
-        devs = mb._in_devices()
+        从 cfg["dev"] 传入，保证收发落在同一序号的那只盒子上；序号在
+        合并清单（winmm 在前、BLE 在后）上统一编号。"""
+        devs = _all_in_devices()
         hit = _pick_hit(devs, hint, dev)
         if hit is None:
             raise PortNotFound("未找到含「%s」的 MIDI 输入端口；现有：%s" % (
                 hint, "、".join(n for _, n in devs) or "无"))
-        idx, self.name = hit
+        tok, self.name = hit
         self._on_msg = on_msg
+        self._ble = None
+        self._h = None
+        if isinstance(tok, str):    # BLE 端点：设备号是端点 id 字符串
+            port, err = midi_ble.open_in(tok, on_msg)
+            if port is None:
+                raise PortNotFound(err)
+            self._ble = port
+            return
         self._cb = mb._Proc(self._dispatch)   # 持引用防 GC
-        h, err = mb.open_in(idx, self._cb)
+        h, err = mb.open_in(tok, self._cb)
         if h is None:
             raise PortNotFound(err)
         self._h = h
@@ -368,6 +393,10 @@ class RawMidiIn:
             self._on_msg(p1 & 0xFF, (p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
 
     def close(self):
+        if self._ble is not None:
+            self._ble.close()
+            self._ble = None
+            return
         h = self._h
         self._h = None
         if h:
@@ -386,10 +415,13 @@ class _MIDIHDR(ctypes.Structure):
                 ("dwReserved", ctypes.c_size_t * 4)]
 
 
-_winmm = mb._winmm
 for _fn in ("midiOutPrepareHeader", "midiOutLongMsg", "midiOutUnprepareHeader"):
-    getattr(_winmm, _fn).argtypes = (wintypes.HANDLE,
-                                     ctypes.POINTER(_MIDIHDR), wintypes.DWORD)
+    # 不留模块级别名（下划线 _winmm 直绑 import 时本体）：别名让测试
+    # monkeypatch mb._winmm 打不进来（test_stability 已知坑）；
+    # argtypes 在 import 时一次性设到真实 DLL 上即可
+    getattr(mb._winmm, _fn).argtypes = (wintypes.HANDLE,
+                                        ctypes.POINTER(_MIDIHDR),
+                                        wintypes.DWORD)
 
 
 def _send_long(h, data):
@@ -398,42 +430,68 @@ def _send_long(h, data):
     hdr = _MIDIHDR()
     hdr.lpData = ctypes.cast(buf, ctypes.c_char_p)
     hdr.dwBufferLength = len(data)
-    if _winmm.midiOutPrepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+    if mb._winmm.midiOutPrepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
         return True
-    _winmm.midiOutLongMsg(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    mb._winmm.midiOutLongMsg(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
     deadline = time.time() + 2
     while not (hdr.dwFlags & WHDR_DONE) and time.time() < deadline:
         time.sleep(0.005)
-    _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    mb._winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
     return False
 
 
 def send_slot(slot, cfg, msgs=None):
     """按 cfg（JUNO 或 AX-09）向输出端口发整个切换序列（或预构造 msgs）；
     返回错误文案，None=成功。open/close 走 midi_bridge 输出专线（与输入
-    同锁同队列）——Win11 进程级锁挂死时发送线程限时失败不再陪葬。"""
-    devs = mb._out_devices()
+    同锁同队列）——Win11 进程级锁挂死时发送线程限时失败不再陪葬。
+    后端分派：命中设备的设备号 str=BLE 端点（_send_slot_ble，走 midi_ble
+    输出），int=winmm 序号（原路径逐字节不动）。"""
+    devs = _all_out_devices()
     hit = _pick_hit(devs, cfg["outHint"], cfg.get("dev", 0))
     if hit is None:
         return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
             cfg["outHint"], "、".join(n for _, n in devs) or "无")
+    if msgs is None:
+        msgs = (ax_switch_msgs(slot, cfg) if cfg.get("ax")
+                else switch_msgs(slot, cfg))
+    if isinstance(hit[0], str):
+        return _send_slot_ble(hit[0], msgs)
     h, err = mb.open_out(hit[0])
     if h is None:
         return err
     try:
-        if msgs is None:
-            msgs = (ax_switch_msgs(slot, cfg) if cfg.get("ax")
-                    else switch_msgs(slot, cfg))
         for kind, payload, gap in msgs:
             if kind == "long":
                 if _send_long(h, payload):
                     return "SysEx 发送失败"
             else:
-                _winmm.midiOutShortMsg(h, payload)
+                mb._winmm.midiOutShortMsg(h, payload)
             if gap:
                 time.sleep(gap)
     finally:
         mb.close_out(h)
+    return None
+
+
+def _send_slot_ble(dev_id, msgs):
+    """BLE 输出分支：同一 msgs 序列走 BleOut（短/长消息后端分派在句柄上），
+    间隔 sleep 复用——调用方是 ToneSwitcher 串行发送线程，不占主线程。"""
+    h, err = midi_ble.open_out(dev_id)
+    if h is None:
+        return err
+    try:
+        for kind, payload, gap in msgs:
+            if kind == "long":
+                if h.send_long(payload):
+                    return "SysEx 发送失败"
+            else:
+                e = h.send_short(payload)
+                if e:
+                    return e
+            if gap:
+                time.sleep(gap)
+    finally:
+        h.close()
     return None
 
 
@@ -920,8 +978,8 @@ class KeyboardAutoWindow(tk.Toplevel):
                             dpi.C_ERR)
 
     def _poll_ports(self):
-        ins = mb._in_devices()
-        outs = mb._out_devices()
+        ins = _all_in_devices()
+        outs = _all_out_devices()
         for key, cfg, cfg_key in (("juno", self.app.jcfg, "juno"),
                                   ("ax", self.app.axcfg, "ax09")):
             ti, oki = self._side_line(ins, cfg["inHint"], _in_dev(cfg),
@@ -968,7 +1026,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         候选由 Combobox values 承载，选中语义=当前值（原 radiobutton
         圆点改由当前显示值表达）。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
-        outs = mb._out_devices()
+        outs = _all_out_devices()
         hit = _pick_hit(outs, cfg["outHint"], cfg.get("dev", 0))
         entries = _device_entries([n for _, n in outs])
         items = [(name, k) for _label, name, k in entries]
@@ -997,7 +1055,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         的 kb_ports 解析同此口径）。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
         if cfg["inHint"] == cfg["outHint"] or \
-                _pick_hit(mb._in_devices(), cfg["inHint"],
+                _pick_hit(_all_in_devices(), cfg["inHint"],
                           _in_dev(cfg)) is None:
             cfg["inHint"] = name
         cfg["outHint"] = name

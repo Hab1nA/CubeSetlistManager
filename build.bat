@@ -6,6 +6,11 @@ py -c "import sv_ttk" 2>nul || (
   echo ERROR: sv_ttk not installed - run: py -m pip install sv_ttk
   exit /b 1
 )
+rem winrt: BLE MIDI backend runtime dep (keyboard automation over Bluetooth); fail fast, no silent fallback
+py -c "import winrt.runtime" 2>nul || (
+  echo ERROR: winrt packages not installed - run: py -m pip install winrt-runtime winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Devices.Enumeration winrt-Windows.Devices.Midi winrt-Windows.Storage.Streams
+  exit /b 1
+)
 rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never overwritten
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
