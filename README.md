@@ -191,6 +191,12 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   全停、上一首、下一首；手法两种：单击、快踩两下（双踩）。窗口里点「学习」
   踩一下即完成绑定，存 `config.json` 的 pedal 段；支持热插拔（断开每 10 秒
   自动重连）。
+- **踩钉冗余路·平板转发**（0.12.2 新增）：踏板 USB-C 有线连平板 → Cube Remote
+  APP 经 WiFi 转发电脑（`/pedal/event` 端点），与蓝牙直连互为冗余、失效域解耦
+  （10-02 演出射频全灭事故的踩钉侧整改）。APP 侧「踩钉转发」开关+电脑踩钉控制页
+  「允许平板转发踩钉」双开生效；蓝牙学到的绑定对转发路自动生效；电脑端关闭时
+  按键透传给平板前台 App；断网丢包不重放陈旧走带动作，心跳 5 秒、失联 15 秒
+  状态行警示，电脑端恢复后自动接回。
 
 ### 移动端遥控 / 谱面自动翻页
 
@@ -244,6 +250,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | juno | inHint / outHint / dev / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道；dev=同名端口序号（两台同型号无线 MIDI 盒时在「键盘自动化」窗下拉选择，0 基，一般勿手改） |
 | ax09 | inHint / outHint / ch / dev | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改）；dev 同 juno |
 | pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double，「学习」时踩出即自动分类）与双踩窗（默认 0.35s） |
+| pedal | remoteEnabled | 允许平板转发踩钉（踩钉控制页开关持久化；APP 侧另有「踩钉转发」开关，双开生效） |
 | webRemote | enabled / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
@@ -261,14 +268,16 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 ├─ daw_ctrl.py           DAW 底座控制器（Cubase/Studio One 事实表双后端：切歌/走带/进程）
 ├─ obs_ctrl.py / obs_ws.py   OBS websocket 控制（投影器/静音/熄屏/进程管理在此）
 ├─ advance.py            自动推进看门狗（两段式）
-├─ dpi.py                DPI 感知 + 深色主题 token（darkify/flatten/dark_title）
-├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC 踩钉
+├─ dpi.py                DPI 感知 + 主题层（apply_theme 集中命名 style/paint_tree/bind_hint/dark_title）
+├─ ui_text.py            跨窗复用文案唯一来源（配套 docs/UI文案与信息设计规范.md）
+├─ stallguard.py         主线程停摆黑匣子（看门狗 stall.log + 栈哨兵 stall_stack.log）+ 指令队列治理
+├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC+HID 踩钉
 ├─ web_remote.py / hotspot.py   移动端遥控（网页服务+语义推送+设备表）/ Windows 热点（WinRT）
 ├─ cpr_meta.py / song_meta.py   .cpr 与 .song 工程时长解析（RIFF 定位条 / ZIP+XML 事件终点）
-├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器）
+├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器+踩钉转发）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
-├─ tests\                test_bridge（离线自检）/ e2e_test（真机分阶段）
+├─ tests\                test_bridge（离线自检）/ test_stability / test_pedal_wire（线级黑盒）/ test_dialog_drain / test_manual_adopt / pedal_sim / e2e_test（真机分阶段）
 ├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
 ├─ config.example.json / config.studioone.json / config.automator.json   各产品预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
