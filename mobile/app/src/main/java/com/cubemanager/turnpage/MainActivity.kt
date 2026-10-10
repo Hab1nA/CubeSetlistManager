@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -77,6 +78,8 @@ class MainActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 private fun fail(msg: String) {
                     hadError = true
+                    // 错误已定性，撤掉 15s 超时提示，避免覆盖更准确的原因
+                    timeoutTask?.let { mainHandler.removeCallbacks(it) }
                     showStatus(msg, true)
                     welcome.visibility = ViewGroup.VISIBLE
                 }
@@ -96,7 +99,20 @@ class MainActivity : Activity() {
                                              description: String?, failingUrl: String?) {
                     fail("加载失败（$errorCode）：$description")
                 }
-                // 只允许私网 IP：防止误输公网地址或被页面跳走
+
+                // 主框架 HTTP 状态错误（404/401/500…）不触发 onReceivedError，
+                // 走这里且 onPageFinished 照常回调：不拦则欢迎页被错误藏掉，
+                // 只剩 WebView 深色空底（全黑），坏地址还会被存成「已验证」，
+                // 重启自动直连直达黑屏
+                override fun onReceivedHttpError(view: WebView?,
+                                                 request: WebResourceRequest?,
+                                                 errorResponse: WebResourceResponse?) {
+                    if (request?.isForMainFrame == true)
+                        fail("加载失败（HTTP ${errorResponse?.statusCode}）")
+                }
+
+                // 页面内跳转（链接/重定向）的私网白名单；初连的校验在
+                // connect()——loadUrl 不经过本回调
                 override fun shouldOverrideUrlLoading(
                     view: WebView?, request: WebResourceRequest?): Boolean {
                     val host = request?.url?.host ?: return false
@@ -107,13 +123,27 @@ class MainActivity : Activity() {
                 }
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (hadError || url == null || url.startsWith("about:")) return
-                    loaded = true
-                    timeoutTask?.let { mainHandler.removeCallbacks(it) }
-                    // 记录「已验证接通」的地址：下次启动自动直连。端口自动
-                    // 纠正（switchToAppPort）后的正确地址会在此覆盖旧值，
-                    // 两者不会错位
-                    prefs().edit().putString("addrOkUrl", normUrl(url)).apply()
-                    welcome.visibility = ViewGroup.GONE
+                    // 内容核验：空 200、别的设备的页面等「加载成功但不是
+                    // 控制页」的变体同样会到这（HTTP 状态错误已由
+                    // onReceivedHttpError 拦下）。标题不符不算连上：欢迎页
+                    // 保留可改地址，坏地址也不会被存成「已验证」导致启动
+                    // 自动直连直达黑屏
+                    view?.evaluateJavascript("document.title") { r ->
+                        if (hadError) return@evaluateJavascript
+                        val title = r?.trim('"')?.trim().orEmpty()
+                        if (title.startsWith("Cube 遥控")) {
+                            loaded = true
+                            timeoutTask?.let { mainHandler.removeCallbacks(it) }
+                            // 记录「已验证接通」的地址：下次启动自动直连。
+                            // 端口自动纠正（switchToAppPort）后的正确地址会
+                            // 在此覆盖旧值，两者不会错位
+                            prefs().edit().putString("addrOkUrl", normUrl(url)).apply()
+                            welcome.visibility = ViewGroup.GONE
+                        } else {
+                            fail(if (title.isEmpty()) "该地址不是 Cube 控制页"
+                                 else "该地址不是 Cube 控制页（标题：$title）")
+                        }
+                    }
                 }
             }
         }
@@ -242,8 +272,15 @@ class MainActivity : Activity() {
         status.visibility = ViewGroup.VISIBLE
     }
 
-    /** 连接并带反馈：成功隐藏欢迎页；15s 未完成提示超时。 */
+    /** 连接并带反馈：成功隐藏欢迎页；15s 未完成提示超时。
+     *  入口校验私网地址（loadUrl 不走 shouldOverrideUrlLoading，
+     *  白名单必须在这里兜底）。 */
     private fun connect(url: String) {
+        val host = android.net.Uri.parse(url).host
+        if (host == null || !PRIVATE_HOST.matches(host)) {
+            showStatus("仅支持局域网地址（10. / 192.168. / 172.16-31. 段）", true)
+            return
+        }
         webView.stopLoading()
         loaded = false
         hadError = false
