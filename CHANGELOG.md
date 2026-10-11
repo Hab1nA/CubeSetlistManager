@@ -4,7 +4,7 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
-## [未发布]
+## [0.12.3] - 2026-10-11
 
 ### 新增
 
@@ -25,6 +25,16 @@
   源码锚钉住）；build.bat 对 winrt 包 fail-fast（运行时仍优雅降级）。
   遗留：真机收发验收待活体 BLE MIDI 设备（本机 TurnerPro 的 GATT 不
   应答已实证，不作验收设备）。
+
+### 修复
+
+- **APP 输错地址连接全黑根治**（APP 0.13）：输错电脑地址时 WebView 收到
+  HTTP 非 2xx，走未覆写的 `onReceivedHttpError`，欢迎页照常被藏、坏地址
+  被存成「已验证」，重启自动直连直达黑屏。三道根治：`onPageFinished`
+  核验页面标题——空 200/他机页面不算连接成功，欢迎页保留可改地址，已
+  中毒数据重启自愈；`connect()` 入口校验私网地址（`loadUrl` 不走
+  `shouldOverrideUrlLoading`，原白名单拦不住初连的公网地址）；`fail()`
+  撤掉 15s 超时任务，超时提示不再覆盖更准确的错误原因。
 
 ## [0.12.2] - 2026-10-08
 
