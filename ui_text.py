@@ -29,13 +29,12 @@ HOTSPOT_OFF = "热点未开，启用后自动开"
 # 移动端遥控勾选框（桌面双设置页同文）
 REMOTE_CHECKBOX = "启用移动端遥控（网页+翻谱推送）"
 
-# 服务网络行（桌面双设置页同文）：模式二选一 + lan 模式地址候选
+# 服务网络行（桌面双设置页同文）：模式二选一 + lan 模式网卡候选
 WEB_STATUS_LOADING = "网络查询中…"
 WEB_MODE_LABEL = "服务网络"
 WEB_MODE_HOTSPOT = "自动开热点"
 WEB_MODE_LAN = "用现有局域网"
-WEB_IP_LABEL = "服务地址 IP"
+WEB_IP_LABEL = "服务网卡"
 WEB_IP_AUTO = "自动"
-WEB_IP_HINT = "多网卡时指定，唯一地址可留自动"
 WEB_LAN_OK = "局域网就绪"
 WEB_LAN_NONE = "未发现局域网地址"

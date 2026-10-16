@@ -1691,8 +1691,9 @@ class WebRemote:
         地址选取确定性不瞎猜：显式配置>唯一候选自动>多候选待选>无候选降级。"""
         self._hotspot_off()     # 模式切走：此前本程序开的热点不再服务，收掉
         self.hotspot_owner = False
-        cands = [ip for ip in hotspot.lan_ips()
+        infos = [(ip, name) for ip, name in hotspot.lan_ips()
                  if valid_push_ip(ip) and not ip.startswith("127.")]
+        cands = [ip for ip, _name in infos]
         ip = self.lan_ip if self.lan_ip in cands else ""
         if not ip and self.lan_ip:
             self._report("配置的服务地址 %s 本机已不存在，改按候选选取"
@@ -1701,9 +1702,10 @@ class WebRemote:
             if len(cands) == 1:
                 ip = cands[0]
             elif cands:
-                self._report("网页服务未启动：本机有多个局域网地址（%s），"
-                             "在设置页「服务地址 IP」指定一个"
-                             % "、".join(cands))
+                self._report("网页服务未启动：本机有多个局域网网卡（%s），"
+                             "在设置页「服务网卡」指定一个"
+                             % "、".join("%s（%s）" % (name, i)
+                                         for i, name in infos))
                 return
             else:
                 self._report("网页服务未启动：没有可用的局域网地址"

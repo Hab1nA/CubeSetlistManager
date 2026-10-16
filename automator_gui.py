@@ -1150,9 +1150,10 @@ class SettingsWindow(tk.Toplevel):
             f.pack(fill="x", pady=2)
             ttk.Label(f, text=label, width=15, anchor="w",
                       style="Dim.TLabel").pack(side="left")
-            ttk.Combobox(f, textvariable=var, values=values,
-                         state="readonly").pack(side="left", fill="x",
-                                                expand=True)
+            box = ttk.Combobox(f, textvariable=var, values=values,
+                               state="readonly")
+            box.pack(side="left", fill="x", expand=True)
+            return box
 
         obs_cfg = (app.ctl.cfg if app.ctl is not None
                    else _load_config().get("obs") or {})
@@ -1213,17 +1214,12 @@ class SettingsWindow(tk.Toplevel):
         ttk.Radiobutton(wfm, text=ui_text.WEB_MODE_LAN, value="lan",
                         variable=self.web_mode_var).pack(side="left",
                                                          padx=(10, 0))
-        wfi = ttk.Frame(body)
-        wfi.pack(fill="x", pady=1)
-        ttk.Label(wfi, text=ui_text.WEB_IP_LABEL, width=15, anchor="w",
-                  style="Dim.TLabel").pack(side="left")
-        self.web_ipvar = tk.StringVar(
-            value=str(wcfg.get("ip") or ui_text.WEB_IP_AUTO))
-        self.web_ip_box = ttk.Combobox(wfi, textvariable=self.web_ipvar,
-                                       width=17, state="readonly")
-        self.web_ip_box.pack(side="left")
-        ttk.Label(wfi, text=ui_text.WEB_IP_HINT,
-                  style="Dim.TLabel").pack(side="left", padx=6)
+        # 服务网卡行：显示网卡名（用户认得网卡不认得 IP），名字↔IP 映射
+        # 由 _load_web_status 回填；「自动」= 唯一候选直选（完整版同款）
+        self.web_ip_map = {}
+        self.web_ipvar = tk.StringVar(value=ui_text.WEB_IP_AUTO)
+        self.web_ip_box = menu_row(ui_text.WEB_IP_LABEL, self.web_ipvar,
+                                   [ui_text.WEB_IP_AUTO])
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
@@ -1314,7 +1310,7 @@ class SettingsWindow(tk.Toplevel):
         lan = str(self.app.web_cfg.get("mode") or "hotspot") == "lan"
         st, cands = {}, []
         if lan:
-            cands = [ip for ip in hotspot.lan_ips()
+            cands = [(ip, name) for ip, name in hotspot.lan_ips()
                      if web_remote.valid_push_ip(ip)
                      and not ip.startswith("127.")]
         else:
@@ -1332,14 +1328,20 @@ class SettingsWindow(tk.Toplevel):
                     txt, tone = ui_text.WEB_LAN_OK, dpi.C_OK
                 else:
                     txt, tone = ui_text.WEB_LAN_NONE, dpi.C_ERR
-                cfg_ip = str(self.app.web_cfg.get("ip") or "")
-                if cfg_ip in cands:
-                    ip = cfg_ip
-                elif len(cands) == 1:
-                    ip = cands[0]
+                self.web_ip_map = {name: i for i, name in cands}
                 self.web_ip_box.config(
-                    values=[ui_text.WEB_IP_AUTO] + cands)
-                self.web_ipvar.set(ip or ui_text.WEB_IP_AUTO)
+                    values=[ui_text.WEB_IP_AUTO] + [name for _i, name
+                                                    in cands])
+                cfg_ip = str(self.app.web_cfg.get("ip") or "")
+                sel = [name for i, name in cands if i == cfg_ip]
+                if sel:
+                    ip = cfg_ip
+                    self.web_ipvar.set(sel[0])
+                elif len(cands) == 1:
+                    ip = cands[0][0]
+                    self.web_ipvar.set(cands[0][1])
+                else:
+                    self.web_ipvar.set(ui_text.WEB_IP_AUTO)
             else:
                 if not st.get("ok"):
                     txt, tone = "热点不可用", dpi.C_ERR
@@ -1431,12 +1433,8 @@ class SettingsWindow(tk.Toplevel):
             app.q.put("APP 连接地址端口非法，按 8767 处理")
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
-        ip = self.web_ipvar.get().strip()
-        if ip == ui_text.WEB_IP_AUTO:
-            ip = ""
-        elif ip and not web_remote.valid_push_ip(ip):
-            app.q.put("服务地址 IP 非法（仅限私网），按自动处理")
-            ip = ""
+        # 下拉存的是网卡名；候选来自本机在线网卡，映射外的一律按自动
+        ip = self.web_ip_map.get(self.web_ipvar.get().strip(), "")
         web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
                       "appPort": app_p, "taskerPort": tsk, "midiIn": pg,
                       "mode": self.web_mode_var.get(), "ip": ip}

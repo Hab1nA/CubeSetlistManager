@@ -127,7 +127,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try {
   $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
     Where-Object { $_.IPAddress -notlike '169.254.*' } |
-    Select-Object -ExpandProperty IPAddress
+    Select-Object IPAddress, InterfaceAlias
   @{ok=$true; ips=@($ips)} | ConvertTo-Json -Compress
 } catch {
   @{ok=$false; err='PowerShell 异常：' + $_.Exception.Message} |
@@ -210,11 +210,17 @@ def stop():
 
 
 def lan_ips(timeout=30):
-    """本机全部 IPv4（PS 层只排 APIPA 链路本地）；环回与私网过滤在调用方
-    （web_remote 按 valid_push_ip 口径）做——本模块不反向依赖 web_remote。
-    返回列表（查询失败=空列表，调用方按「无候选」降级）。"""
+    """本机 IPv4 及其网卡名：[(ip, InterfaceAlias), ...]（PS 层只排 APIPA
+    链路本地）；环回与私网过滤在调用方（web_remote 按 valid_push_ip 口径）
+    做——本模块不反向依赖 web_remote。查询失败=空列表，调用方按「无候选」
+    降级。"""
     r = _run("", timeout=timeout, script=_PS_IPS)
     ips = r.get("ips") if isinstance(r, dict) and r.get("ok") else None
-    if isinstance(ips, str):        # PS 5.1 ConvertTo-Json 单元素数组退化
+    if isinstance(ips, dict):       # PS 5.1 ConvertTo-Json 单元素数组退化
         ips = [ips]
-    return [ip for ip in (ips or []) if isinstance(ip, str) and ip]
+    out = []
+    for it in ips or []:
+        if isinstance(it, dict) and isinstance(it.get("IPAddress"), str) \
+                and it["IPAddress"]:
+            out.append((it["IPAddress"], str(it.get("InterfaceAlias") or "")))
+    return out

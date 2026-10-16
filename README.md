@@ -231,7 +231,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   关=全停；热点模式且热点是本程序开的，退出时自动关掉）、**服务网络**
   二选一：「自动开热点」（原有方式，电脑开 Windows 热点给平板连）/
   「用现有局域网」（不碰热点，服务绑路由器局域网的本机 IP——多网卡时在
-  「服务地址 IP」下拉指定，唯一候选自动选用）；网页端口（默认 8765）、
+  「服务网卡」下拉按网卡名指定，唯一候选自动选用）；网页端口（默认 8765）、
   APP 页面端口（默认 8767）、翻谱接收端口（默认 8766，全局统一）、网络
   状态行（热点模式=热点开/关与本机 IP；局域网模式=候选与本机 IP）。平板/
   手机连入同一网络后：浏览器访问 `http://<状态行IP>:8765`
@@ -269,7 +269,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | ax09 | inHint / outHint / ch / dev | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改）；dev 同 juno |
 | pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double，「学习」时踩出即自动分类）与双踩窗（默认 0.35s） |
 | pedal | remoteEnabled | 允许平板转发踩钉（踩钉控制页开关持久化；APP 侧另有「踩钉转发」开关，双开生效） |
-| webRemote | enabled / mode / ip / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、服务网络（hotspot=自动开热点 / lan=用现有局域网）、lan 模式服务地址（空=自动）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
+| webRemote | enabled / mode / ip / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、服务网络（hotspot=自动开热点 / lan=用现有局域网）、lan 模式服务网卡 IP（空=自动；设置页按网卡名选择）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
 | autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
 | autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |

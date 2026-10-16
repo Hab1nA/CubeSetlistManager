@@ -1580,7 +1580,9 @@ def test_hotspot_script():
     # 坏掉会退化为空列表）；两者同败=本机 EDR 偶发拦 PS 子进程的窗口期
     # （WinError 50/6，同上方语法检查重试先例），此时不作枚举判定。
     if st.get("ok"):
-        assert ips and all(isinstance(x, str) and x for x in ips), (st, ips)
+        assert ips and all(
+            isinstance(i, str) and i and isinstance(n, str)
+            for i, n in ips), (st, ips)
 
 
 class _FakeWebApp:
@@ -1898,7 +1900,7 @@ def test_webremote_lan_mode():
     hotspot.stop = fake_stop
     try:
         # 唯一候选（环回被过滤）：自动选用，服务起在候选 IP 上，热点零调用
-        hotspot.lan_ips = lambda: [lan_ip, "127.0.0.1"]
+        hotspot.lan_ips = lambda: [(lan_ip, "以太网"), ("127.0.0.1", "环回")]
         app = _FakeWebApp()
         wr = web_remote.WebRemote(
             app, {"enabled": True, "mode": "lan", "serverPort": 0,
@@ -1912,7 +1914,7 @@ def test_webremote_lan_mode():
         wr.shutdown()
         assert wr.server is None and stops == []   # lan 模式退出不动热点
         # 多候选未指定：不猜，整套不起并报出全部候选
-        hotspot.lan_ips = lambda: [lan_ip, "10.1.2.3"]
+        hotspot.lan_ips = lambda: [(lan_ip, "以太网"), ("10.1.2.3", "WLAN")]
         app = _FakeWebApp()
         wr = web_remote.WebRemote(
             app, {"enabled": True, "mode": "lan", "serverPort": 0,
@@ -1931,7 +1933,7 @@ def test_webremote_lan_mode():
         assert wr.server.server_address[0] == lan_ip
         wr.shutdown()
         # 显式配置地址失效：回落候选规则（唯一候选自愈并提示）
-        hotspot.lan_ips = lambda: [lan_ip]
+        hotspot.lan_ips = lambda: [(lan_ip, "以太网")]
         wr = web_remote.WebRemote(
             app, {"enabled": True, "mode": "lan", "ip": "192.168.1.99",
                   "serverPort": 0, "taskerPort": 8766, "midiIn": "",
@@ -1961,7 +1963,7 @@ def test_webremote_lan_mode():
         # hotspot→lan 热切换：此前自开的热点当场收掉，lan 服务接管
         hotspot.ensure_on = lambda: {"ok": True, "on": True, "was_on": False,
                                      "ssid": "S", "key": "K", "ip": _LOOPBACK}
-        hotspot.lan_ips = lambda: [lan_ip]
+        hotspot.lan_ips = lambda: [(lan_ip, "以太网")]
         wr = web_remote.WebRemote(
             app, {"enabled": True, "serverPort": 0, "taskerPort": 8766,
                   "midiIn": "", "devices": []})
