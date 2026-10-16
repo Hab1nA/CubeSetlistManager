@@ -896,8 +896,11 @@ class App:
             try:
                 self.web.apply(enabled=bool(wc.get("enabled")),
                                serverPort=wc.get("serverPort"),
+                               appPort=wc.get("appPort"),
                                taskerPort=wc.get("taskerPort"),
-                               midiIn=str(wc.get("midiIn") or ""))
+                               midiIn=str(wc.get("midiIn") or ""),
+                               mode=wc.get("mode"),
+                               ip=str(wc.get("ip") or ""))
             except Exception as e:
                 self.q.put("移动端遥控应用失败：%s" % _err(e))
 
@@ -1195,10 +1198,32 @@ class SettingsWindow(tk.Toplevel):
         self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
         ttk.Checkbutton(wf, text=ui_text.REMOTE_CHECKBOX,
                         variable=self.web_var).pack(side="left")
-        self.web_status = ttk.Label(wf, text="热点查询中…",
+        self.web_status = ttk.Label(wf, text=ui_text.WEB_STATUS_LOADING,
                                     style="Dim.TLabel")
         self.web_status.pack(side="right")
-        self.web_ip = "192.168.137.1"
+        self.web_ip = "192.168.137.1"    # 网络查询后更新（热点 IP 或局域网候选）
+        wfm = ttk.Frame(body)
+        wfm.pack(fill="x", pady=1)
+        ttk.Label(wfm, text=ui_text.WEB_MODE_LABEL, width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.web_mode_var = tk.StringVar(
+            value="lan" if wcfg.get("mode") == "lan" else "hotspot")
+        ttk.Radiobutton(wfm, text=ui_text.WEB_MODE_HOTSPOT, value="hotspot",
+                        variable=self.web_mode_var).pack(side="left")
+        ttk.Radiobutton(wfm, text=ui_text.WEB_MODE_LAN, value="lan",
+                        variable=self.web_mode_var).pack(side="left",
+                                                         padx=(10, 0))
+        wfi = ttk.Frame(body)
+        wfi.pack(fill="x", pady=1)
+        ttk.Label(wfi, text=ui_text.WEB_IP_LABEL, width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.web_ipvar = tk.StringVar(
+            value=str(wcfg.get("ip") or ui_text.WEB_IP_AUTO))
+        self.web_ip_box = ttk.Combobox(wfi, textvariable=self.web_ipvar,
+                                       width=17, state="readonly")
+        self.web_ip_box.pack(side="left")
+        ttk.Label(wfi, text=ui_text.WEB_IP_HINT,
+                  style="Dim.TLabel").pack(side="left", padx=6)
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
@@ -1284,7 +1309,16 @@ class SettingsWindow(tk.Toplevel):
         self.attributes("-alpha", 1)
 
     def _load_web_status(self):
-        st = hotspot.state()
+        """按服务网络模式查热点状态或本机网卡候选（完整版 _load_web_status
+        同款：PS 要数秒走后台线程，回主线程刷新状态/IP/候选/端口探测）。"""
+        lan = str(self.app.web_cfg.get("mode") or "hotspot") == "lan"
+        st, cands = {}, []
+        if lan:
+            cands = [ip for ip in hotspot.lan_ips()
+                     if web_remote.valid_push_ip(ip)
+                     and not ip.startswith("127.")]
+        else:
+            st = hotspot.state()
 
         def apply():
             try:
@@ -1292,18 +1326,35 @@ class SettingsWindow(tk.Toplevel):
                     return
             except tk.TclError:
                 return
-            if not st.get("ok"):
-                txt, tone = "热点不可用", dpi.C_ERR
-            elif st.get("on"):
-                txt, tone = "热点已开", dpi.C_OK
+            ip = ""
+            if lan:
+                if cands:
+                    txt, tone = ui_text.WEB_LAN_OK, dpi.C_OK
+                else:
+                    txt, tone = ui_text.WEB_LAN_NONE, dpi.C_ERR
+                cfg_ip = str(self.app.web_cfg.get("ip") or "")
+                if cfg_ip in cands:
+                    ip = cfg_ip
+                elif len(cands) == 1:
+                    ip = cands[0]
+                self.web_ip_box.config(
+                    values=[ui_text.WEB_IP_AUTO] + cands)
+                self.web_ipvar.set(ip or ui_text.WEB_IP_AUTO)
             else:
-                txt, tone = ui_text.HOTSPOT_OFF, dpi.MUT
+                if not st.get("ok"):
+                    txt, tone = "热点不可用", dpi.C_ERR
+                elif st.get("on"):
+                    txt, tone = "热点已开", dpi.C_OK
+                else:
+                    txt, tone = ui_text.HOTSPOT_OFF, dpi.MUT
+                ip = st.get("ip") or ""
+                self.web_ip_box.config(values=[ui_text.WEB_IP_AUTO])
             self.web_status.config(text=txt, style=dpi.tone(tone) + ".TLabel",
                                    foreground=tone)
-            ip = st.get("ip") or self.web_ip
-            self.web_ip = ip
-            self.web_prefix.config(text="http://%s:" % ip)
-            self.app_prefix.config(text="http://%s:" % ip)
+            if ip:
+                self.web_ip = ip
+                self.web_prefix.config(text="http://%s:" % ip)
+                self.app_prefix.config(text="http://%s:" % ip)
             self._refresh_port_status()
         # worker→主线程走 calls 队列（self.after 封送会阻塞 worker，完整版同款）
         self.app.calls.put(apply)
@@ -1380,8 +1431,15 @@ class SettingsWindow(tk.Toplevel):
             app.q.put("APP 连接地址端口非法，按 8767 处理")
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
+        ip = self.web_ipvar.get().strip()
+        if ip == ui_text.WEB_IP_AUTO:
+            ip = ""
+        elif ip and not web_remote.valid_push_ip(ip):
+            app.q.put("服务地址 IP 非法（仅限私网），按自动处理")
+            ip = ""
         web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
-                      "appPort": app_p, "taskerPort": tsk, "midiIn": pg}
+                      "appPort": app_p, "taskerPort": tsk, "midiIn": pg,
+                      "mode": self.web_mode_var.get(), "ip": ip}
         web_changed = any(app.web_cfg.get(k) != v
                           for k, v in web_fields.items())
         app.web_cfg.update(web_fields)

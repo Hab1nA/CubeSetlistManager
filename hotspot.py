@@ -3,12 +3,14 @@
 NetworkOperatorTetheringManager（旧式 netsh wlan hostednetwork 不用）。
 脚本字符串内置（-EncodedCommand 传递，免疫引号/编码问题），不新增分发文件。
 state() 查询；ensure_on() 确保开启（已开=只查，返回 was_on 供所有权判断）；
-stop() 关闭。全部阻塞式（PS 子进程 1–10 秒），调用方必须在工作线程。
+stop() 关闭；lan_ips() 枚举本机 IPv4（lan 服务模式用，与本热点无关）。
+全部阻塞式（PS 子进程 1–10 秒），调用方必须在工作线程。
 无无线网卡/无已连接网络/被策略禁用分别给出明确报错（设计第三节）。"""
 import base64
 import json
 import os
 import subprocess
+import time
 
 # mode 由环境变量 CUBE_HS_MODE 传入（state/start/stop）；输出强制 UTF-8，
 # 最后一行是单行 JSON（前面可能有杂散输出，解析时取最后一个 { 开头行）。
@@ -117,6 +119,22 @@ try {
 }
 """
 
+# 本机 IPv4 枚举（lan 服务模式的地址候选）：与热点脚本同管线、同输出约定
+# （最后一行单行 JSON）。私网过滤不在这做——口径唯一来源在 web_remote。
+_PS_IPS = r"""
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try {
+  $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+    Where-Object { $_.IPAddress -notlike '169.254.*' } |
+    Select-Object -ExpandProperty IPAddress
+  @{ok=$true; ips=@($ips)} | ConvertTo-Json -Compress
+} catch {
+  @{ok=$false; err='PowerShell 异常：' + $_.Exception.Message} |
+    ConvertTo-Json -Compress
+}
+"""
+
 
 def _err(e):
     return str(e).strip() or type(e).__name__
@@ -135,21 +153,28 @@ def _parse(out):
     return None
 
 
-def _run(mode, timeout):
-    """跑 PS 脚本，返回脚本输出的 JSON dict；无输出/超时=结构化失败。
-    CREATE_NO_WINDOW：本程序是 GUI，任何 PS 调用都不许弹前台控制台。"""
-    enc = base64.b64encode(_PS.encode("utf-16-le")).decode("ascii")
-    try:
-        p = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive",
-             "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
-            capture_output=True, timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            env=dict(os.environ, CUBE_HS_MODE=mode))
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "err": "PowerShell 调用超时（%ds）" % timeout}
-    except OSError as e:
-        return {"ok": False, "err": "无法启动 PowerShell：%s" % _err(e)}
+def _run(mode, timeout, script=None):
+    """跑 PS 脚本（默认热点脚本），返回脚本输出的 JSON dict；无输出/超时=
+    结构化失败。CREATE_NO_WINDOW：本程序是 GUI，任何 PS 调用都不许弹前台
+    控制台。"""
+    enc = base64.b64encode((script or _PS).encode("utf-16-le")).decode("ascii")
+    for attempt in (0, 1):
+        # 本机 EDR 偶发拦 PS 子进程创建（WinError 50/6，同测试重试先例）：
+        # OSError 是立即失败非超时，重试一次代价 <1s
+        try:
+            p = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                capture_output=True, timeout=timeout,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env=dict(os.environ, CUBE_HS_MODE=mode))
+            break
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "err": "PowerShell 调用超时（%ds）" % timeout}
+        except OSError as e:
+            if attempt:
+                return {"ok": False, "err": "无法启动 PowerShell：%s" % _err(e)}
+            time.sleep(0.5)
     r = _parse(p.stdout.decode("utf-8", "replace"))
     if r is None:
         tail = (p.stderr.decode("utf-8", "replace").strip()
@@ -182,3 +207,14 @@ def ensure_on():
 
 def stop():
     return _run("stop", timeout=30)
+
+
+def lan_ips(timeout=30):
+    """本机全部 IPv4（PS 层只排 APIPA 链路本地）；环回与私网过滤在调用方
+    （web_remote 按 valid_push_ip 口径）做——本模块不反向依赖 web_remote。
+    返回列表（查询失败=空列表，调用方按「无候选」降级）。"""
+    r = _run("", timeout=timeout, script=_PS_IPS)
+    ips = r.get("ips") if isinstance(r, dict) and r.get("ok") else None
+    if isinstance(ips, str):        # PS 5.1 ConvertTo-Json 单元素数组退化
+        ips = [ips]
+    return [ip for ip in (ips or []) if isinstance(ip, str) and ip]

@@ -42,6 +42,8 @@
   },
   "webRemote": {
     "enabled": false,
+    "mode": "hotspot",
+    "ip": "",
     "serverPort": 8765,
     "taskerPort": 8766,
     "midiIn": "",

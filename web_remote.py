@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""移动端遥控与翻谱推送：内嵌 HTTP 服务（只绑热点网卡 IP）+ 翻谱 MIDI 组合
+"""移动端遥控与翻谱推送：内嵌 HTTP 服务（服务网络二选一：自动开热点绑
+热点网卡 IP，或 lan 模式绑本机现有局域网网卡 IP 不碰热点）+ 翻谱 MIDI 组合
 判定 + 逐设备 HTTP POST 到平板 MacroDroid（Gesture 动作点击翻页）。
 翻谱链路全程不经过浏览器——网页被冻结/杀掉翻谱照常（设计第八节架构前提）。
 推送安全收口（设计第七节）：目标仅限已配对设备的 私网IPv4:固定端口 固定路径，
@@ -34,6 +35,8 @@ APP_PORT = 8767              # APP 版页面端口（浏览器版=serverPort 876
 
 DEFAULT_WEB_REMOTE = {
     "enabled": False,
+    "mode": "hotspot",         # 服务网络：hotspot=自动开热点 / lan=现有局域网
+    "ip": "",                  # lan 模式服务地址；空=自动（唯一候选直选）
     "serverPort": 8765,
     "appPort": 8767,           # APP 版页面端口（WebView 专用，浏览器不提供）
     "taskerPort": 8766,        # 翻谱接收端口：所有设备统一，APP 内可改需两端同步
@@ -176,7 +179,7 @@ def _bind_web(app, registry, tport, ip, port, page, report=None):
             if time.monotonic() >= deadline:
                 raise
             if report and not reported:
-                report("热点网卡地址配置中，等待绑定 %s:%d…" % (ip, port))
+                report("网卡地址配置中，等待绑定 %s:%d…" % (ip, port))
                 reported = True
             time.sleep(1.0)
 
@@ -1601,17 +1604,21 @@ class _Handler(BaseHTTPRequestHandler):
 
 _ATTR = {"enabled": "enabled", "serverPort": "server_port",
          "appPort": "app_port",
-         "taskerPort": "tasker_port", "midiIn": "midi_hint"}
+         "taskerPort": "tasker_port", "midiIn": "midi_hint",
+         "mode": "mode", "ip": "lan_ip"}
 
 
 class WebRemote:
-    """遥控栈：热点 → HTTP 服务 → 翻谱 MIDI 监听。设置页保存/程序启动时
-    apply()；总开关关=服务+端口停（热点按所有权决定关不关）。apply 总在
-    后台线程跑（热点 PowerShell 调用要数秒），锁保证同一时刻只做一份。"""
+    """遥控栈：网络（热点自动开关 / lan 现有局域网）→ HTTP 服务 → 翻谱
+    MIDI 监听。设置页保存/程序启动时 apply()；总开关关=服务+端口停（热点
+    按所有权决定关不关）。apply 总在后台线程跑（热点/网卡 PowerShell 调用
+    要数秒），锁保证同一时刻只做一份。"""
 
     def __init__(self, app, cfg):
         self.app = app
         self.enabled = bool(cfg.get("enabled"))
+        self.mode = "lan" if cfg.get("mode") == "lan" else "hotspot"
+        self.lan_ip = str(cfg.get("ip") or "")
         self.server_port = _port(cfg.get("serverPort"), 8765)
         self.app_port = _port(cfg.get("appPort"), 8767)
         self.tasker_port = _port(cfg.get("taskerPort"), 8766)
@@ -1659,6 +1666,9 @@ class WebRemote:
             self._hotspot_off()
             self._report("移动端遥控已停用（设置页可开启）")
             return
+        if self.mode == "lan":
+            self._rebuild_lan()
+            return
         self._report("移动端遥控：开启热点…")
         st = hotspot.ensure_on()
         if not st.get("ok"):
@@ -1672,6 +1682,34 @@ class WebRemote:
         if not ip:
             self._report("网页服务未启动：没有热点网卡 IP")
             return
+        self._start_server(ip)
+        self._start_midi()
+
+    def _rebuild_lan(self):
+        """lan 模式：不碰热点，服务绑本机现有局域网网卡 IP（路由器组网；
+        手动开过热点时其网卡 IP 同在候选里——本模式语义即「用现有网络」）。
+        地址选取确定性不瞎猜：显式配置>唯一候选自动>多候选待选>无候选降级。"""
+        self._hotspot_off()     # 模式切走：此前本程序开的热点不再服务，收掉
+        self.hotspot_owner = False
+        cands = [ip for ip in hotspot.lan_ips()
+                 if valid_push_ip(ip) and not ip.startswith("127.")]
+        ip = self.lan_ip if self.lan_ip in cands else ""
+        if not ip and self.lan_ip:
+            self._report("配置的服务地址 %s 本机已不存在，改按候选选取"
+                         % self.lan_ip)
+        if not ip:
+            if len(cands) == 1:
+                ip = cands[0]
+            elif cands:
+                self._report("网页服务未启动：本机有多个局域网地址（%s），"
+                             "在设置页「服务地址 IP」指定一个"
+                             % "、".join(cands))
+                return
+            else:
+                self._report("网页服务未启动：没有可用的局域网地址"
+                             "（先接入路由器网络）")
+                return
+        self._report("移动端遥控：局域网模式，服务地址 %s" % ip)
         self._start_server(ip)
         self._start_midi()
 
@@ -1699,8 +1737,9 @@ class WebRemote:
         threading.Thread(target=self.server.serve_forever,
                          kwargs={"poll_interval": 0.5},
                          daemon=True).start()
-        self._report("网页遥控已就绪：http://%s:%d/（平板连热点后访问）"
-                     % (ip, self.server_port))
+        self._report("网页遥控已就绪：http://%s:%d/（平板连%s后访问）"
+                     % (ip, self.server_port,
+                        "热点" if self.mode == "hotspot" else "同一网络"))
         # APP 版页面（appPort）：承载翻谱设置；浏览器版（serverPort）无翻谱功能
         try:
             self.app_server = _bind_web(self.app, self.registry,

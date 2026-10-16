@@ -1800,8 +1800,11 @@ class App:
             try:
                 self.web.apply(enabled=bool(wc.get("enabled")),
                                serverPort=wc.get("serverPort"),
+                               appPort=wc.get("appPort"),
                                taskerPort=wc.get("taskerPort"),
-                               midiIn=str(wc.get("midiIn") or ""))
+                               midiIn=str(wc.get("midiIn") or ""),
+                               mode=wc.get("mode"),
+                               ip=str(wc.get("ip") or ""))
             except Exception as e:
                 self.q.put("移动端遥控应用失败：%s" % _err(e))
 
@@ -2283,7 +2286,7 @@ class SettingsWindow(tk.Toplevel):
         menu_row("时钟端口名称", self.clock_var, ins)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
-        # 移动端遥控：总开关（右侧热点状态）+ 翻谱端口 + 拼好的网页地址
+        # 移动端遥控：总开关（右侧网络状态）+ 服务网络/地址 + 翻谱端口 + 网页地址
         wcfg = app.web_cfg
         ttk.Label(body, text="移动端遥控", anchor="w",
                   style="Dim.TLabel").pack(fill="x", pady=(pad, 3))
@@ -2292,10 +2295,32 @@ class SettingsWindow(tk.Toplevel):
         self.web_var = tk.BooleanVar(value=bool(wcfg.get("enabled")))
         ttk.Checkbutton(wf, text=ui_text.REMOTE_CHECKBOX,
                         variable=self.web_var).pack(side="left")
-        self.web_status = ttk.Label(wf, text="热点查询中…",
+        self.web_status = ttk.Label(wf, text=ui_text.WEB_STATUS_LOADING,
                                     style="Dim.TLabel")
         self.web_status.pack(side="right")
-        self.web_ip = "192.168.137.1"    # 热点查询后更新（state().ip）
+        self.web_ip = "192.168.137.1"    # 网络查询后更新（热点 IP 或局域网候选）
+        wfm = ttk.Frame(body)
+        wfm.pack(fill="x", pady=1)
+        ttk.Label(wfm, text=ui_text.WEB_MODE_LABEL, width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.web_mode_var = tk.StringVar(
+            value="lan" if wcfg.get("mode") == "lan" else "hotspot")
+        ttk.Radiobutton(wfm, text=ui_text.WEB_MODE_HOTSPOT, value="hotspot",
+                        variable=self.web_mode_var).pack(side="left")
+        ttk.Radiobutton(wfm, text=ui_text.WEB_MODE_LAN, value="lan",
+                        variable=self.web_mode_var).pack(side="left",
+                                                         padx=(10, 0))
+        wfi = ttk.Frame(body)
+        wfi.pack(fill="x", pady=1)
+        ttk.Label(wfi, text=ui_text.WEB_IP_LABEL, width=15, anchor="w",
+                  style="Dim.TLabel").pack(side="left")
+        self.web_ipvar = tk.StringVar(
+            value=str(wcfg.get("ip") or ui_text.WEB_IP_AUTO))
+        self.web_ip_box = ttk.Combobox(wfi, textvariable=self.web_ipvar,
+                                       width=17, state="readonly")
+        self.web_ip_box.pack(side="left")
+        ttk.Label(wfi, text=ui_text.WEB_IP_HINT,
+                  style="Dim.TLabel").pack(side="left", padx=6)
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
         self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
@@ -2413,10 +2438,17 @@ class SettingsWindow(tk.Toplevel):
             self.auto_var.set(True)
 
     def _load_web_status(self):
-        """勾选行右侧的热点状态 + 网页地址前缀的 IP：PS 子进程要数秒，
-        后台线程查完回主线程刷新（此前 apply 定义后从未被调度，状态/IP/
-        端口指示器整条链路停在初值——热点查询中…/…）。"""
-        st = hotspot.state()
+        """勾选行右侧的网络状态 + 网页地址前缀的 IP + 「服务地址 IP」候选：
+        PS 子进程要数秒，后台线程查完回主线程刷新。按服务网络模式查热点
+        或本机网卡候选（lan_ips 含手动热点网卡——lan 模式语义=用现有网络）。"""
+        lan = str(self.app.web_cfg.get("mode") or "hotspot") == "lan"
+        st, cands = {}, []
+        if lan:
+            cands = [ip for ip in hotspot.lan_ips()
+                     if web_remote.valid_push_ip(ip)
+                     and not ip.startswith("127.")]
+        else:
+            st = hotspot.state()
 
         def apply():
             try:
@@ -2424,25 +2456,42 @@ class SettingsWindow(tk.Toplevel):
                     return
             except tk.TclError:
                 return
-            if not st.get("ok"):
-                txt, fg = "热点不可用", dpi.C_ERR
-            elif st.get("on"):
-                txt, fg = "热点已开", dpi.C_OK
+            ip = ""
+            if lan:
+                if cands:
+                    txt, fg = ui_text.WEB_LAN_OK, dpi.C_OK
+                else:
+                    txt, fg = ui_text.WEB_LAN_NONE, dpi.C_ERR
+                cfg_ip = str(self.app.web_cfg.get("ip") or "")
+                if cfg_ip in cands:
+                    ip = cfg_ip
+                elif len(cands) == 1:
+                    ip = cands[0]
+                self.web_ip_box.config(
+                    values=[ui_text.WEB_IP_AUTO] + cands)
+                self.web_ipvar.set(ip or ui_text.WEB_IP_AUTO)
             else:
-                txt, fg = ui_text.HOTSPOT_OFF, dpi.MUT
+                if not st.get("ok"):
+                    txt, fg = "热点不可用", dpi.C_ERR
+                elif st.get("on"):
+                    txt, fg = "热点已开", dpi.C_OK
+                else:
+                    txt, fg = ui_text.HOTSPOT_OFF, dpi.MUT
+                ip = st.get("ip") or ""
+                self.web_ip_box.config(values=[ui_text.WEB_IP_AUTO])
             self.web_status.config(text=txt, style=dpi.tone(fg) + ".TLabel",
                                    foreground=fg)
-            ip = st.get("ip") or self.web_ip
-            self.web_ip = ip
-            self.web_prefix.config(text="http://%s:" % ip)
-            self.app_prefix.config(text="http://%s:" % ip)
+            if ip:
+                self.web_ip = ip
+                self.web_prefix.config(text="http://%s:" % ip)
+                self.app_prefix.config(text="http://%s:" % ip)
             self._refresh_port_status()
         # worker→主线程走 calls 队列：self.after 会把 worker 封送阻塞到主
         # 循环空闲（主线程停摆期间探测线程集体挂起），主窗若销毁还会炸
         self.app.calls.put(apply)
 
     def _refresh_port_status(self, retries=3):
-        """网页/APP 两个本机端口的指示器：connect 探测（服务绑热点 IP）。
+        """网页/APP 两个本机端口的指示器：connect 探测（服务绑本机服务 IP）。
         探测在后台线程；失败按 1.2s 间隔复探 retries 次——保存后服务在
         后台重建要数秒，单次探测会把重启中的端口误报成未监听。"""
         def probe(port, lbl, left):
@@ -2518,8 +2567,15 @@ class SettingsWindow(tk.Toplevel):
             app.q.put("APP 连接地址端口非法，按 8767 处理")
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
+        ip = self.web_ipvar.get().strip()
+        if ip == ui_text.WEB_IP_AUTO:
+            ip = ""
+        elif ip and not web_remote.valid_push_ip(ip):
+            app.q.put("服务地址 IP 非法（仅限私网），按自动处理")
+            ip = ""
         web_fields = {"enabled": self.web_var.get(), "serverPort": srv,
-                      "appPort": app_p, "taskerPort": tsk, "midiIn": pg}
+                      "appPort": app_p, "taskerPort": tsk, "midiIn": pg,
+                      "mode": self.web_mode_var.get(), "ip": ip}
         web_changed = any(app.web_cfg.get(k) != v
                           for k, v in web_fields.items())
         app.web_cfg.update(web_fields)

@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import queue
+import socket
 import struct
 import tempfile
 import threading
@@ -1540,36 +1541,46 @@ def test_hotspot_logic():
 
 
 def test_hotspot_script():
-    """PS 脚本语法可编译（CI/本机都跑）；state 查询只读，失败也须结构化。"""
-    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
-                                     encoding="utf-8-sig") as f:
-        f.write(hotspot._PS)
-        path = f.name
-    try:
-        import subprocess
-        ok = False
-        detail = ""
-        for attempt in range(2):    # 本机突发窗口下 CreateProcess 偶发
-            try:                    #   WinError 50/6（EDR 交互），重试一次
-                p = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command",
-                     "[void][scriptblock]::Create((Get-Content -Raw "
-                     "-LiteralPath '%s')); 'SYNTAX_OK'" % path],
-                    capture_output=True, timeout=90,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                ok = b"SYNTAX_OK" in p.stdout
-                detail = p.stderr.decode("utf-8", "replace")
-            except OSError as e:
-                detail = str(e)
-            if ok:
-                break
-            time.sleep(0.5)
-        assert ok, detail
-    finally:
-        os.unlink(path)
+    """PS 脚本语法可编译（CI/本机都跑）；state/lan_ips 查询只读，失败也须
+    结构化。"""
+    import subprocess
+    for script in (hotspot._PS, hotspot._PS_IPS):
+        with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
+                                         encoding="utf-8-sig") as f:
+            f.write(script)
+            path = f.name
+        try:
+            ok = False
+            detail = ""
+            for attempt in range(2):    # 本机突发窗口下 CreateProcess 偶发
+                try:                    #   WinError 50/6（EDR 交互），重试一次
+                    p = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         "[void][scriptblock]::Create((Get-Content -Raw "
+                         "-LiteralPath '%s')); 'SYNTAX_OK'" % path],
+                        capture_output=True, timeout=90,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    ok = b"SYNTAX_OK" in p.stdout
+                    detail = p.stderr.decode("utf-8", "replace")
+                except OSError as e:
+                    detail = str(e)
+                if ok:
+                    break
+                time.sleep(0.5)
+            assert ok, detail
+        finally:
+            os.unlink(path)
     r = hotspot._run("state", timeout=60)
     assert isinstance(r, dict) and isinstance(r.get("ok"), bool), r
+    st = hotspot.state()
+    assert isinstance(st, dict) and isinstance(st.get("ok"), bool), st
+    ips = hotspot.lan_ips()
+    # 环回恒在（PS 层只排 APIPA）。state 正常而 ips 空=真回归（脚本输出
+    # 坏掉会退化为空列表）；两者同败=本机 EDR 偶发拦 PS 子进程的窗口期
+    # （WinError 50/6，同上方语法检查重试先例），此时不作枚举判定。
+    if st.get("ok"):
+        assert ips and all(isinstance(x, str) and x for x in ips), (st, ips)
 
 
 class _FakeWebApp:
@@ -1644,11 +1655,11 @@ class _FakeDevice(BaseHTTPRequestHandler):
 _LOOPBACK = "127.0.0.1"     # 测试请求只打本机回环：主机名钉死，端口/路径显式校验
 
 
-def _http_req(method, port, path, body=None):
-    """测试专用请求：主机字面量钉死回环，端口/路径显式校验后直连。"""
+def _http_req(method, port, path, body=None, host=_LOOPBACK):
+    """测试专用请求：主机字面量显式传入（默认回环），端口/路径显式校验。"""
     assert isinstance(port, int) and 0 < port < 65536
     assert isinstance(path, str) and path.startswith("/")
-    conn = http.client.HTTPConnection(_LOOPBACK, port, timeout=3)
+    conn = http.client.HTTPConnection(host, port, timeout=3)
     try:
         conn.request(method, path, body=body,
                      headers={"Content-Type": "application/json"}
@@ -1663,8 +1674,8 @@ def _http_req(method, port, path, body=None):
         conn.close()
 
 
-def _http_get(port, path):
-    return _http_req("GET", port, path)
+def _http_get(port, path, host=_LOOPBACK):
+    return _http_req("GET", port, path, host=host)
 
 
 def _http_post(port, path, obj=None, raw=None):
@@ -1853,6 +1864,116 @@ def test_webremote_lifecycle():
         assert any("无网卡" in str(m) for m in list(app.q.queue))
     finally:
         hotspot.ensure_on, hotspot.stop = orig
+
+
+def _local_lan_ip():
+    """本机真实局域网 IP（UDP connect 不发包只查路由源地址）：lan 模式测试
+    的服务地址必须是本机真网卡 IP，bind 才会成功。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.168.50.1", 9))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    assert web_remote.valid_push_ip(ip) and not ip.startswith("127."), \
+        "测试机没有可绑定的局域网地址（%r），lan 模式用例无法执行" % ip
+    return ip
+
+
+def test_webremote_lan_mode():
+    """lan 服务模式：全程不碰热点；地址选取=显式配置>唯一候选自动>多候选
+    待选>无候选降级，环回候选被过滤；hotspot→lan 切换收掉自开热点。"""
+    orig = (hotspot.ensure_on, hotspot.stop, hotspot.lan_ips)
+
+    def boom(*a, **k):
+        raise AssertionError("lan 模式不得调用热点")
+
+    def fake_stop():
+        stops.append(1)
+        return {"ok": True}
+
+    lan_ip = _local_lan_ip()
+    hotspot.ensure_on = boom
+    stops = []
+    hotspot.stop = fake_stop
+    try:
+        # 唯一候选（环回被过滤）：自动选用，服务起在候选 IP 上，热点零调用
+        hotspot.lan_ips = lambda: [lan_ip, "127.0.0.1"]
+        app = _FakeWebApp()
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "lan", "serverPort": 0,
+                  "taskerPort": 8766, "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.server is not None
+        assert wr.server.server_address[0] == lan_ip
+        assert not wr.hotspot_owner and stops == []
+        assert _http_get(wr.server.server_address[1], "/state",
+                         host=lan_ip)[0] == 200
+        wr.shutdown()
+        assert wr.server is None and stops == []   # lan 模式退出不动热点
+        # 多候选未指定：不猜，整套不起并报出全部候选
+        hotspot.lan_ips = lambda: [lan_ip, "10.1.2.3"]
+        app = _FakeWebApp()
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "lan", "serverPort": 0,
+                  "taskerPort": 8766, "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.server is None
+        msgs = " ".join(str(m) for m in list(app.q.queue))
+        assert lan_ip in msgs and "10.1.2.3" in msgs
+        # 多候选 + 显式配置地址生效（免去「多个待选」拦截）
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "lan", "ip": lan_ip,
+                  "serverPort": 0, "taskerPort": 8766, "midiIn": "",
+                  "devices": []})
+        wr.apply()
+        assert wr.server is not None
+        assert wr.server.server_address[0] == lan_ip
+        wr.shutdown()
+        # 显式配置地址失效：回落候选规则（唯一候选自愈并提示）
+        hotspot.lan_ips = lambda: [lan_ip]
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "lan", "ip": "192.168.1.99",
+                  "serverPort": 0, "taskerPort": 8766, "midiIn": "",
+                  "devices": []})
+        wr.apply()
+        assert wr.server.server_address[0] == lan_ip
+        assert any("192.168.1.99" in str(m) for m in list(app.q.queue))
+        wr.shutdown()
+        # 无候选：整套不起且明说
+        hotspot.lan_ips = lambda: []
+        app = _FakeWebApp()
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "lan", "serverPort": 0,
+                  "taskerPort": 8766, "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.server is None
+        assert any("局域网" in str(m) for m in list(app.q.queue))
+        # 未知 mode 值保守回退 hotspot 路径
+        hotspot.ensure_on = lambda: {"ok": True, "on": True, "was_on": True,
+                                     "ssid": "S", "key": "K", "ip": _LOOPBACK}
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "mode": "weird", "serverPort": 0,
+                  "taskerPort": 8766, "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.mode == "hotspot" and wr.server is not None
+        wr.shutdown()
+        # hotspot→lan 热切换：此前自开的热点当场收掉，lan 服务接管
+        hotspot.ensure_on = lambda: {"ok": True, "on": True, "was_on": False,
+                                     "ssid": "S", "key": "K", "ip": _LOOPBACK}
+        hotspot.lan_ips = lambda: [lan_ip]
+        wr = web_remote.WebRemote(
+            app, {"enabled": True, "serverPort": 0, "taskerPort": 8766,
+                  "midiIn": "", "devices": []})
+        wr.apply()
+        assert wr.hotspot_owner
+        wr.apply(mode="lan")
+        assert stops == [1] and not wr.hotspot_owner
+        assert wr.server.server_address[0] == lan_ip
+        wr.shutdown()
+        assert stops == [1]                # 已收过，退出不再重复关
+    finally:
+        hotspot.ensure_on, hotspot.stop, hotspot.lan_ips = orig
 
 
 def test_score_combo():
@@ -2231,5 +2352,6 @@ if __name__ == "__main__":
     test_web_api()
     test_bind_retry()
     test_webremote_lifecycle()
+    test_webremote_lan_mode()
     test_hotspot_script()
     print("test_bridge：全部通过")
