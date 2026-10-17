@@ -133,6 +133,38 @@ def test_watchdog_silent_when_healthy(tmp_path):
     assert not log.exists() or log.read_text(encoding="utf-8").strip() == ""
 
 
+def test_native_probe_logs_foreground_stack_and_recovery(tmp_path):
+    """停摆原生取证探针：首条=前台窗口+py-spy 原生栈；hwnd=0 跳过 WM_NULL
+    探针不崩；恢复行闭环。证据链断裂（如 py-spy 缺失）也要有占位文本。"""
+    import stallguard
+    hb = {"t": time.monotonic()}
+    log = tmp_path / "stall_native.log"
+    p = stallguard.StallNativeProbe(
+        heartbeat=lambda: hb["t"], main_hwnd=lambda: 0, path=log,
+        threshold=0.2, poke=0.15, period=0.05).start()
+    time.sleep(0.5)                     # 心跳冻结=停摆窗口
+    hb["t"] = time.monotonic()          # 恢复
+    time.sleep(0.4)
+    p.stop()
+    text = log.read_text(encoding="utf-8")
+    assert "停摆" in text and "前台=" in text and "恢复" in text
+    assert "Thread" in text             # py-spy 原生栈落了盘
+
+
+def test_native_probe_silent_when_healthy(tmp_path):
+    import stallguard
+    hb = {"t": time.monotonic()}
+    log = tmp_path / "stall_native.log"
+    p = stallguard.StallNativeProbe(
+        heartbeat=lambda: hb["t"], main_hwnd=lambda: 0, path=log,
+        threshold=0.2, poke=0.15, period=0.05).start()
+    for _ in range(8):                  # 健康心跳：每 50ms 喂一次
+        time.sleep(0.05)
+        hb["t"] = time.monotonic()
+    p.stop()
+    assert not log.exists() or log.read_text(encoding="utf-8").strip() == ""
+
+
 def test_bounded_call_queue_drops_oldest():
     import stallguard
     q = stallguard.BoundedCallQueue(3)

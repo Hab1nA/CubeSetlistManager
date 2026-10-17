@@ -492,6 +492,10 @@ class App:
             notify=self.q.put)
         self._stall_wd.start()
         self._stack_sent = stallguard.StackSentinel(_HERE / "stall_stack.log")
+        self._stall_probe = stallguard.StallNativeProbe(
+            heartbeat=lambda: self._hb,
+            main_hwnd=lambda: self._main_hwnd,
+            path=_HERE / "stall_native.log").start()
         threading.Thread(target=self._startup, daemon=True).start()
         root.after(400, self._tick)
         root.after(50, self._drain_calls)
@@ -773,6 +777,7 @@ class App:
             return
         self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
         self._stack_sent.stop()     # 同理断掉栈哨兵计时窗
+        self._stall_probe.stop()
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close()),

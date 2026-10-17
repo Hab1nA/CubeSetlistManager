@@ -7,11 +7,17 @@ WM_PAINT=深色窗黑面、不泵 after=50ms 指令排水停）→ APP 指令全
 出了事只有用户肉眼，没有日志能回答「当时卡在哪个调用、队列里压了多少」——
 黑匣子把每次停摆的现场（时长/正在执行的回调/队列深度/丢弃数）落盘。
 """
+import ctypes
 import faulthandler
+import os
 import pathlib
 import queue
+import shutil
+import subprocess
+import sys
 import threading
 import time
+from ctypes import wintypes
 
 
 class StallWatchdog:
@@ -136,6 +142,148 @@ class StackSentinel:
                 f.close()
         except Exception:
             pass
+
+
+class StallNativeProbe:
+    """停摆自愈哨兵 + 原生取证（StallWatchdog 之外的独立守护线程）。
+
+    机理（10-17 实验室复现定案）：停摆中主线程原生栈停在
+    NtUserMsgWaitForMultipleObjectsEx → Tcl_WaitForEvent ——它空闲等在
+    消息泵里，Tcl 定时器（after 50ms 排水链）到期却不醒；点击窗口=注入
+    消息=唯一可靠唤醒源，这就是「点一下本软件才恢复」的根因。消息投递
+    通道与定时器通道正交且从未失效，故本哨兵双管齐下：
+
+    ① 自愈：心跳停滞 >poke 阈值即向主窗 PostMessageW(WM_NULL)（惰性消息，
+       忙/闲皆无害），每周期补投直到心跳恢复——把用户可感的停摆从 5-10s
+       压到 ~1s；「首针即愈」同时就是根因指纹（定时唤醒缺失，非卡调用）。
+    ② 取证：停滞超取证阈值（与 StallWatchdog 对齐）才升级——记录前台窗口
+       PID+标题（客观锚定「失焦才停摆」）+ py-spy --native 全线程原生栈
+       （faulthandler 只有 Python 帧）。证据落 stall_native.log。
+
+    py-spy 路径：CSM_PYSPY 环境变量 > PATH > 解释器旁 Scripts；缺失则只
+    自愈不取证。全部采样自坏不伤主程序（try/except 全包）。"""
+
+    def __init__(self, heartbeat, main_hwnd, path,
+                 threshold=3.0, poke=0.7, period=0.25, clock=time.monotonic):
+        self._hb = heartbeat
+        self._hwnd = main_hwnd
+        self._path = str(path)
+        self._threshold = max(threshold, poke)   # 取证永不低于自愈阈值
+        self._poke = poke
+        self._period = period
+        self._clock = clock
+        self._stop = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True,
+                         name="stall-native-probe").start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+
+    def _write(self, text):
+        try:
+            p = pathlib.Path(self._path)
+            try:
+                if p.exists() and p.stat().st_size > 512 * 1024:
+                    p.replace(p.with_name(p.name + ".1"))
+            except OSError:
+                pass
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(text.rstrip("\n") + "\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _find_pyspy():
+        exe = os.environ.get("CSM_PYSPY")
+        if exe and os.path.isfile(exe):
+            return exe
+        exe = shutil.which("py-spy")
+        if exe:
+            return exe
+        cand = pathlib.Path(sys.executable).with_name("Scripts") / "py-spy.exe"
+        return str(cand) if cand.is_file() else None
+
+    @staticmethod
+    def _foreground():
+        try:
+            u32 = ctypes.windll.user32
+            hwnd = u32.GetForegroundWindow()
+            if not hwnd:
+                return "（无前台窗口）"
+            pid = wintypes.DWORD()
+            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            buf = ctypes.create_unicode_buffer(256)
+            u32.GetWindowTextW(hwnd, buf, 256)
+            return "PID %s「%s」hwnd=0x%X" % (pid.value, buf.value or "?", hwnd)
+        except Exception as e:
+            return "查询失败 %s" % type(e).__name__
+
+    def _pyspy_dump(self):
+        exe = self._find_pyspy()
+        if not exe:
+            return "（py-spy 不可用：设 CSM_PYSPY 或 pip install py-spy）"
+        try:
+            r = subprocess.run(
+                [exe, "dump", "--pid", str(os.getpid()), "--native"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=20)
+            out = (r.stdout or "").rstrip("\n")
+            if (r.stderr or "").strip():
+                out += "\n[stderr] " + r.stderr.strip()
+            return out
+        except Exception as e:
+            return "（py-spy 失败：%s: %s）" % (type(e).__name__, e)
+
+    def _loop(self):
+        u32 = ctypes.windll.user32
+        in_stall = False
+        dumped = False
+        pokes = 0
+        poke_t = None
+        stall_start = 0.0
+        while not self._stop.is_set():
+            self._stop.wait(self._period)
+            if self._stop.is_set():
+                return
+            try:
+                hb = self._hb()
+            except Exception:
+                continue
+            now = self._clock()
+            stall = now - hb
+            if stall <= self._poke:
+                if in_stall:
+                    in_stall = False
+                    since = ("，WM_NULL×%d 后 %.2fs 恢复"
+                             % (pokes, hb - poke_t)) if poke_t else ""
+                    self._write("%s 恢复：本次停摆约 %.1fs%s"
+                                % (time.strftime("%m-%d %H:%M:%S"),
+                                   hb - stall_start, since))
+                dumped = False
+                pokes = 0
+                poke_t = None
+                continue
+            if not in_stall:
+                in_stall = True
+                stall_start = hb
+            if stall > self._threshold and not dumped:
+                dumped = True
+                self._write("==== %s 停摆 %.1fs：前台=%s"
+                            % (time.strftime("%m-%d %H:%M:%S"), stall,
+                               self._foreground()))
+                self._write(self._pyspy_dump())
+            if stall > self._poke and now - (poke_t or 0.0) >= self._period:
+                try:
+                    hwnd = self._hwnd() or 0
+                except Exception:
+                    hwnd = 0
+                if hwnd:
+                    u32.PostMessageW(hwnd, 0, 0, 0)     # WM_NULL：惰性探针
+                    pokes += 1
+                    poke_t = self._clock()
 
 
 class BoundedCallQueue(queue.Queue):
