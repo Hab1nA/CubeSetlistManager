@@ -602,10 +602,14 @@ def test_kbd_auto():
             == (1, "USB-Midi")
     finally:
         pedal.mb._in_devices = orig_in
-    # IN 侧位次：dev 只在与 outHint 同名（同一台盒）时作用于 IN 组；
-    # 异名手工配置退回首命中——一个序号不跨两组用（R2-P3）
+    # IN 侧位次：无 inDev 走旧语义（同名跟随 dev、异名退 0）；有 inDev =
+    # 「MIDI 输入」行选过的独立位次，脏值经 _norm_dev 收敛（R2-P3）
     assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
     assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+    assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1,
+                             "inDev": 2}) == 2
+    assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1,
+                             "inDev": True}) == 0
 
 
 def test_midi_ble():

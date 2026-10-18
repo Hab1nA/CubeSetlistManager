@@ -308,9 +308,12 @@ def _norm_dev(v):
 
 
 def _in_dev(cfg):
-    """IN 侧位次：dev 是用户在设备下拉（列 OUT 口）里选的序号，只有
-    inHint 与 outHint 同名（同一台盒的一对口）时才对 IN 组有意义；
-    异名手工配置的 inHint 位次独立，退回首命中——一个序号不跨两组用。"""
+    """IN 侧位次：inDev 是用户在「MIDI 输入」下拉里选的同名序（选过才落
+    键，不进 DEFAULT——装载处强建会废掉旧配置的 dev 跟随语义）；无 inDev
+    时 dev 只在 inHint 与 outHint 同名（同一台盒的一对口）时对 IN 组有
+    意义；异名退回首命中——一个序号不跨两组用。"""
+    if "inDev" in cfg:
+        return _norm_dev(cfg["inDev"])
     return cfg["dev"] if cfg["inHint"] == cfg["outHint"] else 0
 
 
@@ -606,8 +609,8 @@ class KeyboardAutoWindow(tk.Toplevel):
         st.map("Rec.TButton", foreground=[("pressed", dpi.C_ERR)])
         pad = dpi.scale(self, 12)   # pack 边距是裸像素，高 DPI 下须换算
         # 乐器分页：下拉切换，窗口只显示一台琴的内容。行构成与页内
-        # 「MIDI 设备」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮）
-        # ——两行下拉起点/宽度对齐；刷新=重枚举当前页设备并复核端口状态，
+        # 「MIDI 输出」行严格同款（宽 15 标签+下拉填充+右侧宽 6 刷新钮）
+        # ——三行下拉起点/宽度对齐；刷新=重枚举当前页设备并复核端口状态，
         # 设备插回时不必切页即可一键复核。窗级说明段零保留（规范五）：
         # 录制/触发的用法在各自按钮的悬停提示里
         self._sel = tk.StringVar(value=PAGE_NAMES[0])
@@ -629,9 +632,9 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._slot_lbl = {}
         self._rec_btn = {}
         self._pages = {}
-        self._dev_vars = {}         # 每乐器页的设备下拉（key: juno/ax）
+        self._dev_vars = {}         # 每乐器页×每方向的设备下拉（key:(页,方向)）
         self._dev_menus = {}
-        self._dev_items = {}        # 与各页 values 平行：(端口名, 同名序 0 基)
+        self._dev_items = {}        # 与各下拉 values 平行：(端口名, 同名序 0 基)
         for key, groups in (
                 ("juno", (("── 音色槽（C4 起 10 键）──", SLOT_NOTES),
                           ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)))),
@@ -639,29 +642,38 @@ class KeyboardAutoWindow(tk.Toplevel):
                         ("── 全局移调（F2 起 4 键）──",
                          list(AX_SHIFT_NOTES))))):
             page = ttk.Frame(self)
-            # MIDI 设备行：本页乐器走哪个端口，选在录/触发之前。下拉动态
-            # 枚举当前在线端口——零写死设备名（无线盒今天枚举出 USB-Midi、
-            # 明天换有线枚举出 JUNO-DS，同一套机制）；同名多口（两只同型号
-            # 无线盒）以（第N个）区分，序号存 cfg["dev"]。行构成仿踩钉控制
+            # 收发设备两行：输出=触发发送（BS/PC/移调出琴）、输入=录制捕获
+            # （琴上选音色进软件）。收发异名盒（WIDI Uhost 的 OUT/IN 后缀
+            # 口）两行各选各的口，同名盒输出行选定即跟随输入行
+            # （_select_device）。下拉动态枚举当前在线端口——零写死设备名
+            # （无线盒今天枚举出 USB-Midi、明天换有线枚举出 JUNO-DS，同一
+            # 套机制）；同名多口（两只同型号无线盒）以（第N个）区分，序号
+            # 输出行存 cfg["dev"]、输入行存 cfg["inDev"]。行构成仿踩钉控制
             # 窗的设备行（宽 15 标签+下拉填充+宽 6 刷新）。
-            devrow = ttk.Frame(page)
-            devrow.pack(fill="x", pady=(0, 4))
-            ttk.Label(devrow, text="MIDI 设备", width=15,
-                      anchor="w", style="Dim.TLabel").pack(side="left")
-            self._dev_vars[key] = tk.StringVar(value="…")
-            opt = ttk.Combobox(devrow, textvariable=self._dev_vars[key],
-                               state="readonly")
-            opt.pack(side="left", fill="x", expand=True)
-            self._dev_menus[key] = opt
-            self._dev_items[key] = []
-            opt.bind("<<ComboboxSelected>>",
-                     lambda _e, k=key: self._on_dev_selected(k))
-            dpi.bind_hint(opt, self._hint,
-                          "当前琴型的 MIDI 口；「当前不可用」即设备未接入")
-            ref = ttk.Button(devrow, text="刷新", width=6,
-                             command=lambda k=key: self._rebuild_device_menu(k))
-            dpi.bind_hint(ref, self._hint, "重新枚举设备并复核端口状态")
-            ref.pack(side="left", padx=(6, 0))
+            for direction, label, hint in (
+                    ("out", "MIDI 输出", "触发/发送用的 MIDI 口"),
+                    ("in", "MIDI 输入", "录制捕获用的 MIDI 口")):
+                devrow = ttk.Frame(page)
+                devrow.pack(fill="x", pady=(0, 4))
+                ttk.Label(devrow, text=label, width=15,
+                          anchor="w", style="Dim.TLabel").pack(side="left")
+                self._dev_vars[key, direction] = tk.StringVar(value="…")
+                opt = ttk.Combobox(
+                    devrow, textvariable=self._dev_vars[key, direction],
+                    state="readonly")
+                opt.pack(side="left", fill="x", expand=True)
+                self._dev_menus[key, direction] = opt
+                self._dev_items[key, direction] = []
+                opt.bind("<<ComboboxSelected>>",
+                         lambda _e, k=key, d=direction:
+                         self._on_dev_selected(k, d))
+                dpi.bind_hint(opt, self._hint,
+                              "%s；「当前不可用」即设备未接入" % hint)
+                ref = ttk.Button(
+                    devrow, text="刷新", width=6,
+                    command=lambda k=key: self._rebuild_device_menu(k))
+                dpi.bind_hint(ref, self._hint, "重新枚举设备并复核端口状态")
+                ref.pack(side="left", padx=(6, 0))
             grid = ttk.Frame(page)
             grid.pack(fill="both", expand=True)
             for c, t in enumerate(("音符", "音色映射", "操作")):
@@ -1018,57 +1030,64 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._rebuild_device_menu(self._page_key)
         self._poll_ports()
 
-    def _on_dev_selected(self, key):
-        """设备下拉选中：按位次映射回（端口名, 同名序）交给 _select_device。
-        显示值是组合态（含（第N个）/幽灵标注），不在 values 里时
-        current()=-1——只消费用户真选中的项。"""
-        i = self._dev_menus[key].current()
-        if 0 <= i < len(self._dev_items[key]):
-            name, k = self._dev_items[key][i]
-            self._select_device(key, name, k)
+    def _on_dev_selected(self, key, direction):
+        """收/发设备下拉选中：按位次映射回（端口名, 同名序）交给
+        _select_device。显示值是组合态（含（第N个）/幽灵标注），不在
+        values 里时 current()=-1——只消费用户真选中的项。"""
+        i = self._dev_menus[key, direction].current()
+        if 0 <= i < len(self._dev_items[key, direction]):
+            name, k = self._dev_items[key, direction][i]
+            self._select_device(key, direction, name, k)
 
     def _rebuild_device_menu(self, key):
-        """重建设备下拉项（开窗/点「刷新」/改选后调用）：枚举当前在线输出
-        端口，唯一名显示全名、同名多口逐项「名（第N个）」；已选设备不在
-        在线清单则追加幽灵项保住显示（设备可能只是没上电），改选其它项即
-        替换。收发两向同名同选——一台盒子双向口同名，dev 序号两向同用。
-        候选由 Combobox values 承载，选中语义=当前值（原 radiobutton
-        圆点改由当前显示值表达）。"""
+        """重建设备下拉项（开窗/点「刷新」/改选后调用）：输出行列当前在线
+        输出端口、输入行列输入端口（收发异名盒各落各的口，见
+        _select_device），唯一名显示全名、同名多口逐项「名（第N个）」；
+        已选设备不在在线清单则追加幽灵项保住显示（设备可能只是没上电），
+        改选其它项即替换。候选由 Combobox values 承载，选中语义=当前值
+        （原 radiobutton 圆点改由当前显示值表达）。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
-        outs = _all_out_devices()
-        hit = _pick_hit(outs, cfg["outHint"], cfg.get("dev", 0))
-        entries = _device_entries([n for _, n in outs])
-        items = [(name, k) for _label, name, k in entries]
-        labels = [label for label, _name, _k in entries]
-        if hit is not None:
-            pos, total = _name_pos(outs, hit[1], hit[0])
-            shown = hit[1] if total == 1 else "%s（第%d个）" % (hit[1], pos)
-        else:                       # 幽灵项：已选设备当前不在场，可点回它
-            shown = cfg["outHint"] + ABSENT_MARK
-            labels.append(shown)
-            items.append((cfg["outHint"], cfg.get("dev", 0)))
-        self._dev_items[key] = items
-        self._dev_menus[key].config(values=labels)
-        self._dev_vars[key].set(shown)
+        for direction, hint, dev, devs in (
+                ("out", cfg["outHint"], cfg.get("dev", 0),
+                 _all_out_devices()),
+                ("in", cfg["inHint"], _in_dev(cfg), _all_in_devices())):
+            hit = _pick_hit(devs, hint, dev)
+            entries = _device_entries([n for _, n in devs])
+            items = [(name, k) for _label, name, k in entries]
+            labels = [label for label, _name, _k in entries]
+            if hit is not None:
+                pos, total = _name_pos(devs, hit[1], hit[0])
+                shown = hit[1] if total == 1 else "%s（第%d个）" % (
+                    hit[1], pos)
+            else:                   # 幽灵项：已选设备当前不在场，可点回它
+                shown = hint + ABSENT_MARK
+                labels.append(shown)
+                items.append((hint, dev))
+            self._dev_items[key, direction] = items
+            self._dev_menus[key, direction].config(values=labels)
+            self._dev_vars[key, direction].set(shown)
 
-    def _select_device(self, key, name, k):
-        """选定设备：outHint 置为所选完整端口名（完整名是其自身的子串，
-        恒命中且不误配他口）、同名序号写 dev；inHint 仅在原本与 outHint
-        同名、或已无任何命中时跟随——异名接口（IN/OUT 口名不同）手工配
-        置过的录制路径不被下拉改选打断。原地改 cfg dict——ToneSwitcher
-        持有本体、发送路径每次现枚举、录制路径录制时现开，选完下个音符
-        即生效，无需重连重启；落盘后状态行即时复核。config 按段整替落盘
-        （与 pedal._save 同口径，单实例互斥下运行中外部手加的未知键会被
-        内存快照覆盖——已知取舍）。dev 是 OUT 组里选的位次，仅在与
-        outHint 同名的 inHint 上对 IN 侧生效（见 _in_dev；踩钉学习候选
-        的 kb_ports 解析同此口径）。"""
+    def _select_device(self, key, direction, name, k):
+        """选定收/发设备（两行下拉各选各的）：名字存完整端口名（完整名是
+        其自身的子串，恒命中且不误配他口）、同名序号按行写 dev/inDev——
+        收发异名盒（WIDI Uhost 的 OUT/IN 后缀口）录制与触发各走各的口。
+        输出行选定仅当所选名字在输入组也精确在场（同一台盒的一对同名口）
+        才让 inHint 跟随，保持一次选定体验；不再盲改异名 inHint（旧逻辑
+        会把 OUT 口名污染进 inHint，录制必撞 PortNotFound）。原地改 cfg
+        dict——ToneSwitcher 持有本体、发送路径每次现枚举、录制路径录制时
+        现开，选完下个音符即生效，无需重连重启；落盘后两行下拉与状态行
+        即时复核。config 按段整替落盘（与 pedal._save 同口径，单实例互斥
+        下运行中外部手加的未知键会被内存快照覆盖——已知取舍）。同名序号
+        口径见 _in_dev；踩钉学习候选的 kb_ports 解析同此。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
-        if cfg["inHint"] == cfg["outHint"] or \
-                _pick_hit(_all_in_devices(), cfg["inHint"],
-                          _in_dev(cfg)) is None:
+        if direction == "in":
             cfg["inHint"] = name
-        cfg["outHint"] = name
-        cfg["dev"] = k
+            cfg["inDev"] = k
+        else:
+            cfg["outHint"] = name
+            cfg["dev"] = k
+            if name in [n for _, n in _all_in_devices()]:
+                cfg["inHint"] = name    # 同名盒：输入行免重选
         self.app._persist_config(**({"juno": dict(cfg)} if key == "juno"
                                     else {"ax09": dict(cfg)}))
         self._rebuild_device_menu(key)
@@ -1132,6 +1151,12 @@ if __name__ == "__main__":
     assert _norm_dev("1") == 0 and _norm_dev(True) == 0 and _norm_dev(2) == 2
     assert _pick_hit(dv, "") is None and _pick_hit(dv, None) is None
     assert _name_pos(dv, "USB-Midi", 2) == (2, 2)
+    # IN 侧位次：无 inDev 走旧语义（同名跟随 dev、异名退 0），有则独立收敛
+    assert _in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
+    assert _in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+    assert _in_dev({"inHint": "B", "outHint": "A", "dev": 1, "inDev": 2}) == 2
+    assert _in_dev({"inHint": "A", "outHint": "A", "dev": 1,
+                    "inDev": True}) == 0
     assert _device_entries(["A", "B", "B"])[1:] == [
         ("B（第1个）", "B", 0), ("B（第2个）", "B", 1)]
     with tempfile.TemporaryDirectory() as td:

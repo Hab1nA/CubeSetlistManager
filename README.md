@@ -191,8 +191,11 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   （"slots"=JUNO 段，"ax"=AX-09 段）。AX-09 只能经 USB 接收（DIN 口 OUT-only）；
   BS+PC 直发 144 个常规音色（MSB 恒 87；1-128 号 LSB=0、129-144 号 LSB=1），
   Favorite/Special Tone 不在 MIDI 映射表里。
-  琴侧 MIDI 口在窗口「MIDI 设备」下拉里选（收发两向同名同选，在线枚举
-  零写死；同名多口以（第N个）区分）。蓝牙无线接法（BLE MIDI，如琴上插
+  琴侧 MIDI 口在窗口「MIDI 输出」（触发/发送）与「MIDI 输入」（录制捕获）
+  两行下拉里分别选（在线枚举零写死；同名多口以（第N个）区分）。收发异名
+  盒（如 WIDI U-Host 的 `WIDI Uhost OUT`=PC→琴、`WIDI Uhost IN`=琴→PC）
+  两行各选各的口；同名双向口盒在输出行选定后输入行自动跟随。
+  蓝牙无线接法（BLE MIDI，如琴上插
   CME WIDI U-Host 连电脑内置蓝牙）：BLE 端点以「名（BLE）」出现在同一
   下拉里，选中即收发全走 BLE（`midi_ble.py`，走 Windows WinRT，winmm
   看不到 BLE 端点）；有线的同名 USB 口恒排在前，手写宽 hint（如 JUNO）
