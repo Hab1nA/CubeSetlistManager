@@ -463,7 +463,7 @@ class App:
         self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
-        self.pedal_held = {}            # 延音踏板键按住计数（kbd_auto.PEDAL_NOTES）
+        self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self.start_err = ""
@@ -1200,8 +1200,8 @@ class App:
 
     def _on_kb_msg(self, status, d1, d2):
         """Keyboard Automation 端口音符：36-39→JUNO 全局移调（连按累加）、
-        60-69→JUNO、72-77→AX-09 查映射切音色；E2(40)/A2(45)=延音踏板键，
-        按住发 CC64=127、松开发 0（重叠音符按计数去重，状态翻转才发）。"""
+        41-44→AX-09 全局移调（弯音钉位，连按累加）、60-69→JUNO、
+        72-77→AX-09 查映射切音色。"""
         st = status & 0xF0
         if st == 0x90 and d2 == 0:
             st = 0x80                   # Note On vel=0 等价 Note Off
@@ -1226,24 +1226,24 @@ class App:
                 self.q.put(ui_text.TRANSPOSE_NOT_READY
                            % self.juno_shift)
             return
-        if d1 in kbd_auto.PEDAL_NOTES:
-            before = self.pedal_held.get(d1, 0)
-            after = max(0, before + (1 if down else -1))
-            self.pedal_held[d1] = after
-            if (before == 0) == (after == 0):
-                return                  # 按住/松开状态没翻转，不重发
-            ax = kbd_auto.PEDAL_NOTES[d1] == "ax"
-            switcher = self.ax_switcher if ax else self.switcher
-            if switcher is None:
-                self.q.put(ui_text.SUSTAIN_NOT_READY
-                           % ("AX-09" if ax else "JUNO"))
+        if d1 in kbd_auto.AX_SHIFT_NOTES:
+            if not down:
                 return
-            switcher.submit_msgs(
-                kbd_auto.pedal_msgs(after > 0,
-                                    self.axcfg["ch"] if ax
-                                    else self.jcfg["patchCh"]),
-                why="%s 延音%s" % ("AX-09" if ax else "JUNO",
-                                   "踩下" if after > 0 else "抬起"))
+            if self.ctrl is not None and self.ctrl.busy:
+                self.q.put("切歌中，忽略移调音符 %s" % kbd_auto.note_name(d1))
+                return
+            self.ax_shift = max(
+                -kbd_auto.AX_SHIFT_LIMIT,
+                min(kbd_auto.AX_SHIFT_LIMIT,
+                    self.ax_shift + kbd_auto.AX_SHIFT_NOTES[d1]))
+            if self.ax_switcher:
+                self.ax_switcher.submit_msgs(
+                    kbd_auto.ax_shift_msgs(self.ax_shift,
+                                           self.axcfg["ch"]),
+                    why="AX-09 全局移调 %+d 半音" % self.ax_shift)
+            else:
+                self.q.put(ui_text.AX_TRANSPOSE_NOT_READY
+                           % self.ax_shift)
             return
         if not down:
             return
@@ -1267,7 +1267,7 @@ class App:
 
     def _on_kb_result(self, desc, err):
         """ToneSwitcher 线程回调：最近一次音色切换结果（进监控栏，只写属性）。
-        失败也带动作名（音色描述/延音踩下抬起），否则看不出哪个动作失败。"""
+        失败也带动作名（音色描述/移调半音数），否则看不出哪个动作失败。"""
         self._kb_last = (("%s失败：%s" % (desc, err)) if err
                          else ("已发送：%s" % desc),
                          dpi.C_ERR if err else dpi.C_OK)

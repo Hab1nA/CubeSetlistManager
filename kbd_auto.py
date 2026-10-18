@@ -16,11 +16,11 @@ LSB=1）；Favorite/Special Tone 不在 PC 映射表里，MIDI 不可直达。
 另有 JUNO 全局移调触发键（C2=36 起：↓半音/↑半音/↓八度/↑八度）：按官方
 MIDI Implementation，GM 通用 SysEx Master Coarse Tuning 写 SYSTEM Master
 Key Shift（±24 半音，全局、模式无关），连按累加（软件记累计值，反向键
-抵消）；AX-09 不参与（SysEx 接收=X）。
-另有延音踏板键：E2(40)→JUNO、A2(45)→AX-09（41-44 留给以后 AX-09 音高
-移动）。按住=向琴发 CC64(Hold 1) 127、松开=发 0——两台琴官方文档都接收
-CC64；注意 JUNO 的 CC64 只作用于 MIDI IN 音符（不影响手弹），AX-09 仅
-USB 接收（真机行为待实测）。
+抵消）。
+另有 AX-09 全局移调触发键（F2=41 起：同款四个方向）：真机实测（2026-10-18）
+AX-09 不收 SysEx，调音 RPN 与 CC64 都进不了本地发声路径，唯弯音进——
+发 RPN 0,0 弯音灵敏度=12 后用弯音钉位（灵敏度设 24 被钳回 12，故限
+±12）；连按累加，切音色不掉，弯音杆一碰即覆盖。
 只捕获短消息（CC0/CC32/PC）；不收 SysEx 输入（长缓冲收包复杂且模式可
 推断补齐——ponytail: 若实测 Favorite TX 带模式 SysEx 且推断出错再升级）。"""
 import ctypes
@@ -43,16 +43,16 @@ KB_PORT_HINT = "Keyboard Automation"
 SLOT_NOTES = list(range(60, 70))            # JUNO：C4 起十个半音
 AX_NOTES = list(range(72, 78))              # AX-09：C5 起六个半音
 SHIFT_NOTES = {36: -1, 37: 1, 38: -12, 39: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
-SHIFT_DESC = {36: "降1半音", 37: "升1半音", 38: "降1八度", 39: "升1八度"}
+AX_SHIFT_NOTES = {41: -1, 42: 1, 43: -12, 44: 12}  # AX-09 移调：F2↓半音 F#2↑半音 G2↓八度 G#2↑八度
+SHIFT_DESC = {36: "降1半音", 37: "升1半音", 38: "降1八度", 39: "升1八度",
+              41: "降1半音", 42: "升1半音", 43: "降1八度", 44: "升1八度"}
 # ↑↑↓ 箭头字形竖线长箭头头小，暗场远距两行几乎同形（初看像 I1）——
 # 升/降改汉字直读，四行同款文案风格
 SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围 ±24 半音
-PEDAL_NOTES = {40: "juno", 45: "ax"}        # 延音踏板键：E2→JUNO、A2→AX-09
-                                            # （41-44 留给以后 AX-09 音高移动）
-PEDAL_DESC = {40: "按住踩下延音，松开抬起", 45: "按住踩下延音，松开抬起"}
+AX_SHIFT_LIMIT = 12                         # AX-09 弯音灵敏度真机钳在 12（设 24 无效）
 PAGE_NAMES = ("JUNO DS-88", "AX-09 Lucina")     # 配置窗口的乐器分页
-NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2", 40: "E2",
-              45: "A2",
+NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2",
+              41: "F2", 42: "F#2", 43: "G2", 44: "G#2",
               60: "C4", 61: "C#4", 62: "D4", 63: "D#4", 64: "E4",
               65: "F4", 66: "F#4", 67: "G4", 68: "G#4", 69: "A4",
               72: "C5", 73: "C#5", 74: "D5", 75: "D#5", 76: "E5", 77: "F5"}
@@ -114,11 +114,20 @@ def shift_msgs(total):
     return [("long", bytes([0xF0, 0x7F, 0x7F, 0x04, 0x04, 0x00, mm, 0xF7]), 0)]
 
 
-def pedal_msgs(on, ch):
-    """延音 CC64（Hold 1）：on=True→127 踩下、False→0 松开；ch 为 1 基通道。
-    JUNO 用 patchCh、AX-09 用 ch，与各自音色切换通道一致。"""
-    return [("short",
-             0xB0 | (ch - 1) | 64 << 8 | (0x7F if on else 0) << 16, 0)]
+def ax_shift_msgs(total, ch):
+    """AX-09 全局移调：RPN 0,0 弯音灵敏度=12 + 弯音钉位（ch 为 1 基通道）。
+    真机实测（2026-10-18）：灵敏度设 24 被钳回 12；弯音值 v=round(8192×
+    (12+半音)/12)，±12 边界取满舵 0/16383（+12 实为 11.99，听感等价）。"""
+    s = max(-12, min(12, total))
+    v = max(0, min(16383, round(8192 * (12 + s) / 12)))
+    b = 0xB0 | (ch - 1)
+    return [("short", b | 101 << 8, MSG_GAP),                    # RPN 0,0 选参
+            ("short", b | 100 << 8, MSG_GAP),
+            ("short", b | 6 << 8 | 12 << 16, MSG_GAP),           # 灵敏度 12 半音
+            ("short", b | 101 << 8 | 0x7F << 16, MSG_GAP),       # RPN null 收尾
+            ("short", b | 100 << 8 | 0x7F << 16, MSG_GAP),
+            ("short", 0xE0 | (ch - 1) | (v & 0x7F) << 8
+             | (v >> 7 & 0x7F) << 16, 0)]
 
 
 def switch_msgs(slot, cfg):
@@ -511,7 +520,7 @@ class ToneSwitcher:
             self._q.put((slot, why))
 
     def submit_msgs(self, msgs, why=""):
-        """预构造消息序列（全局移调/延音踏板）走同一串行队列。"""
+        """预构造消息序列（两琴全局移调）走同一串行队列。"""
         self._q.put((msgs, why))
 
     def submit_shift(self, total, why=""):
@@ -522,7 +531,7 @@ class ToneSwitcher:
         while True:
             item, why = self._q.get()
             try:
-                if isinstance(item, list):      # 预构造序列（移调/延音）
+                if isinstance(item, list):      # 预构造序列（全局移调）
                     err = send_slot(None, self.cfg, msgs=item)
                     self._log("%s%s" % (why, "失败：%s" % err if err else ""))
                     if self.on_result:
@@ -536,7 +545,7 @@ class ToneSwitcher:
                 if self.on_result:
                     self.on_result(describe_slot(slot), err)
             except Exception as e:
-                # 发送线程绝不允许静默死亡：死一次=音色切换/延音/移调全场
+                # 发送线程绝不允许静默死亡：死一次=音色切换/移调全场
                 # 失效且零日志（load_slots 类型洞曾可经 describe_slot 炸死）
                 try:
                     self._log("音色发送异常（已恢复）：%s: %s"
@@ -625,10 +634,10 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._dev_items = {}        # 与各页 values 平行：(端口名, 同名序 0 基)
         for key, groups in (
                 ("juno", (("── 音色槽（C4 起 10 键）──", SLOT_NOTES),
-                          ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)),
-                          ("── 延音踏板 ──", [40]))),
+                          ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)))),
                 ("ax", (("── 音色槽（C5 起 6 键）──", AX_NOTES),
-                        ("── 延音踏板 ──", [45])))):
+                        ("── 全局移调（F2 起 4 键）──",
+                         list(AX_SHIFT_NOTES))))):
             page = ttk.Frame(self)
             # MIDI 设备行：本页乐器走哪个端口，选在录/触发之前。下拉动态
             # 枚举当前在线端口——零写死设备名（无线盒今天枚举出 USB-Midi、
@@ -669,7 +678,7 @@ class KeyboardAutoWindow(tk.Toplevel):
                     ttk.Label(grid, text="%s（%d）" % (note_name(note), note),
                               anchor="w").grid(row=row, column=0, sticky="w",
                                                pady=2)
-                    desc = SHIFT_DESC.get(note) or PEDAL_DESC.get(note)
+                    desc = SHIFT_DESC.get(note)
                     if desc:        # 固定功能行：只显示，无录制/触发
                         ttk.Label(grid, text=desc, anchor="w",
                                   style="Dim.TLabel").grid(
@@ -1097,14 +1106,17 @@ if __name__ == "__main__":
         [0xF0, 0x7F, 0x7F, 0x04, 0x04, 0x00, 0x40, 0xF7])
     assert shift_msgs(24)[0][1][6] == 0x58 and shift_msgs(-24)[0][1][6] == 0x28
     assert shift_msgs(30)[0][1][6] == 0x58 and shift_msgs(-99)[0][1][6] == 0x28
-    p = pedal_msgs(True, 1)
-    assert p[0][1] == 0xB0 | 0 | 64 << 8 | 0x7F << 16      # B0 40 7F 踩下
-    q = pedal_msgs(False, 16)
-    assert q[0][1] >> 16 & 0xFF == 0 and q[0][1] & 0x0F == 15   # BF 40 00 抬起
+    p = ax_shift_msgs(0, 1)
+    assert p[2][1] >> 8 & 0xFF == 6 and p[2][1] >> 16 == 12  # 灵敏度 12 半音
+    assert p[-1][1] == 0xE0 | 0x40 << 16                     # 归零=弯音回中
+    assert ax_shift_msgs(3, 1)[-1][1] == 0xE0 | 0x50 << 16   # +3 半音（真机实测）
+    assert ax_shift_msgs(-12, 1)[-1][1] == 0xE0              # -12=弯音谷底
+    assert ax_shift_msgs(12, 1)[-1][1] == 0xE0 | 0x7F << 8 | 0x7F << 16  # 满舵
+    assert ax_shift_msgs(99, 1) == ax_shift_msgs(12, 1)      # 越界钳位
+    assert ax_shift_msgs(1, 16)[-1][1] & 0x0F == 15          # ch 1 基换算
     assert note_name(69) == "A4" and note_name(72) == "C5"
     assert note_name(36) == "C2" and note_name(39) == "D#2"
-    assert note_name(40) == "E2" and note_name(45) == "A2"
-    assert PEDAL_NOTES == {40: "juno", 45: "ax"}
+    assert note_name(41) == "F2" and note_name(44) == "G#2"
     # 同名多口消歧（两只同型号无线盒）：dev 序号落位/越界收敛/互不误配
     dv = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
     assert _pick_hit(dv, "USB-Midi") == (1, "USB-Midi")

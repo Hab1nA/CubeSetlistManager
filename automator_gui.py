@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Cube Automator：Studio One 纯自动化集线器（完整版的简化兄弟产品）。
 不做歌单/切歌/走带控制——DAW 由使用者自行操作，本程序只做联动：
-VJ 视频跟随（时钟+音符触发+熄屏/投影）、键盘自动化（音色切换+移调+
-延音踏板）、自动翻谱推送、移动端翻谱配置页（网页端=提示+下载 APP）。
+VJ 视频跟随（时钟+音符触发+熄屏/投影）、键盘自动化（音色切换+双琴全局
+移调）、自动翻谱推送、移动端翻谱配置页（网页端=提示+下载 APP）。
 当前工程靠窗口标题识别（Studio One - 歌名）：400ms 轮询，标题变化即在
 工程库里按名匹配 .song，自动装载旁挂的 keyboard_automation.json。
 键盘自动化窗口直接对应当前识别到的工程（替代完整版的手动选曲）。
@@ -314,7 +314,7 @@ class App:
         self.kb_err = ""
         self._kb_last = ("待机", dpi.MUT)
         self.juno_shift = 0
-        self.pedal_held = {}
+        self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
         self.q = queue.Queue()
         self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
         self.calls_urgent = collections.deque()  # 紧急调用（对称预留）
@@ -718,8 +718,8 @@ class App:
     # ---- 键盘自动化（音符分发与完整版同构，无切歌忽略分支）----
 
     def _on_kb_msg(self, status, d1, d2):
-        """Keyboard Automation 端口音符：36-39→JUNO 全局移调、60-69→JUNO、
-        72-77→AX-09 查映射切音色；E2(40)/A2(45)=延音踏板键。"""
+        """Keyboard Automation 端口音符：36-39→JUNO 全局移调、41-44→AX-09
+        全局移调（弯音钉位）、60-69→JUNO、72-77→AX-09 查映射切音色。"""
         st = status & 0xF0
         if st == 0x90 and d2 == 0:
             st = 0x80
@@ -741,24 +741,21 @@ class App:
                 self.q.put(ui_text.TRANSPOSE_NOT_READY
                            % self.juno_shift)
             return
-        if d1 in kbd_auto.PEDAL_NOTES:
-            before = self.pedal_held.get(d1, 0)
-            after = max(0, before + (1 if down else -1))
-            self.pedal_held[d1] = after
-            if (before == 0) == (after == 0):
-                return                  # 按住/松开状态没翻转，不重发
-            ax = kbd_auto.PEDAL_NOTES[d1] == "ax"
-            switcher = self.ax_switcher if ax else self.switcher
-            if switcher is None:
-                self.q.put(ui_text.SUSTAIN_NOT_READY
-                           % ("AX-09" if ax else "JUNO"))
+        if d1 in kbd_auto.AX_SHIFT_NOTES:
+            if not down:
                 return
-            switcher.submit_msgs(
-                kbd_auto.pedal_msgs(after > 0,
-                                    self.axcfg["ch"] if ax
-                                    else self.jcfg["patchCh"]),
-                why="%s 延音%s" % ("AX-09" if ax else "JUNO",
-                                   "踩下" if after > 0 else "抬起"))
+            self.ax_shift = max(
+                -kbd_auto.AX_SHIFT_LIMIT,
+                min(kbd_auto.AX_SHIFT_LIMIT,
+                    self.ax_shift + kbd_auto.AX_SHIFT_NOTES[d1]))
+            if self.ax_switcher:
+                self.ax_switcher.submit_msgs(
+                    kbd_auto.ax_shift_msgs(self.ax_shift,
+                                           self.axcfg["ch"]),
+                    why="AX-09 全局移调 %+d 半音" % self.ax_shift)
+            else:
+                self.q.put(ui_text.AX_TRANSPOSE_NOT_READY
+                           % self.ax_shift)
             return
         if not down:
             return

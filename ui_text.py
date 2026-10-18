@@ -21,7 +21,7 @@ FOLLOW_OFF = "未启用，未收到时钟"
 
 # 音色切换器缺席时的降级日志
 TRANSPOSE_NOT_READY = "JUNO 移调 %+d 半音（输出未就绪，未发送）"
-SUSTAIN_NOT_READY = "%s 延音踏板（输出未就绪，未发送）"
+AX_TRANSPOSE_NOT_READY = "AX-09 移调 %+d 半音（输出未就绪，未发送）"
 
 # 设置页遥控行：热点未开提示（仅 hotspot 服务模式使用）
 HOTSPOT_OFF = "热点未开，启用后自动开"

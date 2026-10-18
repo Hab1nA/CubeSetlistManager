@@ -54,41 +54,26 @@ def main():
                 10, "note65 未配置提示"):
         OK = False
 
-    # 延音踏板键：E2(40)→JUNO、A2(45)→AX-09，按住=CC64 踩下、松开=抬起。
-    # 断言用 app._kb_last 属性（发送线程直接写）：不与主线程抢日志队列；
-    # 重复按住/松开被去重时不发送，属性 tuple 引用不变，用 is 验证
+    # AX-09 全局移调键：F2(41)=降1半音、F#2(42)=升1半音，连按累加；
+    # 断言用 app._kb_last 属性（发送线程直接写）：不与主线程抢日志队列
     def wait_last(tag):
         return wait(lambda: tag in app._kb_last[0], 10, "%s 结果" % tag)
 
-    mb.send_note(hits[0][0], 40)        # 按住 → JUNO 延音踩下
-    if not wait_last("JUNO 延音踩下"):
+    mb.send_note(hits[0][0], 41)        # ax_shift=-1 → 弯音钉位
+    if not wait_last("AX-09 全局移调 -1"):
         OK = False
-    snap = app._kb_last                 # 重叠按住 → 状态未翻转不重发
-    mb.send_note(hits[0][0], 40)
+    mb.send_note(hits[0][0], 42)        # 连按累加回 0 → 弯音回中
+    if not wait_last("AX-09 全局移调 +0"):
+        OK = False
+    mb.send_note(hits[0][0], 43)        # 降1八度 → 钳位边界路径
+    if not wait_last("AX-09 全局移调 -12"):
+        OK = False
+    snap = app._kb_last                 # 松开移调键（Note Off）→ 不重发
+    mb.send_note(hits[0][0], 43, vel=0)
     time.sleep(1.5)
     if app._kb_last is not snap:
         OK = False
-        print("FAIL：重复按住未去重（_kb_last 被更新）", flush=True)
-    mb.send_note(hits[0][0], 40, vel=0)  # 第一次松开：只抵消重叠的那条
-    time.sleep(1.5)
-    if app._kb_last is not snap:
-        OK = False
-        print("FAIL：重叠音符的第一次松开就抬起了（计数错）", flush=True)
-    mb.send_note(hits[0][0], 40, vel=0)  # 第二次松开：全部释放 → 抬起
-    if not wait_last("JUNO 延音抬起"):
-        OK = False
-    snap = app._kb_last                 # 第三次松开（多余）→ 去重
-    mb.send_note(hits[0][0], 40, vel=0)
-    time.sleep(1.5)
-    if app._kb_last is not snap:
-        OK = False
-        print("FAIL：多余松开未去重（_kb_last 被更新）", flush=True)
-    mb.send_note(hits[0][0], 45)        # A2 → AX-09 延音踩下
-    if not wait_last("AX-09 延音踩下"):
-        OK = False
-    mb.send_note(hits[0][0], 45, vel=0)
-    if not wait_last("AX-09 延音抬起"):
-        OK = False
+        print("FAIL：移调键松开不应重发（_kb_last 被更新）", flush=True)
 
     logs = drain(app)
     print("---- GUI 日志（全部）----", flush=True)

@@ -490,7 +490,7 @@ def test_load_slots_rejects_bad_types(tmp_path):
 
 
 def test_tone_switcher_loop_survives_exception(monkeypatch):
-    """发送线程裸 while True 曾被单次异常静默毒杀（音色/延音/移调全场
+    """发送线程裸 while True 曾被单次异常静默毒杀（音色/移调全场
     失效零日志）：现异常就地吞掉进日志，线程存活继续消费。"""
     import kbd_auto
     results = []

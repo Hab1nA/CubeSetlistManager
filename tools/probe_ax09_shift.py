@@ -8,6 +8,7 @@ Implementation 实锤接收 RPN 0,2 Channel Coarse Tuning（±48 半音）——
   5 全复位
 用法：py -u probe_ax09_shift.py [输出端口名子串，默认 AX-09]"""
 import ctypes
+import os
 import pathlib
 import sys
 import time
@@ -15,7 +16,7 @@ from ctypes import wintypes
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import kbd_auto
+import midi_bridge as mb
 
 CH = 0                                  # AX-09 默认接收通道 1
 
@@ -45,32 +46,34 @@ def _selftest():
 
 def flush(h, msgs, gap=0.012):
     for t in msgs:
-        kbd_auto._winmm.midiOutShortMsg(h, _st(t))
+        mb._winmm.midiOutShortMsg(h, _st(t))
         time.sleep(gap)
 
 
 def play(h, note=60, sec=1.5, vel=100):
-    kbd_auto._winmm.midiOutShortMsg(h, _st((0x90 | CH, note, vel)))
+    mb._winmm.midiOutShortMsg(h, _st((0x90 | CH, note, vel)))
     time.sleep(sec)
-    kbd_auto._winmm.midiOutShortMsg(h, _st((0x80 | CH, note, 0)))
+    mb._winmm.midiOutShortMsg(h, _st((0x80 | CH, note, 0)))
     time.sleep(0.3)
 
 
 def step(title, fn):
-    print("\n=== %s" % title)
-    input("回车播放测试音…")
+    print("\n=== %s" % title, flush=True)
+    if os.environ.get("PROBE_AUTO"):
+        time.sleep(6)                       # 无人值守：留读题间隙
+    else:
+        input("回车播放测试音…")
     fn()
 
 
 def main():
     _selftest()
     hint = sys.argv[1] if len(sys.argv) > 1 else "AX-09"
-    hits = [(i, n) for i, n in kbd_auto.mb._out_devices() if hint in n]
+    hits = [(i, n) for i, n in mb._out_devices() if hint in n]
     assert hits, "未找到含「%s」的 MIDI 输出端口" % hint
     print("输出端口：%s" % hits[0][1])
     h = wintypes.HANDLE()
-    r = kbd_auto._winmm.midiOutOpen(ctypes.byref(h), hits[0][0],
-                                    kbd_auto.mb._Proc(), 0, 0)
+    r = mb._winmm.midiOutOpen(ctypes.byref(h), hits[0][0], mb._Proc(), 0, 0)
     assert not r, "midiOutOpen 失败（code %d）" % r
     try:
         step("① 基准音（记住这个音高）", lambda: play(h))
@@ -88,7 +91,7 @@ def main():
         print("\n结束。②可用=半音/八度都能走 RPN Coarse（同 JUNO 方案）；"
               "②✘③✔=只能 ±1 半音；都✘=只能软件移调或弯音 hack。")
     finally:
-        kbd_auto._winmm.midiOutClose(h)
+        mb._winmm.midiOutClose(h)
 
 
 if __name__ == "__main__":
