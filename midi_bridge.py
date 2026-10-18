@@ -12,12 +12,13 @@ Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port�
 在触发位置画音符：C4→1.mp4、C#4→2.mp4 …（只认 Note On，音符长度无所谓）。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
-暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“发送 MIDI 时钟”，
-目的地选 loopMIDI Port（建议存进工程模板）。收到时钟脉冲=在播，
-脉冲断流=暂停视频（定格）；时钟恢复=继续播放。暂停态磁吸对齐到
-触发音符上起播时，以音符切换为准（短暂抑制恢复，旧视频不闪现）。
-不发送时钟则此功能不启用。
+暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“MIDI 时码输出”
+（MTC），目的地选 loopMIDI Port（建议存进工程模板）。收到时码四分之一帧
+=在播，断流=暂停视频（定格）；恢复=继续播放。暂停态磁吸对齐到触发音符
+上起播时，以音符切换为准（短暂抑制恢复，旧视频不闪现）。
+不发时码则此功能不启用。MIDI 时钟（F8）不是位置来源，只作诊断计数。
 """
+import collections
 import ctypes
 import json
 import os
@@ -28,10 +29,11 @@ import time
 import winreg
 from ctypes import wintypes
 
+import mtc
 from obs_ctrl import ObsController, launch_detached
 
 PORT_HINT = "loopMIDI Port"   # 默认端口全名；不能宽匹配 loopMIDI，否则会误开「Keyboard Automation」端口
-CLOCK_TIMEOUT = 0.25   # 这么久没有走带脉冲就视为暂停/停止
+CLOCK_TIMEOUT = 0.25   # 这么久没有走带时码（QF）就视为暂停/停止
 POLL_SEC = 0.1         # 看门狗轮询间隔
 NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸对齐音符起播时，切换归音符管）
 # C4=60 → 1.mp4，向上每个音顺延：C#4=61 → 2.mp4 … D6=89 → 30.mp4
@@ -40,13 +42,39 @@ NOTE_MAP[90] = None  # F#6 → 熄屏
 
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
+_MIM_LONGDATA = 0x3C4     # SysEx 缓冲收满（须先 AddBuffer 投缓冲，否则 SysEx 被静默丢弃）
+_MIM_LONGERROR = 0x3C2    # SysEx 接收错误（缓冲同样要回收重投）
 _CALLBACK_FUNC = 0x30000
 _Proc = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, ctypes.c_uint,
                            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t)
+
+
+class _MIDIHDR(ctypes.Structure):
+    """midiInAddBuffer 的缓冲头。lpData/dwBytesRecorded 是回调侧只读、
+    专线侧消费的字段；缓冲字节块必须与头同被 MidiIn 实例持有（ctypes
+    不保活所指内存），直到 Unprepare 后随对象释放。"""
+    _fields_ = [("lpData", ctypes.c_void_p),
+                ("dwBufferLength", wintypes.DWORD),
+                ("dwBytesRecorded", wintypes.DWORD),
+                ("dwUser", ctypes.c_size_t),
+                ("dwFlags", wintypes.DWORD),
+                ("lpNext", ctypes.c_void_p),
+                ("reserved", ctypes.c_size_t),
+                ("dwOffset", wintypes.DWORD),
+                ("dwReserved", wintypes.DWORD * 4)]
+
+
 _winmm.midiInOpen.argtypes = (ctypes.POINTER(wintypes.HANDLE), ctypes.c_uint,
                               _Proc, ctypes.c_size_t, wintypes.DWORD)
 _winmm.midiOutOpen.argtypes = (ctypes.POINTER(wintypes.HANDLE), ctypes.c_uint,
                                _Proc, ctypes.c_size_t, wintypes.DWORD)
+_winmm.midiInPrepareHeader.argtypes = (wintypes.HANDLE,
+                                       ctypes.POINTER(_MIDIHDR), wintypes.UINT)
+_winmm.midiInUnprepareHeader.argtypes = (wintypes.HANDLE,
+                                         ctypes.POINTER(_MIDIHDR),
+                                         wintypes.UINT)
+_winmm.midiInAddBuffer.argtypes = (wintypes.HANDLE, ctypes.POINTER(_MIDIHDR),
+                                   wintypes.UINT)
 
 
 class _InCaps(ctypes.Structure):
@@ -197,9 +225,11 @@ def post_io(fn):
     _io_q.put(fn)
 
 
-def close_in(h):
-    """在专线按官方收尾序 Stop→Reset→Close 关输入口。fire-and-forget：
-    调用方（含主线程）即刻返回，收尾在专线串行完成（终审 F1）。
+def close_in(h, teardown=None):
+    """在专线按官方收尾序 Stop→Reset→[teardown]→Close 关输入口。
+    fire-and-forget：调用方（含主线程）即刻返回，收尾在专线串行完成
+    （终审 F1）。teardown=Reset 返回缓冲后、Close 前的钩子（longdata 头
+    Unprepare 用），异常吞掉绝不阻塞关闭。
     幂等守卫：对象层 close() 虽有 _h 置空，但两线程并发 close 可同时读
     到同一句柄；句柄值被系统回收复用后二次 close 会误关无关新口。
     迟到收尾的句柄值复用问题被单线程串行结构性排除：所有 winmm open/
@@ -213,6 +243,11 @@ def close_in(h):
     def job():
         _winmm.midiInStop(h)
         _winmm.midiInReset(h)
+        if teardown:
+            try:
+                teardown()
+            except Exception:
+                pass
         _winmm.midiInClose(h)
 
     post_io(job)
@@ -306,43 +341,127 @@ _out_cache_holder = _CacheHolder()
 
 
 class MidiIn:
-    """winmm MIDI 输入口；on_note(note, vel) 只收 Note On(vel>0)，
-    on_clock() 收走带脉冲（MIDI Clock F8 / MTC 四分之一帧 F1）。"""
+    """winmm MIDI 输入口。
+    on_note(note, vel)  只收 Note On(vel>0)（VJ 触发）
+    on_mtc(data1)       MTC 四分之一帧数据字节（时码位置流）
+    on_f8()             MIDI Clock 脉冲（迁移后仅诊断计数，不是位置来源）
+    on_sysex(bytes)     SysEx 缓冲原始字节（MTC 全帧等；传了才挂 longdata
+                        缓冲池——VJ 音符口零改动，SysEx 照旧被驱动丢弃）"""
 
-    def __init__(self, name_sub, on_note, on_clock=None):
+    POOL_N = 4          # longdata 缓冲池：全帧稀疏（定位/停止时才有），
+    POOL_SIZE = 256     # 4×256B 足够；池尽=新 SysEx 被驱动丢弃（无损降级）
+
+    def __init__(self, name_sub, on_note, on_mtc=None, on_f8=None,
+                 on_sysex=None):
         found = _pick(_in_devices(), name_sub)
         if found is None:
             sys.exit("没找到 %s 端口：请先安装并运行 loopMIDI 建一个虚拟端口"
                      % name_sub)
         idx, self.name = found
         self._on_note = on_note
-        self._on_clock = on_clock
+        self._on_mtc = on_mtc
+        self._on_f8 = on_f8
+        self._on_sysex = on_sysex
         self._cb = _Proc(self._dispatch)   # 必须持有引用，防止回调被 GC
         h, err = open_in(idx, self._cb)    # 专线上限时打开（主线程不陪葬）
         if h is None:
             sys.exit(err)
         self._h = h
+        self._done = collections.deque()   # 已完成的缓冲头地址 (addr, errored)
+        self._done_lock = threading.Lock()
+        self._scheduled = False
+        self._hdrs = []                    # (hdr, buf) 同持：ctypes 不保活 buf
+        if on_sysex is not None:
+            self._setup_pool(h)
+
+    def _setup_pool(self, h):
+        """prepare+投递缓冲池。Start 之后补投有毫秒级窗口（头几个 SysEx
+        可能被丢）——可接受：全帧只在停止/定位时才有，端口刚开必无。"""
+        for _ in range(self.POOL_N):
+            buf = (ctypes.c_ubyte * self.POOL_SIZE)()
+            hdr = _MIDIHDR()
+            hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+            hdr.dwBufferLength = self.POOL_SIZE
+            if _winmm.midiInPrepareHeader(
+                    h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                continue
+            if _winmm.midiInAddBuffer(
+                    h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                _winmm.midiInUnprepareHeader(
+                    h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                continue
+            self._hdrs.append((hdr, buf))
 
     def _dispatch(self, h, msg, inst, p1, p2):
-        if msg != _MIM_DATA:
-            return
-        status = p1 & 0xFF
-        if status in (0xF1, 0xF8):
-            if self._on_clock:
-                self._on_clock()
-        elif status & 0xF0 == 0x90 and (p1 >> 16) & 0xFF:
-            self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
+        # 回调线程零重活：longdata 只入队+按需派工，取字节/重投在专线
+        if msg == _MIM_DATA:
+            status = p1 & 0xFF
+            if status == 0xF1:
+                if self._on_mtc:
+                    self._on_mtc((p1 >> 8) & 0xFF)
+            elif status == 0xF8:
+                if self._on_f8:
+                    self._on_f8()
+            elif status & 0xF0 == 0x90 and (p1 >> 16) & 0xFF:
+                self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
+        elif msg in (_MIM_LONGDATA, _MIM_LONGERROR) and p1:
+            self._done_push(int(p1), msg == _MIM_LONGERROR)
+
+    def _done_push(self, addr, errored):
+        with self._done_lock:
+            self._done.append((addr, errored))
+            first = not self._scheduled
+            self._scheduled = True
+        if first:
+            post_io(self._refeed)      # 复投递走 winmm 专线（串行于 close）
+
+    def _refeed(self):
+        """专线线程：消费完成缓冲——取字节→on_sysex→Unprepare/Prepare→
+        AddBuffer 重投。与 close 收尾同队列串行，互不交错；_h 已空（收尾
+        中/已关）只消费不重投（缓冲随实例存亡，不提前释放）。
+        派工旗标在队空时同锁复位：清旗与入队判定同锁原子，回调侧要么
+        赶上本批被消费、要么看到旗已复位自派新工——无丢失唤醒窗口。"""
+        while True:
+            with self._done_lock:
+                item = self._done.popleft() if self._done else None
+                if item is None:
+                    self._scheduled = False
+                    return
+            addr, errored = item
+            hh = self._h
+            if not hh:
+                continue
+            try:
+                hdr = _MIDIHDR.from_address(addr)
+                if self._on_sysex is not None and not errored \
+                        and hdr.dwBytesRecorded:
+                    self._on_sysex(ctypes.string_at(
+                        hdr.lpData, hdr.dwBytesRecorded))
+                if _winmm.midiInUnprepareHeader(
+                        hh, ctypes.byref(hdr), ctypes.sizeof(hdr)) == 0 \
+                    and _winmm.midiInPrepareHeader(
+                        hh, ctypes.byref(hdr), ctypes.sizeof(hdr)) == 0:
+                    _winmm.midiInAddBuffer(
+                        hh, ctypes.byref(hdr), ctypes.sizeof(hdr))
+            except Exception:
+                pass
 
     def close(self):
         """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
-        → Close。裸 Close 在回调密集时（F8 流 ~20ms 一个）与回调执行存在
-        竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续 open/close。
-        在 winmm 专线上 fire-and-forget：调用方（含主线程）即刻返回，收尾
-        排队迟到完成；幂等（二次 close 无操作）。"""
+        → [longdata 头 Unprepare] → Close。裸 Close 在回调密集时与回调
+        执行存在竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续
+        open/close。在 winmm 专线上 fire-and-forget：调用方（含主线程）
+        即刻返回，收尾排队迟到完成；幂等（二次 close 无操作）。"""
         h = self._h
         self._h = None
         if h:
-            close_in(h)
+            close_in(h, teardown=(lambda hh=h: self._unprepare_pool(hh))
+                     if self._hdrs else None)
+
+    def _unprepare_pool(self, h):
+        for hdr, _buf in self._hdrs:
+            _winmm.midiInUnprepareHeader(h, ctypes.byref(hdr),
+                                         ctypes.sizeof(hdr))
 
 
 class TransportSync:
@@ -559,7 +678,12 @@ def main():
         return
     ctl = ObsController(load_obs_cfg())
     sync = TransportSync(ctl, on_event=lambda m: print(m, flush=True))
-    port = MidiIn(PORT_HINT, note_handler(ctl, sync), on_clock=sync.on_clock)
+    dec = mtc.Decoder(
+        on_qf=sync.on_clock,
+        on_position=lambda sec: print("MTC %d:%06.3f" % (
+            int(sec) // 60, sec % 60), flush=True))
+    port = MidiIn(PORT_HINT, note_handler(ctl, sync), on_mtc=dec.feed,
+                  on_f8=dec.note_f8, on_sysex=dec.full_frame)
     ctl.enabled = True
     ctl.start()
     threading.Thread(target=_watchdog, args=(sync,), daemon=True).start()

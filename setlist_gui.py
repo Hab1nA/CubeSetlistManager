@@ -7,8 +7,8 @@
 继续=从当前位置播/回零/上一首/下一首/全停）+自动化（键盘自动化/踩钉控制）居中，
 退出靠右。
 切歌=DawController.switch_to（关闭当前工程[自动保存]→打开下一个），
-只认播放列表里的歌；自动推进=AdvanceWatch 累计走带活跃时长≥工程时长×95%
-且时钟断流。工程时长：启动时后台全量重探（自动来源；手动设定不覆盖）+
+只认播放列表里的歌；自动推进=MTC 时码位置−左定位条 ≥ 工程时长×95% 且
+时码断流。工程时长：启动时后台全量重探（自动来源；手动设定不覆盖）+
 打开工程时重测，持久化在 playlist.json，未设定位条的用「写入时长」手填。
 直接 `python setlist_gui.py` 运行，或 PyInstaller 打包 exe（config.json、
 playlist.json 与 exe 同目录）。"""
@@ -35,6 +35,7 @@ import daw_ctrl
 import dpi
 import hotspot
 import kbd_auto
+import mtc
 import midi_bridge as mb
 import pedal
 import song_meta
@@ -245,6 +246,17 @@ def _read_duration(path):
     return (song_meta.read_duration(path)
             if path.lower().endswith(".song")
             else cpr_meta.read_duration(path))
+
+
+def _read_span(path):
+    """(时长, 左定位条偏移)：左定位条是时码位置→歌内已播秒的换算原点
+    （.song 无定位条概念 → 左=0；.cpr 解析不出 → (0, 0) 手填兜底）。"""
+    if path.lower().endswith(".song"):
+        return (song_meta.read_duration(path) or 0.0, 0.0)
+    loc = cpr_meta.read_locators(path)
+    if not loc:
+        return (0.0, 0.0)
+    return ((loc[1] - loc[0]) if loc[1] > loc[0] else 0.0, loc[0])
 
 
 def _reprobe(songs, durations, dur_src):
@@ -459,6 +471,7 @@ class App:
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.ctrl = self.watch = None
         self.clock_port = None
+        self.mtc = None                 # 时码解码器（启动线程构造，_watch 读计数）
         self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
         self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
@@ -924,20 +937,26 @@ class App:
                 except SystemExit as e:  # 没有端口/被占用：只废 VJ 触发这一项
                     self.port = None
                     self.q.put("MIDI 监听未启动：%s" % e)
-                # 时钟监听：独立端口（与 VJ 音符口解耦，端口可各自指定）
+                # 时码监听：独立端口（与 VJ 音符口解耦，端口可各自指定）。
+                # 解码器居中分髮：QF 逐条喂三态、装配位置喂推进；全帧只进位置
+                self.mtc = mtc.Decoder(on_qf=self.sync.on_clock,
+                                       on_position=self.watch.on_position,
+                                       on_full=self.watch.on_full_position)
                 try:
                     if self.clock_hint:
                         self.clock_port = mb.MidiIn(
                             self.clock_hint, lambda n, v: None,
-                            on_clock=lambda: (self.sync.on_clock(),
-                                              self.watch.on_clock()))
-                        self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
+                            on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                            on_sysex=self.mtc.full_frame)
+                        self.q.put("时码监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用：未设时钟端口，走带三态/"
+                        self.mtc = None
+                        self.q.put("时码监听已停用：未设时码端口，走带三态/"
                                    "已播/自动推进与停止键不可用")
                 except SystemExit as e:
                     self.clock_port = None
-                    self.q.put("时钟监听未启动：%s，走带三态/自动推进不可用" % e)
+                    self.mtc = None
+                    self.q.put("时码监听未启动：%s，走带三态/自动推进不可用" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -1030,11 +1049,11 @@ class App:
                 if self.by_key[k]["name"] == name:
                     self.cur = i
                     song = self.by_key[k]
-                    d = self.durations.get(k) or \
-                        _read_duration(song["path"]) or 0.0
+                    d_file, left = _read_span(song["path"])
+                    d = self.durations.get(k) or d_file or 0.0
                     self.durations[k] = d
                     if self.watch is not None:  # watch 缺席降级态同 _switch
-                        self.watch.set_duration(d)
+                        self.watch.set_duration(d, left)
                     self.slots = kbd_auto.load_slots(song["path"])
                     self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
                     self.cur_song_path = song["path"]
@@ -1186,10 +1205,23 @@ class App:
         self._update_buttons()
 
     def _watch(self):
+        f8_mark = None                 # F8-only 诊断：起见时刻与一次性闩锁
+        f8_hinted = False
         while True:
             try:
                 self.sync.poll()
                 self.watch.poll()
+                m = self.mtc
+                if not f8_hinted and m is not None and not m.qf_seen \
+                        and m.f8_seen >= 8:
+                    if f8_mark is None:
+                        f8_mark = time.monotonic()
+                    elif time.monotonic() - f8_mark > 5.0:
+                        f8_hinted = True
+                        self.q.put("检测到 MIDI 时钟（F8）但未收到时码："
+                                   "请在工程同步设置勾选 MTC 时码输出到"
+                                   "该端口，否则走带三态/进度/自动推进"
+                                   "不可用")
             except Exception as e:
                 # 看门狗线程绝不允许静默死亡
                 try:
@@ -1309,7 +1341,7 @@ class App:
         if (self.switch_confirm and 0 <= i < len(self.pl_keys)
                 and i != self.cur and ws):
             # 双击是最易误触的手势、切歌会关掉当前工程：有工程在开时默认
-            # 确认（覆盖无时钟工程——那种工程"在不在播"无从判断）；
+            # 确认（覆盖无时码工程——那种工程"在不在播"无从判断）；
             # 无打开工程时双击=直接打开，没有可被关掉的东西，不弹确认。
             # 「从」名取工程标题里的真实名字：当前工程可能不在播放列表里
             # （cur 为 None 按歌名查不到，会显示成《？》误导）
@@ -1430,7 +1462,7 @@ class App:
         if song is None:
             return
         # 打开后再测一次时长；手动设定不被自动识别覆盖（需要时点「重新识别」）
-        d = _read_duration(song["path"]) or 0.0
+        d, left = _read_span(song["path"])
         if self.dur_src.get(key) == "manual":
             self.q.put("《%s》保留手动时长 %s（工程内为 %s，可点「重新识别」改用）"
                        % (song["name"], cpr_meta.fmt_mmss(self.durations.get(key)),
@@ -1444,7 +1476,7 @@ class App:
             self.q.put("《%s》时长未知（工程未设循环定位条）：可用「写入时长」手填"
                        % song["name"])
         if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
-            self.watch.set_duration(d)
+            self.watch.set_duration(d, left)
         self.calls.put(self._refresh)
         slots = kbd_auto.load_slots(song["path"])
         ax_slots = kbd_auto.load_slots(song["path"], "ax")
@@ -1521,7 +1553,7 @@ class App:
         path, name = song["path"], song["name"]
 
         def run():
-            d = _read_duration(path)
+            d, left = _read_span(path)
             if not d:
                 self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
                            % name)
@@ -1530,7 +1562,7 @@ class App:
             self.dur_src.pop(key, None)     # 回归自动来源
             self._persist()
             if key == loaded and self.watch is not None:
-                self.watch.set_duration(d)  # watch 缺席降级态同 _switch
+                self.watch.set_duration(d, left)  # watch 缺席降级态同 _switch
             self.calls.put(self._refresh)
             self.q.put("已识别《%s》工程内原时长 %s"
                        % (name, cpr_meta.fmt_mmss(d)))
@@ -1641,6 +1673,11 @@ class App:
         def run():
             if not skip_keys:
                 self.ctrl.panic()
+                time.sleep(1.0)         # 全停核验：键序落地后查时码是否真停
+                if self.watch is not None \
+                        and self.watch.is_transport_live():
+                    self.q.put("全停核验：走带仍在播放（停止键未生效），"
+                               "请手动停止 DAW")
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
@@ -1650,15 +1687,16 @@ class App:
 
         threading.Thread(target=run, daemon=True).start()
         if self.watch is not None:  # watch 可能没起来（VJ 链构造失败而 ctrl
-            self.watch.reset()      #   独立成功）——裸 reset 会炸 _drain_calls
+            self.watch.suppress_advance()   #   独立成功）——裸调用会炸队列
         if skip_keys:
             known = bool(self.clock_hint) and self.clock_port is not None
             self.q.put("全停：%s，走带键跳过（S1 空格会反向起播），"
-                       "计时已复位、视频已熄灭；如 DAW 仍在播放请手动停止"
+                       "自动推进已抑制、视频已熄灭；如 DAW 仍在播放请手动"
+                       "停止"
                        % ("本就未在播放" if known
-                          else "时钟未监听，走带状态未知"))
+                          else "时码未监听，走带状态未知"))
         else:
-            self.q.put("全停：走带已停，自动切换已复位，视频已熄灭")
+            self.q.put("全停：走带已停，自动推进已抑制，视频已熄灭")
 
     def _open_settings(self):
         if self.settings_win is None or not self.settings_win.winfo_exists():
@@ -1695,9 +1733,9 @@ class App:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
-        # 时钟监听热切换（停用/换口=走带基线复位：三态回「未播放」，防旧口
+        # 时码监听热切换（停用/换口=走带基线复位：三态回「未播放」，防旧口
         # 断流卡「已暂停」误导互锁与全停；视频跟随同步复位不误报暂停）。
-        # 仅时钟口实际变化才动时钟基线——改 VJ/键盘口不动时钟，已播不清零
+        # 仅时码口实际变化才动基线——改 VJ/键盘口不动时码，进度不清零
         clock_changed = getattr(self, "_clock_changed", True)
         if clock_changed and self.clock_port is not None:
             try:
@@ -1710,23 +1748,32 @@ class App:
                 self.sync.reset()
             if self.watch is not None:
                 self.watch.reset()
+            if self.mtc is not None:
+                self.mtc.reset()
         if self.ctl is not None and self.sync is not None \
                 and self.watch is not None:
             if not self.clock_hint:
                 if clock_changed:
-                    self.q.put("时钟监听已停用：未设时钟端口，走带三态/已播/"
+                    if self.mtc is not None:
+                        self.mtc = None
+                    self.q.put("时码监听已停用：未设时码端口，走带三态/已播/"
                                "自动推进与停止键不可用")
             elif clock_changed:
+                self.mtc = self.mtc or mtc.Decoder(
+                    on_qf=self.sync.on_clock,
+                    on_position=self.watch.on_position,
+                    on_full=self.watch.on_full_position)
                 try:
                     self.clock_port = mb.MidiIn(
                         self.clock_hint, lambda n, v: None,
-                        on_clock=lambda: (self.sync.on_clock(),
-                                          self.watch.on_clock()))
-                    self.q.put("时钟监听已切换（%s）" % self.clock_port.name)
+                        on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                        on_sysex=self.mtc.full_frame)
+                    self.q.put("时码监听已切换（%s）" % self.clock_port.name)
                 except SystemExit as e:
-                    self.q.put("时钟监听未启动：%s" % e)
+                    self.mtc = None
+                    self.q.put("时码监听未启动：%s" % e)
         else:
-            self.q.put("时钟服务未就绪：端口名称已保存，重启程序后生效")
+            self.q.put("时码服务未就绪：端口名称已保存，重启程序后生效")
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
@@ -1759,8 +1806,8 @@ class App:
         if self.ctrl.transport(action, live=self._transport_state() == "playing") \
                 and action == "rewind" \
                 and self.watch is not None:
-            self.watch.reset()      # 回零=停在零点，已播计时同步归零
-        self._regain_focus()
+            self.watch.reset()      # 回零=停在零点：纪元复位让显示立即归零，
+        self._regain_focus()        # 不等下一条时码（播放/暂停无需复位——位置自证）
 
     def _toggle_auto(self):
         # 回写属性：watch 建立时按它恢复；踩钉可在 watch 存在前翻转
@@ -1856,9 +1903,9 @@ class App:
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
 
     def _update_transport_buttons(self):
-        """暂停/继续随走带状态启停（仅工程发时钟时状态可知）：
+        """暂停/继续随走带状态启停（仅工程发时码时状态可知）：
         播放中禁「继续」（空格会停走带）、停止禁「暂停」（NUM0 会跳回
-        上次起播位置）；未发时钟的工程无从判断，两键保持可用。"""
+        上次起播位置）；未发时码的工程无从判断，两键保持可用。"""
         live = (self.watch.is_transport_live()
                 if self.sync is not None and self.sync.is_following()
                 and self.watch is not None else None)
@@ -2029,8 +2076,8 @@ class App:
             self.log.see("end")
 
     def _transport_state(self):
-        """走带三态：playing=时钟活跃；paused=收过时钟但已断流；
-        stopped=从未收到（未发时钟工程无从判断，按未播放）。"""
+        """走带三态：playing=时码 QF 活跃；paused=收过时码但已断流；
+        stopped=从未收到（未发时码工程无从判断，按未播放）。"""
         w = self.watch
         if w is None or self.ctrl is None:
             return "stopped"
@@ -2065,7 +2112,7 @@ class App:
         self.ax_slots = {}
         if self.watch is not None:
             self.watch.reset()
-            self.watch.set_duration(0)
+            self.watch.set_duration(0, 0.0)   # 游离歌坐标未知：左偏移一并清
         self._refresh()
         self.q.put("《%s》不在播放列表：不自动推进（NEXT 置空）" % name)
 
@@ -2080,7 +2127,8 @@ class App:
         path = song["path"]
 
         def run():
-            d = self.durations.get(key) or _read_duration(path) or 0.0
+            d_file, left = _read_span(path)
+            d = self.durations.get(key) or d_file or 0.0
             slots = kbd_auto.load_slots(path)
             ax = kbd_auto.load_slots(path, "ax")
             with self._load_lock:
@@ -2088,7 +2136,7 @@ class App:
                     return              # 已被更新的一次装载/切歌取代
                 self.durations[key] = d
                 if self.watch is not None:
-                    self.watch.set_duration(d)   # 内部 reset：重新累计
+                    self.watch.set_duration(d, left)   # 不复位：位置自证
                 self.slots = slots
                 self.ax_slots = ax
                 self.cur_song_path = path
@@ -2143,12 +2191,15 @@ class App:
                     ns = self.by_key.get(nk) if nk else None
                     nxt = "%s" % ns["name"] if ns else "（末尾）"
                     d = self.durations.get(self.pl_keys[self.cur], 0.0)
+                    played = max(0.0, self.watch.played()
+                                 if self.watch is not None else 0.0)
                     if not d:
-                        remain = "时长未知"
+                        # 时长未知也可显已播（时码位置在，定位条没读到）
+                        remain = ("%d:%02d | 时长未知"
+                                  % (int(played) // 60, int(played) % 60)
+                                  if played > 0 else "时长未知")
                     else:
-                        played = min(d, max(
-                            0.0, self.watch.active()
-                            if self.watch is not None else 0.0))
+                        played = min(d, played)
                         frac = min(1.0, played / d)
                         rem = max(0, int(d - played))
                         remain = ("%d:%02d | %d:%02d"
@@ -2289,7 +2340,7 @@ class SettingsWindow(tk.Toplevel):
         self.clock_var = port_var(app.clock_hint)
         self.vj_var = port_var(app.vj_hint)
         self.kb_var = port_var(app.kb_hint)
-        menu_row("时钟端口名称", self.clock_var, ins)
+        menu_row("时码端口名称", self.clock_var, ins)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
         # 移动端遥控：总开关（右侧网络状态）+ 服务网络/地址 + 翻谱端口 + 网页地址

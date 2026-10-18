@@ -393,6 +393,79 @@ def test_midiin_open_and_idempotent_close(monkeypatch):
     assert port._h is None
 
 
+class _FakeWinmmSysex(_FakeWinmm):
+    """带头函数记账的桩：prepare/unprepare/add 记日志，供 longdata 生命周期用例。"""
+
+    def midiInPrepareHeader(self, _h, hdr, _n):
+        self.log.append("prepare")
+        return 0
+
+    def midiInUnprepareHeader(self, _h, hdr, _n):
+        self.log.append("unprepare")
+        return 0
+
+    def midiInAddBuffer(self, _h, hdr, _n):
+        self.log.append("add")
+        return 0
+
+
+def test_midiin_longdata_pool_lifecycle(monkeypatch):
+    """longdata 缓冲池全周期：建口即投 4 缓冲 → 合成 MIM_LONGDATA 回调
+    → 专线取字节喂 on_sysex → 重投 → close 时 Unprepare 在 Reset 后、
+    Close 前；_h 已空（收尾中）只消费不重投。"""
+    import ctypes
+    fake = _FakeWinmmSysex()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    got = []
+    port = mb.MidiIn("FakePort", lambda n, v: None,
+                     on_mtc=lambda d1: None, on_sysex=got.append)
+    assert fake.log.count("prepare") == 4 and fake.log.count("add") == 4
+
+    buf = (ctypes.c_ubyte * 16)()
+    frame = b"\xf0\x7f\x7f\x01\x01\x61\x00\x00\x10\xf7"
+    for i, b in enumerate(frame):
+        buf[i] = b
+    hdr = mb._MIDIHDR()
+    hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+    hdr.dwBufferLength = 16
+    hdr.dwBytesRecorded = len(frame)
+    port._dispatch(42, mb._MIM_LONGDATA, 0, ctypes.addressof(hdr), 0)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not got:
+        time.sleep(0.02)
+    assert got == [frame]                       # 原始字节原样到 on_sysex
+    deadline = time.monotonic() + 2.0           # 重投完成（第 5 次 add）
+    while time.monotonic() < deadline and fake.log.count("add") < 5:
+        time.sleep(0.02)
+    assert fake.log.count("add") == 5
+
+    # 第二批（派工旗标复位后的新回调）也必须被消费+重投——
+    # 「首批后旗标卡死」回归锚（复审发现过：_scheduled 永不复位=第二批起
+    # 全部缓冲无人重投，SysEx 静默丢失）
+    hdr.dwBytesRecorded = len(frame)
+    port._dispatch(42, mb._MIM_LONGDATA, 0, ctypes.addressof(hdr), 0)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and fake.log.count("add") < 6:
+        time.sleep(0.02)
+    assert fake.log.count("add") == 6 and len(got) == 2
+
+    port.close()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "close" not in fake.log:
+        time.sleep(0.02)
+    tail = fake.log[fake.log.index("reset"):]   # Reset 返回缓冲→逐头 Unprepare→Close
+    assert tail[0] == "reset" and tail[-1] == "close"
+    assert tail.count("unprepare") >= 4
+    adds_after = fake.log.count("add")          # 收尾后回调只消费不重投
+    port._dispatch(42, mb._MIM_LONGDATA, 0, ctypes.addressof(hdr), 0)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and len(port._done):
+        time.sleep(0.02)
+    assert not port._done                       # 派工旗标复位后仍会被消费
+    assert fake.log.count("add") == adds_after
+    assert len(got) == 2                        # 已关后不再喂 on_sysex
+
+
 def test_rawmidiin_timeout_raises_portnotfound(monkeypatch):
     """kbd_auto.RawMidiIn 走同一专线：超时=PortNotFound（调用方既有
     降级分支直接消化），迟到弃单同样回收。"""

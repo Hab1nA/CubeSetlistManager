@@ -266,45 +266,86 @@ def test_advance_watch():
                              clock_timeout=0.25, t=lambda: now[0])
     w.set_armed(True)
     w.poll()
-    assert fired == [] and stops == []          # 没有时钟不介入
+    assert fired == [] and stops == []          # 没有时码不介入
     w.set_duration(100.0)
-    for i in range(101):                        # 播 100 秒（逐秒脉冲）
+    for i in range(101):                        # 播 100 秒（位置逐秒前推）
         now[0] = 1000.0 + i
-        w.on_clock()
-    w.poll()                                    # 仍在播但已到时长
+        w.on_position(float(min(i, 100)))
+    w.poll()                                    # 仍在播但位置到时长
     assert len(stops) == 1 and not fired        # 程序发停止键
     w.poll()
     assert len(stops) == 1                      # 3 秒内不重试
-    for i in range(1, 5):                       # 停止没生效，走带还在走
+    for i in range(1, 5):                       # 停止没生效，位置继续走
         now[0] = 1100.0 + i
-        w.on_clock()
+        w.on_position(100.0 + i)
     w.poll()
     assert len(stops) == 2                      # 3 秒后重试停止
     for i in range(5, 11):
         now[0] = 1100.0 + i
-        w.on_clock()
+        w.on_position(100.0 + i)
     now[0] = 1112.0                             # 停止生效：断流
     w.poll()
-    assert len(fired) == 1                      # 活跃 100 ≥ 95 → 推进
+    assert len(fired) == 1                      # 位置 100 ≥ 95 → 推进
     w.poll()
     assert len(fired) == 1                      # 只触发一次
 
-    w.set_duration(50.0)                        # 换歌 → 重新累计
+    w.reset()                                   # 换歌 → 纪元复位（位置未知）
     now[0] = 2000.0
-    w.on_clock()
-    for i in range(1, 11):                      # 播 10 秒
+    w.poll()
+    assert len(fired) == 1                      # 位置未知不推进
+    w.set_duration(50.0, 7.0)                   # 左定位条 7 秒
+    for i in range(1, 11):                      # 位置 8→17（歌内 1→10）
         now[0] = 2000.0 + i
-        w.on_clock()
+        w.on_position(7.0 + i)
     now[0] = 2015.0                             # 断流（不到时长就停）
     w.poll()
-    assert len(fired) == 1                      # 活跃 10 < 47.5 → 不推进
+    assert len(fired) == 1                      # 歌内 10 < 47.5 → 不推进
+    assert w.played() == 10.0                   # 已播 = 位置−左定位条
 
     w.set_armed(False)                          # 取消勾选 → 彻底不推进
     now[0] = 2116.0
-    w.on_clock()
+    w.on_position(60.0)
     now[0] = 2200.0
     w.poll()
     assert len(fired) == 1
+
+
+def test_advance_full_frame_not_liveness():
+    """全帧（停止/定位态补发）只更新位置，绝不当播放证据——否则部分主控
+    停止期间补发的全帧会把断流伪装成在播（三态卡「播放中」+推进误判）。"""
+    now = [1000.0]
+    w = advance.AdvanceWatch(lambda: None, clock_timeout=0.25,
+                             t=lambda: now[0])
+    w.on_full_position(50.0)
+    assert w.played() == 50.0
+    assert not w.is_transport_live() and not w.ever_live()
+    now[0] = 1001.0
+    w.on_position(51.0)                         # QF 才是播放证据
+    assert w.is_transport_live()
+    now[0] = 1100.0                             # 断流后停止态拖播放头
+    w.on_full_position(52.0)
+    assert not w.is_transport_live()            # 不复活活跃
+    assert w.played() == 52.0
+
+
+def test_advance_suppress_and_duration_keep():
+    """全停抑制推进且显示保持真值；播放中改时长不复位进度。"""
+    now = [1000.0]
+    fired, stops = [], []
+    w = advance.AdvanceWatch(lambda: fired.append(1),
+                             on_stop_transport=lambda: stops.append(1),
+                             clock_timeout=0.25, t=lambda: now[0])
+    w.set_armed(True)
+    w.set_duration(100.0)
+    now[0] = 1000.5
+    w.on_position(99.0)
+    w.suppress_advance()                        # 全停：本曲不再推进
+    now[0] = 1200.0                             # 断流（位置在 95% 线上）
+    w.poll()
+    assert fired == [] and stops == []
+    assert w.played() == 99.0                   # 显示不归零
+    w.set_duration(120.0)                       # 播放中改时长（手动/重识别）
+    assert w.played() == 99.0                   # 进度不清零
 
 
 def test_project_title():
@@ -366,9 +407,9 @@ def test_pedal_pause_toggle():
 
 
 def test_clock_port():
-    """时钟端口独立配置：预置配置必须直填时钟端口（空/缺键=时钟监听停用，
+    """时码端口独立配置：预置配置必须直填时码端口（空/缺键=时码监听停用，
     走带三态/已播/自动推进全不可用——不许手滑清空静默下线）。另以源码
-    锚断言双端接线（持久化/热切换/设置页行/基线复位）不回归。"""
+    锚断言双端接线（持久化/热切换/设置页行/基线复位/解码器居中分髮）不回归。"""
     src_set = open(pathlib.Path(__file__).resolve().parents[1]
                    / "setlist_gui.py", encoding="utf-8").read()
     src_auto = open(pathlib.Path(__file__).resolve().parents[1]
@@ -377,9 +418,14 @@ def test_clock_port():
         # hint 读取 + 持久化 + 热切换 + 设置页行
         assert 'cfg.get("clockPortHint")' in src
         assert '"clockPortHint": ck' in src
-        assert 'menu_row("时钟端口名称"' in src
+        assert 'menu_row("时码端口名称"' in src
         assert "self.clock_port = mb.MidiIn(" in src
         assert "self.sync.reset()" in src            # 换口走带基线复位
+        # MTC 接线：解码器分髮（QF 活跃/位置/全帧三路），不直连 on_clock
+        assert "mtc.Decoder(on_qf=self.sync.on_clock" in src
+        assert "on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8" in src
+        assert "on_sysex=self.mtc.full_frame" in src
+        assert "on_clock=lambda" not in src          # 旧脉冲直连已根除
     for f in ("config.example.json", "config.studioone.json",
               "config.automator.json"):
         cfg = json.load(open(pathlib.Path(__file__).resolve().parents[1] / f,

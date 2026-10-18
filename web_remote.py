@@ -449,7 +449,7 @@ def build_snapshot(app, has_project, proj_name=None):
     w = getattr(app, "watch", None)
     ctrl = getattr(app, "ctrl", None)
     lite = bool(getattr(app, "lite", False))
-    # 简化版（Cube Automator，app.lite=True）无切歌控制器：三态直接看时钟
+    # 简化版（Cube Automator，app.lite=True）无切歌控制器：三态直接看时码
     if w is None or (ctrl is None and not lite):
         tstate = "stopped"
     elif w.is_transport_live():
@@ -459,7 +459,7 @@ def build_snapshot(app, has_project, proj_name=None):
     key = (app.pl_keys[cur]
            if isinstance(cur, int) and 0 <= cur < len(app.pl_keys) else None)
     dur = float(app.durations.get(key) or 0.0) if key else 0.0
-    pos = min(dur, max(0.0, w.active())) if (w is not None and dur > 0) else 0.0
+    pos = min(dur, max(0.0, w.played())) if (w is not None and dur > 0) else 0.0
     # 平板转发踩钉路健康（远程注入；GIL 原子读桥上的 float 时间戳）。
     # link：心跳/事件 15 秒内有=ok，从无=never，超时=stale。
     br = getattr(getattr(app, "pedal", None), "bridge", None)

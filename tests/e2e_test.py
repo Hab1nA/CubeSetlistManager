@@ -24,6 +24,7 @@ import advance
 import cpr_meta
 import daw_ctrl
 import kbd_auto
+import mtc
 import midi_bridge as mb
 import obs_ctrl
 import web_remote
@@ -233,28 +234,31 @@ def p_advance():
         log("先切到 intro…")
         ctrl.switch_to(s_a, on_done=lambda n: log("on_done → %s" % n))
         wait_until(lambda: not ctrl.busy, 200, "切到 intro")
-    dur = cpr_meta.read_duration(s_a)
-    log("intro 时长 %.1fs，开始自动推进全周期" % dur)
+    loc = cpr_meta.read_locators(s_a) or (0.0, 0.0)
+    dur, left = max(0.0, loc[1] - loc[0]), loc[0]
+    log("intro 时长 %.1fs（左定位条 %.1fs），开始自动推进全周期" % (dur, left))
     fired = []
     watch = advance.AdvanceWatch(lambda: fired.append(1), on_event=log,
                                  clock_timeout=mb.CLOCK_TIMEOUT)
     watch.set_armed(True)
-    watch.set_duration(dur)
+    watch.set_duration(dur, left)
+    dec = mtc.Decoder(on_qf=lambda: None, on_position=watch.on_position,
+                      on_full=watch.on_full_position)
     pulses = [0]
     port = kbd_auto.RawMidiIn("loopMIDI Port", lambda s, d1, d2:
-                              (watch.on_clock(),
+                              (dec.feed(d1),
                                pulses.__setitem__(0, pulses[0] + 1))
-                              if s in (0xF1, 0xF8) else None)
+                              if s == 0xF1 else None)
     ctrl.transport("play")
     deadline = time.time() + dur + 90
     while time.time() < deadline and not fired:
         watch.poll()
         time.sleep(mb.POLL_SEC)
     port.close()
-    log("结果：fired=%s 活跃 %.1fs / 时长 %.1fs / 脉冲 %d" % (
-        bool(fired), watch._active, dur, pulses[0]))
+    log("结果：fired=%s 已播 %.1fs / 时长 %.1fs / QF %d" % (
+        bool(fired), watch.played(), dur, pulses[0]))
     if not fired:
-        log("未触发——若脉冲仍在走，说明 Cubase 播完没有自动停止（设计假设被推翻）")
+        log("未触发——若时码仍在走，说明 Cubase 播完没有自动停止（设计假设被推翻）")
         ctrl.panic()
         return
     log("播完自动触发 ✓，等待自动切换到下一首…")
@@ -533,19 +537,21 @@ def p_s1_advance():
                                  on_event=log, clock_timeout=mb.CLOCK_TIMEOUT)
     watch.set_armed(True)
     watch.set_duration(dur)
+    dec = mtc.Decoder(on_qf=lambda: None, on_position=watch.on_position,
+                      on_full=watch.on_full_position)
     pulses = [0]
     port = kbd_auto.RawMidiIn("VJ Automation", lambda s, d1, d2:
-                              (watch.on_clock(),
+                              (dec.feed(d1),
                                pulses.__setitem__(0, pulses[0] + 1))
-                              if s in (0xF1, 0xF8) else None)
+                              if s == 0xF1 else None)
     ctrl.transport("play")
     deadline = time.time() + dur + 60
     while time.time() < deadline and not fired:
         watch.poll()
         time.sleep(mb.POLL_SEC)
     port.close()
-    log("结果：fired=%s 活跃 %.1fs / 时长 %.0fs / 脉冲 %d" % (
-        bool(fired), watch._active, dur, pulses[0]))
+    log("结果：fired=%s 已播 %.1fs / 时长 %.0fs / QF %d" % (
+        bool(fired), watch.played(), dur, pulses[0]))
     assert fired, "15s 合成时长未触发自动推进"
     log("播完自动触发 ✓，切到下一首…")
     ctrl.switch_to(s_b, on_done=lambda n: log("on_done → %s" % n))

@@ -15,10 +15,11 @@ import setlist_gui
 
 class _FakeWatch:
     def __init__(self):
-        self.durs, self.resets = [], 0
+        self.durs, self.lefts, self.resets = [], [], 0
 
-    def set_duration(self, d):
+    def set_duration(self, d, left=None):
         self.durs.append(d)
+        self.lefts.append(left)
 
     def reset(self):
         self.resets += 1
@@ -72,8 +73,8 @@ def _wait(app, cond, timeout=3.0):
 
 
 def test_adopt_match(monkeypatch):
-    monkeypatch.setattr(setlist_gui.cpr_meta, "read_duration",
-                        lambda p: 120.0)
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
+                        lambda p: (0.0, 120.0))
     loaded = []
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
                         lambda p, kind=None: loaded.append(p) or {"s": 1})
@@ -84,27 +85,29 @@ def test_adopt_match(monkeypatch):
                  and app.slots == {"s": 1})
     _drain(app)
     assert app.durations["b"] == 120.0
-    assert app.watch.durs == [120.0]         # 时长就位（内部 reset 重新累计）
+    assert app.watch.durs == [120.0]         # 时长就位（不复位：位置自证）
+    assert app.watch.lefts == [0.0]
     assert loaded == ["/p2", "/p2"]          # JUNO + AX 槽都按新工程装载
     assert app.ax_slots == {"s": 1}
     assert any("已跟随" in m for m in app.logs)
 
 
 def test_adopt_match_keeps_manual_duration(monkeypatch):
-    monkeypatch.setattr(setlist_gui.cpr_meta, "read_duration",
-                        lambda p: 120.0)
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
+                        lambda p: (5.0, 120.0))
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
                         lambda p, kind=None: {})
     app = _app(durs={"a": 42.0})
     setlist_gui.App._adopt(app, "X")
     assert _wait(app, lambda: app.cur_song_path == "/p1")
     assert app.durations["a"] == 42.0 and app.watch.durs == [42.0]
+    assert app.watch.lefts == [5.0]          # 手动时长也吃文件里的左定位条
 
 
 def test_adopt_miss_clears(monkeypatch):
     """游离：清指针回第一首兜底、清映射、计时器清零（永不推进）。"""
     fired = []
-    monkeypatch.setattr(setlist_gui.cpr_meta, "read_duration",
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
                         lambda p: fired.append(p))    # 不该被探时长
     app = _app()
     setlist_gui.App._adopt(app, "别的歌")
@@ -115,7 +118,8 @@ def test_adopt_miss_clears(monkeypatch):
 
 
 def test_adopt_duplicate_name_takes_first(monkeypatch):
-    monkeypatch.setattr(setlist_gui.cpr_meta, "read_duration", lambda p: 0)
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
+                        lambda p: (0.0, 0.0))
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
                         lambda p, kind=None: {})
     app = _app(pl=("a", "b"))

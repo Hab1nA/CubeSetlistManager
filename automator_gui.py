@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Cube Automator：Studio One 纯自动化集线器（完整版的简化兄弟产品）。
 不做歌单/切歌/走带控制——DAW 由使用者自行操作，本程序只做联动：
-VJ 视频跟随（时钟+音符触发+熄屏/投影）、键盘自动化（音色切换+双琴全局
+VJ 视频跟随（时码+音符触发+熄屏/投影）、键盘自动化（音色切换+双琴全局
 移调）、自动翻谱推送、移动端翻谱配置页（网页端=提示+下载 APP）。
 当前工程靠窗口标题识别（Studio One - 歌名）：400ms 轮询，标题变化即在
 工程库里按名匹配 .song，自动装载旁挂的 keyboard_automation.json。
@@ -30,6 +30,7 @@ import daw_ctrl
 import dpi
 import hotspot
 import kbd_auto
+import mtc
 import midi_bridge as mb
 import stallguard
 import ui_text
@@ -323,6 +324,7 @@ class App:
         root.report_callback_exception = self._on_ui_error
         self.ctl = self.sync = self.port = self.watch = None
         self.clock_port = None
+        self.mtc = None                 # 时码解码器（启动线程构造，_watch 读计数）
         self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
         self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.kb_port = self.switcher = self.ax_switcher = None
@@ -528,7 +530,7 @@ class App:
             self.q.put("VJ显示位置未恢复：%s" % self.ctl.last_error)
 
     def _startup(self):
-        """后台启动：loopMIDI 探测（不拉起）→ VJ 链（OBS 连接/时钟/音符）→
+        """后台启动：loopMIDI 探测（不拉起）→ VJ 链（OBS 连接/时码/音符）→
         键盘自动化 → 移动端遥控 → 工程库扫描。逐组降级，一组失败只废该组。"""
         try:
             # 简化版不管理其它软件的生命周期：loopMIDI 不在场只提示，
@@ -559,20 +561,25 @@ class App:
                 except SystemExit as e:
                     self.port = None
                     self.q.put("MIDI 监听未启动：%s" % e)
-                # 时钟监听：独立端口（与 VJ 音符口解耦）
+                # 时码监听：独立端口（与 VJ 音符口解耦）
+                self.mtc = mtc.Decoder(on_qf=self.sync.on_clock,
+                                       on_position=self.watch.on_position,
+                                       on_full=self.watch.on_full_position)
                 try:
                     if self.clock_hint:
                         self.clock_port = mb.MidiIn(
                             self.clock_hint, lambda n, v: None,
-                            on_clock=lambda: (self.sync.on_clock(),
-                                              self.watch.on_clock()))
-                        self.q.put("时钟监听已启动（%s）" % self.clock_port.name)
+                            on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                            on_sysex=self.mtc.full_frame)
+                        self.q.put("时码监听已启动（%s）" % self.clock_port.name)
                     else:
-                        self.q.put("时钟监听已停用：未设时钟端口，走带三态/"
+                        self.mtc = None
+                        self.q.put("时码监听已停用：未设时码端口，走带三态/"
                                    "已播不可用")
                 except SystemExit as e:
                     self.clock_port = None
-                    self.q.put("时钟监听未启动：%s，走带三态不可用" % e)
+                    self.mtc = None
+                    self.q.put("时码监听未启动：%s，走带三态不可用" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -623,10 +630,22 @@ class App:
                 self.calls.put(self._apply_ports)
 
     def _watch(self):
+        f8_mark = None                 # F8-only 诊断：起见时刻与一次性闩锁
+        f8_hinted = False
         while True:
             try:
                 self.sync.poll()
                 self.watch.poll()
+                m = self.mtc
+                if not f8_hinted and m is not None and not m.qf_seen \
+                        and m.f8_seen >= 8:
+                    if f8_mark is None:
+                        f8_mark = time.monotonic()
+                    elif time.monotonic() - f8_mark > 5.0:
+                        f8_hinted = True
+                        self.q.put("检测到 MIDI 时钟（F8）但未收到时码："
+                                   "请在工程同步设置勾选 MTC 时码输出到"
+                                   "该端口，否则走带三态/已播不可用")
             except Exception as e:
                 try:
                     self.q.put("后台监控异常（已自动恢复）：%s" % _err(e))
@@ -826,7 +845,7 @@ class App:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
             self.q.put("VJ 服务未就绪：端口名称已保存，重启程序后生效")
-        # 时钟监听热切换（停用/换口=走带基线复位，仅时钟口实际变化时执行）
+        # 时码监听热切换（停用/换口=走带基线复位，仅时码口实际变化时执行）
         clock_changed = getattr(self, "_clock_changed", True)
         if clock_changed and self.clock_port is not None:
             try:
@@ -839,23 +858,32 @@ class App:
                 self.sync.reset()
             if self.watch is not None:
                 self.watch.reset()
+            if self.mtc is not None:
+                self.mtc.reset()
         if self.ctl is not None and self.sync is not None \
                 and self.watch is not None:
             if not self.clock_hint:
                 if clock_changed:
-                    self.q.put("时钟监听已停用：未设时钟端口，走带三态/已播"
+                    if self.mtc is not None:
+                        self.mtc = None
+                    self.q.put("时码监听已停用：未设时码端口，走带三态/已播"
                                "不可用")
             elif clock_changed:
+                self.mtc = self.mtc or mtc.Decoder(
+                    on_qf=self.sync.on_clock,
+                    on_position=self.watch.on_position,
+                    on_full=self.watch.on_full_position)
                 try:
                     self.clock_port = mb.MidiIn(
                         self.clock_hint, lambda n, v: None,
-                        on_clock=lambda: (self.sync.on_clock(),
-                                          self.watch.on_clock()))
-                    self.q.put("时钟监听已切换（%s）" % self.clock_port.name)
+                        on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                        on_sysex=self.mtc.full_frame)
+                    self.q.put("时码监听已切换（%s）" % self.clock_port.name)
                 except SystemExit as e:
-                    self.q.put("时钟监听未启动：%s" % e)
+                    self.mtc = None
+                    self.q.put("时码监听未启动：%s" % e)
         else:
-            self.q.put("时钟服务未就绪：端口名称已保存，重启程序后生效")
+            self.q.put("时码服务未就绪：端口名称已保存，重启程序后生效")
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
@@ -1075,7 +1103,7 @@ class App:
         self.state_lbl.config(text="当前状态：" + st_t,
                               style=dpi.tone(st_c) + ".TLabel",
                               foreground=st_c)
-        played = self.watch.active() if self.watch is not None else 0.0
+        played = self.watch.played() if self.watch is not None else 0.0
         shown = played > 0
         self.elapsed_lbl.config(
             text=("已播 %d:%02d" % (int(played) // 60, int(played) % 60))
@@ -1100,8 +1128,8 @@ class App:
             self.log.see("end")
 
     def _transport_state(self):
-        """走带三态：playing=时钟活跃；paused=收过时钟但断流；stopped=从未
-        收到（简化版无切歌控制器，直接看时钟）。"""
+        """走带三态：playing=时码活跃；paused=收过时码但断流；stopped=从未
+        收到（简化版无切歌控制器，直接看时码）。"""
         w = self.watch
         if w is None:
             return "stopped"
@@ -1192,7 +1220,7 @@ class SettingsWindow(tk.Toplevel):
         self.clock_var = port_var(app.clock_hint)
         self.vj_var = port_var(app.vj_hint)
         self.kb_var = port_var(app.kb_hint)
-        menu_row("时钟端口名称", self.clock_var, ins)
+        menu_row("时码端口名称", self.clock_var, ins)
         menu_row("VJ 端口名称", self.vj_var, ins)
         menu_row("键盘端口名称", self.kb_var, ins)
         # 移动端遥控（翻谱）

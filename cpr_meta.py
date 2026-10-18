@@ -16,10 +16,11 @@ _RE_CYCLE = re.compile(
     rb"\x00\x00\x00\x05Time\x00\x00\x04(.{8})", re.S)
 
 
-def read_duration(path):
-    """工程时长秒数（右定位条-左定位条）；未设定位条/解析失败/文件不可读
-    返回 None。OSError 必须就地消化：本函数跑在装载后台线程，裸抛会静默
-    杀死线程（_switch_done 尾部/adopted_load/重扫，复审 P2-4）。"""
+def read_locators(path):
+    """工程循环定位条 (左, 右) 秒；未设定位条/解析失败/文件不可读返回
+    None。左定位条是「时码位置 → 歌内已播秒」的换算原点（MTC 是工程
+    绝对时间）。OSError 必须就地消化：本函数跑在装载后台线程，裸抛会
+    静默杀死线程（_switch_done 尾部/adopted_load/重扫，复审 P2-4）。"""
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -34,7 +35,15 @@ def read_duration(path):
             pos[side] = struct.unpack(">d", m.group(2))[0]
     if "Left" not in pos or "Right" not in pos:
         return None
-    dur = pos["Right"] - pos["Left"]
+    return pos["Left"], pos["Right"]
+
+
+def read_duration(path):
+    """工程时长秒数（右定位条-左定位条）；未设定位条/解析失败返回 None。"""
+    loc = read_locators(path)
+    if not loc:
+        return None
+    dur = loc[1] - loc[0]
     return dur if dur > 0 else None
 
 
