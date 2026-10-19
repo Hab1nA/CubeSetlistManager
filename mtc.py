@@ -69,6 +69,9 @@ class Decoder:
         self._lock = threading.Lock()
         self.qf_seen = 0            # 累计计数（跟口不跟歌，reset 不清）
         self.f8_seen = 0
+        self.full_seen = 0          # 收到的全帧数——「时码已配置」的铁证：
+        #   正确配置的工程停止/定位时必补发全帧；只开时钟的工程永远没有。
+        #   F8-only 诊断提示用它把「停止模式时钟的 F8」与「没配时码」区分开
         self._pos = None
         self._parts = None          # 装配中的 8 半字节；None=等类型 0 起组
         self._expect = 0            # 下一个允许的类型
@@ -137,6 +140,7 @@ class Decoder:
                     if self._epoch != epoch:
                         return
                     self._pos = pos
+                    self.full_seen += 1
                 self._emit(self._on_full, pos)
         except Exception:
             pass

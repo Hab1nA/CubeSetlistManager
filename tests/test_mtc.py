@@ -93,6 +93,7 @@ def test_full_frame_epoch_guard(monkeypatch):
     """全帧 parse 期间发生 reset：旧纪元位置弃（落位前纪元号复核）。"""
     pos, fulls = [], []
     d = _dec(on_position=pos.append, on_full=fulls.append)
+    assert d.full_seen == 0
     frame = b"\xf0\x7f\x7f\x01\x01\x61\x00\x00\x0a\x00"
     orig = mtc.parse_full_frame
 
@@ -106,6 +107,7 @@ def test_full_frame_epoch_guard(monkeypatch):
     monkeypatch.setattr(mtc, "parse_full_frame", orig)
     d.full_frame(frame)                 # 新纪元正常落位
     assert fulls == [3600 + 10 / 30] and d.position() == 3600 + 10 / 30
+    assert d.full_seen == 1             # 全帧计数只认有效帧（诊断提示的门）
 
 
 def test_f8_counter_and_epoch_not_clearing():

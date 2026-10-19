@@ -1309,7 +1309,9 @@ class App:
                 if m is not None and m.qf_seen:
                     f8_mark = None      # 时码已到：F8 计数是残留，撤销计窗
                 if not f8_hinted and m is not None and not m.qf_seen \
-                        and m.f8_seen >= 8:
+                        and not m.full_seen and m.f8_seen >= 8:
+                    # full_seen 也要求为 0：正确配置的工程停止/定位会补发
+                    # 全帧（SysEx），「停止模式时钟」的 F8 不构成时码缺失证据
                     if f8_mark is None:
                         f8_mark = time.monotonic()
                     elif time.monotonic() - f8_mark > 5.0:
