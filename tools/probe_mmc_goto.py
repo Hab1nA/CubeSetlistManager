@@ -62,6 +62,7 @@ def main():
         return
     print("=== 输出 %s → GOTO %s（%d 秒观察窗）==="
           % (name, points.fmt_tc(target), seconds), flush=True)
+    time.sleep(1.0)     # 等 IN 口 SysEx 缓冲池挂稳：开口毫秒级内的全帧会被丢
     err = mb.send_sysex(idx, frame)
     print("SENT %s%s" % (frame.hex(" "), "" if err is None
                          else "（失败：%s）" % err), flush=True)
@@ -69,7 +70,7 @@ def main():
     seen = -1
     try:
         while time.time() < deadline:
-            if len(last_pos) > seen:
+            if last_pos and len(last_pos) > seen:
                 seen = len(last_pos)
                 print("POS %s" % points.fmt_tc(last_pos[-1]), flush=True)
             time.sleep(0.1)
