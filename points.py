@@ -47,7 +47,7 @@ def load_points(song_dir):
         return empty_data(), "定位点目录非法：%s" % song_dir
     base = os.path.normpath(os.path.abspath(song_dir))
     path = os.path.normpath(os.path.abspath(os.path.join(base, SIDECAR)))
-    if _has_dotdot(path) or not path.startswith(base + os.sep):
+    if os.path.dirname(path) != base:   # dirname 口径：盘根目录（C:\）也成立
         return empty_data(), "定位点目录非法：%s" % song_dir
     try:
         with open(path, encoding="utf-8") as f:

@@ -1218,9 +1218,9 @@ class App:
         """选中变化：配置目标标签（标蓝曲）+ 输入框预显示（自动时长/数值/未知）。"""
         t = self._sel_target()
         if t:
-            s = self.by_key.get(t[2])
-            if s is not None:
-                self.m_tgt.set(s["name"], dpi.FG)
+            e = self._resolve_entry(t[2])
+            if e is not None:
+                self.m_tgt.set(e["display"], dpi.FG)
                 text, _c = self._dur_status(t[2], for_entry=True)
                 self.dur_var.set(text)
                 return
@@ -1445,9 +1445,10 @@ class App:
             # （cur 为 None 按歌名查不到，会显示成《？》误导）
             cur = daw_ctrl.project_name_from_title(ws[1])
             if not cur and self.cur is not None:
-                cur = self.by_key.get(self.pl_keys[self.cur], {}).get(
-                    "name", "？")
-            dst = self.by_key.get(self.pl_keys[i], {}).get("name", "？")
+                e = self._resolve_entry(self.pl_keys[self.cur])
+                cur = e["display"] if e else "？"
+            e = self._resolve_entry(self.pl_keys[i])
+            dst = e["display"] if e else "？"
             if not messagebox.askyesno(
                     "切换工程", "确定从《%s》切换到《%s》？\n"
                     "当前工程将被关闭（自动保存）。" % (cur, dst)):
@@ -1472,7 +1473,9 @@ class App:
                     self.q.put("已移除当前歌曲，自动指向下一首（工程保持打开）")
         self._persist()
         self._refresh()
-        self.q.put("已从播放列表移除：《%s》" % key.split("/")[-1])
+        e = self._resolve_entry(key)
+        self.q.put("已从播放列表移除：《%s》"
+                   % (e["display"] if e else key.split("/")[-1]))
 
     def _clear_pl(self):
         if not self.pl_keys:
@@ -1519,7 +1522,7 @@ class App:
         if entry is None:
             self.q.put("歌单项不在素材库里：%s" % key)
             return False
-        if via == "手动" and i == self.cur:
+        if via == "手动" and i == self.cur and entry["point"] is None:
             ws = daw_ctrl.current_project()
             if ws and daw_ctrl.project_name_from_title(ws[1]) \
                     == entry["song_name"]:
@@ -1571,10 +1574,11 @@ class App:
         self._goto_send(entry["point"]["start"], entry["display"])
 
         def finish():
-            if not (0 <= i < len(self.pl_keys)) \
+            if (not (0 <= i < len(self.pl_keys))
                     or self.pl_keys[i] != points.pt_key(
-                        entry["lib_key"], entry["point"]["id"]):
-                return              # 编排已变：弃本次装载（归属失效）
+                        entry["lib_key"], entry["point"]["id"])
+                    or self.cur_song_path != entry["path"]):
+                return              # 编排已变/已切走他曲：弃本次装载
             self.cur = i
             if self.watch is not None:
                 self.watch.reset()  # 清推进闩；位置由 GOTO 补发全帧重灌
@@ -1677,6 +1681,15 @@ class App:
                            % song["name"])
         data["enabled"] = bool(on)
         self.points[lib_key] = data
+        # 切歌在途的归属键跟随变换：正在打开的歌被启用=完成后落首点；
+        # 被停用=还原裸条目归属
+        if self._switch_key == lib_key and on:
+            keys = points.pt_keys_for(lib_key, data)
+            if keys:
+                self._switch_key = keys[0]
+        elif self._switch_key and points.parse_pt_key(self._switch_key) \
+                and not on:
+            self._switch_key = lib_key
         old_keys = list(self.pl_keys)
         if on:
             self.pl_keys = points.expand_replace(
@@ -1684,9 +1697,19 @@ class App:
         else:
             self.pl_keys = points.collapse_restore(old_keys, lib_key)
         self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
+        if self._pending_switch is not None:
+            self._pending_switch = points.remap_cur(
+                old_keys, self.pl_keys, self._pending_switch, lib_key)
         try:
             points.save_points(os.path.dirname(song["path"]), data)
         except (OSError, ValueError) as e:
+            # 回滚内存变换并重读磁盘：不留「列表已变而定义没存」的分叉
+            data2, _ = points.load_points(os.path.dirname(song["path"]))
+            self.points[lib_key] = data2
+            self.pl_keys = old_keys
+            self.cur = points.remap_cur(self.pl_keys, old_keys,
+                                        self.cur, lib_key)
+            self._refresh()
             self.q.put("定位点保存失败：%s" % e)
             return
         self._persist()
@@ -1704,8 +1727,9 @@ class App:
         if time.time() - sent <= 1.2:
             return
         self._goto_ack = None
-        if pre is None or self.mtc is None or self.watch is None \
-                or not self.watch.ever_live():
+        if pre is None or self.mtc is None or not self.mtc.qf_seen:
+            # 「时码从未在场」判据用 qf_seen（reset 不清）：停止态 GOTO 前
+            # watch 刚 reset、ever_live 恒 False，用它会把告警永远哑掉
             return
         if self.mtc.position() == pre:
             self.q.put("工程未响应定位：《%s》时码未变化（检查 DAW 已勾 "
@@ -1732,6 +1756,9 @@ class App:
             self.q.put("先在素材库或播放列表选中一首再写入时长")
             return
         _, _, key = t
+        if points.parse_pt_key(key):
+            self.q.put("定位点条目时长由起止点决定，不手填")
+            return
         raw = self.dur_var.get().strip()
         if raw in ("自动时长", "未知"):
             self.q.put("请输入时长：秒数或 分:秒（如 213 或 3:33）")
@@ -1760,6 +1787,9 @@ class App:
             self.q.put("先在素材库或播放列表选中一首再识别")
             return
         _, _, key = t
+        if points.parse_pt_key(key):
+            self.q.put("定位点条目时长由起止点决定，无需识别")
+            return
         song = self.by_key.get(key)
         if song is None:
             self.q.put("歌单项不在素材库里：%s" % key)
@@ -2338,6 +2368,11 @@ class App:
         焦点；播放列表未载入不动。"""
         if not self.pl_keys:
             return
+        cur_e = (self._resolve_entry(self.pl_keys[self.cur])
+                 if self.cur is not None and self.cur < len(self.pl_keys)
+                 else None)
+        if cur_e is not None and cur_e["song_name"] == name:
+            return          # 当前条目（含定位点）即该工程：指针已对，不重采
         for i, k in enumerate(self.pl_keys):
             e = self._resolve_entry(k)
             if e is not None and e["song_name"] == name:
@@ -2366,20 +2401,25 @@ class App:
         gen 由调用方在 _load_lock 内递增后传入；写回时锁内复核——「校验后
         写入」的 TOCTOU 窗（装载完成与切歌清空的交错=跨歌错装）靠同锁
         原子化关闭。写状态均为无锁属性/GIL 原子（_switch_done 同款）。"""
-        song = self.by_key.get(key)
-        if song is None:
+        e = self._resolve_entry(key)
+        if e is None:
             return
-        path = song["path"]
+        path = e["path"]
+        pt = e["point"]
 
         def run():
-            d_file, left = _read_span(path)
-            d = self.durations.get(key) or d_file or 0.0
+            if pt is not None:          # 定位点条目：段区间，不动 durations
+                d, left = pt["end"] - pt["start"], pt["start"]
+            else:
+                d_file, left = _read_span(path)
+                d = self.durations.get(key) or d_file or 0.0
             slots = kbd_auto.load_slots(path)
             ax = kbd_auto.load_slots(path, "ax")
             with self._load_lock:
                 if gen != self._load_gen:
                     return              # 已被更新的一次装载/切歌取代
-                self.durations[key] = d
+                if pt is None:
+                    self.durations[key] = d
                 if self.watch is not None:
                     self.watch.reset()  # 纪元闭合同 _switch_done：装载半程的
                     #   IO 窗口里旧工程可能还在播（尾流 QF 重灌位置），提交
@@ -2417,9 +2457,14 @@ class App:
                 now, color = "（无打开的工程）", dpi.MUT
             else:
                 name = proj_name = daw_ctrl.project_name_from_title(ws[1])
-                want = (self.by_key.get(self.pl_keys[self.cur], {}).get("name")
-                        if self.cur is not None and self.cur < len(self.pl_keys)
-                        else None)
+
+                def _want():
+                    return (self._resolve_entry(self.pl_keys[self.cur])
+                            if self.cur is not None
+                            and self.cur < len(self.pl_keys) else None)
+
+                cur_e = _want()
+                want = cur_e["song_name"] if cur_e else None
                 # 手动跟随：标题变化或与指针漂移（人工在 DAW 开了别的歌、
                 # 播放列表被编辑）→ 按标题对位播放列表（_adopt），采纳后
                 # want 重取；busy 走上面的冻结分支，不会与切歌流程抢跑。
@@ -2428,17 +2473,19 @@ class App:
                     self._adopted_name = name
                     if want is None or want != name:
                         self._adopt(name)
-                        want = (self.by_key.get(self.pl_keys[self.cur],
-                                                {}).get("name")
-                                if self.cur is not None
-                                and self.cur < len(self.pl_keys) else None)
+                        cur_e = _want()
+                        want = cur_e["song_name"] if cur_e else None
                 now, color = "%s" % name, dpi.C_OK
-                if want:
+                if want and cur_e:
                     nk = (self.pl_keys[self.cur + 1]
                           if self.cur + 1 < len(self.pl_keys) else None)
-                    ns = self.by_key.get(nk) if nk else None
-                    nxt = "%s" % ns["name"] if ns else "（末尾）"
-                    d = self.durations.get(self.pl_keys[self.cur], 0.0)
+                    ne = self._resolve_entry(nk) if nk else None
+                    nxt = ne["display"] if ne else "（末尾）"
+                    if cur_e["point"] is not None:      # 定位点：段区间
+                        p = cur_e["point"]
+                        d = p["end"] - p["start"]
+                    else:
+                        d = self.durations.get(self.pl_keys[self.cur], 0.0)
                     played = max(0.0, self.watch.played()
                                  if self.watch is not None else 0.0)
                     if not d:
@@ -2669,10 +2716,17 @@ class PointsWindow(tk.Toplevel):
         停用态不动列表（条目不在）。含持久化与刷新。"""
         app = self.app
         data = self._data()
+        song = self._song()
+        if song is None:
+            self._say("工程已不在素材库", dpi.C_ERR)
+            return
         try:
-            points.save_points(os.path.dirname(self._song()["path"]), data)
+            points.save_points(os.path.dirname(song["path"]), data)
         except (OSError, ValueError) as e:
             app.q.put("定位点保存失败：%s" % e)
+            data2, _ = points.load_points(os.path.dirname(song["path"]))
+            app.points[self.lib_key] = data2     # 回读磁盘：放弃本次变更
+            self._refill()
             return
         if data["enabled"]:
             old = list(app.pl_keys)
@@ -2706,7 +2760,10 @@ class PointsWindow(tk.Toplevel):
                 v.set(sec // unit % (24 if unit == 3600 else 60))
 
     def _edit_sec(self, tag):
-        h, m, s = (v.get() for v in self.spin_vars[tag])
+        try:
+            h, m, s = (v.get() for v in self.spin_vars[tag])
+        except (tk.TclError, TypeError):
+            return None
         return h * 3600 + m * 60 + s
 
     def _sel_point(self):
@@ -2719,6 +2776,9 @@ class PointsWindow(tk.Toplevel):
     def _add(self):
         data = self._data()
         song = self._song()
+        if song is None:
+            self._say("工程已不在素材库", dpi.C_ERR)
+            return
         d_file, left = _read_span(song["path"])
         start = 0.0
         if self.app.mtc is not None:
@@ -2774,6 +2834,9 @@ class PointsWindow(tk.Toplevel):
             self._say("名称不能为空", dpi.C_ERR)
             return
         start, end = self._edit_sec("sh"), self._edit_sec("eh")
+        if start is None or end is None:
+            self._say("时间格式无效", dpi.C_ERR)
+            return
         err, warn = points.validate_point(start, end)
         if err:
             self._say(err, dpi.C_ERR)

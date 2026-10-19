@@ -88,6 +88,8 @@ _winmm.midiOutLongMsg.argtypes = (wintypes.HANDLE, ctypes.POINTER(_MIDIHDR),
 
 MHDR_DONE = 0x1           # 头已由驱动回收（SysEx 发毕）
 _SYSEX_DONE_TIMEOUT = 0.5  # 等驱动的上限：轮询到点强制收尾，头不泄漏
+_SYSEX_STUCK = []         # DONE 超时未回收的头：驱动仍持有 lpData，Unprepare
+                          # 会失败且释放缓冲=use-after-free——持引用到进程退出
 
 
 class _InCaps(ctypes.Structure):
@@ -306,12 +308,17 @@ def close_out(h):
 
 def send_sysex_h(h, data, timeout=1.0):
     """在已开的 OUT 口同步发一条 SysEx（全流程一个专线 job：Prepare→
-    LongMsg→轮询 MHDR_DONE→Unprepare；失败路径同样 Unprepare，头不泄漏）。
+    LongMsg→轮询 MHDR_DONE→Unprepare；失败路径同样 Unprepare，头不泄漏。
     低频定长消息不做缓冲池（对照 MidiIn 收方向的池纪律：发送无回调回收
-    问题，DONE 轮询上限兜底驱动不回）。返回 None 或错误文案。"""
+    问题，DONE 轮询上限兜底驱动不回——超时未回收的头挂 _SYSEX_STUCK 保引用，
+    绝不 Unprepare 未 DONE 的缓冲=use-after-free）。返回 None 或错误文案。"""
     result = {}
+    state = {"dead": False}
 
     def job():
+        if state["dead"]:                       # 等待方已弃单：迟到不打扰 DAW
+            result["err"] = "已超时弃单，迟到发送被丢弃"
+            return
         n = len(data)
         buf = (ctypes.c_ubyte * n)(*data)       # 字节块与头同被 job 持有
         hdr = _MIDIHDR()
@@ -329,12 +336,15 @@ def send_sysex_h(h, data, timeout=1.0):
         deadline = time.time() + _SYSEX_DONE_TIMEOUT
         while not hdr.dwFlags & MHDR_DONE:
             if time.time() >= deadline:
-                break                            # 兜底收尾，不无限等
+                _SYSEX_STUCK.append((h, hdr, buf))
+                result["err"] = "SysEx 完成超时（缓冲由驱动持有，进程退出回收）"
+                return
             time.sleep(0.002)
         _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), size)
 
     done, _ = run_io(job, timeout)
     if not done:
+        state["dead"] = True
         return "SysEx 发送超时（%.1f 秒）" % timeout
     return result.get("err")
 
