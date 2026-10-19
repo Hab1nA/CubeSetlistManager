@@ -365,6 +365,30 @@ def test_project_title():
     assert daw_ctrl.project_windows.__doc__  # 冒烟：识别函数可用
 
 
+def test_advance_drag_to_end_while_paused_no_fire():
+    """暂停态拖光标到曲尾（全帧位置）：显示跟随真值但不得触发推进——
+    只有播放真实到达过曲尾（QF 点亮资格闩）才允许断流推进。"""
+    now = [1000.0]
+    fired = []
+    w = advance.AdvanceWatch(lambda: fired.append(1), clock_timeout=0.25,
+                             t=lambda: now[0])
+    w.set_armed(True)
+    w.set_duration(100.0)
+    now[0] = 1000.5
+    w.on_position(60.0)                 # 播到 60 秒暂停（<95%，闩不亮）
+    now[0] = 1001.0
+    w.on_full_position(99.5)            # 暂停态拖光标到曲尾
+    now[0] = 1200.0                     # 断流一直成立
+    w.poll()
+    assert fired == []                  # 拖过去≠唱完了
+    assert w.played() == 99.5           # 显示跟随真值
+    now[0] = 1201.0
+    w.on_position(99.5)                 # 从曲尾起播：QF 点亮资格闩
+    now[0] = 1300.0                     # 播 0.5 秒断流
+    w.poll()
+    assert fired == [1]                 # 真唱到尾→断流→推进
+
+
 def test_transport_blocked():
     """走带状态互锁：S1/Cubase 的 SPACE 系键序是播放⇄停止开关，状态盲发
     会反向作用（已暂停按「暂停」起播、播放中按「播放/继续」反停、已停止

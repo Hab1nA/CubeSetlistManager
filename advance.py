@@ -30,6 +30,7 @@ class AdvanceWatch:
         self._pos = None            # 最近时码位置（工程绝对秒）；None=未知
         self._last = 0.0            # 最近 QF 活跃时戳
         self._live = False
+        self._reached = False       # 播放真实到达过曲尾（≥95%）——推进资格闩
         self._fired = False
         self._dead_reported = False
         self._stop_tries = 0        # 已发停止键次数（含重试）
@@ -55,6 +56,7 @@ class AdvanceWatch:
     def _reset(self):
         self._pos = None
         self._live = False
+        self._reached = False
         self._fired = False
         self._dead_reported = False
         self._stop_tries = 0
@@ -73,12 +75,17 @@ class AdvanceWatch:
             self._dead_reported = False
 
     def on_position(self, sec):
-        """QF 装配出完整位置（winmm 回调线程，~15Hz）——播放证据。"""
+        """QF 装配出完整位置（winmm 回调线程，~15Hz）——播放证据。
+        位置由播放真实带到曲尾（≥95%）时点亮推进资格闩——暂停态拖光标
+        到曲尾（全帧位置）不算：拖过去≠唱完了，不得触发推进。"""
         now = self._t()
         with self._lock:
             self._pos = sec
             self._last = now
             self._live = True
+            if self.duration > 0 \
+                    and max(0.0, sec - self.left) >= self.duration * 0.95:
+                self._reached = True
 
     def on_full_position(self, sec):
         """全帧位置（停止/定位态）：只更新位置，不动活跃时戳。"""
@@ -126,7 +133,9 @@ class AdvanceWatch:
                                       else "（重试 %d/2）" % (self._stop_tries - 1)))
                     self.on_stop_transport()
                 return
-            if played >= self.duration * 0.95:
+            if played >= self.duration * 0.95 and self._reached:
+                # 位置在曲尾且「唱到过」曲尾——暂停态拖光标到曲尾不满足
+                # 后者（_reached 只由 QF 播放点亮），不切
                 self._fired = True
                 self.on_event("走带已停（已播 %.0f 秒 / 时长 %.0f 秒）"
                               "→ 自动切换下一首" % (played, self.duration))
