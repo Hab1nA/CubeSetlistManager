@@ -2339,7 +2339,8 @@ class App:
         if not self.pl_keys:
             return
         for i, k in enumerate(self.pl_keys):
-            if self.by_key[k]["name"] == name:
+            e = self._resolve_entry(k)
+            if e is not None and e["song_name"] == name:
                 self.cur = i
                 with self._load_lock:   # 清空+代际递增原子化（同 _switch）
                     self.slots = {}

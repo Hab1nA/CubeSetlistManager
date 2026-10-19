@@ -49,9 +49,12 @@ def _app(name="X", durs=None, pl=("a", "b")):
     import threading as _th
     app._load_lock = _th.Lock()     # 装载代际守卫锁（_adopt/_switch 触及）
     app._refresh = lambda: app.logs.append("<refresh>")
+    app.points = {}                 # _resolve_entry 触及（pt 条目解析）
     # SimpleNamespace 无类方法解析：显式绑定真实现（装载半程要真跑）
     app._adopted_load = lambda key, gen: \
         setlist_gui.App._adopted_load(app, key, gen)
+    app._resolve_entry = lambda key: \
+        setlist_gui.App._resolve_entry(app, key)
     return app
 
 

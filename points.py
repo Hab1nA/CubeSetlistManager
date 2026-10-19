@@ -126,7 +126,7 @@ def parse_pt_key(key):
 
 
 def pt_keys_for(lib_key, data):
-    return [pt_key(lib_key, p) for p in data["points"]]
+    return [pt_key(lib_key, p["id"]) for p in data["points"]]
 
 
 def display_name(lib_name, point_name):

@@ -194,3 +194,9 @@ def test_next_point_counter_never_reuses(tmp_path):
     del d["points"][1]                                 # 删掉定位点2
     pt, d = points.next_point(d, 0.0, 1.0)
     assert pt["id"] == 3 and pt["name"] == "定位点3"   # 编号不回补
+
+
+def test_pt_keys_for_formats_ids_not_dicts():
+    d = points.initial_data(60.0)
+    points.next_point(d, 5.0, 10.0)
+    assert points.pt_keys_for("A/B", d) == ["pt:A/B#1", "pt:A/B#2"]
