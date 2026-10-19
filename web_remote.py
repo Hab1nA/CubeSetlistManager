@@ -1397,6 +1397,12 @@ class _Handler(BaseHTTPRequestHandler):
                        self.server.page.encode("utf-8"))
         elif path == "/app" or path.startswith("/app/"):
             self._h_app_asset(path)
+        elif path == "/playlist":
+            self._h_playlist()
+        elif path == "/points":
+            self._h_points()
+        elif path == "/log":
+            self._h_log()
         elif path == "/state":
             snap = getattr(self.server.app, "_web_snap", None) or {}
             self._json(200, snap)
@@ -1438,13 +1444,108 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_unregister, "/device/unregister"),
                           (self._h_test, "/device/test"),
                           (self._h_diag, "/diag"),
-                          (self._h_pedal, "/pedal/event")):
+                          (self._h_pedal, "/pedal/event"),
+                          (self._h_plcmd, "/plcmd"),
+                          (self._h_ptcmd, "/ptcmd")):
                 if path == p:
                     fn(body, ip)
                     return
             self._json(404, {"error": "未知路径"})
         except Exception as e:
             self._json(500, {"error": _err(e)})
+
+    # -- 新前端（/app）数据与命令端点 --
+
+    def _h_playlist(self):
+        """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+
+        播放列表解析视图 + 当前指针。只读快照（GIL 原子性足够，与 /state
+        同一容错语义）。"""
+        app = self.server.app
+        resolve = getattr(app, "_resolve_entry", None)
+        if resolve is None:
+            self._json(403, {"error": "简化版无编排遥控"})
+            return
+        lib = [{"key": s["key"], "team": s["team"], "name": s["name"]}
+               for s in getattr(app, "_lib_view", list)()]
+        pl = []
+        for k in app.pl_keys:
+            e = resolve(k)
+            if e is not None:
+                p = e["point"]
+                dur = (p["end"] - p["start"] if p
+                       else app.durations.get(k) or 0.0)
+                pl.append({"key": k, "name": e["display"],
+                           "dur": _fmt_dur(dur),
+                           "pt": p is not None})
+            else:
+                pl.append({"key": k, "name": k.split("/")[-1], "dur": "",
+                           "pt": False})
+        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
+
+    def _h_points(self):
+        """定位点定义：全部工程的 sidecar 数据 + 启用态。"""
+        app = self.server.app
+        pts = getattr(app, "points", None)
+        if pts is None:
+            self._json(403, {"error": "简化版无定位点"})
+            return
+        out = {}
+        for key, data in pts.items():
+            song = app.by_key.get(key)
+            out[key] = {"name": song["name"] if song else key,
+                        "enabled": bool(data["enabled"]),
+                        "points": data["points"]}
+        self._json(200, {"projects": out})
+
+    def _h_log(self):
+        """日志环形缓冲（App 主线程 q 消费处追加）。"""
+        app = self.server.app
+        ring = getattr(app, "log_ring", None)
+        if ring is None:
+            self._json(403, {"error": "简化版无日志"})
+            return
+        self._json(200, {"lines": [{"t": t, "msg": m} for t, m in ring]})
+
+    def _run_on_app(self, fn):
+        """经 calls 投递主线程执行并同步取回返回值（POST 命令需要结果）。"""
+        app = self.server.app
+        done = threading.Event()
+        box = {}
+
+        def job():
+            try:
+                box["r"] = fn()
+            except Exception as e:
+                box["r"] = _err(e)
+            done.set()
+
+        app.calls.put(job)
+        if not done.wait(8.0):
+            self._json(504, {"error": "主线程响应超时"})
+            return False
+        r = box.get("r")
+        if r:
+            self._json(400, {"error": r})
+            return False
+        self._ok()
+        return True
+
+    def _h_plcmd(self, body, _ip):
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无编排遥控"})
+            return
+        self._run_on_app(lambda: app._pl_cmd_web(
+            str(body.get("op") or ""), str(body.get("key") or "")))
+
+    def _h_ptcmd(self, body, _ip):
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无定位点"})
+            return
+        self._run_on_app(lambda: app._points_cmd_web(
+            str(body.get("op") or ""), str(body.get("key") or ""),
+            body.get("payload") or {}))
 
     def _h_pedal(self, body, ip):
         """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP

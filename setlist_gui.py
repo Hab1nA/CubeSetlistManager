@@ -464,6 +464,7 @@ class App:
         self.kb_err = ""                # 键盘自动化停用原因（监控栏显示）
         self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
         self._sel_lock = False          # 双列表互斥选中的防重入标记
+        self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 60-69）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
@@ -1735,6 +1736,132 @@ class App:
             self.q.put("工程未响应定位：《%s》时码未变化（检查 DAW 已勾 "
                        "MMC Slave 且输入口与 MMC 输出口为同一虚拟口）" % label)
 
+    # ---- 新前端（webui/平板 /app 页）命令面：主线程执行，经 calls 投递 ----
+
+    def _points_sync_list(self, lib_key):
+        """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
+        持久化刷新。PointsWindow._sync_list 与 /ptcmd 共用。"""
+        song = self.by_key.get(lib_key)
+        data = self.points.get(lib_key)
+        if song is None or data is None:
+            return "工程不存在"
+        try:
+            points.save_points(os.path.dirname(song["path"]), data)
+        except (OSError, ValueError) as e:
+            data2, _ = points.load_points(os.path.dirname(song["path"]))
+            self.points[lib_key] = data2          # 回读磁盘：放弃本次变更
+            self._refresh()
+            return "保存失败：%s" % e
+        if data["enabled"]:
+            old = list(self.pl_keys)
+            new = points.collapse_restore(old, lib_key)
+            new = points.expand_replace(new, lib_key,
+                                        points.pt_keys_for(lib_key, data))
+            self.pl_keys = new
+            self.cur = points.remap_cur(old, new, self.cur, lib_key)
+        self._persist()
+        self._refresh()
+        return None
+
+    def _points_cmd_web(self, op, lib_key, payload):
+        """/ptcmd：定位点增删改排（op: toggle/add/del/edit/move）。返回
+        None=成功，str=错误文案（HTTP 线程经 result 队列取回）。"""
+        song = self.by_key.get(lib_key)
+        if song is None:
+            return "工程不存在"
+        if op == "toggle":
+            self._toggle_points(lib_key, bool(payload.get("on")))
+            return None
+        data = self.points.get(lib_key) or points.empty_data()
+        if op == "add":
+            d_file, left = _read_span(song["path"])
+            start = payload.get("start")
+            if start is None:
+                start = self.mtc.position() if self.mtc is not None else 0.0
+            end = payload.get("end")
+            if end is None:
+                end = left + d_file if d_file else 0.0
+            pt, data = points.next_point(data, start, end)
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        pid = payload.get("id")
+        pt = points.get_point(data, int(pid or 0))
+        if pt is None:
+            return "定位点不存在"
+        if op == "del":
+            data["points"] = [q for q in data["points"]
+                              if q["id"] != pt["id"]]
+            self.points[lib_key] = data
+            if not data["points"]:
+                self._toggle_points(lib_key, False)   # 删光=自动停用
+                return None
+            return self._points_sync_list(lib_key)
+        if op == "edit":
+            start = float(payload.get("start") or 0.0)
+            end = float(payload.get("end") or 0.0)
+            err, _warn = points.validate_point(start, end)
+            if err:
+                return err
+            pt["name"] = str(payload.get("name") or pt["name"]).strip() \
+                or pt["name"]
+            pt["start"], pt["end"] = start, end
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        if op == "move":
+            step = int(payload.get("step") or 0)
+            idx = data["points"].index(pt)
+            j = idx + (1 if step > 0 else -1)
+            if not 0 <= j < len(data["points"]):
+                return None
+            data["points"][idx], data["points"][j] = \
+                data["points"][j], data["points"][idx]
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        return "未知操作"
+
+    def _pl_cmd_web(self, op, key):
+        """/plcmd：编排动作（op: add/remove/up/down/clear）。返回 None=成功。"""
+        if op == "clear":
+            self.pl_keys = []
+            self.cur = None
+            self._persist()
+            self._refresh()
+            return None
+        if op == "add":
+            if key not in self.by_key:
+                return "素材库里没有该工程"
+            if key in self.pl_keys:
+                return "已在播放列表里"
+            self.pl_keys.append(key)
+        else:
+            try:
+                i = self.pl_keys.index(key)
+            except ValueError:
+                return "条目不在播放列表里"
+            if op == "remove":
+                self.pl_keys.pop(i)
+                if self.cur is not None:
+                    if i < self.cur:
+                        self.cur -= 1
+                    elif i == self.cur:
+                        self.cur = (min(self.cur, len(self.pl_keys) - 1)
+                                    if self.pl_keys else None)
+            elif op in ("up", "down"):
+                j = i + (-1 if op == "up" else 1)
+                if not 0 <= j < len(self.pl_keys):
+                    return None
+                self.pl_keys[i], self.pl_keys[j] = \
+                    self.pl_keys[j], self.pl_keys[i]
+                if self.cur == i:
+                    self.cur = j
+                elif self.cur == j:
+                    self.cur = i
+            else:
+                return "未知操作"
+        self._persist()
+        self._refresh()
+        return None
+
     def _auto_play(self):
         """切换完成后自动播放：窗口标题出现≠加载完成——过早发播放键会被
         未就绪的 Cubase 吞掉（实测需再点一次）。等「正在加载」浮层消失
@@ -2341,6 +2468,7 @@ class App:
             except queue.Empty:
                 break
             self.log.insert("end", time.strftime("[%H:%M:%S] ") + msg)
+            self.log_ring.append((time.time(), msg))   # 新前端日志页数据源
             if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
                 self.log.itemconfigure(self.log.size() - 1,
                                        foreground=dpi.C_ERR)
@@ -2713,30 +2841,14 @@ class PointsWindow(tk.Toplevel):
 
     def _sync_list(self):
         """启用态下把播放列表中该工程的点条目块重排为当前表格顺序；
-        停用态不动列表（条目不在）。含持久化与刷新。"""
-        app = self.app
-        data = self._data()
-        song = self._song()
-        if song is None:
+        停用态不动列表（条目不在）。落盘/重排/刷新统一走 App 共享方法。"""
+        if self._song() is None:
             self._say("工程已不在素材库", dpi.C_ERR)
             return
-        try:
-            points.save_points(os.path.dirname(song["path"]), data)
-        except (OSError, ValueError) as e:
-            app.q.put("定位点保存失败：%s" % e)
-            data2, _ = points.load_points(os.path.dirname(song["path"]))
-            app.points[self.lib_key] = data2     # 回读磁盘：放弃本次变更
-            self._refill()
-            return
-        if data["enabled"]:
-            old = list(app.pl_keys)
-            new = points.collapse_restore(old, self.lib_key)
-            new = points.expand_replace(new, self.lib_key,
-                                        points.pt_keys_for(self.lib_key, data))
-            app.pl_keys = new
-            app.cur = points.remap_cur(old, new, app.cur, self.lib_key)
-        app._persist()
-        app._refresh()
+        err = self.app._points_sync_list(self.lib_key)
+        if err:
+            self._say(err, dpi.C_ERR)
+        self._refill()
 
     # ---- 事件 ----
 

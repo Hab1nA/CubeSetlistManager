@@ -126,3 +126,44 @@ body.show .big { font-size: 72px; }
 body.show .mid { font-size: 38px; }
 body.show #clock { font-size: 46px; color: var(--ok); }
 body.show #bar { height: 14px; }
+
+/* ---- P2 页面 ---- */
+.cols { display: flex; gap: 18px; height: calc(100vh - 190px); }
+.col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.colhead { display: flex; align-items: center; gap: 8px;
+  font-weight: 700; margin-bottom: 8px; }
+.colhead .dim { font-weight: 400; }
+.col .list { flex: 1; overflow: auto; }
+.mini { font-size: 12px; padding: 3px 10px; }
+button { font: inherit; }
+#pl-clear { margin-left: auto; background: #402024; color: var(--err);
+  border: 0; border-radius: 6px; cursor: pointer; }
+.row .ops { display: flex; gap: 4px; opacity: 0; }
+.row:hover .ops { opacity: 1; }
+.row .ops button { background: #26303a; color: var(--fg); border: 0;
+  border-radius: 6px; cursor: pointer; padding: 2px 8px; font-size: 12px; }
+.row .ops button.danger { background: #402024; color: var(--err); }
+#pt-edit { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin-top: 12px; padding: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; }
+#pt-edit label { display: flex; gap: 6px; align-items: center; }
+#pt-edit input { background: #0d1116; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px;
+  font: inherit; }
+#pt-name { width: 160px; } #pt-s, #pt-e { width: 90px; }
+#pt-edit button { background: #1f262e; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+  cursor: pointer; }
+#pt-edit button.danger { background: #402024; color: var(--err); }
+#pt-edit .chk { margin-left: auto; }
+#pt-list .row.cur { outline: 1px solid var(--accent); }
+.log { font: 13px/1.7 Consolas, "Microsoft YaHei", monospace;
+  background: #0b0e12; border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 14px; height: calc(100vh - 190px); overflow: auto;
+  white-space: pre-wrap; }
+.log .err { color: var(--err); }
+.sumlist { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.sumlist .item { display: flex; justify-content: space-between; gap: 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 14px; }
+.sumlist .item b { font-weight: 700; }
