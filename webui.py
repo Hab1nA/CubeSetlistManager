@@ -23,20 +23,6 @@ def main():
     h = int(sys.argv[2]) if len(sys.argv) > 2 else 800
     sg.dpi.enable()
 
-    # 桌面壳需要 WebRemote 栈在位（/state、/cmd、设备注册表都在其上）；
-    # 总开关强制开——用户选 webui 入口即"要用 Web 界面"。对外绑定行为
-    # 仍按 config（loopback 实例另起，不扩大暴露面）
-    orig_cfg = sg._load_config
-
-    def _cfg():
-        cfg = orig_cfg()
-        wr = dict(cfg.get("webRemote") or {})
-        wr["enabled"] = True
-        cfg["webRemote"] = wr
-        return cfg
-
-    sg._load_config = _cfg
-
     holder = {}
 
     def tk_main():
@@ -51,13 +37,14 @@ def main():
             holder["err"] = e
 
     threading.Thread(target=tk_main, daemon=True, name="tk-biz").start()
-    # 等 App 建好 + WebRemote 主服务就绪（注册表等共享件在其上）
+    # 等 App 建好 + WebRemote 栈就绪（registry 等共享件在构造期创建，
+    # 不依赖遥控总开关——用户关着遥控时桌面壳照常可用且不碰热点语义）
     app = None
     for _ in range(150):
         app = holder.get("app")
         if app is not None:
             wr = getattr(app, "web", None)
-            if wr is not None and getattr(wr, "server", None) is not None:
+            if wr is not None and wr.registry is not None:
                 break
         if "err" in holder:
             sys.exit("业务栈启动失败：%s" % holder["err"])
@@ -65,7 +52,8 @@ def main():
     else:
         sys.exit("等待业务栈超时（App 未就绪）")
 
-    # UI 专用 loopback 实例：127.0.0.1 随机口，/app /state /cmd 同一套面
+    # UI 专用 loopback 实例：127.0.0.1 随机口，/app /state /cmd 同一套面；
+    # 与 WebRemote 主服务（按用户配置起/不起热点与对外端口）完全独立
     ui_srv = web_remote._bind_web(app, app.web.registry,
                                   lambda: app.web.tasker_port,
                                   "127.0.0.1", 0, web_remote.PAGE_APP,

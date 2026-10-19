@@ -38,13 +38,44 @@
       </div>
       <div id="console-list" class="list"></div>
     </section>
-    <section class="page" id="p-setlist"><h2>编排</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-points"><h2>定位点</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-pedal"><h2>踩钉</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-kbd"><h2>键盘</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-vj"><h2>VJ</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-settings"><h2>设置</h2><p class="dim">P2 迁入</p></section>
-    <section class="page" id="p-log"><h2>日志</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-setlist">
+      <h2>编排</h2>
+      <div class="cols">
+        <div class="col">
+          <div class="colhead">素材库 <span class="dim" id="lib-n"></span></div>
+          <div id="lib" class="list"></div>
+        </div>
+        <div class="col">
+          <div class="colhead">播放列表 <span class="dim" id="pl-n"></span>
+            <button id="pl-clear" class="mini danger">清空</button></div>
+          <div id="pl" class="list"></div>
+        </div>
+      </div>
+    </section>
+    <section class="page" id="p-points">
+      <h2>定位点 <select id="pt-proj"></select></h2>
+      <div id="pt-list" class="list"></div>
+      <div id="pt-edit">
+        <label>名称 <input id="pt-name"></label>
+        <label>开始 <input id="pt-s" placeholder="分:秒"></label>
+        <label>结束 <input id="pt-e" placeholder="分:秒"></label>
+        <button id="pt-save">保存修改</button>
+        <button id="pt-add">添加（开始=当前时码）</button>
+        <button id="pt-del" class="danger">删除选中</button>
+        <button id="pt-up" class="mini">上移</button>
+        <button id="pt-down" class="mini">下移</button>
+        <label class="chk"><input type="checkbox" id="pt-on"> 启用定位点</label>
+      </div>
+    </section>
+    <section class="page" id="p-pedal"><h2>踩钉</h2><div id="pedal-sum" class="sumlist"></div></section>
+    <section class="page" id="p-kbd"><h2>键盘自动化</h2><div id="kbd-sum" class="sumlist"></div></section>
+    <section class="page" id="p-vj"><h2>VJ 联动</h2><div id="vj-sum" class="sumlist"></div></section>
+    <section class="page" id="p-settings"><h2>设置</h2><div id="set-sum" class="sumlist"></div>
+      <p class="dim">完整设置请用旧版设置窗（后续版本迁入）</p></section>
+    <section class="page" id="p-log">
+      <h2>日志</h2>
+      <div id="log" class="log"></div>
+    </section>
   </main>
 </div>
 <footer id="statusbar">
