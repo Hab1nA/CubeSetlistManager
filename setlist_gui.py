@@ -746,6 +746,9 @@ class App:
         g3.pack(side="left")
         ttk.Button(g3, text="键盘自动化", width=9,
                    command=self._open_kbd).pack(side="left", padx=3, pady=3)
+        ttk.Button(g3, text="定位点", width=9,
+                   command=self._open_points).pack(side="left", padx=3,
+                                                   pady=3)
         ttk.Button(g3, text="踩钉控制", width=9,
                    command=self._open_pedal).pack(side="left", padx=3, pady=3)
         dpi.setup_window(self.root)
@@ -2102,6 +2105,25 @@ class App:
         self.kbd_win.set_song(song)          # 初开与再点统一：绑定所选曲
         self.kbd_win.lift()
 
+    def _open_points(self):
+        t = self._sel_target()
+        key = t[2] if t else (self.pl_keys[self.cur]
+                              if self.cur is not None
+                              and self.cur < len(self.pl_keys) else None)
+        lib_key = None
+        if key:
+            pt = points.parse_pt_key(key)
+            lib_key = pt[0] if pt else (
+                key if key in self.by_key else None)
+        if lib_key is None:
+            self.q.put("先在素材库或播放列表选中一首再配置定位点")
+            return
+        if self.points_win is None or not self.points_win.winfo_exists():
+            self.points_win = PointsWindow(self, lib_key)
+        else:
+            self.points_win.set_song(lib_key)
+        self.points_win.lift()
+
     # ---- 主线程轮询：状态 + 日志 + 跨线程调用 ----
 
     DOT_CELLS = {("vj", "端口状态"), ("vj", "OBS 状态"),
@@ -2473,6 +2495,284 @@ class App:
 
 
 _ABSENT = "（当前不可用）"   # 下拉幽灵项标注：已存设定名在当前环境不在场
+
+
+class PointsWindow(tk.Toplevel):
+    """定位点设置窗：为选中工程启停定位点、增删改与排序点定义。
+    定义存工程目录 setlist_points.json（enabled 只翻开关，停用不删数据）；
+    启用中素材库/播放列表按点条目示人（App._toggle_points 统一变换，
+    窗内增删改经 _sync_list 重排点条目块）。时间一律工程绝对时码。"""
+
+    def __init__(self, app, lib_key):
+        super().__init__(app.root)
+        self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
+        self.app = app
+        self.lib_key = lib_key
+        self.title("定位点")
+        self.geometry(dpi.scale(self, 620, 430))
+        app.points_win = self           # 守卫槽先占：alpha 段 update 泵输入
+        pad = dpi.scale(self, 12)
+        self.status = ttk.Label(self, style="Dim.TLabel")
+        self.status.pack(side="bottom", fill="x", padx=pad,
+                         pady=(0, dpi.scale(self, 8)))
+
+        def on_hint(text):
+            self._hover = text
+            self._present()
+
+        self._hover = None
+        self._transient = (None, None)
+        self._transient_until = 0.0
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=pad, pady=(pad, 4))
+        self.s1 = self.app.facts.get("name") == "cubase"
+        song = self.app.by_key.get(lib_key)
+        self.enable_var = tk.BooleanVar(
+            value=bool((self.app.points.get(lib_key)
+                        or points.empty_data())["enabled"]))
+        cb = ttk.Checkbutton(
+            body, text="为《%s》启用定位点" % (song["name"] if song else lib_key),
+            variable=self.enable_var, command=self._on_toggle)
+        cb.pack(fill="x")
+        if not self.s1:
+            cb.state(["disabled"])
+            self._say("定位点仅 Cubase 支持", dpi.C_ERR)
+        dpi.bind_hint(cb, on_hint, "启用后该工程以定位点条目示人；停用还原"
+                                  "整曲，定义保留")
+
+        mid = ttk.Frame(body)
+        mid.pack(fill="both", expand=True, pady=(6, 0))
+        cols = ("name", "start", "end")
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings",
+                                 height=8, selectmode="browse")
+        for c, w, t in (("name", 170, "名称"), ("start", 90, "开始"),
+                        ("end", 90, "结束")):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=dpi.scale(self, w), anchor="w")
+        sb = ttk.Scrollbar(mid, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="left", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_sel)
+
+        ops = ttk.Frame(mid)
+        ops.pack(side="left", fill="y", padx=(8, 0))
+        for text, cmd, tip in (
+                ("添加", self._add, "开始点默认取当前时码位置"),
+                ("删除", self._del, "从定义与播放列表一并移除该点"),
+                ("上移", lambda: self._move(-1), "调整展开顺序"),
+                ("下移", lambda: self._move(1), "调整展开顺序")):
+            b = ttk.Button(ops, text=text, width=8, command=cmd)
+            b.pack(anchor="w", pady=2)
+            dpi.bind_hint(b, on_hint, tip)
+
+        ed = ttk.LabelFrame(body, text="编辑选中点")
+        ed.pack(fill="x", pady=(8, 0))
+        row = ttk.Frame(ed)
+        row.pack(fill="x", pady=4, padx=4)
+        ttk.Label(row, text="名称", style="Dim.TLabel").pack(side="left")
+        self.name_var = tk.StringVar()
+        ttk.Entry(row, textvariable=self.name_var, width=18).pack(
+            side="left", padx=(4, 14))
+        self.spin_vars = {}
+        for tag, label in (("sh", "开始"), ("eh", "结束")):
+            ttk.Label(row, text=label, style="Dim.TLabel").pack(side="left")
+            trio = []
+            for unit, hi in (("时", 23), ("分", 59), ("秒", 59)):
+                v = tk.IntVar()
+                sp = ttk.Spinbox(row, from_=0, to=hi, width=3,
+                                 textvariable=v)
+                sp.pack(side="left", padx=2)
+                trio.append(v)
+            self.spin_vars[tag] = trio
+        ttk.Button(ed, text="保存修改", command=self._save_edit).pack(
+            side="right", padx=4, pady=4)
+        dpi.bind_hint(ed, on_hint, "时分秒为工程绝对时码（与 App 显示一致）")
+
+        self._refill()
+        self._present()
+        dpi.setup_window(self)
+        self.attributes("-alpha", 0)
+        self.deiconify()
+        for _ in range(2):
+            self.update()
+        self.attributes("-alpha", 1)
+
+    # ---- 底栏三方优先级 ----
+
+    def _say(self, text, color=None):
+        self._transient = (text, color or dpi.MUT)
+        self._transient_until = time.time() + 5
+        self._present()
+
+    def _present(self):
+        """底栏三方优先级：悬停提示 > 瞬时反馈 > 常驻状态。"""
+        if self._hover is not None:
+            self.status.config(text=self._hover, foreground=dpi.MUT)
+        elif self._transient[0] and time.time() < self._transient_until:
+            self.status.config(text=self._transient[0],
+                               foreground=self._transient[1])
+        else:
+            if self.s1 and self.app.mmc_out is None:
+                self.status.config(text="MMC 输出口未就绪：定位不可用"
+                                        "（检查时码口配置）", foreground=dpi.C_ERR)
+            else:
+                self.status.config(text="启用中：%d 个定位点"
+                                        % len(self._data()["points"])
+                                        if self._data()["enabled"] else "未启用",
+                                   foreground=dpi.MUT)
+
+    # ---- 数据 ----
+
+    def _data(self):
+        return self.app.points.get(self.lib_key) or points.empty_data()
+
+    def _song(self):
+        return self.app.by_key.get(self.lib_key)
+
+    def set_song(self, lib_key):
+        """重开/切换对象：刷新勾选框、表格与常驻状态。"""
+        self.lib_key = lib_key
+        song = self._song()
+        data = self._data()
+        self.enable_var.set(bool(data["enabled"]))
+        self.title("定位点 — %s" % (song["name"] if song else lib_key))
+        self._refill()
+
+    def _refill(self):
+        sel = self.tree.selection()
+        self.tree.delete(*self.tree.get_children())
+        for p in self._data()["points"]:
+            self.tree.insert("", "end", iid=str(p["id"]), values=(
+                p["name"], points.fmt_tc(p["start"]), points.fmt_tc(p["end"])))
+        if sel:
+            try:
+                self.tree.selection_set(sel[0])
+            except tk.TclError:
+                pass
+        self._present()
+
+    def _sync_list(self):
+        """启用态下把播放列表中该工程的点条目块重排为当前表格顺序；
+        停用态不动列表（条目不在）。含持久化与刷新。"""
+        app = self.app
+        data = self._data()
+        try:
+            points.save_points(os.path.dirname(self._song()["path"]), data)
+        except (OSError, ValueError) as e:
+            app.q.put("定位点保存失败：%s" % e)
+            return
+        if data["enabled"]:
+            old = list(app.pl_keys)
+            new = points.collapse_restore(old, self.lib_key)
+            new = points.expand_replace(new, self.lib_key,
+                                        points.pt_keys_for(self.lib_key, data))
+            app.pl_keys = new
+            app.cur = points.remap_cur(old, new, app.cur, self.lib_key)
+        app._persist()
+        app._refresh()
+
+    # ---- 事件 ----
+
+    def _on_toggle(self):
+        on = bool(self.enable_var.get())
+        self.app._toggle_points(self.lib_key, on)
+        self.enable_var.set(bool(self._data()["enabled"]))
+        self._refill()
+        if not on:
+            self._say("已停用：列表条目还原整曲（定义保留）", dpi.C_OK)
+
+    def _on_tree_sel(self, _e=None):
+        sel = self.tree.selection()
+        p = points.get_point(self._data(), int(sel[0])) if sel else None
+        if p is None:
+            return
+        self.name_var.set(p["name"])
+        for tag, key in (("sh", "start"), ("eh", "end")):
+            sec = int(round(p[key]))
+            for v, unit in zip(self.spin_vars[tag], (3600, 60, 1)):
+                v.set(sec // unit % (24 if unit == 3600 else 60))
+
+    def _edit_sec(self, tag):
+        h, m, s = (v.get() for v in self.spin_vars[tag])
+        return h * 3600 + m * 60 + s
+
+    def _sel_point(self):
+        sel = self.tree.selection()
+        if not sel:
+            self._say("先在表格里选中一个定位点")
+            return None
+        return points.get_point(self._data(), int(sel[0]))
+
+    def _add(self):
+        data = self._data()
+        song = self._song()
+        d_file, left = _read_span(song["path"])
+        start = 0.0
+        if self.app.mtc is not None:
+            start = self.app.mtc.position() or 0.0
+        end = left + d_file if d_file else 0.0
+        pt, data = points.next_point(data, start, end)
+        self.app.points[self.lib_key] = data
+        self._sync_list()
+        self._refill()
+        self.tree.selection_set(str(pt["id"]))
+        self._say("已添加《%s》（%s → %s）"
+                  % (pt["name"], points.fmt_tc(start), points.fmt_tc(end)),
+                  dpi.C_OK)
+        if not end:
+            self._say("结束点未定（工程末尾未知）：请补填后保存", dpi.C_WARN)
+
+    def _del(self):
+        p = self._sel_point()
+        if p is None:
+            return
+        data = self._data()
+        data["points"] = [q for q in data["points"] if q["id"] != p["id"]]
+        if not data["points"]:
+            self.app._toggle_points(self.lib_key, False)   # 删光=自动停用
+            self.enable_var.set(False)
+            self._say("已删光：定位点自动停用，条目还原整曲", dpi.C_OK)
+        else:
+            self._sync_list()
+            self._say("已删除《%s》" % p["name"], dpi.C_OK)
+        self._refill()
+
+    def _move(self, step):
+        p = self._sel_point()
+        if p is None:
+            return
+        data = self._data()
+        idx = data["points"].index(p)
+        j = idx + step
+        if not 0 <= j < len(data["points"]):
+            return
+        data["points"][idx], data["points"][j] = \
+            data["points"][j], data["points"][idx]
+        self._sync_list()
+        self._refill()
+        self.tree.selection_set(str(p["id"]))
+
+    def _save_edit(self):
+        p = self._sel_point()
+        if p is None:
+            return
+        name = self.name_var.get().strip()
+        if not name:
+            self._say("名称不能为空", dpi.C_ERR)
+            return
+        start, end = self._edit_sec("sh"), self._edit_sec("eh")
+        err, warn = points.validate_point(start, end)
+        if err:
+            self._say(err, dpi.C_ERR)
+            return
+        p["name"], p["start"], p["end"] = name, float(start), float(end)
+        self._sync_list()
+        self._refill()
+        self.tree.selection_set(str(p["id"]))
+        self._say("已保存《%s》（%s → %s）"
+                  % (name, points.fmt_tc(start), points.fmt_tc(end)),
+                  dpi.C_WARN if warn else dpi.C_OK)
 
 
 class SettingsWindow(tk.Toplevel):
