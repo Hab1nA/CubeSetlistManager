@@ -4,7 +4,7 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
-## [0.14.0] - 2026-10-19
+## [0.13.1] - 2026-10-20
 
 ### 新增
 
