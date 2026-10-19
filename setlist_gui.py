@@ -38,6 +38,7 @@ import kbd_auto
 import mtc
 import midi_bridge as mb
 import pedal
+import points
 import song_meta
 import stallguard
 import ui_text
@@ -477,6 +478,10 @@ class App:
         self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
         self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
+        self.points = {}                # lib_key → 定位点数据（_load_songs 装载）
+        self._goto_ack = None           # (发送前位置, 时戳, 标签)：GOTO 无回执告警
+        self.mmc_out = None             # MMC 输出口句柄（定位点 GOTO）
+        self.points_win = None          # 定位点设置窗单例守卫槽
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self.start_err = ""
@@ -794,7 +799,8 @@ class App:
         for closer in ((lambda: self.port.close()),
                        (lambda: self.kb_port.close()),
                        (lambda: self.clock_port.close()),
-                       (lambda: self.pedal.shutdown())):
+                       (lambda: self.pedal.shutdown()),
+                       (lambda: mb.close_out(self.mmc_out))):
             try:
                 closer()
             except Exception:
@@ -973,6 +979,10 @@ class App:
             except Exception as e:
                 self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
+            # MMC 输出口（定位点 GOTO）：仅 Cubase 底座，走与 MTC 收听同一
+            # 虚拟口——外发 SysEx 经 loopMIDI 喂给 DAW；mtc.Decoder 不解析
+            # MMC 帧（F0 7F 7F 06 …），回环进本程序无害
+            self._open_mmc_out()
             # 键盘自动化：发送线程（JUNO + AX-09）+ 联动端口
             try:
                 self.switcher = kbd_auto.ToneSwitcher(
@@ -1030,6 +1040,56 @@ class App:
                 self._pending_ports = False
                 self.calls.put(self._apply_ports)
 
+    def _entry_alive(self, key):
+        """播放列表条目存活判定：pt 条目 ⇔ 宿主在库且启用且点存在。"""
+        pt = points.parse_pt_key(key)
+        if pt:
+            lib_key, pid = pt
+            data = self.points.get(lib_key)
+            return bool(data and data["enabled"]
+                        and points.get_point(data, pid)
+                        and lib_key in self.by_key)
+        return key in self.by_key
+
+    def _resolve_entry(self, key):
+        """播放列表条目统一解析 → {display, path, lib_key, song_name,
+        point|None}：显示名/切歌路径/装载时长全走这里，pt 与裸条目同一
+        出口；库缺或点缺返回 None。"""
+        pt = points.parse_pt_key(key)
+        if pt:
+            lib_key, pid = pt
+            song = self.by_key.get(lib_key)
+            p = points.get_point(self.points.get(lib_key)
+                                 or points.empty_data(), pid)
+            if song is None or p is None:
+                return None
+            return {"display": points.display_name(song["name"], p["name"]),
+                    "path": song["path"], "lib_key": lib_key,
+                    "song_name": song["name"], "point": p}
+        song = self.by_key.get(key)
+        if song is None:
+            return None
+        return {"display": song["name"], "path": song["path"],
+                "lib_key": key, "song_name": song["name"], "point": None}
+
+    def _open_mmc_out(self):
+        """MMC 输出口启动（_startup 工作线程调用）：仅 Cubase 底座 + 时码口
+        已配；找不到/打不开只降级定位点定位，不拦主流程。"""
+        self.mmc_out = None
+        if self.facts.get("name") != "cubase" or not self.clock_hint:
+            return
+        dev = mb._pick(mb._out_devices(), self.clock_hint)
+        if dev is None:
+            self.q.put("MMC 输出口未启动：找不到含「%s」的输出端口"
+                       "（定位点定位不可用）" % self.clock_hint)
+            return
+        h, err = mb.open_out(dev[0])
+        if h is None:
+            self.q.put("MMC 输出口未启动：%s" % err)
+            return
+        self.mmc_out = h
+        self.q.put("MMC 输出已启动（%s）" % dev[1])
+
     def _load_songs(self):
         root = self.ccfg["projectsRoot"]
         if not os.path.isdir(root):
@@ -1039,26 +1099,38 @@ class App:
         songs = scan_library(root, self.facts["song_ext"])
         self.by_key = {s["key"]: s for s in songs}
         self.songs = songs
-        # 播放列表清掉库里已不存在的项
-        self.pl_keys = [k for k in self.pl_keys if k in self.by_key]
+        # 定位点 sidecar 装载（工程目录级）；损坏降级为停用空表并告警
+        self.points = {}
+        for s in songs:
+            data, err = points.load_points(os.path.dirname(s["path"]))
+            if err:
+                self.q.put("《%s》%s" % (s["name"], err))
+            self.points[s["key"]] = data
+        # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）
+        self.pl_keys = [k for k in self.pl_keys if self._entry_alive(k)]
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表
         ws = daw_ctrl.current_project()
         name = daw_ctrl.project_name_from_title(ws[1]) if ws else None
         if name:
             for i, k in enumerate(self.pl_keys):
-                if self.by_key[k]["name"] == name:
-                    self.cur = i
-                    song = self.by_key[k]
-                    d_file, left = _read_span(song["path"])
+                e = self._resolve_entry(k)
+                if e is None or e["song_name"] != name:
+                    continue
+                self.cur = i
+                d_file, left = _read_span(e["path"])
+                p = e["point"]
+                if p is not None:   # 定位点条目：装载段区间，不动 durations
+                    d, left = p["end"] - p["start"], p["start"]
+                else:
                     d = self.durations.get(k) or d_file or 0.0
                     self.durations[k] = d
-                    if self.watch is not None:  # watch 缺席降级态同 _switch
-                        self.watch.set_duration(d, left)
-                    self.slots = kbd_auto.load_slots(song["path"])
-                    self.ax_slots = kbd_auto.load_slots(song["path"], "ax")
-                    self.cur_song_path = song["path"]
-                    self.q.put("已恢复当前工程：《%s》" % name)
-                    break
+                if self.watch is not None:  # watch 缺席降级态同 _switch
+                    self.watch.set_duration(d, left)
+                self.slots = kbd_auto.load_slots(e["path"])
+                self.ax_slots = kbd_auto.load_slots(e["path"], "ax")
+                self.cur_song_path = e["path"]
+                self.q.put("已恢复当前工程：《%s》" % name)
+                break
         self._probe_durations(songs)
         self.calls.put(self._refresh)
         self.q.put("素材库 %d 首，播放列表 %d 首（%s）"
@@ -1105,13 +1177,23 @@ class App:
         self._update_buttons()
 
     def _lib_view(self):
-        """素材库按搜索词过滤后的视图；_refresh/_add/_sel_target 共用同一
-        计算，保证显示下标与数据下标一致。"""
+        """素材库视图：启用定位点的工程原位展开为点条目（裸条目隐藏），
+        其余按搜索词过滤；_refresh/_add/_sel_target 共用同一计算，保证
+        显示下标与数据下标一致。"""
         q = self._lib_query
-        if not q:
-            return self.songs
-        return [s for s in self.songs
-                if q in s["name"].lower() or q in s["team"].lower()]
+        out = []
+        for s in self.songs:
+            data = self.points.get(s["key"])
+            if data and data["enabled"] and data["points"]:
+                for p in data["points"]:
+                    entry = dict(s, key=points.pt_key(s["key"], p["id"]),
+                                 name=points.display_name(s["name"], p["name"]))
+                    if not q or q in entry["name"].lower() \
+                            or q in s["team"].lower():
+                        out.append(entry)
+            elif not q or q in s["name"].lower() or q in s["team"].lower():
+                out.append(s)
+        return out
 
     def _on_search(self):
         self._lib_query = self.lib_q.get().strip().lower()
@@ -1145,7 +1227,16 @@ class App:
     def _dur_status(self, key, for_entry=False):
         """时长三态 → (显示文本, 颜色)：自动=绿/手动=数值黄/未知=红。
         列表行里自动态直接显示时长数值（降噪）；输入框预显示用「自动时长」
-        占位（for_entry=True），其值不可直接覆盖，需清空后输入。"""
+        占位（for_entry=True），其值不可直接覆盖，需清空后输入。
+        定位点条目显示段长（计算值，不走手动时长机制）。"""
+        pt = points.parse_pt_key(key)
+        if pt:
+            lib_key, pid = pt
+            p = points.get_point(self.points.get(lib_key)
+                                 or points.empty_data(), pid)
+            if p is not None and p["end"] > p["start"]:
+                return cpr_meta.fmt_mmss(p["end"] - p["start"]), dpi.C_OK
+            return "未知", dpi.C_ERR
         d = self.durations.get(key, 0.0)
         if not d:
             return "未知", dpi.C_ERR
@@ -1168,13 +1259,13 @@ class App:
             self.lib.itemconfigure(i, foreground=color)
         self.pl.delete(0, "end")
         for i, key in enumerate(self.pl_keys):
-            s = self.by_key.get(key)
-            if s is None:
+            e = self._resolve_entry(key)
+            if e is None:
                 continue
             text, color = self._dur_status(key)
             mark = " ←" if i == self.cur else ""
             self.pl.insert("end", "%d. %s（%s）%s" % (
-                i + 1, s["name"], text, mark))
+                i + 1, e["display"], text, mark))
             self.pl.itemconfigure(i, foreground=color)
             if i == self.cur:               # 当前行底色：未选中也能一眼定位
                 self.pl.itemconfigure(i, background=dpi.CUR_BG)
@@ -1419,23 +1510,35 @@ class App:
                 self.q.put("已在播放列表末尾")
             return False
         key = self.pl_keys[i]
-        song = self.by_key.get(key)
-        if song is None:
+        entry = self._resolve_entry(key)
+        if entry is None:
             self.q.put("歌单项不在素材库里：%s" % key)
             return False
         if via == "手动" and i == self.cur:
             ws = daw_ctrl.current_project()
-            if ws and daw_ctrl.project_name_from_title(ws[1]) == song["name"]:
-                self.q.put("《%s》已是当前工程，不重载" % song["name"])
+            if ws and daw_ctrl.project_name_from_title(ws[1]) \
+                    == entry["song_name"]:
+                self.q.put("《%s》已是当前工程，不重载" % entry["song_name"])
                 return False
+        # 同工程定位点：免开关工程，停走带→GOTO→按需播放（不占 ctrl.busy）
+        if entry["point"] is not None and self.ctrl is not None \
+                and not self.ctrl.busy \
+                and self.cur_song_path == entry["path"] \
+                and self.mmc_out is not None:
+            self.q.put("切换到《%s》（同工程定位，无需重开）" % entry["display"])
+            threading.Thread(target=self._goto_worker,
+                             args=(i, entry, play_after),
+                             daemon=True).start()
+            return True
         if self.ctrl is None or not self.ctrl.switch_to(
-                song["path"], on_done=self._switch_done):
+                entry["path"], on_done=self._switch_done):
             if via == "手动":       # 忙时保留最后一次用户请求，完成后自动执行
                 self._pending_switch = i
                 self.q.put("切换中：《%s》已排队，完成后自动执行"
-                           % song["name"])
+                           % entry["song_name"])
             else:
-                self.q.put("正忙，忽略%s切换请求：《%s》" % (via, song["name"]))
+                self.q.put("正忙，忽略%s切换请求：《%s》"
+                           % (via, entry["song_name"]))
             return False
         self._switch_key = key      # 快照：完成时按 key 归属，防编排变动张冠李戴
         self._play_after_switch = play_after
@@ -1453,8 +1556,43 @@ class App:
         self._kb_warned = set()
         self._refresh()
         self.q.put("切换到《%s》…（%s）"
-                   % (song["name"], "已排队" if via == "排队" else via))
+                   % (entry["display"], "已排队" if via == "排队" else via))
         return True
+
+    def _goto_worker(self, i, entry, play_after):
+        """同工程定位点切换（工作线程）：停走带→GOTO→主线程装载段区间。
+        停止键失焦偶发失败仅记日志——GOTO 在播放中落地光标仍会跳，自愈。"""
+        self.ctrl.transport("stop")
+        self._goto_send(entry["point"]["start"], entry["display"])
+
+        def finish():
+            if not (0 <= i < len(self.pl_keys)) \
+                    or self.pl_keys[i] != points.pt_key(
+                        entry["lib_key"], entry["point"]["id"]):
+                return              # 编排已变：弃本次装载（归属失效）
+            self.cur = i
+            if self.watch is not None:
+                self.watch.reset()  # 清推进闩；位置由 GOTO 补发全帧重灌
+                self.watch.set_duration(
+                    entry["point"]["end"] - entry["point"]["start"],
+                    entry["point"]["start"])
+            self._refresh()
+            if play_after:
+                threading.Thread(target=self._transport_thread,
+                                 args=("play",), daemon=True).start()
+        self.calls.put(finish)
+
+    def _goto_send(self, start, label):
+        """发 MMC GOTO 并登记 ACK（任意线程；1.2 秒内时码无变化则告警）。"""
+        if self.mmc_out is None:
+            self.q.put("MMC 输出口未就绪：无法定位《%s》" % label)
+            return
+        pre = self.mtc.position() if self.mtc is not None else None
+        err = mb.send_sysex_h(self.mmc_out, points.mmc_goto_bytes(start))
+        if err:
+            self.q.put("定位发送失败：%s" % err)
+        else:
+            self._goto_ack = (pre, time.time(), label)
 
     def _switch_done(self, name):
         key = self._switch_key
@@ -1463,37 +1601,52 @@ class App:
         self._play_after_switch = False
         if name is None or not key:
             return
-        song = self.by_key.get(key)
-        if song is None:
+        entry = self._resolve_entry(key)
+        if entry is None:
+            return
+        if entry["point"] is not None:
+            # 定位点条目：时长=段区间（不动 durations/dur_src）；打开工程
+            # 后光标停在上次保存位，必须补 GOTO 到段起点
+            if self.watch is not None:
+                self.watch.reset()
+                self.watch.set_duration(
+                    entry["point"]["end"] - entry["point"]["start"],
+                    entry["point"]["start"])
+            self._goto_send(entry["point"]["start"], entry["display"])
+            self._finish_switch_common(entry, play_after)
             return
         # 打开后再测一次时长；手动设定不被自动识别覆盖（需要时点「重新识别」）
-        d, left = _read_span(song["path"])
+        d, left = _read_span(entry["path"])
         if self.dur_src.get(key) == "manual":
             self.q.put("《%s》保留手动时长 %s（工程内为 %s，可点「重新识别」改用）"
-                       % (song["name"], cpr_meta.fmt_mmss(self.durations.get(key)),
+                       % (entry["song_name"], cpr_meta.fmt_mmss(self.durations.get(key)),
                           cpr_meta.fmt_mmss(d)))
         elif d and d != self.durations.get(key):
             self.durations[key] = d
             self._persist()
-            self.q.put("《%s》时长更新为 %s" % (song["name"],
+            self.q.put("《%s》时长更新为 %s" % (entry["song_name"],
                                                 cpr_meta.fmt_mmss(d)))
         elif not d and not self.durations.get(key):
             self.q.put("《%s》时长未知（工程未设循环定位条）：可用「写入时长」手填"
-                       % song["name"])
+                       % entry["song_name"])
         d = self.durations.get(key) or d   # 手动时长优先：watch 与横幅/推进
         if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
             self.watch.reset()      #   同一坐标系（文件的 left 配手动秒数会错位）
             self.watch.set_duration(d, left)   # 纪元闭合同 _switch_done
+        self._finish_switch_common(entry, play_after)
+
+    def _finish_switch_common(self, entry, play_after):
+        """切换收尾公共段（_switch_done 工作线程）：音色映射装载+焦点/自动播。"""
         self.calls.put(self._refresh)
-        slots = kbd_auto.load_slots(song["path"])
-        ax_slots = kbd_auto.load_slots(song["path"], "ax")
+        slots = kbd_auto.load_slots(entry["path"])
+        ax_slots = kbd_auto.load_slots(entry["path"], "ax")
         with self._load_lock:       # 写回与 _switch 清空/后台装载同锁原子化
             self.slots = slots      # （复审 R3-1：第三写者收编；IO 在锁外）
             self.ax_slots = ax_slots
-            self.cur_song_path = song["path"]
+            self.cur_song_path = entry["path"]
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
-                       % (song["name"], len(slots), len(ax_slots)))
+                       % (entry["song_name"], len(slots), len(ax_slots)))
         if play_after:
             # 等待加载的循环放后台线程，别堵主线程的状态轮询
             self.calls.put(lambda: threading.Thread(
@@ -1501,6 +1654,57 @@ class App:
             self.q.put("加载完成，自动开始播放")
         else:
             self._regain_focus()      # 单实例转交激活了 Cubase，焦点收回
+
+    def _toggle_points(self, lib_key, on):
+        """启用/停用定位点（主线程，定位点设置窗调用）：sidecar 翻 enabled +
+        播放列表原位替换/还原（可逆、数据无损，不弹确认）。启用且无点时
+        建初始点「定位点1」=[0:00, 工程末尾]。"""
+        song = self.by_key.get(lib_key)
+        if song is None:
+            return
+        data = self.points.get(lib_key) or points.empty_data()
+        if on and not data["points"]:
+            d_file, left = _read_span(song["path"])
+            end = left + d_file if d_file else 0.0
+            data = points.initial_data(end)
+            if not end:
+                self.q.put("《%s》工程末尾未知：请在定位点设置里补填结束点"
+                           % song["name"])
+        data["enabled"] = bool(on)
+        self.points[lib_key] = data
+        old_keys = list(self.pl_keys)
+        if on:
+            self.pl_keys = points.expand_replace(
+                old_keys, lib_key, points.pt_keys_for(lib_key, data))
+        else:
+            self.pl_keys = points.collapse_restore(old_keys, lib_key)
+        self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
+        try:
+            points.save_points(os.path.dirname(song["path"]), data)
+        except (OSError, ValueError) as e:
+            self.q.put("定位点保存失败：%s" % e)
+            return
+        self._persist()
+        self._refresh()
+        self.q.put("《%s》定位点已%s"
+                   % (song["name"], "启用" if on else "停用（条目已还原整曲）"))
+
+    def _check_goto_ack(self):
+        """GOTO 无回执告警：发送 1.2 秒后时码位置无变化 → MMC 链路存疑。
+        时码从未在场（ever_live=False）的会话静默——未开时码输出无从判定。"""
+        ack = self._goto_ack
+        if ack is None:
+            return
+        pre, sent, label = ack
+        if time.time() - sent <= 1.2:
+            return
+        self._goto_ack = None
+        if pre is None or self.mtc is None or self.watch is None \
+                or not self.watch.ever_live():
+            return
+        if self.mtc.position() == pre:
+            self.q.put("工程未响应定位：《%s》时码未变化（检查 DAW 已勾 "
+                       "MMC Slave 且输入口与 MMC 输出口为同一虚拟口）" % label)
 
     def _auto_play(self):
         """切换完成后自动播放：窗口标题出现≠加载完成——过早发播放键会被
@@ -1782,6 +1986,13 @@ class App:
                     self.q.put("时码监听未启动：%s" % e)
         else:
             self.q.put("时码服务未就绪：端口名称已保存，重启程序后生效")
+        # MMC 输出口跟随时码口热切换（同一虚拟口喂 GOTO；停用/换口即重开）
+        if clock_changed:
+            if self.mmc_out is not None:
+                mb.close_out(self.mmc_out)
+                self.mmc_out = None
+            if self.clock_hint:
+                self._open_mmc_out()
         if self.kb_port is not None:
             try:
                 self.kb_port.close()
@@ -1994,6 +2205,7 @@ class App:
             i = self._pending_switch
             self._pending_switch = None
             self._switch(i, "排队")     # busy 期间用户点的歌，完成后接续执行
+        self._check_goto_ack()
         if self.vj_hint:
             # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：查询本身毫秒级，
             # 但落在主线程且与 midiInOpen/Close 共进程级锁——挂死=主线程陪葬
