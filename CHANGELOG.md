@@ -4,6 +4,23 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [未发布]
+
+### 新增
+
+- **前端现代化（pywebview + Web，feat/webview-ui）**：桌面入口切换为
+  pywebview（WebView2）原生窗口指向本机 `/app` 页；侧边栏 8 页（主控台/
+  编排/定位点/踩钉/键盘/VJ/设置/日志）+ 底部状态条 + 演出模式全屏。动作
+  全走既有 HTTP 命令面（与平板同源），新增 /playlist /points /log
+  /plcmd /ptcmd 端点与编排、定位点的完整遥控能力；业务层语义零改动。
+  线程模型：Tk 业务栈迁专属子线程（calls/after 跨线程约定不变），
+  pywebview 占主线程；UI 承载在 127.0.0.1 随机口 loopback 服务实例上，
+  与 WebRemote 主服务（热点/LAN 按用户配置）互不影响——遥控总开关关闭
+  时桌面壳照常可用且不自动开热点。WebView2 缺失时给可读错误与安装指引；
+  设 `CUBE_TK=1` 回退旧 Tk 界面（旧界面保留为兜底与对照环境）。spec 已
+  带 webapp/ 静态资源。现场机验证项：停摆病过夜观察、置顶/焦点手感、
+  WebView2 缺失机兜底、平板/安卓 APP 实机回归。
+
 ## [0.13.1] - 2026-10-20
 
 ### 新增

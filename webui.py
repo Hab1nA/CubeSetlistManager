@@ -65,7 +65,19 @@ def main():
     print("ui:", url, flush=True)
 
     webview.create_window("Cube Setlist Manager", url, width=w, height=h)
-    webview.start(gui="edgechromium")   # 主线程阻塞至窗口关闭
+    try:
+        webview.start(gui="edgechromium")   # 主线程阻塞至窗口关闭
+    except Exception as e:
+        # WebView2 Runtime 缺失/损坏的可读出口（pywebview 起窗失败在此抛）
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0, "新前端需要 WebView2 Runtime，但启动失败：\n%s\n\n"
+               "安装指引：https://developer.microsoft.com/microsoft-edge/"
+               "webview2/（Evergreen Bootstrapper）\n"
+               "或设置环境变量 CUBE_TK=1 回退旧 Tk 界面。" % e,
+            "Cube Setlist Manager", 0x30)
+        app.calls.put(app._on_exit)
+        return
     ui_srv.shutdown()
     app.calls.put(app._on_exit)         # 窗口关=通知 Tk 线程退出全程序
 
