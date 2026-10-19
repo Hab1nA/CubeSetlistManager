@@ -53,16 +53,24 @@ def test_sidecar_dirty_row_skipped(tmp_path):
     assert back["points"][1]["name"] == "7" and back["points"][1]["end"] == 9.0
 
 
-def test_sidecar_traversal_normalizes_inside_target(tmp_path):
-    # ".." 先被规范化：落点必须在解析后的目标目录之内，不得越过它
-    root = tmp_path / "root"
+def test_sidecar_dotdot_input_rejected(tmp_path):
+    # 统一口径：路径含 ".." 分量一律拒绝（不依赖规范化结果）
+    with pytest.raises(ValueError):
+        points.save_points(str(tmp_path / "sub" / ".." / "out"),
+                           points.empty_data())
+    back, err = points.load_points(str(tmp_path / "sub" / ".." / "out"))
+    assert back == points.empty_data() and err
+
+
+def test_sidecar_clean_nested_dir_roundtrip(tmp_path):
+    # 干净嵌套目录：正常读写；目录不代建（在盘才可写，同工程目录语义）
     target = tmp_path / "sub"
-    target.mkdir()                       # 目录不代建：在盘才可写（同工程目录）
-    points.save_points(str(root / ".." / "sub"), points.empty_data())
-    assert (target / points.SIDECAR).exists()
-    assert not (root / points.SIDECAR).exists()
+    with pytest.raises(OSError):
+        points.save_points(str(target), points.empty_data())
+    target.mkdir()
+    points.save_points(str(target), points.initial_data(10.0))
     back, err = points.load_points(str(target))
-    assert err is None and back == points.empty_data()
+    assert err is None and back["enabled"] is True
 
 
 def test_sidecar_broken_dir_degrades_without_raising(tmp_path):

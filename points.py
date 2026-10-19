@@ -89,7 +89,7 @@ def save_points(song_dir, data):
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                    encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    tmp.replace(path)
 
 
 def get_point(data, pid):
