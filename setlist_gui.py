@@ -3450,6 +3450,17 @@ def main():
         ctypes.windll.user32.MessageBoxW(
             0, "Cube Setlist Manager 已在运行", "Cube Setlist Manager", 0x30)
         return
+    # 新前端入口分流：pywebview 可用即走 Web UI（旧 Tk 路径设 CUBE_TK=1
+    # 可强制回退，作为兜底与对照环境保留）
+    if os.environ.get("CUBE_TK") != "1":
+        try:
+            import webui
+        except ImportError:
+            print("pywebview 未安装：回退旧 Tk 界面（pip install pywebview "
+                  "可启用新前端）", flush=True)
+        else:
+            webui.main()
+            return
     try:                        # noconsole exe 无 stderr：崩溃栈落 crash.log
         _cl = _HERE / "crash.log"
         if _cl.exists() and _cl.stat().st_size > 512 * 1024:   # 轮转防无限增长
