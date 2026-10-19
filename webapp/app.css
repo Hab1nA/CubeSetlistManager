@@ -1,0 +1,128 @@
+/* 新前端骨架样式：深色大字沿用现有设计语言（#101418 底/#e8eaed 字/雅黑）。*/
+:root {
+  --bg: #101418;
+  --panel: #171c22;
+  --line: #262d36;
+  --fg: #e8eaed;
+  --dim: #8a929c;
+  --ok: #7fd487;
+  --warn: #e8c268;
+  --err: #ef8080;
+  --accent: #4aa3ff;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+}
+#shell { flex: 1; display: flex; min-height: 0; }
+
+/* 侧边栏 */
+#side {
+  width: 120px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  gap: 6px;
+}
+#brand { font-weight: 700; color: var(--accent); padding: 4px 8px 10px; }
+.nav {
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.nav:hover { color: var(--fg); background: #1f262e; }
+.nav.on { color: var(--fg); background: #232b34; font-weight: 700; }
+.side-gap { flex: 1; }
+#btn-show {
+  background: #22303f;
+  color: var(--accent);
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* 主区 */
+#main { flex: 1; min-width: 0; overflow: auto; }
+.page { display: none; padding: 22px 26px; }
+.page.on { display: block; }
+.page h2 { margin: 0 0 14px; font-size: 20px; }
+.dim { color: var(--dim); }
+
+/* 主控台 */
+#p-console { display: none; }
+#p-console.on { display: flex; flex-direction: column; gap: 12px; }
+.big { font-size: 42px; font-weight: 700; line-height: 1.15; }
+.mid { font-size: 22px; }
+#clock { font-variant-numeric: tabular-nums; }
+#bar {
+  height: 8px;
+  background: var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+#barfill { height: 100%; width: 0; background: var(--ok); }
+#transport { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+#transport button {
+  background: #1f262e;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+#transport button.go { background: #1d3a26; color: var(--ok); }
+#transport button.panic { background: #402024; color: var(--err); }
+#transport button:disabled { opacity: .4; cursor: default; }
+.list { display: flex; flex-direction: column; gap: 4px; }
+.list .row {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.list .row.cur { background: #1d3a26; }
+.list .row .dur { color: var(--dim); }
+
+/* 底部状态条 */
+#statusbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 13px;
+}
+.lamp i { font-style: normal; color: var(--dim); }
+.lamp.ok i { color: var(--ok); }
+.lamp.err i { color: var(--err); }
+.lamp.warn i { color: var(--warn); }
+#tstate { margin-left: auto; }
+
+/* 演出模式（全屏大字） */
+body.show #side, body.show #statusbar { display: none; }
+body.show #p-console.on { justify-content: center; }
+body.show .big { font-size: 72px; }
+body.show .mid { font-size: 38px; }
+body.show #clock { font-size: 46px; color: var(--ok); }
+body.show #bar { height: 14px; }

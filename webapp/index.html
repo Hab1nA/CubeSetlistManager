@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cube Setlist Manager</title>
+<link rel="stylesheet" href="/app/app.css">
+</head>
+<body>
+<div id="shell">
+  <nav id="side">
+    <div id="brand">Cube</div>
+    <button class="nav b-console" data-page="console">主控台</button>
+    <button class="nav b-setlist" data-page="setlist">编排</button>
+    <button class="nav b-points" data-page="points">定位点</button>
+    <button class="nav b-pedal" data-page="pedal">踩钉</button>
+    <button class="nav b-kbd" data-page="kbd">键盘</button>
+    <button class="nav b-vj" data-page="vj">VJ</button>
+    <button class="nav b-settings" data-page="settings">设置</button>
+    <button class="nav b-log" data-page="log">日志</button>
+    <div class="side-gap"></div>
+    <button id="btn-show" title="演出模式">⛶ 演出</button>
+  </nav>
+  <main id="main">
+    <section class="page" id="p-console">
+      <div id="now" class="big">…</div>
+      <div id="next" class="mid">NEXT —</div>
+      <div id="clock" class="mid dim">0:00 | 0:00</div>
+      <div id="bar"><div id="barfill"></div></div>
+      <div id="transport">
+        <button data-cmd="play" class="go">▶ 开始</button>
+        <button data-cmd="pause">⏸ 暂停</button>
+        <button data-cmd="resume">▷ 继续</button>
+        <button data-cmd="rewind">⟲ 回零</button>
+        <button data-cmd="prev">⏮ 上一首</button>
+        <button data-cmd="next">⏭ 下一首</button>
+        <button data-cmd="panic" class="panic">■ 全停</button>
+      </div>
+      <div id="console-list" class="list"></div>
+    </section>
+    <section class="page" id="p-setlist"><h2>编排</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-points"><h2>定位点</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-pedal"><h2>踩钉</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-kbd"><h2>键盘</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-vj"><h2>VJ</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-settings"><h2>设置</h2><p class="dim">P2 迁入</p></section>
+    <section class="page" id="p-log"><h2>日志</h2><p class="dim">P2 迁入</p></section>
+  </main>
+</div>
+<footer id="statusbar">
+  <span class="lamp" id="l-daw">DAW <i>·</i></span>
+  <span class="lamp" id="l-obs">OBS <i>·</i></span>
+  <span class="lamp" id="l-loop">loopMIDI <i>·</i></span>
+  <span class="lamp" id="l-pedal">踩钉 <i>·</i></span>
+  <span class="lamp" id="l-hot">热点 <i>·</i></span>
+  <span class="lamp" id="l-remote">遥控 <i>·</i></span>
+  <span id="tstate" class="dim"></span>
+</footer>
+<script type="module" src="/app/app.js"></script>
+</body>
+</html>
