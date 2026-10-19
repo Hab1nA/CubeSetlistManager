@@ -77,6 +77,17 @@ _winmm.midiInUnprepareHeader.argtypes = (wintypes.HANDLE,
                                          wintypes.UINT)
 _winmm.midiInAddBuffer.argtypes = (wintypes.HANDLE, ctypes.POINTER(_MIDIHDR),
                                    wintypes.UINT)
+_winmm.midiOutPrepareHeader.argtypes = (wintypes.HANDLE,
+                                        ctypes.POINTER(_MIDIHDR),
+                                        wintypes.UINT)
+_winmm.midiOutUnprepareHeader.argtypes = (wintypes.HANDLE,
+                                          ctypes.POINTER(_MIDIHDR),
+                                          wintypes.UINT)
+_winmm.midiOutLongMsg.argtypes = (wintypes.HANDLE, ctypes.POINTER(_MIDIHDR),
+                                  wintypes.UINT)
+
+MHDR_DONE = 0x1           # 头已由驱动回收（SysEx 发毕）
+_SYSEX_DONE_TIMEOUT = 0.5  # 等驱动的上限：轮询到点强制收尾，头不泄漏
 
 
 class _InCaps(ctypes.Structure):
@@ -291,6 +302,53 @@ def close_out(h):
         _winmm.midiOutClose(h)
 
     post_io(job)
+
+
+def send_sysex_h(h, data, timeout=1.0):
+    """在已开的 OUT 口同步发一条 SysEx（全流程一个专线 job：Prepare→
+    LongMsg→轮询 MHDR_DONE→Unprepare；失败路径同样 Unprepare，头不泄漏）。
+    低频定长消息不做缓冲池（对照 MidiIn 收方向的池纪律：发送无回调回收
+    问题，DONE 轮询上限兜底驱动不回）。返回 None 或错误文案。"""
+    result = {}
+
+    def job():
+        n = len(data)
+        buf = (ctypes.c_ubyte * n)(*data)       # 字节块与头同被 job 持有
+        hdr = _MIDIHDR()
+        hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+        hdr.dwBufferLength = n
+        size = wintypes.UINT(ctypes.sizeof(hdr))
+        if _winmm.midiOutPrepareHeader(h, ctypes.byref(hdr), size):
+            result["err"] = "midiOutPrepareHeader 失败"
+            return
+        r = _winmm.midiOutLongMsg(h, ctypes.byref(hdr), size)
+        if r:
+            _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), size)
+            result["err"] = "midiOutLongMsg 失败（code %d）" % r
+            return
+        deadline = time.time() + _SYSEX_DONE_TIMEOUT
+        while not hdr.dwFlags & MHDR_DONE:
+            if time.time() >= deadline:
+                break                            # 兜底收尾，不无限等
+            time.sleep(0.002)
+        _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), size)
+
+    done, _ = run_io(job, timeout)
+    if not done:
+        return "SysEx 发送超时（%.1f 秒）" % timeout
+    return result.get("err")
+
+
+def send_sysex(idx, data, timeout=None):
+    """一次性打开 OUT 口发一条 SysEx 再关闭（探针/命令行用；App 常驻口
+    走 send_sysex_h）。返回 None 或错误文案。"""
+    h, err = open_out(idx, timeout)
+    if h is None:
+        return err
+    try:
+        return send_sysex_h(h, data, timeout)
+    finally:
+        close_out(h)
 
 
 def _in_devices():
