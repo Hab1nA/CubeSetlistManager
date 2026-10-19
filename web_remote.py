@@ -439,7 +439,16 @@ def build_snapshot(app, has_project, proj_name=None):
     在播放列表里——网页 NOW 与确认弹窗「从」名都要用它对齐 PC 横幅）。
     tstate/pos/dur：走带三态与当前工程进度（移动端状态行+进度条）。"""
     songs = []
+    resolve = getattr(app, "_resolve_entry", None)
     for key in app.pl_keys:
+        # 定位点条目与裸条目同一出口（显示名「工程 · 点名」+段长）；无解析
+        # 能力的简化版或库缺项回落旧路径
+        e = resolve(key) if resolve is not None else None
+        if e is not None:
+            dur = (_fmt_dur(e["point"]["end"] - e["point"]["start"])
+                   if e["point"] else _fmt_dur(app.durations.get(key)))
+            songs.append({"name": e["display"], "dur": dur})
+            continue
         s = app.by_key.get(key)
         if s is None:                       # 列表有而素材库缺：还能切回，保留显示
             songs.append({"name": key.split("/")[-1], "dur": ""})
@@ -458,7 +467,12 @@ def build_snapshot(app, has_project, proj_name=None):
         tstate = "paused" if w.ever_live() else "stopped"
     key = (app.pl_keys[cur]
            if isinstance(cur, int) and 0 <= cur < len(app.pl_keys) else None)
-    dur = float(app.durations.get(key) or 0.0) if key else 0.0
+    cur_entry = resolve(key) if (resolve is not None and key) else None
+    if cur_entry is not None and cur_entry["point"] is not None:
+        p = cur_entry["point"]
+        dur = p["end"] - p["start"]
+    else:
+        dur = float(app.durations.get(key) or 0.0) if key else 0.0
     pos = min(dur, max(0.0, w.played())) if (w is not None and dur > 0) else 0.0
     # 平板转发踩钉路健康（远程注入；GIL 原子读桥上的 float 时间戳）。
     # link：心跳/事件 15 秒内有=ok，从无=never，超时=stale。
