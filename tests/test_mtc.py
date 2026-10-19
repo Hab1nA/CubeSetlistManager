@@ -89,6 +89,25 @@ def test_full_frame_default_routes_to_position():
     assert pos == [7.0]                             # 未给 on_full 时并入主路
 
 
+def test_full_frame_epoch_guard(monkeypatch):
+    """全帧 parse 期间发生 reset：旧纪元位置弃（落位前纪元号复核）。"""
+    pos, fulls = [], []
+    d = _dec(on_position=pos.append, on_full=fulls.append)
+    frame = b"\xf0\x7f\x7f\x01\x01\x61\x00\x00\x0a\x00"
+    orig = mtc.parse_full_frame
+
+    def parsing_with_reset(data):
+        d.reset()                       # parse 进行中主线程纪元复位
+        return orig(data)
+
+    monkeypatch.setattr(mtc, "parse_full_frame", parsing_with_reset)
+    d.full_frame(frame)
+    assert fulls == [] and d.position() is None
+    monkeypatch.setattr(mtc, "parse_full_frame", orig)
+    d.full_frame(frame)                 # 新纪元正常落位
+    assert fulls == [3600 + 10 / 30] and d.position() == 3600 + 10 / 30
+
+
 def test_f8_counter_and_epoch_not_clearing():
     d = _dec()
     for _ in range(10):

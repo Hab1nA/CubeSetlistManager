@@ -99,8 +99,9 @@ def cmd_transport(action):
 
 def cmd_clock():
     import midi_bridge as mb
+    import mtc
     hint = sys.argv[2] if len(sys.argv) > 2 else "loopMIDI"
-    print("MIDI 输入端口（S1 勾 Send MIDI Clock 后等脉冲）：")
+    print("MIDI 输入端口（S1 勾 Send MIDI Clock / MTC 后等脉冲）：")
     for idx, name in mb._in_devices():
         print("  %d %s" % (idx, name))
     hit = mb._pick(mb._in_devices(), hint)
@@ -108,15 +109,19 @@ def cmd_clock():
         print("（没有匹配 %r 的端口）" % hint)
         return
     n = [0]
+    dec = mtc.Decoder(on_qf=lambda: None, on_position=lambda sec: None)
 
-    def on_clock():
+    def on_any():
         n[0] += 1
-    port = mb.MidiIn(hit[1], lambda *a: None, on_clock=on_clock)
+    port = mb.MidiIn(hit[1], lambda *a: None,
+                     on_mtc=lambda d1: (on_any(), dec.feed(d1))[1],
+                     on_f8=on_any)
     print("监听 %s 5 秒…" % port.name)
     t0 = time.time()
     while time.time() - t0 < 5:
         time.sleep(0.2)
-    print("5 秒收到时钟脉冲 %d 个（>0 = S1 时钟已到 %s）" % (n[0], port.name))
+    print("5 秒收到走带消息 %d 个（QF %d / F8 %d；>0 = S1 走带输出已到 %s）"
+          % (n[0], dec.qf_seen, dec.f8_seen, port.name))
 
 
 if __name__ == "__main__":

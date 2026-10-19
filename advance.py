@@ -39,7 +39,9 @@ class AdvanceWatch:
     def set_armed(self, on):
         with self._lock:
             self.armed = on
-            self._fired = False
+            # _fired 不清：它是本曲级闩锁——全停 suppress 或已推进过的歌，
+            # 中途取消再重勾自动推进不得瞬间触发（停点 ≥95% 时重勾=立即
+            # 关当前工程切下一首）。纪元复位（reset）才是清闩锁的唯一入口。
             self._dead_reported = False
 
     def set_duration(self, sec, left=None):

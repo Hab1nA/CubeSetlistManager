@@ -419,6 +419,9 @@ def test_midiin_longdata_pool_lifecycle(monkeypatch):
     got = []
     port = mb.MidiIn("FakePort", lambda n, v: None,
                      on_mtc=lambda d1: None, on_sysex=got.append)
+    deadline = time.monotonic() + 2.0            # 池经专线 post_io 异步投递
+    while time.monotonic() < deadline and fake.log.count("prepare") < 4:
+        time.sleep(0.02)
     assert fake.log.count("prepare") == 4 and fake.log.count("add") == 4
 
     buf = (ctypes.c_ubyte * 16)()

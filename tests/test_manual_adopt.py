@@ -16,13 +16,16 @@ import setlist_gui
 class _FakeWatch:
     def __init__(self):
         self.durs, self.lefts, self.resets = [], [], 0
+        self.ops = []                   # reset/dur 顺序（P0-1 纪元闭合锚）
 
     def set_duration(self, d, left=None):
         self.durs.append(d)
         self.lefts.append(left)
+        self.ops.append("dur")
 
     def reset(self):
         self.resets += 1
+        self.ops.append("reset")
 
 
 class _Q(list):
@@ -87,6 +90,9 @@ def test_adopt_match(monkeypatch):
     assert app.durations["b"] == 120.0
     assert app.watch.durs == [120.0]         # 时长就位（不复位：位置自证）
     assert app.watch.lefts == [0.0]
+    assert app.watch.ops == ["reset", "dur"]  # P0-1：装载提交时刻先纪元复位
+    #   ——装载 IO 窗口里旧工程的时码尾流重灌的位置，必须在此时兜住，
+    #   否则旧位置穿越新歌坐标系（旧位置≥新时长 95% 会确定性跳歌）
     assert loaded == ["/p2", "/p2"]          # JUNO + AX 槽都按新工程装载
     assert app.ax_slots == {"s": 1}
     assert any("已跟随" in m for m in app.logs)

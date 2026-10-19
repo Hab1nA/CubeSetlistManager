@@ -346,6 +346,12 @@ def test_advance_suppress_and_duration_keep():
     assert w.played() == 99.0                   # 显示不归零
     w.set_duration(120.0)                       # 播放中改时长（手动/重识别）
     assert w.played() == 99.0                   # 进度不清零
+    w.set_armed(True)                           # 全停后重勾自动推进：
+    now[0] = 1202.0
+    w.on_position(99.0)
+    now[0] = 1500.0                             # 断流且位置 ≥95%
+    w.poll()
+    assert fired == []                          # 本曲闩锁不因重勾解除
 
 
 def test_project_title():

@@ -52,7 +52,9 @@ _Proc = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, ctypes.c_uint,
 class _MIDIHDR(ctypes.Structure):
     """midiInAddBuffer 的缓冲头。lpData/dwBytesRecorded 是回调侧只读、
     专线侧消费的字段；缓冲字节块必须与头同被 MidiIn 实例持有（ctypes
-    不保活所指内存），直到 Unprepare 后随对象释放。"""
+    不保活所指内存），直到 Unprepare 后随对象释放。
+    dwReserved 按 SDK 是 DWORD_PTR[8]（mmeapi.h）——少声明会让 MMSYSTEM
+    对系统保留区的写入越过 ctypes 分配的堆块。"""
     _fields_ = [("lpData", ctypes.c_void_p),
                 ("dwBufferLength", wintypes.DWORD),
                 ("dwBytesRecorded", wintypes.DWORD),
@@ -61,7 +63,7 @@ class _MIDIHDR(ctypes.Structure):
                 ("lpNext", ctypes.c_void_p),
                 ("reserved", ctypes.c_size_t),
                 ("dwOffset", wintypes.DWORD),
-                ("dwReserved", wintypes.DWORD * 4)]
+                ("dwReserved", ctypes.c_size_t * 8)]
 
 
 _winmm.midiInOpen.argtypes = (ctypes.POINTER(wintypes.HANDLE), ctypes.c_uint,
@@ -371,12 +373,15 @@ class MidiIn:
         self._done_lock = threading.Lock()
         self._scheduled = False
         self._hdrs = []                    # (hdr, buf) 同持：ctypes 不保活 buf
+        self._refeed_fails = 0             # 重投失败计数（池慢性耗尽的可观测线索）
         if on_sysex is not None:
-            self._setup_pool(h)
+            post_io(lambda hh=h: self._setup_pool(hh))   # 专线投递：不在调用
+            #   线程直呼 winmm（挂死/毒化时陪葬）；开窗几毫秒内的 SysEx 被
+            #   驱动丢弃可接受（全帧只在停止/定位时才有，端口刚开必无）
 
     def _setup_pool(self, h):
-        """prepare+投递缓冲池。Start 之后补投有毫秒级窗口（头几个 SysEx
-        可能被丢）——可接受：全帧只在停止/定位时才有，端口刚开必无。"""
+        """prepare+投递缓冲池。个别失败只缩池不致命：4 缓冲对稀疏全帧
+        足够；全部失败=longdata 静默停摆（QF 主路径不受影响）。"""
         for _ in range(self.POOL_N):
             buf = (ctypes.c_ubyte * self.POOL_SIZE)()
             hdr = _MIDIHDR()
@@ -443,8 +448,13 @@ class MidiIn:
                         hh, ctypes.byref(hdr), ctypes.sizeof(hdr)) == 0:
                     _winmm.midiInAddBuffer(
                         hh, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                else:
+                    # 重投失败=该缓冲永久出局，池只缩不涨（STILLPLAYING/
+                    # 错误风暴时全帧通道慢性耗尽）。不抛（专线绝不忘），
+                    # 计数留可观测线索。
+                    self._refeed_fails += 1
             except Exception:
-                pass
+                self._refeed_fails += 1
 
     def close(self):
         """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
@@ -455,8 +465,10 @@ class MidiIn:
         h = self._h
         self._h = None
         if h:
+            # teardown 按「要求过 sysex」判（_hdrs 由专线异步填充，此刻可能
+            # 还空）；专线串行保证 close job 前池已投完，逐头 Unprepare
             close_in(h, teardown=(lambda hh=h: self._unprepare_pool(hh))
-                     if self._hdrs else None)
+                     if self._on_sysex is not None else None)
 
     def _unprepare_pool(self, h):
         for hdr, _buf in self._hdrs:

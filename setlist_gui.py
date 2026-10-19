@@ -1212,6 +1212,8 @@ class App:
                 self.sync.poll()
                 self.watch.poll()
                 m = self.mtc
+                if m is not None and m.qf_seen:
+                    f8_mark = None      # 时码已到：F8 计数是残留，撤销计窗
                 if not f8_hinted and m is not None and not m.qf_seen \
                         and m.f8_seen >= 8:
                     if f8_mark is None:
@@ -1438,7 +1440,10 @@ class App:
         self._switch_key = key      # 快照：完成时按 key 归属，防编排变动张冠李戴
         self._play_after_switch = play_after
         if self.watch is not None:  # watch 没起来（VJ 链构造失败）不得炸切歌，
-            self.watch.reset()      #   与 _panic 同款守卫（审计实测可达）
+            self.watch.reset()      #   与 _panic 同款守卫（审计实测可达）；但
+                                    #   旧工程关窗期间尾流 QF 会重灌位置——
+                                    #   真正的纪元闭合在 _switch_done（彼时旧
+                                    #   工程已确保关闭），此处只是早零显示
         self.cur = i
         with self._load_lock:       # 清空+代际递增原子化：堵后台装载的
             self.slots = {}         # 「校验后写入」TOCTOU 窗（复审 M3）
@@ -1475,8 +1480,10 @@ class App:
         elif not d and not self.durations.get(key):
             self.q.put("《%s》时长未知（工程未设循环定位条）：可用「写入时长」手填"
                        % song["name"])
+        d = self.durations.get(key) or d   # 手动时长优先：watch 与横幅/推进
         if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
-            self.watch.set_duration(d, left)
+            self.watch.reset()      #   同一坐标系（文件的 left 配手动秒数会错位）
+            self.watch.set_duration(d, left)   # 纪元闭合同 _switch_done
         self.calls.put(self._refresh)
         slots = kbd_auto.load_slots(song["path"])
         ax_slots = kbd_auto.load_slots(song["path"], "ax")
@@ -1673,7 +1680,8 @@ class App:
         def run():
             if not skip_keys:
                 self.ctrl.panic()
-                time.sleep(1.0)         # 全停核验：键序落地后查时码是否真停
+                time.sleep(2.0)         # 全停核验：停止落地+时码尾流排空
+                # （保存框/后台忙时 Cubase 停得慢，1 秒窗会误报未生效）
                 if self.watch is not None \
                         and self.watch.is_transport_live():
                     self.q.put("全停核验：走带仍在播放（停止键未生效），"
@@ -2136,6 +2144,9 @@ class App:
                     return              # 已被更新的一次装载/切歌取代
                 self.durations[key] = d
                 if self.watch is not None:
+                    self.watch.reset()  # 纪元闭合同 _switch_done：装载半程的
+                    #   IO 窗口里旧工程可能还在播（尾流 QF 重灌位置），提交
+                    #   时刻复位兜住，旧位置不得穿越新歌坐标系
                     self.watch.set_duration(d, left)   # 不复位：位置自证
                 self.slots = slots
                 self.ax_slots = ax

@@ -17,7 +17,6 @@
 三态与进度随之回「未播放/0」；qf/f8 计数不清（端口内容统计与 F8-only 提示
 用，跟口不跟歌）。"""
 import threading
-import time
 
 # 速率码 → 帧率（小时字段 bit5-6：0=24fps 1=25 2=30 drop-frame 3=30）
 _FPS = (24.0, 25.0, 30.0, 30.0)
@@ -63,17 +62,19 @@ class Decoder:
     on_position(sec)  QF 装配出完整位置（播放中，~15Hz）
     on_full(sec)      全帧位置（停止/定位态；缺省=并入 on_position）"""
 
-    def __init__(self, on_qf, on_position, on_full=None, t=time.time):
+    def __init__(self, on_qf, on_position, on_full=None):
         self._on_qf = on_qf or (lambda: None)
         self._on_position = on_position or (lambda sec: None)
         self._on_full = on_full or on_position or (lambda sec: None)
-        self._t = t
         self._lock = threading.Lock()
         self.qf_seen = 0            # 累计计数（跟口不跟歌，reset 不清）
         self.f8_seen = 0
         self._pos = None
         self._parts = None          # 装配中的 8 半字节；None=等类型 0 起组
         self._expect = 0            # 下一个允许的类型
+        self._epoch = 0             # 纪元号：reset 递增；落位/回调前校验，
+                                    #   防「复位插在 assemble 与落位之间」
+                                    #   把旧纪元位置复活（双临界区教训）
 
     # ---- 对消费方的只读面 ----
 
@@ -85,6 +86,7 @@ class Decoder:
     def reset(self):
         """纪元复位：位置未知、弃装配组（切歌/换口/回零时调用）。"""
         with self._lock:
+            self._epoch += 1
             self._pos = None
             self._parts = None
             self._expect = 0
@@ -110,23 +112,30 @@ class Decoder:
                         done = self._assemble(self._parts)
                         self._parts = None
                         self._expect = 0
+                        if done is not None:
+                            # 与 assemble 同临界区落位：reset 不可能插在中间
+                            self._pos = done
                 else:
                     self._parts = None
                     self._expect = 0
             self._emit(self._on_qf)
             if done is not None:
-                with self._lock:
-                    self._pos = done
                 self._emit(self._on_position, done)
         except Exception:
             pass
 
     def full_frame(self, data):
-        """longdata 缓冲原始字节：扫全帧，命中即更新位置（不动活跃）。"""
+        """longdata 缓冲原始字节：扫全帧，命中即更新位置（不动活跃）。
+        parse 在锁外（纯函数）：先取纪元号，落位前复核——parse 期间发生
+        reset 则本次位置属于旧纪元，弃。"""
         try:
+            with self._lock:
+                epoch = self._epoch
             pos = parse_full_frame(bytes(data))
             if pos is not None:
                 with self._lock:
+                    if self._epoch != epoch:
+                        return
                     self._pos = pos
                 self._emit(self._on_full, pos)
         except Exception:

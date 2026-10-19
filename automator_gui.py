@@ -637,6 +637,8 @@ class App:
                 self.sync.poll()
                 self.watch.poll()
                 m = self.mtc
+                if m is not None and m.qf_seen:
+                    f8_mark = None      # 时码已到：F8 计数是残留，撤销计窗
                 if not f8_hinted and m is not None and not m.qf_seen \
                         and m.f8_seen >= 8:
                     if f8_mark is None:
