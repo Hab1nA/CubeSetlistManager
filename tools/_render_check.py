@@ -345,7 +345,7 @@ tl = app.rows[("vj", "走带跟随")]
 app.sync = _FakeSync("stopped", None, on=False)
 app._tick_body()
 check("走带跟随未启用=黄",
-      tl.cget("text") == "● 未启用，未收到时钟"
+      tl.cget("text") == "● 未启用，未收到时码"
       and tl.cget("style") == "Warn.TLabel")
 app.sync = _FakeSync("playing", "1 开场.mp4")
 app._tick_body()
@@ -389,7 +389,7 @@ import types
 sg.daw_ctrl.current_project = lambda: (None, "Cubase Pro 工程 - SongA")
 app.ctrl = types.SimpleNamespace(busy=False)
 app.watch = types.SimpleNamespace(
-    active=lambda: 60.0,
+    played=lambda: 60.0,
     is_transport_live=lambda: False,
     ever_live=lambda: False)
 app._tick_body()

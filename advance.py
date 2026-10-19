@@ -34,7 +34,7 @@ class AdvanceWatch:
         self._pos = None            # 最近时码位置（工程绝对秒）；None=未知
         self._last = 0.0            # 最近 QF 活跃时戳
         self._live = False
-        self._reached = False       # 播放真实到达过曲尾（≥95%）——推进资格闩
+        self._reached = False       # 播放真实到达过曲尾（≥FINISH_RATIO）——推进资格闩
         self._fired = False
         self._dead_reported = False
         self._stop_tries = 0        # 已发停止键次数（含重试）
@@ -45,7 +45,7 @@ class AdvanceWatch:
         with self._lock:
             self.armed = on
             # _fired 不清：它是本曲级闩锁——全停 suppress 或已推进过的歌，
-            # 中途取消再重勾自动推进不得瞬间触发（停点 ≥95% 时重勾=立即
+            # 中途取消再重勾自动推进不得瞬间触发（停点 ≥阈值 时重勾=立即
             # 关当前工程切下一首）。纪元复位（reset）才是清闩锁的唯一入口。
             self._dead_reported = False
 
@@ -80,7 +80,7 @@ class AdvanceWatch:
 
     def on_position(self, sec):
         """QF 装配出完整位置（winmm 回调线程，~15Hz）——播放证据。
-        位置由播放真实带到曲尾（≥95%）时点亮推进资格闩——暂停态拖光标
+        位置由播放真实带到曲尾（≥FINISH_RATIO）时点亮推进资格闩——暂停态拖光标
         到曲尾（全帧位置）不算：拖过去≠唱完了，不得触发推进。"""
         now = self._t()
         with self._lock:
