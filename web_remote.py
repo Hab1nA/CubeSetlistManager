@@ -9,6 +9,7 @@
 所有控制动作经 app.calls 队列回 Tk 主线程执行，HTTP 线程不碰 Tk。"""
 import json
 import os
+import pathlib
 import queue
 import sys
 import threading
@@ -27,6 +28,9 @@ CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
 CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
 DEV_NOTES = tuple(range(60, 70))   # C4–A4 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
+
+_HERE = pathlib.Path(getattr(sys, "frozen", False) and sys.executable
+                     or __file__).resolve().parent
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 1.5           # 推送短超时：连接池省掉了握手，但平板 Wi-Fi
                              # 省电唤醒仍可达秒级；失败只记日志不拖累别的设备
@@ -1364,6 +1368,26 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(code, "application/json; charset=utf-8",
                    json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
+    # -- 新前端静态托管（/app）--
+
+    def _h_app_asset(self, path):
+        """webapp/ 静态文件（新前端壳）。白名单后缀、目录恒定——无穿越面；
+        文件缺失回 404 JSON（与既有 API 风格一致）。"""
+        rel = path[len("/app"):].lstrip("/") or "index.html"
+        if rel not in ("index.html", "app.css", "app.js"):
+            self._json(404, {"error": "未知资源"})
+            return
+        fp = _HERE / "webapp" / rel
+        try:
+            data = fp.read_bytes()
+        except OSError:
+            self._json(404, {"error": "新前端文件缺失：%s" % rel})
+            return
+        ctype = ("text/html; charset=utf-8" if rel.endswith(".html")
+                 else "text/css; charset=utf-8" if rel.endswith(".css")
+                 else "text/javascript; charset=utf-8")
+        self._send(200, ctype, data)
+
     # -- GET --
 
     def do_GET(self):
@@ -1371,6 +1395,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, "text/html; charset=utf-8",
                        self.server.page.encode("utf-8"))
+        elif path == "/app" or path.startswith("/app/"):
+            self._h_app_asset(path)
         elif path == "/state":
             snap = getattr(self.server.app, "_web_snap", None) or {}
             self._json(200, snap)
