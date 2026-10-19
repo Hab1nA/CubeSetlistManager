@@ -746,7 +746,7 @@ class App:
         g3.pack(side="left")
         ttk.Button(g3, text="键盘自动化", width=9,
                    command=self._open_kbd).pack(side="left", padx=3, pady=3)
-        ttk.Button(g3, text="定位点", width=9,
+        ttk.Button(g3, text="定位点", width=6,
                    command=self._open_points).pack(side="left", padx=3,
                                                    pady=3)
         ttk.Button(g3, text="踩钉控制", width=9,
@@ -2512,7 +2512,7 @@ class PointsWindow(tk.Toplevel):
         self.app = app
         self.lib_key = lib_key
         self.title("定位点")
-        self.geometry(dpi.scale(self, 620, 430))
+        self.geometry(dpi.scale(self, 620, 470))
         app.points_win = self           # 守卫槽先占：alpha 段 update 泵输入
         pad = dpi.scale(self, 12)
         self.status = ttk.Label(self, style="Dim.TLabel")
@@ -2545,13 +2545,18 @@ class PointsWindow(tk.Toplevel):
 
         mid = ttk.Frame(body)
         mid.pack(fill="both", expand=True, pady=(6, 0))
+        style = ttk.Style(self)
+        style.configure("Pts.Treeview",
+                        rowheight=dpi.scale(self, 30))
         cols = ("name", "start", "end")
         self.tree = ttk.Treeview(mid, columns=cols, show="headings",
-                                 height=8, selectmode="browse")
-        for c, w, t in (("name", 170, "名称"), ("start", 90, "开始"),
-                        ("end", 90, "结束")):
+                                 height=7, selectmode="browse",
+                                 style="Pts.Treeview")
+        for c, w, t, a in (("name", 170, "名称", "w"),
+                           ("start", 90, "开始", "center"),
+                           ("end", 90, "结束", "center")):
             self.tree.heading(c, text=t)
-            self.tree.column(c, width=dpi.scale(self, w), anchor="w")
+            self.tree.column(c, width=dpi.scale(self, w), anchor=a)
         sb = ttk.Scrollbar(mid, command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -2571,25 +2576,29 @@ class PointsWindow(tk.Toplevel):
 
         ed = ttk.LabelFrame(body, text="编辑选中点")
         ed.pack(fill="x", pady=(8, 0))
-        row = ttk.Frame(ed)
-        row.pack(fill="x", pady=4, padx=4)
-        ttk.Label(row, text="名称", style="Dim.TLabel").pack(side="left")
+        row1 = ttk.Frame(ed)
+        row1.pack(fill="x", pady=(4, 2), padx=4)
+        ttk.Label(row1, text="名称", style="Dim.TLabel").pack(side="left")
         self.name_var = tk.StringVar()
-        ttk.Entry(row, textvariable=self.name_var, width=18).pack(
-            side="left", padx=(4, 14))
+        ttk.Entry(row1, textvariable=self.name_var).pack(
+            side="left", fill="x", expand=True, padx=(4, 0))
+        row2 = ttk.Frame(ed)
+        row2.pack(fill="x", pady=(2, 4), padx=4)
         self.spin_vars = {}
         for tag, label in (("sh", "开始"), ("eh", "结束")):
-            ttk.Label(row, text=label, style="Dim.TLabel").pack(side="left")
+            ttk.Label(row2, text=label, style="Dim.TLabel").pack(side="left")
             trio = []
-            for unit, hi in (("时", 23), ("分", 59), ("秒", 59)):
+            for hi in (23, 59, 59):
                 v = tk.IntVar()
-                sp = ttk.Spinbox(row, from_=0, to=hi, width=3,
+                sp = ttk.Spinbox(row2, from_=0, to=hi, width=2,
                                  textvariable=v)
                 sp.pack(side="left", padx=2)
                 trio.append(v)
             self.spin_vars[tag] = trio
-        ttk.Button(ed, text="保存修改", command=self._save_edit).pack(
-            side="right", padx=4, pady=4)
+            if tag == "sh":
+                ttk.Frame(row2, width=dpi.scale(self, 16)).pack(side="left")
+        ttk.Button(row2, text="保存修改", command=self._save_edit).pack(
+            side="right")
         dpi.bind_hint(ed, on_hint, "时分秒为工程绝对时码（与 App 显示一致）")
 
         self._refill()
