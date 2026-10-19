@@ -285,7 +285,7 @@ def test_advance_watch():
         w.on_position(100.0 + i)
     now[0] = 1112.0                             # 停止生效：断流
     w.poll()
-    assert len(fired) == 1                      # 位置 100 ≥ 95 → 推进
+    assert len(fired) == 1                      # 位置 100 ≥ 99 → 推进
     w.poll()
     assert len(fired) == 1                      # 只触发一次
 
@@ -340,7 +340,7 @@ def test_advance_suppress_and_duration_keep():
     now[0] = 1000.5
     w.on_position(99.0)
     w.suppress_advance()                        # 全停：本曲不再推进
-    now[0] = 1200.0                             # 断流（位置在 95% 线上）
+    now[0] = 1200.0                             # 断流（位置在阈值线上）
     w.poll()
     assert fired == [] and stops == []
     assert w.played() == 99.0                   # 显示不归零
@@ -349,7 +349,7 @@ def test_advance_suppress_and_duration_keep():
     w.set_armed(True)                           # 全停后重勾自动推进：
     now[0] = 1202.0
     w.on_position(99.0)
-    now[0] = 1500.0                             # 断流且位置 ≥95%
+    now[0] = 1500.0                             # 断流且位置 ≥99%（阈值线上）
     w.poll()
     assert fired == []                          # 本曲闩锁不因重勾解除
 
@@ -375,7 +375,7 @@ def test_advance_drag_to_end_while_paused_no_fire():
     w.set_armed(True)
     w.set_duration(100.0)
     now[0] = 1000.5
-    w.on_position(60.0)                 # 播到 60 秒暂停（<95%，闩不亮）
+    w.on_position(60.0)                 # 播到 60 秒暂停（<99%，闩不亮）
     now[0] = 1001.0
     w.on_full_position(99.5)            # 暂停态拖光标到曲尾
     now[0] = 1200.0                     # 断流一直成立

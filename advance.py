@@ -7,13 +7,17 @@
 位置由 mtc.Decoder 解码（四分之一帧装配 / 全帧），回调只记「最后位置+时戳」
 ——QF 四分之一帧是唯一播放证据；全帧（停止/定位态补发）只更新位置不动
 活跃时戳（on_full_position），防止停止期间补发的全帧把断流伪装成在播。
-暂停/手动停止不推进（位置停在半途，断流时不足 95% 不切换）；未设工程时长
-（0）不推进；工程切换须 set_duration()/reset() 重新对位（reset=纪元复位，
-位置回未知）；全停用 suppress_advance() 抑制本曲推进（不碰位置/三态）。
+暂停/手动停止不推进（位置停在半途，断流时不足 FINISH_RATIO 不切换）；未设
+工程时长（0）不推进；工程切换须 set_duration()/reset() 重新对位（reset=纪元
+复位，位置回未知）；全停用 suppress_advance() 抑制本曲推进（不碰位置/三态）。
 on_position 在 winmm 回调线程，poll 在看门狗线程，与 TransportSync 同样
 只做记账级操作。"""
 import threading
 import time
+
+# 断流推进阈值：停在曲尾这个比例之内视为「唱完了」（判定与资格闩共用，
+# 两处不许漂移）。99%=3 分钟歌最后 1.8 秒内手动停才算唱完。
+FINISH_RATIO = 0.99
 
 
 class AdvanceWatch:
@@ -84,7 +88,8 @@ class AdvanceWatch:
             self._last = now
             self._live = True
             if self.duration > 0 \
-                    and max(0.0, sec - self.left) >= self.duration * 0.95:
+                    and max(0.0, sec - self.left) \
+                    >= self.duration * FINISH_RATIO:
                 self._reached = True
 
     def on_full_position(self, sec):
@@ -133,7 +138,7 @@ class AdvanceWatch:
                                       else "（重试 %d/2）" % (self._stop_tries - 1)))
                     self.on_stop_transport()
                 return
-            if played >= self.duration * 0.95 and self._reached:
+            if played >= self.duration * FINISH_RATIO and self._reached:
                 # 位置在曲尾且「唱到过」曲尾——暂停态拖光标到曲尾不满足
                 # 后者（_reached 只由 QF 播放点亮），不切
                 self._fired = True
