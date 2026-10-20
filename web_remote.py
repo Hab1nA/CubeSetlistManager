@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cpr_meta
 import hotspot
 import kbd_auto
+import obs_ctrl
 import ui_text
 
 CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
@@ -406,6 +407,28 @@ def _fmt_dur(d):
     return cpr_meta.fmt_mmss(d) if d else ""
 
 
+# loopMIDI 在场探测（状态灯真实化）：进程快照有成本，专职线程 5 秒一扫，
+# build_snapshot 只读布尔（Tk 主线程零开销；GIL 原子读 bool）。
+_loop_state = {"on": False, "started": False}
+
+
+def _loopmidi_online():
+    if not _loop_state["started"]:
+        _loop_state["started"] = True
+
+        def probe():
+            while True:
+                try:
+                    _loop_state["on"] = bool(
+                        obs_ctrl.find_processes_by_prefix("loopmidi"))
+                except Exception:
+                    pass
+                time.sleep(5.0)
+        threading.Thread(target=probe, daemon=True,
+                         name="loopmidi-probe").start()
+    return _loop_state["on"]
+
+
 def _apk_file():
     """翻谱 APP 的 APK（程序目录下 CubeRemote.apk，构建后由 build.bat 拷入）。
     返回字节或 None。"""
@@ -464,6 +487,9 @@ def build_snapshot(app, has_project, proj_name=None):
     cur = app.cur
     w = getattr(app, "watch", None)
     ctrl = getattr(app, "ctrl", None)
+    obs_ctl = getattr(app, "ctl", None)
+    web = getattr(app, "web", None)
+    web_srv = getattr(web, "server", None)
     lite = bool(getattr(app, "lite", False))
     # 简化版（Cube Automator，app.lite=True）无切歌控制器：三态直接看时码
     if w is None or (ctrl is None and not lite):
@@ -512,8 +538,13 @@ def build_snapshot(app, has_project, proj_name=None):
         "cur": cur,
         "songs": songs,
         "pedalRemote": remote,
+        # 联动健康（状态灯真实化）：OBS=obs-websocket 连接；loop=loopMIDI 进程
+        # 在场；webIp=移动端遥控服务实际绑定地址（未启用为空串）
+        "obs": bool(obs_ctl is not None and obs_ctl.is_connected()),
+        "loop": _loopmidi_online(),
+        "webIp": (web_srv.server_address[0] if web_srv is not None else ""),
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
-        "appPort": getattr(getattr(app, "web", None), "app_port", None),
+        "appPort": getattr(web, "app_port", None) if web is not None else None,
     }
 
 
