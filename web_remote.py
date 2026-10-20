@@ -1494,6 +1494,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_plcmd, "/plcmd"),
                           (self._h_ptcmd, "/ptcmd"),
                           (self._h_settings_set, "/settings"),
+                          (self._h_pickdir, "/pickdir"),
                           (self._h_pedal_set, "/pedalset"),
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
@@ -1558,10 +1559,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(200, {"lines": [{"t": t, "msg": m} for t, m in ring]})
 
-    def _run_on_app(self, fn, result_fn=None):
+    def _run_on_app(self, fn, result_fn=None, timeout=8.0):
         """经 calls 投递主线程执行并同步取回结果：result_fn=None 时 fn 的
         返回值即语义（None=成功 → {ok:true}；str=错误 → 400）；给了
-        result_fn 则其返回值作为 JSON 200 载荷（GET 型数据端点）。"""
+        result_fn 则其返回值作为 JSON 200 载荷（GET 型数据端点）。
+        timeout 可调（目录选择等交互型端点给长窗）。"""
         app = self.server.app
         done = threading.Event()
         box = {}
@@ -1574,7 +1576,7 @@ class _Handler(BaseHTTPRequestHandler):
             done.set()
 
         app.calls.put(job)
-        if not done.wait(8.0):
+        if not done.wait(timeout):
             self._json(504, {"error": "主线程响应超时"})
             return
         if "err" in box:
@@ -1611,6 +1613,19 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无设置"})
             return
         self._run_on_app(lambda: self.server.app._settings_apply_web(body))
+
+    def _h_pickdir(self, _body, _ip):
+        """目录选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，
+        长超时窗；简化版与旧宿主无此能力时明确拒绝）。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无目录选择"})
+            return
+        fn = getattr(app, "_pickdir_web", None)
+        if fn is None:
+            self._json(403, {"error": "当前宿主不支持目录选择"})
+            return
+        self._run_on_app(lambda: None, result_fn=fn, timeout=180.0)
 
     def _h_pedal_set(self, body, _ip):
         if getattr(self.server.app, "lite", False):

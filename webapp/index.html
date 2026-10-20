@@ -80,8 +80,12 @@
         <h2>编排</h2>
         <input id="sl-search" type="search" placeholder="搜索曲目 / 团队">
       </div>
+      <div id="sl-tabs">
+        <button class="on" data-col="lib">素材库</button>
+        <button data-col="pl">播放列表</button>
+      </div>
       <div class="cols">
-        <div class="col">
+        <div class="col show">
           <div class="colhead">素材库 <span class="badge" id="lib-n"></span></div>
           <div id="lib" class="list"></div>
         </div>
@@ -208,7 +212,7 @@
             <span class="step-val" id="kb-jshift">0</span>
             <button id="kb-jup" class="btn icon sm" title="移调 +1">+</button>
             <button id="kb-jreset" class="btn ghost xs">重置</button></span></h3>
-        <div id="kb-slots" class="list"></div>
+        <div id="kb-slots" class="slot-grid"></div>
       </div>
       <div class="card slotcard">
         <h3>AX-09 音色槽
@@ -216,8 +220,9 @@
             <span class="step-val" id="kb-ashift">0</span>
             <button id="kb-aup" class="btn icon sm" title="移调 +1">+</button>
             <button id="kb-areset" class="btn ghost xs">重置</button></span></h3>
-        <div id="kb-axslots" class="list"></div>
+        <div id="kb-axslots" class="slot-grid"></div>
       </div>
+      <p class="dim sm-txt">点击卡片编辑音色（PC/MSB/LSB）；「试」=向琴发送该音色做连通测试。</p>
     </section>
 
     <section class="page" id="p-vj">
@@ -235,7 +240,10 @@
           <div class="field"><label for="vj-media">媒体输入名</label>
             <input id="vj-media"></div>
           <div class="field wide"><label for="vj-root">视频目录</label>
-            <input id="vj-root" class="wide"></div>
+            <div class="input-row">
+              <input id="vj-root" class="wide">
+              <button class="btn ghost sm browse" data-pick="vj-root">浏览…</button>
+            </div></div>
           <div class="field"><label>播放声音</label>
             <label class="switch"><input type="checkbox" id="vj-mute"><i></i>
               <span>静音播放</span></label></div>
@@ -275,7 +283,10 @@
       <div class="card"><h3>目录与工程</h3>
         <div class="grid2">
           <div class="field wide"><label for="st-root">工程库根</label>
-            <input id="st-root" class="wide"></div>
+            <div class="input-row">
+              <input id="st-root" class="wide">
+              <button class="btn ghost sm browse" data-pick="st-root">浏览…</button>
+            </div></div>
           <div class="field wide"><label for="st-exe">Cubase 程序</label>
             <input id="st-exe" class="wide"></div>
           <label class="switch"><input type="checkbox" id="st-autosave"><i></i>
@@ -303,6 +314,7 @@
         <div id="app-addr-wrap" class="addr" hidden>
           <div class="lbl">APP 连接地址（点击复制）</div>
           <button id="app-addr" class="addr-txt" title="点击复制"></button>
+          <div id="qr-box" title="扫码连接 APP"></div>
         </div>
         <button id="st-save" class="btn primary" disabled>保存并应用</button>
       </div>

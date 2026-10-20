@@ -1819,6 +1819,14 @@ class App:
             return self._points_sync_list(lib_key)
         return "未知操作"
 
+    def _pickdir_web(self):
+        """/pickdir：原生目录选择对话框（Tk 主线程执行；空串=取消）。"""
+        try:
+            path = filedialog.askdirectory(parent=self.root, title="选择目录")
+        except Exception as e:
+            return {"error": _err(e)}
+        return {"path": path or ""}
+
     def _monitor_web(self):
         """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
         return {"/".join(k): list(v.cget("text") and

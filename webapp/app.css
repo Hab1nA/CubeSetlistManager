@@ -409,8 +409,30 @@ details.card .grid2 { margin-top: var(--s3); }
 .stepper { display: inline-flex; align-items: center; gap: var(--s2); }
 .step-val { font-size: var(--f-lg); font-weight: 700; min-width: 34px;
   text-align: center; font-variant-numeric: tabular-nums; }
-#kb-slots .row, #kb-axslots .row { cursor: default; }
-#kb-slots .row:hover, #kb-axslots .row:hover { background: var(--sur-2); }
+.input-row { display: flex; gap: var(--s2); align-items: center; }
+.input-row input { flex: 1; }
+
+/* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
+.slot-grid { display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.slot {
+  background: var(--sur-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px var(--s3); cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px; position: relative;
+  transition: border-color var(--t-fast) var(--ease),
+              background-color var(--t-fast) var(--ease);
+}
+.slot:hover { background: var(--sur-3); border-color: #33404d; }
+.slot .s-note { font-size: var(--f-xs); color: var(--dim);
+  font-weight: 700; }
+.slot .s-pc { font-size: var(--f-xl); font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.slot .s-sub { font-size: var(--f-xs); color: var(--dim); min-height: 14px; }
+.slot.unconfigured { border-style: dashed; }
+.slot.unconfigured .s-pc { color: var(--dim); font-size: var(--f-md);
+  font-weight: 400; }
+.slot .s-test { position: absolute; top: 8px; right: 8px; opacity: .35; }
+.slot:hover .s-test { opacity: 1; }
 
 /* ---- VJ / 设置页 ---- */
 .card + .card { margin-top: var(--s3); }
@@ -420,6 +442,32 @@ details.card .grid2 { margin-top: var(--s3); }
   background: none; border: 0; color: var(--accent);
   font-size: var(--f-xl); font-weight: 700; cursor: copy; padding: 4px 0; }
 .addr-txt:hover { color: #6ab5ff; }
+#qr-box { margin-top: var(--s2); background: #fff; border-radius: 8px;
+  padding: 10px; width: 176px; }
+#qr-box svg { display: block; width: 156px; height: 156px; }
+
+/* ---- 编排窄窗 tab（<900px 双列折叠为单列）---- */
+#sl-tabs { display: none; gap: var(--s2); margin-bottom: var(--s2); }
+#sl-tabs button { background: var(--sur-1); color: var(--dim);
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 18px;
+  cursor: pointer; }
+#sl-tabs button.on { color: var(--ok); border-color: #2c5c3a;
+  background: #16281e; font-weight: 700; }
+
+/* ---- 窄窗响应式（<900px）：为平板收敛铺路 ---- */
+@media (max-width: 900px) {
+  #sl-tabs { display: flex; }
+  .cols { flex-direction: column; height: auto; }
+  .cols .col { display: none; }
+  .cols .col.show { display: flex; }
+  .col .list { max-height: 44vh; }
+  .grid2 { grid-template-columns: 1fr; }
+  .cards2 { grid-template-columns: 1fr; }
+  .md { flex-direction: column; }
+  .md-master { width: auto; }
+  #pt-list { max-height: 34vh; }
+  .log { height: calc(100vh - 280px); }
+}
 
 /* ---- 日志页 ---- */
 .log-tools { display: flex; align-items: center; gap: var(--s2);
