@@ -1,6 +1,76 @@
-/* 新前端骨架：导航 + /state 轮询渲染 + 走带命令。P2 逐页填肉。 */
+/* 新前端：导航 + /state 轮询渲染 + 走带命令。设计系统与交互态见 app.css。 */
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+
+// JS 错误取证：截图脚本从 window.__errs 读走
+window.__errs = [];
+addEventListener("error", e => window.__errs.push(
+    e.message + "@" + (e.filename || "").split("/").pop() + ":" + e.lineno));
+addEventListener("unhandledrejection",
+                e => window.__errs.push("rejection: " + e.reason));
+
+// ---- toast（替代全部 alert）----
+function toast(msg, kind) {
+  const box = $("#toasts");
+  while (box.children.length >= 4) box.firstChild.remove();
+  const t = document.createElement("div");
+  t.className = "toast" + (kind === "err" ? " err" : "");
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => {
+    t.classList.add("out");
+    setTimeout(() => t.remove(), 200);
+  }, 2600);
+}
+
+// ---- 两段式确认（替代 confirm）：首点变红字「确认…？」3s 回弹，再点执行 ----
+function armConfirm(btn, fn, confirmText) {
+  if (btn.dataset.armed) {
+    clearTimeout(+btn.dataset.t);
+    delete btn.dataset.armed;
+    btn.classList.remove("armed");
+    btn.textContent = btn.dataset.orig;
+    fn();
+    return;
+  }
+  btn.dataset.orig = btn.textContent;
+  btn.textContent = confirmText || "确认移除？";
+  btn.classList.add("armed");
+  btn.dataset.armed = "1";
+  btn.dataset.t = setTimeout(() => {
+    delete btn.dataset.armed;
+    btn.classList.remove("armed");
+    btn.textContent = btn.dataset.orig;
+  }, 3000);
+}
+
+// ---- popover（替代 prompt 链）：锚定行内表单，外点/ESC 关闭 ----
+let popEl = null;
+function _popOut(e) { if (popEl && !popEl.contains(e.target)) closePop(); }
+function _popEsc(e) { if (e.key === "Escape") closePop(); }
+function closePop() {
+  if (!popEl) return;
+  popEl.remove();
+  popEl = null;
+  document.removeEventListener("pointerdown", _popOut, true);
+  document.removeEventListener("keydown", _popEsc, true);
+}
+function popover(anchor, build) {
+  closePop();
+  popEl = document.createElement("div");
+  popEl.className = "pop";
+  build(popEl, closePop);
+  document.body.appendChild(popEl);
+  const r = anchor.getBoundingClientRect();
+  let x = Math.max(10, Math.min(r.left, innerWidth - popEl.offsetWidth - 10));
+  let y = r.bottom + 8;
+  if (y + popEl.offsetHeight > innerHeight - 10)
+    y = Math.max(10, r.top - popEl.offsetHeight - 8);
+  popEl.style.left = x + "px";
+  popEl.style.top = y + "px";
+  document.addEventListener("pointerdown", _popOut, true);
+  document.addEventListener("keydown", _popEsc, true);
+}
 
 // ---- 导航 ----
 function nav(page) {
@@ -9,21 +79,56 @@ function nav(page) {
 }
 $$(".nav").forEach(b => b.addEventListener("click", () => nav(b.dataset.page)));
 nav("console");
-$("#btn-show").addEventListener("click", () => {
-  document.body.classList.toggle("show");
-  $("#btn-show").textContent =
-      document.body.classList.contains("show") ? "⤢ 退出演出" : "⛶ 演出";
+
+// ---- 演出模式：进出动效 + ESC/F11 + 屏角热区退出 ----
+const reduceMotion = () =>
+    matchMedia("(prefers-reduced-motion: reduce)").matches;
+function setShow(on) {
+  const body = document.body;
+  if (on === body.classList.contains("show")) return;
+  const btn = $("#btn-show");
+  if (on) {
+    nav("console");
+    body.classList.add("show");
+    btn.textContent = "⤢ 退出演出";
+  } else if (reduceMotion()) {
+    body.classList.remove("show");
+    btn.textContent = "⛶ 演出";
+  } else {
+    $("#main").classList.add("leaving");
+    setTimeout(() => {
+      $("#main").classList.remove("leaving");
+      body.classList.remove("show");
+      btn.textContent = "⛶ 演出";
+    }, 200);
+  }
+}
+$("#btn-show").addEventListener("click",
+    () => setShow(!document.body.classList.contains("show")));
+$("#show-exit").addEventListener("click", () => setShow(false));
+document.addEventListener("keydown", e => {
+  if ((e.key === "Escape" || e.key === "F11")
+      && document.body.classList.contains("show")) {
+    e.preventDefault();
+    setShow(false);
+  }
 });
 
-// ---- 走带命令 ----
+// ---- 走带命令（失败可见，不再静默）----
 async function cmd(action, index) {
   const body = index === undefined ? {action} : {action, index};
   try {
     const r = await fetch("/cmd", {method: "POST",
                                    headers: {"Content-Type": "application/json"},
                                    body: JSON.stringify(body)});
-    return r.ok;
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      toast(j.error || "命令发送失败", "err");
+      return false;
+    }
+    return true;
   } catch {
+    toast("命令发送失败（网络）", "err");
     return false;
   }
 }
@@ -35,15 +140,13 @@ $("#console-list").addEventListener("dblclick", ev => {
 });
 
 // ---- /state 轮询渲染 ----
-const LAMPS = ["l-daw", "l-obs", "l-loop", "l-pedal", "l-hot", "l-remote"];
 const fmt = s => {
   s = Math.max(0, Math.round(s || 0));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 };
 
 function render(st) {
-  const page = $("#p-console");
-  if (!page) return;
+  if (!$("#p-console")) return;
   $("#now").textContent = st.open ? st.projName : "（无打开的工程）";
   const rows = st.songs || [];
   const cur = typeof st.cur === "number" ? st.cur : -1;
@@ -68,7 +171,6 @@ function render(st) {
       list.appendChild(div);
     });
   }
-  // 状态灯：/state 现有字段尽量映射；缺的先落 err 灯（P2 补端点）
   const busy = st.busy;
   const lamp = (id, cls) => {
     const el = $("#" + id);
@@ -77,7 +179,8 @@ function render(st) {
   };
   lamp("l-daw", st.open ? "ok" : "err");
   lamp("l-remote", st.ready ? "ok" : "err");
-  lamp("l-pedal", st.pedalRemote && st.pedalRemote.ok ? "ok" : "warn");
+  const pr = st.pedalRemote;
+  lamp("l-pedal", pr && pr.link === "ok" ? "ok" : "warn");
   lamp("l-obs", "warn");
   lamp("l-loop", "warn");
   lamp("l-hot", "warn");
@@ -102,7 +205,7 @@ async function poll() {
 setInterval(poll, 500);
 poll();
 
-// ================= P2 页面 =================
+// ================= 各数据页 =================
 let stCur = null, plCache = null, stState = null;
 
 // ---- 编排页 ----
@@ -120,7 +223,9 @@ function plRow(i, it) {
     if (op === "remove") b.className = "danger";
     b.addEventListener("click", ev => {
       ev.stopPropagation();
-      plcmd(op, it.key);
+      if (op === "remove")
+        armConfirm(b, () => plcmd("remove", it.key), "确认移除？");
+      else plcmd(op, it.key);
     });
     ops.appendChild(b);
   }
@@ -160,24 +265,28 @@ async function refreshPlaylist() {
   } catch { /* 瞬断 */ }
 }
 async function plcmd(op, key) {
-  if (op === "remove") {
-    const it = (plCache.pl || []).find(x => x.key === key);
-    if (it && !confirm("把《" + it.name + "》移出播放列表？")) return;
+  try {
+    const r = await fetch("/plcmd", {method: "POST",
+                           headers: {"Content-Type": "application/json"},
+                           body: JSON.stringify({op, key})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) toast(j.error || "操作失败", "err");
+  } catch {
+    toast("操作失败（网络）", "err");
   }
-  await fetch("/plcmd", {method: "POST",
-                         headers: {"Content-Type": "application/json"},
-                         body: JSON.stringify({op, key})});
   refreshPlaylist();
 }
-$("#pl-clear").addEventListener("click", async () => {
-  if (confirm("确定清空播放列表？（素材库不受影响）")) plcmd("clear", "");
-});
+$("#pl-clear").addEventListener("click", ev =>
+    armConfirm(ev.currentTarget, () => plcmd("clear", ""), "确认清空？"));
 
 // ---- 定位点页 ----
 let ptProj = null, ptData = null, ptSel = null;
 const parseTC = t => {
-  const p = String(t || "").split(":").map(Number);
-  if (p.some(isNaN)) return null;
+  const raw = String(t || "").trim();
+  if (!raw || !/^\d+(?::\d{0,2}){0,2}$/.test(raw)) return null;
+  const p = raw.split(":").map(Number);
+  if (p.length > 1 && p[1] > 59) return null;
+  if (p.length > 2 && p[2] > 59) return null;
   while (p.length < 3) p.unshift(0);
   return p[0] * 3600 + p[1] * 60 + p[2];
 };
@@ -189,6 +298,26 @@ const fmtTC = s => {
              String(x).padStart(2, "0")
            : m + ":" + String(x).padStart(2, "0");
 };
+
+// 时码即时校验：红框+原因文案，保存按钮随校验禁用（根治静默失败）
+function validatePt() {
+  const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
+  let msg = "";
+  if (s === null) msg = "开始时码格式应为 分:秒（如 3:33）或秒数";
+  else if (e === null) msg = "结束时码格式应为 分:秒（如 3:33）或秒数";
+  else if (e <= s) msg = "结束必须晚于开始";
+  else if (!ptSel) msg = "先在上方列表选中一个定位点";
+  $("#pt-s").classList.toggle("invalid", s === null);
+  $("#pt-e").classList.toggle("invalid", e === null || (s !== null && e <= s));
+  const save = $("#pt-save");
+  save.disabled = !!msg;
+  save.title = msg || "";
+  $("#pt-hint").textContent = msg;
+  return !msg;
+}
+["pt-s", "pt-e"].forEach(id =>
+    $("#" + id).addEventListener("input", validatePt));
+
 async function refreshPoints() {
   try {
     const r = await fetch("/points");
@@ -202,14 +331,19 @@ async function refreshPoints() {
     const dd = ptData[ptProj];
     if (!dd) return;
     const sel = $("#pt-proj");
-    sel.innerHTML = "";
-    Object.keys(ptData).forEach(k => {
-      const o = document.createElement("option");
-      o.value = k;
-      o.textContent = ptData[k].name + (ptData[k].enabled ? " ✓" : "");
-      if (k === ptProj) o.selected = true;
-      sel.appendChild(o);
-    });
+    const sig = Object.keys(ptData).map(
+        k => k + (ptData[k].enabled ? "1" : "0")).join("|");
+    if (sel.dataset.sig !== sig) {           // 无变化不重建：避免打断展开
+      sel.dataset.sig = sig;
+      sel.innerHTML = "";
+      Object.keys(ptData).forEach(k => {
+        const o = document.createElement("option");
+        o.value = k;
+        o.textContent = ptData[k].name + (ptData[k].enabled ? " ✓" : "");
+        if (k === ptProj) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
     $("#pt-on").checked = dd.enabled;
     const el = $("#pt-list");
     el.innerHTML = "";
@@ -227,13 +361,20 @@ async function refreshPoints() {
       });
       el.appendChild(div);
     });
+    validatePt();
   } catch { /* 瞬断 */ }
 }
 async function ptcmd(op, payload) {
-  await fetch("/ptcmd", {method: "POST",
-                         headers: {"Content-Type": "application/json"},
-                         body: JSON.stringify({op, key: ptProj,
-                                               payload: payload || {}})});
+  try {
+    const r = await fetch("/ptcmd", {method: "POST",
+                           headers: {"Content-Type": "application/json"},
+                           body: JSON.stringify({op, key: ptProj,
+                                                 payload: payload || {}})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) toast(j.error || "操作失败", "err");
+  } catch {
+    toast("操作失败（网络）", "err");
+  }
   refreshPoints();
   refreshPlaylist();
 }
@@ -245,13 +386,15 @@ $("#pt-proj").addEventListener("change", e => {
   refreshPoints();
 });
 $("#pt-add").addEventListener("click", () => ptcmd("add", {}));
-$("#pt-del").addEventListener("click", () => {
-  if (ptSel) ptcmd("del", {id: ptSel});
+$("#pt-del").addEventListener("click", ev => {
+  if (ptSel) armConfirm(ev.currentTarget, () => ptcmd("del", {id: ptSel}),
+                        "确认删除？");
 });
 $("#pt-save").addEventListener("click", () => {
-  const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
-  if (ptSel && s !== null && e !== null)
-    ptcmd("edit", {id: ptSel, name: $("#pt-name").value, start: s, end: e});
+  if (!validatePt()) return;
+  ptcmd("edit", {id: ptSel, name: $("#pt-name").value,
+                 start: parseTC($("#pt-s").value),
+                 end: parseTC($("#pt-e").value)});
 });
 $("#pt-up").addEventListener("click", () => ptSel && ptcmd("move",
     {id: ptSel, step: -1}));
@@ -279,36 +422,21 @@ async function refreshLog() {
   } catch { /* 瞬断 */ }
 }
 
-// ---- 摘要页（踩钉/键盘/VJ/设置）----
-function renderSummary() {
-  const st = stState;
-  if (!st) return;
-  const item = (k, v) => "<div class=\"item\"><b>" + k + "</b><span>" + v +
-                         "</span></div>";
-  $("#pedal-sum").innerHTML =
-      item("有线踩钉", st.pedalRemote && st.pedalRemote.ok ? "已连接"
-              : "未连接") +
-      item("远程转发", st.pedalRemote ? "支持" : "不支持");
-  $("#kbd-sum").innerHTML = item("状态", "见旧版键盘自动化窗（后续迁入）");
-  $("#vj-sum").innerHTML = item("视频联动", st.open ? "跟随当前工程"
-                                                   : "无打开的工程");
-  $("#set-sum").innerHTML =
-      item("DAW", "Cubase") +
-      item("遥控服务", st.ready ? "运行中" : "未启动") +
-      item("工程库", "见旧版设置窗");
-}
-setInterval(refreshPlaylist, 1500);
-setInterval(refreshPoints, 1500);
-setInterval(refreshLog, 1500);
-refreshPlaylist();
-refreshPoints();
-refreshLog();
-
 // ================= 四页全功能（踩钉/键盘/VJ/设置）=================
 const $v = id => $(id).value;
-const put = (path, body) => fetch(path, {method: "POST",
-  headers: {"Content-Type": "application/json"},
-  body: JSON.stringify(body)}).then(r => r.json());
+async function put(path, body) {
+  try {
+    const r = await fetch(path, {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) toast(j.error || "保存失败", "err");
+    return j;
+  } catch {
+    toast("保存失败（网络）", "err");
+    return {ok: false};
+  }
+}
 
 // ---- 踩钉 ----
 async function refreshPedal() {
@@ -331,33 +459,81 @@ $("#pd-save").addEventListener("click", async () => {
     doubleWindow: parseFloat($v("#pd-win")) || 0.35,
     intercept: $("#pd-intercept").checked,
     remoteEnabled: $("#pd-remote").checked});
-  alert(r.ok ? "踩钉配置已应用" : "失败：" + r.error);
+  if (r.ok) toast("踩钉配置已应用");
   refreshPedal();
 });
 
 // ---- 键盘自动化 ----
 let kbData = null;
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
+                    "A#", "B"];
+const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+
+// 音色槽编辑：popover 行内表单（PC 必填 0-127，MSB/LSB 可空）替代 prompt 链
+function slotEditor(anchor, inst, note, slot) {
+  popover(anchor, (box, close) => {
+    box.innerHTML =
+        "<h4>音 " + noteName(note) + "（MIDI " + note + "）音色</h4>" +
+        "<label>PC（0-127）<input type=\"number\" min=\"0\" max=\"127\" " +
+        "id=\"sp-pc\"></label>" +
+        "<label>MSB（可空）<input type=\"number\" min=\"0\" max=\"127\" " +
+        "id=\"sp-msb\"></label>" +
+        "<label>LSB（可空）<input type=\"number\" min=\"0\" max=\"127\" " +
+        "id=\"sp-lsb\"></label>" +
+        "<div class=\"field-err\" id=\"sp-err\"></div>" +
+        "<div class=\"btns\">" +
+        (slot ? "<button class=\"danger\" id=\"sp-clear\">清除</button>" : "") +
+        "<button id=\"sp-cancel\">取消</button>" +
+        "<button class=\"primary\" id=\"sp-ok\">保存</button></div>";
+    const pc = $("#sp-pc", box), msb = $("#sp-msb", box), lsb = $("#sp-lsb", box);
+    pc.value = slot ? slot.pc : 0;
+    if (slot && slot.msb !== undefined) msb.value = slot.msb;
+    if (slot && slot.lsb !== undefined) lsb.value = slot.lsb;
+    const check = () => {
+      const bad = pc.value === "" || Number(pc.value) < 0
+                  || Number(pc.value) > 127;
+      $("#sp-err", box).textContent =
+          bad ? "PC 须为 0-127 的数字" : "";
+      $("#sp-ok", box).disabled = bad;
+    };
+    pc.addEventListener("input", check);
+    check();
+    pc.focus();
+    pc.select();
+    $("#sp-cancel", box).addEventListener("click", close);
+    $("#sp-ok", box).addEventListener("click", () => {
+      const s = {pc: Number(pc.value)};
+      if (msb.value !== "") s.msb = Number(msb.value);
+      if (lsb.value !== "") s.lsb = Number(lsb.value);
+      const cur = (inst === "ax" ? kbData.axSlots : kbData.slots) || {};
+      cur[note] = s;
+      put("/slotset", {inst, slots: cur}).then(j => {
+        if (j.ok) toast("音 " + noteName(note) + " 已保存");
+        refreshKbd();
+      });
+      close();
+    });
+    const clearBtn = $("#sp-clear", box);
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+      const cur = (inst === "ax" ? kbData.axSlots : kbData.slots) || {};
+      delete cur[note];
+      put("/slotset", {inst, slots: cur}).then(j => {
+        if (j.ok) toast("音 " + noteName(note) + " 已清除");
+        refreshKbd();
+      });
+      close();
+    });
+  });
+}
 function slotRow(note, slot, inst) {
   const div = document.createElement("div");
   div.className = "row";
   const txt = slot ? ("PC " + slot.pc + (slot.msb !== undefined
       ? " | MSB " + slot.msb + " | LSB " + slot.lsb : "")) : "（未配置）";
-  div.innerHTML = "<span>音 " + note + "</span><span class=\"dur\">" +
+  div.innerHTML = "<span>音 " + noteName(note) + "</span><span class=\"dur\">" +
                   txt + "</span>";
-  div.addEventListener("dblclick", () => {
-    const pc = prompt("音 " + note + " 的 PC（0-127）", slot ? slot.pc : 0);
-    if (pc === null) return;
-    const msb = prompt("MSB（可空）",
-                       slot && slot.msb !== undefined ? slot.msb : "");
-    const lsb = prompt("LSB（可空）",
-                       slot && slot.lsb !== undefined ? slot.lsb : "");
-    const s = {pc: Number(pc)};
-    if (msb) s.msb = Number(msb);
-    if (lsb) s.lsb = Number(lsb);
-    const cur = (inst === "ax" ? kbData.axSlots : kbData.slots) || {};
-    cur[note] = s;
-    put("/slotset", {inst, slots: cur}).then(refreshKbd);
-  });
+  div.title = "点击编辑音色";
+  div.addEventListener("click", () => slotEditor(div, inst, note, slot));
   return div;
 }
 async function refreshKbd() {
@@ -383,7 +559,7 @@ async function refreshKbd() {
 $("#kb-save").addEventListener("click", async () => {
   const r = await put("/kbdset", {junoIn: $v("#kb-jin"),
     junoOut: $v("#kb-jout"), axIn: $v("#kb-ain"), axOut: $v("#kb-aout")});
-  alert(r.ok ? "键盘端口已应用" : "失败：" + r.error);
+  if (r.ok) toast("键盘端口已应用");
   refreshKbd();
 });
 $("#kb-jup").addEventListener("click", () => put("/kbdshift",
@@ -417,7 +593,7 @@ $("#vj-save").addEventListener("click", async () => {
   const r = await put("/settings", {obs: {
     projectorMonitor: $v("#vj-mon"), mediaInput: $v("#vj-media"),
     videoRoot: $v("#vj-root"), vjMute: $("#vj-mute").checked}});
-  alert(r.ok ? "VJ 配置已应用" : "失败：" + r.error);
+  if (r.ok) toast("VJ 配置已应用");
 });
 
 // ---- 设置页 ----
@@ -464,10 +640,15 @@ $("#st-save").addEventListener("click", async () => {
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
           ip: $v("#st-ip") === "自动" ? "" : $v("#st-ip")}});
-  alert(r.ok ? "设置已保存并应用" : "失败：" + r.error);
+  if (r.ok) toast("设置已保存并应用");
 });
 refreshPedal();
 refreshKbd();
 refreshVj();
 refreshSettings();
-
+setInterval(refreshPlaylist, 1500);
+setInterval(refreshPoints, 1500);
+setInterval(refreshLog, 1500);
+refreshPlaylist();
+refreshPoints();
+refreshLog();

@@ -19,13 +19,13 @@
     <button class="nav b-settings" data-page="settings">设置</button>
     <button class="nav b-log" data-page="log">日志</button>
     <div class="side-gap"></div>
-    <button id="btn-show" title="演出模式">⛶ 演出</button>
+    <button id="btn-show" title="演出模式（大字全屏）">⛶ 演出</button>
   </nav>
   <main id="main">
     <section class="page" id="p-console">
       <div id="now" class="big">…</div>
       <div id="next" class="mid">NEXT —</div>
-      <div id="clock" class="mid dim">0:00 | 0:00</div>
+      <div id="clock" class="mid dim">—</div>
       <div id="bar"><div id="barfill"></div></div>
       <div id="transport">
         <button data-cmd="play" class="go">▶ 开始</button>
@@ -57,14 +57,15 @@
       <div id="pt-list" class="list"></div>
       <div id="pt-edit">
         <label>名称 <input id="pt-name"></label>
-        <label>开始 <input id="pt-s" placeholder="分:秒"></label>
-        <label>结束 <input id="pt-e" placeholder="分:秒"></label>
+        <label>开始 <input id="pt-s" placeholder="分:秒" inputmode="numeric"></label>
+        <label>结束 <input id="pt-e" placeholder="分:秒" inputmode="numeric"></label>
         <button id="pt-save">保存修改</button>
         <button id="pt-add">添加（开始=当前时码）</button>
         <button id="pt-del" class="danger">删除选中</button>
         <button id="pt-up" class="mini">上移</button>
         <button id="pt-down" class="mini">下移</button>
         <label class="chk"><input type="checkbox" id="pt-on"> 启用定位点</label>
+        <span id="pt-hint" class="field-err"></span>
       </div>
     </section>
     <section class="page" id="p-pedal">
@@ -160,6 +161,8 @@
   <span class="lamp" id="l-remote">遥控 <i>·</i></span>
   <span id="tstate" class="dim"></span>
 </footer>
+<button id="show-exit" title="退出演出模式（ESC / F11）">⨯ 退出演出</button>
+<div id="toasts"></div>
 <script type="module" src="/app/app.js"></script>
 </body>
 </html>
