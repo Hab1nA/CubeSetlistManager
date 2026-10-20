@@ -10,155 +10,329 @@
 <div id="shell">
   <nav id="side">
     <div id="brand">Cube</div>
-    <button class="nav b-console" data-page="console">主控台</button>
-    <button class="nav b-setlist" data-page="setlist">编排</button>
-    <button class="nav b-points" data-page="points">定位点</button>
-    <button class="nav b-pedal" data-page="pedal">踩钉</button>
-    <button class="nav b-kbd" data-page="kbd">键盘</button>
-    <button class="nav b-vj" data-page="vj">VJ</button>
-    <button class="nav b-settings" data-page="settings">设置</button>
-    <button class="nav b-log" data-page="log">日志</button>
+    <div class="side-group">演出</div>
+    <button class="nav b-console" data-page="console">
+      <svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+      主控台</button>
+    <div class="side-group">准备</div>
+    <button class="nav b-setlist" data-page="setlist">
+      <svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+      编排</button>
+    <button class="nav b-points" data-page="points">
+      <svg viewBox="0 0 16 16"><path d="M4 14V2.5M4 3.5h8l-2.5 3L12 9.5H4"/></svg>
+      定位点</button>
+    <button class="nav b-pedal" data-page="pedal">
+      <svg viewBox="0 0 16 16"><rect x="3" y="9" width="10" height="4" rx="1.5"/><path d="M8 9V6"/><circle cx="8" cy="4" r="1.5"/></svg>
+      踩钉</button>
+    <button class="nav b-kbd" data-page="kbd">
+      <svg viewBox="0 0 16 16"><rect x="1.5" y="4.5" width="13" height="8" rx="1.5"/><path d="M4 7.5h.6M6.4 7.5h.6M8.8 7.5h.6M11.2 7.5h.6M4 9.8h8"/></svg>
+      键盘</button>
+    <button class="nav b-vj" data-page="vj">
+      <svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9.5" rx="1.5"/><path d="M5.5 14.5h5M8 12v2.5M6.5 5.5l3.5 2-3.5 2z"/></svg>
+      VJ</button>
     <div class="side-gap"></div>
-    <button id="btn-show" title="演出模式（大字全屏）">⛶ 演出</button>
+    <div class="side-group">系统</div>
+    <button class="nav b-settings" data-page="settings">
+      <svg viewBox="0 0 16 16"><path d="M2.5 5h11M2.5 11h11"/><circle cx="6" cy="5" r="2"/><circle cx="10.5" cy="11" r="2"/></svg>
+      设置</button>
+    <button class="nav b-log" data-page="log">
+      <svg viewBox="0 0 16 16"><rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>
+      日志</button>
+    <button id="btn-show" title="演出模式（大字全屏，ESC 退出）">
+      <svg viewBox="0 0 16 16"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>
+      演出</button>
   </nav>
   <main id="main">
     <section class="page" id="p-console">
-      <div id="now" class="big">…</div>
-      <div id="next" class="mid">NEXT —</div>
-      <div id="clock" class="mid dim">—</div>
-      <div id="bar"><div id="barfill"></div></div>
+      <div class="hero card">
+        <div class="hero-top">
+          <span class="lbl">NOW</span>
+          <span class="chip" id="tchip">…</span>
+        </div>
+        <div id="now" class="big">…</div>
+        <div id="clock" class="mid dim">—</div>
+        <div id="bar"><div id="barfill"></div></div>
+      </div>
       <div id="transport">
-        <button data-cmd="play" class="go">▶ 开始</button>
-        <button data-cmd="pause">⏸ 暂停</button>
-        <button data-cmd="resume">▷ 继续</button>
-        <button data-cmd="rewind">⟲ 回零</button>
-        <button data-cmd="prev">⏮ 上一首</button>
-        <button data-cmd="next">⏭ 下一首</button>
-        <button data-cmd="panic" class="panic">■ 全停</button>
+        <button id="smart" class="btn primary lg">▶ 开始</button>
+        <button data-cmd="rewind" class="btn icon" title="回零">⟲</button>
+        <button data-cmd="prev" class="btn icon" title="上一首">⏮</button>
+        <button data-cmd="next" class="btn icon" title="下一首">⏭</button>
+        <span class="tspacer"></span>
+        <button data-cmd="panic" class="btn danger-outline lg">■ 全停</button>
+      </div>
+      <div id="chips" class="chips" hidden></div>
+      <div id="next-card" class="card">
+        <div class="lbl">NEXT</div>
+        <div class="next-row"><div id="next" class="mid">—</div>
+          <button id="next-go" class="btn ghost sm">切到这首</button></div>
       </div>
       <div id="console-list" class="list"></div>
+      <div id="console-empty" class="empty-state" hidden>
+        <svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+        <div>播放列表为空</div>
+        <button class="btn ghost sm" data-nav="setlist">去编排加入曲目</button>
+      </div>
     </section>
+
     <section class="page" id="p-setlist">
-      <h2>编排</h2>
+      <div class="page-head">
+        <h2>编排</h2>
+        <input id="sl-search" type="search" placeholder="搜索曲目 / 团队">
+      </div>
       <div class="cols">
         <div class="col">
-          <div class="colhead">素材库 <span class="dim" id="lib-n"></span></div>
+          <div class="colhead">素材库 <span class="badge" id="lib-n"></span></div>
           <div id="lib" class="list"></div>
         </div>
         <div class="col">
-          <div class="colhead">播放列表 <span class="dim" id="pl-n"></span>
-            <button id="pl-clear" class="mini danger">清空</button></div>
+          <div class="colhead">播放列表 <span class="badge" id="pl-n"></span>
+            <button id="pl-more" class="btn icon sm" title="更多操作">⋯</button></div>
           <div id="pl" class="list"></div>
+          <div id="pl-empty" class="empty-state sm" hidden>
+            从左侧素材库点 ＋ 加入曲目
+          </div>
         </div>
       </div>
     </section>
+
     <section class="page" id="p-points">
-      <h2>定位点 <select id="pt-proj"></select></h2>
-      <div id="pt-list" class="list"></div>
-      <div id="pt-edit">
-        <label>名称 <input id="pt-name"></label>
-        <label>开始 <input id="pt-s" placeholder="分:秒" inputmode="numeric"></label>
-        <label>结束 <input id="pt-e" placeholder="分:秒" inputmode="numeric"></label>
-        <button id="pt-save">保存修改</button>
-        <button id="pt-add">添加（开始=当前时码）</button>
-        <button id="pt-del" class="danger">删除选中</button>
-        <button id="pt-up" class="mini">上移</button>
-        <button id="pt-down" class="mini">下移</button>
-        <label class="chk"><input type="checkbox" id="pt-on"> 启用定位点</label>
-        <span id="pt-hint" class="field-err"></span>
+      <div class="page-head">
+        <h2>定位点</h2>
+        <select id="pt-proj"></select>
+        <label class="switch" title="启用后该工程条目展开为定位点播放">
+          <input type="checkbox" id="pt-on"><i></i><span>启用</span></label>
+      </div>
+      <div class="md">
+        <div class="md-master card">
+          <div class="md-head">定位点列表
+            <button id="pt-add" class="btn ghost sm">＋ 添加（开始=当前时码）</button>
+          </div>
+          <div id="pt-list" class="list"></div>
+        </div>
+        <div class="md-detail card">
+          <div id="pt-none" class="empty-state sm">在左侧选择一个定位点编辑</div>
+          <div id="pt-form" hidden>
+            <div class="field"><label for="pt-name">名称</label>
+              <input id="pt-name"></div>
+            <div class="field-row">
+              <div class="field"><label for="pt-s">开始</label>
+                <input id="pt-s" placeholder="分:秒 如 3:33" inputmode="numeric"></div>
+              <div class="field"><label for="pt-e">结束</label>
+                <input id="pt-e" placeholder="分:秒 如 4:05" inputmode="numeric"></div>
+            </div>
+            <div class="field-err" id="pt-hint"></div>
+            <div class="tl-wrap">
+              <div class="lbl">时间轴分布（只读）</div>
+              <div id="pt-tl" class="tl"></div>
+              <div class="tl-scale"><span>0:00</span><span id="pt-tl-max">—</span></div>
+            </div>
+            <div class="md-actions">
+              <button id="pt-save" class="btn primary">保存</button>
+              <button id="pt-goto" class="btn ghost" title="同工程免重开，直接定位">跳到这点</button>
+              <span class="tspacer"></span>
+              <button id="pt-up" class="btn icon sm" title="上移">↑</button>
+              <button id="pt-down" class="btn icon sm" title="下移">↓</button>
+              <button id="pt-del" class="btn danger sm">删除</button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
+
     <section class="page" id="p-pedal">
-      <h2>踩钉 <span id="pedal-conn" class="dim"></span></h2>
-      <div class="form">
-        <label>提示名 <input id="pd-hint"></label>
-        <label>设备名过滤 <input id="pd-dev"></label>
-        <label>单踩动作
-          <select id="pd-g-play"><option value="play">播放/暂停</option>
-            <option value="next">下一首</option></select></label>
-        <label>双踩动作
-          <select id="pd-g-next"><option value="play">播放/暂停</option>
-            <option value="next">下一首</option></select></label>
-        <label>双踩窗秒 <input id="pd-win" class="num"></label>
-        <label class="chk"><input type="checkbox" id="pd-intercept"> 拦截硬件原键</label>
-        <label class="chk"><input type="checkbox" id="pd-remote"> 平板转发踩钉</label>
-        <button id="pd-save">保存并应用</button>
+      <h2>踩钉</h2>
+      <div class="stat-cards">
+        <div class="card stat"><div class="lbl">连接状态</div>
+          <div class="stat-big" id="pedal-conn">…</div></div>
+        <div class="card stat"><div class="lbl">平板转发链路</div>
+          <div class="stat-big" id="pedal-link">—</div></div>
+        <div class="card stat"><div class="lbl">最近踩钉事件</div>
+          <div class="stat-big"><span id="pedal-flash">·</span>
+            <span class="dim" id="pedal-when"></span></div></div>
       </div>
-      <p class="dim">单踩=播放/暂停切换，双踩=下一首；动作可对调。改配置后点「保存并应用」即时生效。</p>
+      <div class="card"><h3>基本</h3>
+        <div class="grid2">
+          <div class="field"><label for="pd-hint">提示名</label>
+            <input id="pd-hint"></div>
+          <div class="field"><label for="pd-dev">设备名过滤</label>
+            <input id="pd-dev"></div>
+        </div>
+      </div>
+      <div class="card"><h3>手势</h3>
+        <div class="gesture-row">
+          <div class="gesture">
+            <span class="tag">单踩</span><span class="g-arrow">→</span>
+            <select id="pd-g-play"><option value="play">播放/暂停</option>
+              <option value="next">下一首</option></select>
+          </div>
+          <div class="gesture">
+            <span class="tag">双踩</span><span class="g-arrow">→</span>
+            <select id="pd-g-next"><option value="play">播放/暂停</option>
+              <option value="next">下一首</option></select>
+          </div>
+        </div>
+        <p class="dim sm-txt">单踩=播放/暂停切换，双踩=下一首；动作可对调。</p>
+      </div>
+      <details class="card"><summary>高级</summary>
+        <div class="grid2">
+          <div class="field"><label for="pd-win">双踩窗（秒）</label>
+            <input id="pd-win" class="num" inputmode="decimal"></div>
+          <div class="field"><label>硬件原键</label>
+            <label class="switch"><input type="checkbox" id="pd-intercept"><i></i>
+              <span>拦截硬件原键</span></label></div>
+          <div class="field"><label>平板转发</label>
+            <label class="switch"><input type="checkbox" id="pd-remote"><i></i>
+              <span>允许平板转发踩钉</span></label></div>
+        </div>
+      </details>
+      <button id="pd-save" class="btn primary">保存并应用</button>
     </section>
+
     <section class="page" id="p-kbd">
       <h2>键盘自动化 <span id="kbd-song" class="dim"></span></h2>
-      <div class="form">
-        <label>JUNO 输入 <input id="kb-jin"></label>
-        <label>JUNO 输出 <input id="kb-jout"></label>
-        <label>AX-09 输入 <input id="kb-ain"></label>
-        <label>AX-09 输出 <input id="kb-aout"></label>
-        <button id="kb-save">保存并应用</button>
+      <div class="cards2">
+        <div class="card"><h3>JUNO 端口</h3>
+          <div class="field"><label for="kb-jin">输入</label><input id="kb-jin"></div>
+          <div class="field"><label for="kb-jout">输出</label><input id="kb-jout"></div>
+        </div>
+        <div class="card"><h3>AX-09 端口</h3>
+          <div class="field"><label for="kb-ain">输入</label><input id="kb-ain"></div>
+          <div class="field"><label for="kb-aout">输出</label><input id="kb-aout"></div>
+        </div>
       </div>
-      <h3>JUNO 音色槽 <span class="dim">移调
-        <button id="kb-jdown" class="mini">−1</button>
-        <span id="kb-jshift">0</span>
-        <button id="kb-jup" class="mini">+1</button></span></h3>
-      <div id="kb-slots" class="list"></div>
-      <h3>AX-09 音色槽 <span class="dim">移调
-        <button id="kb-adown" class="mini">−1</button>
-        <span id="kb-ashift">0</span>
-        <button id="kb-aup" class="mini">+1</button></span></h3>
-      <div id="kb-axslots" class="list"></div>
+      <button id="kb-save" class="btn primary">保存并应用</button>
+      <div class="card slotcard">
+        <h3>JUNO 音色槽
+          <span class="stepper"><button id="kb-jdown" class="btn icon sm" title="移调 −1">−</button>
+            <span class="step-val" id="kb-jshift">0</span>
+            <button id="kb-jup" class="btn icon sm" title="移调 +1">+</button>
+            <button id="kb-jreset" class="btn ghost xs">重置</button></span></h3>
+        <div id="kb-slots" class="list"></div>
+      </div>
+      <div class="card slotcard">
+        <h3>AX-09 音色槽
+          <span class="stepper"><button id="kb-adown" class="btn icon sm" title="移调 −1">−</button>
+            <span class="step-val" id="kb-ashift">0</span>
+            <button id="kb-aup" class="btn icon sm" title="移调 +1">+</button>
+            <button id="kb-areset" class="btn ghost xs">重置</button></span></h3>
+        <div id="kb-axslots" class="list"></div>
+      </div>
     </section>
+
     <section class="page" id="p-vj">
-      <h2>VJ 联动 <span id="vj-obs" class="dim"></span></h2>
-      <div class="form">
-        <label>VJ显示位置 <select id="vj-mon"></select></label>
-        <label>媒体输入名 <input id="vj-media"></label>
-        <label>视频目录 <input id="vj-root" class="wide"></label>
-        <label class="chk"><input type="checkbox" id="vj-mute"> 静音播放</label>
-        <button id="vj-save">保存并应用</button>
+      <h2>VJ 联动</h2>
+      <div class="stat-cards">
+        <div class="card stat"><div class="lbl">OBS 连接</div>
+          <div class="stat-big" id="vj-obs">…</div></div>
+        <div class="card stat"><div class="lbl">媒体源</div>
+          <div class="stat-big" id="vj-media-st">…</div></div>
       </div>
-      <div id="vj-sum" class="sumlist"></div>
+      <div class="card"><h3>视频联动</h3>
+        <div class="grid2">
+          <div class="field"><label for="vj-mon">VJ 显示位置</label>
+            <select id="vj-mon"></select></div>
+          <div class="field"><label for="vj-media">媒体输入名</label>
+            <input id="vj-media"></div>
+          <div class="field wide"><label for="vj-root">视频目录</label>
+            <input id="vj-root" class="wide"></div>
+          <div class="field"><label>播放声音</label>
+            <label class="switch"><input type="checkbox" id="vj-mute"><i></i>
+              <span>静音播放</span></label></div>
+        </div>
+        <button id="vj-save" class="btn primary">保存并应用</button>
+      </div>
     </section>
+
     <section class="page" id="p-settings">
-      <h2>设置</h2>
-      <div class="form">
-        <h3>联动端口</h3>
-        <label>时码端口 <input id="st-clock" class="wide"></label>
-        <label>VJ 端口 <input id="st-vj" class="wide"></label>
-        <label>键盘端口 <input id="st-kb" class="wide"></label>
-        <h3>行为</h3>
-        <label class="chk"><input type="checkbox" id="st-auto"> 播完自动切换</label>
-        <label class="chk"><input type="checkbox" id="st-cont"> 切完自动播放</label>
-        <label class="chk"><input type="checkbox" id="st-top"> 窗口置顶</label>
-        <label class="chk"><input type="checkbox" id="st-confirm"> 切歌确认</label>
-        <label class="chk"><input type="checkbox" id="st-exit"> 退出时关闭被控软件</label>
-        <h3>目录与工程</h3>
-        <label>工程库根 <input id="st-root" class="wide"></label>
-        <label>Cubase 程序 <input id="st-exe" class="wide"></label>
-        <label class="chk"><input type="checkbox" id="st-autosave"> 切歌自动保存</label>
-        <h3>移动端遥控</h3>
-        <label class="chk"><input type="checkbox" id="st-web"> 启用遥控</label>
-        <label>模式 <select id="st-mode"><option value="hotspot">热点</option>
-          <option value="lan">局域网</option></select></label>
-        <label>网页端口 <input id="st-srv" class="num"></label>
-        <label>APP 端口 <input id="st-app" class="num"></label>
-        <label>翻谱端口 <input id="st-tsk" class="num"></label>
-        <label>翻谱 MIDI 口 <input id="st-pg" class="wide"></label>
-        <label>网卡 <select id="st-ip"></select></label>
-        <button id="st-save" class="go">保存并应用</button>
+      <div class="page-head">
+        <h2>设置 <span id="st-dirty" class="dirty" hidden>● 未保存</span></h2>
+      </div>
+      <div class="card"><h3>联动端口</h3>
+        <div class="grid2">
+          <div class="field"><label for="st-clock">时码端口</label>
+            <input id="st-clock"></div>
+          <div class="field"><label for="st-vj">VJ 端口</label>
+            <input id="st-vj"></div>
+          <div class="field"><label for="st-kb">键盘端口</label>
+            <input id="st-kb"></div>
+        </div>
+      </div>
+      <div class="card"><h3>行为</h3>
+        <div class="grid2">
+          <label class="switch"><input type="checkbox" id="st-auto"><i></i>
+            <span>播完自动切换</span></label>
+          <label class="switch"><input type="checkbox" id="st-cont"><i></i>
+            <span>切完自动播放</span></label>
+          <label class="switch"><input type="checkbox" id="st-top"><i></i>
+            <span>窗口置顶</span></label>
+          <label class="switch"><input type="checkbox" id="st-confirm"><i></i>
+            <span>切歌确认</span></label>
+          <label class="switch"><input type="checkbox" id="st-exit"><i></i>
+            <span>退出时关闭被控软件</span></label>
+        </div>
+      </div>
+      <div class="card"><h3>目录与工程</h3>
+        <div class="grid2">
+          <div class="field wide"><label for="st-root">工程库根</label>
+            <input id="st-root" class="wide"></div>
+          <div class="field wide"><label for="st-exe">Cubase 程序</label>
+            <input id="st-exe" class="wide"></div>
+          <label class="switch"><input type="checkbox" id="st-autosave"><i></i>
+            <span>切歌自动保存</span></label>
+        </div>
+      </div>
+      <div class="card"><h3>移动端遥控</h3>
+        <div class="grid2">
+          <label class="switch"><input type="checkbox" id="st-web"><i></i>
+            <span>启用遥控（网页+翻谱推送）</span></label>
+          <div class="field"><label for="st-mode">服务网络</label>
+            <select id="st-mode"><option value="hotspot">自动开热点</option>
+              <option value="lan">用现有局域网</option></select></div>
+          <div class="field"><label for="st-ip">服务网卡</label>
+            <select id="st-ip"></select></div>
+          <div class="field"><label for="st-srv">网页端口</label>
+            <input id="st-srv" class="num" inputmode="numeric"></div>
+          <div class="field"><label for="st-app">APP 端口</label>
+            <input id="st-app" class="num" inputmode="numeric"></div>
+          <div class="field"><label for="st-tsk">翻谱端口</label>
+            <input id="st-tsk" class="num" inputmode="numeric"></div>
+          <div class="field wide"><label for="st-pg">翻谱 MIDI 口</label>
+            <input id="st-pg"></div>
+        </div>
+        <div id="app-addr-wrap" class="addr" hidden>
+          <div class="lbl">APP 连接地址（点击复制）</div>
+          <button id="app-addr" class="addr-txt" title="点击复制"></button>
+        </div>
+        <button id="st-save" class="btn primary" disabled>保存并应用</button>
       </div>
     </section>
+
     <section class="page" id="p-log">
-      <h2>日志</h2>
+      <div class="page-head">
+        <h2>日志</h2>
+        <div class="log-tools">
+          <select id="lg-filter">
+            <option value="all">全部</option>
+            <option value="err">仅错误</option>
+          </select>
+          <label class="switch sm"><input type="checkbox" id="lg-auto" checked><i></i>
+            <span>自动滚动</span></label>
+          <button id="lg-copy" class="btn ghost sm">复制</button>
+          <button id="lg-clear" class="btn danger sm">清空</button>
+        </div>
+      </div>
       <div id="log" class="log"></div>
     </section>
   </main>
 </div>
 <footer id="statusbar">
-  <span class="lamp" id="l-daw">DAW <i>·</i></span>
-  <span class="lamp" id="l-obs">OBS <i>·</i></span>
-  <span class="lamp" id="l-loop">loopMIDI <i>·</i></span>
-  <span class="lamp" id="l-pedal">踩钉 <i>·</i></span>
-  <span class="lamp" id="l-hot">热点 <i>·</i></span>
-  <span class="lamp" id="l-remote">遥控 <i>·</i></span>
+  <span class="lamp" id="l-daw" data-page-nav="console">DAW <i>·</i></span>
+  <span class="lamp" id="l-obs" data-page-nav="vj">OBS <i>·</i></span>
+  <span class="lamp" id="l-loop" data-page-nav="settings">loopMIDI <i>·</i></span>
+  <span class="lamp" id="l-pedal" data-page-nav="pedal">踩钉 <i>·</i></span>
+  <span class="lamp" id="l-hot" data-page-nav="settings">热点 <i>·</i></span>
+  <span class="lamp" id="l-remote" data-page-nav="settings">遥控 <i>·</i></span>
   <span id="tstate" class="dim"></span>
 </footer>
 <button id="show-exit" title="退出演出模式（ESC / F11）">⨯ 退出演出</button>
