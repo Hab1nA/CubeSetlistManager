@@ -29,8 +29,11 @@ CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
 DEV_NOTES = tuple(range(60, 70))   # C4–A4 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 
-_HERE = pathlib.Path(getattr(sys, "frozen", False) and sys.executable
-                     or __file__).resolve().parent
+if getattr(sys, "frozen", False):
+    _HERE = pathlib.Path(getattr(sys, "_MEIPASS", "")) or \
+        pathlib.Path(sys.executable).resolve().parent   # 打包态：_internal
+else:
+    _HERE = pathlib.Path(__file__).resolve().parent
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 1.5           # 推送短超时：连接池省掉了握手，但平板 Wi-Fi
                              # 省电唤醒仍可达秒级；失败只记日志不拖累别的设备
