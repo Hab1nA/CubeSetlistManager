@@ -1403,6 +1403,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._h_points()
         elif path == "/log":
             self._h_log()
+        elif path == "/monitor":
+            self._run_on_app(lambda: None, result_fn=lambda: dict(
+                self.server.app._monitor_web()))
+        elif path == "/settings":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._settings_get_web)
+        elif path == "/pedal":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_get_web)
+        elif path == "/kbd":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._kbd_get_web)
         elif path == "/state":
             snap = getattr(self.server.app, "_web_snap", None) or {}
             self._json(200, snap)
@@ -1446,7 +1458,13 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_diag, "/diag"),
                           (self._h_pedal, "/pedal/event"),
                           (self._h_plcmd, "/plcmd"),
-                          (self._h_ptcmd, "/ptcmd")):
+                          (self._h_ptcmd, "/ptcmd"),
+                          (self._h_settings_set, "/settings"),
+                          (self._h_pedal_set, "/pedalset"),
+                          (self._h_kbd_set, "/kbdset"),
+                          (self._h_kbd_test, "/kbdtest"),
+                          (self._h_kbd_shift, "/kbdshift"),
+                          (self._h_slot_set, "/slotset")):
                 if path == p:
                     fn(body, ip)
                     return
@@ -1506,29 +1524,36 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(200, {"lines": [{"t": t, "msg": m} for t, m in ring]})
 
-    def _run_on_app(self, fn):
-        """经 calls 投递主线程执行并同步取回返回值（POST 命令需要结果）。"""
+    def _run_on_app(self, fn, result_fn=None):
+        """经 calls 投递主线程执行并同步取回结果：result_fn=None 时 fn 的
+        返回值即语义（None=成功 → {ok:true}；str=错误 → 400）；给了
+        result_fn 则其返回值作为 JSON 200 载荷（GET 型数据端点）。"""
         app = self.server.app
         done = threading.Event()
         box = {}
 
         def job():
             try:
-                box["r"] = fn()
+                box["r"] = result_fn() if result_fn is not None else fn()
             except Exception as e:
-                box["r"] = _err(e)
+                box["err"] = _err(e)
             done.set()
 
         app.calls.put(job)
         if not done.wait(8.0):
             self._json(504, {"error": "主线程响应超时"})
-            return False
+            return
+        if "err" in box:
+            self._json(400, {"error": box["err"]})
+            return
+        if result_fn is not None:
+            self._json(200, box.get("r") or {})
+            return
         r = box.get("r")
         if r:
             self._json(400, {"error": r})
-            return False
-        self._ok()
-        return True
+        else:
+            self._ok()
 
     def _h_plcmd(self, body, _ip):
         app = self.server.app
@@ -1546,6 +1571,45 @@ class _Handler(BaseHTTPRequestHandler):
         self._run_on_app(lambda: app._points_cmd_web(
             str(body.get("op") or ""), str(body.get("key") or ""),
             body.get("payload") or {}))
+
+    def _h_settings_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无设置"})
+            return
+        self._run_on_app(lambda: self.server.app._settings_apply_web(body))
+
+    def _h_pedal_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        self._run_on_app(lambda: self.server.app._pedal_apply_web(body))
+
+    def _h_kbd_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_apply_web(body))
+
+    def _h_kbd_test(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_test_web(
+            str(body.get("inst") or "juno"), int(body.get("note") or 0)))
+
+    def _h_kbd_shift(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_shift_web(
+            str(body.get("inst") or "juno"), int(body.get("total") or 0)))
+
+    def _h_slot_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._slots_save_web(
+            str(body.get("inst") or "juno"), body.get("slots") or {}))
 
     def _h_pedal(self, body, ip):
         """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP

@@ -304,3 +304,170 @@ refreshPlaylist();
 refreshPoints();
 refreshLog();
 
+// ================= 四页全功能（踩钉/键盘/VJ/设置）=================
+const $v = id => $(id).value;
+const put = (path, body) => fetch(path, {method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify(body)}).then(r => r.json());
+
+// ---- 踩钉 ----
+async function refreshPedal() {
+  try {
+    const d = await (await fetch("/pedal")).json();
+    $("#pedal-conn").textContent = d.connected ? "— 已连接" : "— 未连接";
+    $("#pd-hint").value = d.hint || "";
+    $("#pd-dev").value = d.deviceHint || "";
+    $("#pd-g-play").value = d.gestures.play || "play";
+    $("#pd-g-next").value = d.gestures.next || "next";
+    $("#pd-win").value = d.doubleWindow || 0.35;
+    $("#pd-intercept").checked = !!d.intercept;
+    $("#pd-remote").checked = !!d.remoteEnabled;
+  } catch { /* 瞬断 */ }
+}
+$("#pd-save").addEventListener("click", async () => {
+  const r = await put("/pedalset", {
+    hint: $v("#pd-hint"), deviceHint: $v("#pd-dev"),
+    gestures: {play: $v("#pd-g-play"), next: $v("#pd-g-next")},
+    doubleWindow: parseFloat($v("#pd-win")) || 0.35,
+    intercept: $("#pd-intercept").checked,
+    remoteEnabled: $("#pd-remote").checked});
+  alert(r.ok ? "踩钉配置已应用" : "失败：" + r.error);
+  refreshPedal();
+});
+
+// ---- 键盘自动化 ----
+let kbData = null;
+function slotRow(note, slot, inst) {
+  const div = document.createElement("div");
+  div.className = "row";
+  const txt = slot ? ("PC " + slot.pc + (slot.msb !== undefined
+      ? " | MSB " + slot.msb + " | LSB " + slot.lsb : "")) : "（未配置）";
+  div.innerHTML = "<span>音 " + note + "</span><span class=\"dur\">" +
+                  txt + "</span>";
+  div.addEventListener("dblclick", () => {
+    const pc = prompt("音 " + note + " 的 PC（0-127）", slot ? slot.pc : 0);
+    if (pc === null) return;
+    const msb = prompt("MSB（可空）",
+                       slot && slot.msb !== undefined ? slot.msb : "");
+    const lsb = prompt("LSB（可空）",
+                       slot && slot.lsb !== undefined ? slot.lsb : "");
+    const s = {pc: Number(pc)};
+    if (msb) s.msb = Number(msb);
+    if (lsb) s.lsb = Number(lsb);
+    const cur = (inst === "ax" ? kbData.axSlots : kbData.slots) || {};
+    cur[note] = s;
+    put("/slotset", {inst, slots: cur}).then(refreshKbd);
+  });
+  return div;
+}
+async function refreshKbd() {
+  try {
+    kbData = await (await fetch("/kbd")).json();
+    $("#kbd-song").textContent = kbData.song ? "— " + kbData.song : "";
+    $("#kb-jin").value = kbData.junoIn;
+    $("#kb-jout").value = kbData.junoOut;
+    $("#kb-ain").value = kbData.axIn;
+    $("#kb-aout").value = kbData.axOut;
+    $("#kb-jshift").textContent = kbData.junoShift;
+    $("#kb-ashift").textContent = kbData.axShift;
+    const js = $("#kb-slots");
+    js.innerHTML = "";
+    for (let n = 60; n <= 69; n++)
+      js.appendChild(slotRow(n, kbData.slots[n], "juno"));
+    const as = $("#kb-axslots");
+    as.innerHTML = "";
+    for (let n = 72; n <= 77; n++)
+      as.appendChild(slotRow(n, kbData.axSlots[n], "ax"));
+  } catch { /* 瞬断 */ }
+}
+$("#kb-save").addEventListener("click", async () => {
+  const r = await put("/kbdset", {junoIn: $v("#kb-jin"),
+    junoOut: $v("#kb-jout"), axIn: $v("#kb-ain"), axOut: $v("#kb-aout")});
+  alert(r.ok ? "键盘端口已应用" : "失败：" + r.error);
+  refreshKbd();
+});
+$("#kb-jup").addEventListener("click", () => put("/kbdshift",
+    {inst: "juno", total: (kbData.junoShift || 0) + 1}).then(refreshKbd));
+$("#kb-jdown").addEventListener("click", () => put("/kbdshift",
+    {inst: "juno", total: (kbData.junoShift || 0) - 1}).then(refreshKbd));
+$("#kb-aup").addEventListener("click", () => put("/kbdshift",
+    {inst: "ax", total: (kbData.axShift || 0) + 1}).then(refreshKbd));
+$("#kb-adown").addEventListener("click", () => put("/kbdshift",
+    {inst: "ax", total: (kbData.axShift || 0) - 1}).then(refreshKbd));
+
+// ---- VJ 联动 ----
+async function refreshVj() {
+  try {
+    const d = await (await fetch("/settings")).json();
+    const sel = $("#vj-mon");
+    sel.innerHTML = "";
+    (d.screens || []).forEach(n => {
+      const o = document.createElement("option");
+      o.value = n;
+      o.textContent = n;
+      if (n === d.obs.projectorMonitor) o.selected = true;
+      sel.appendChild(o);
+    });
+    $("#vj-media").value = d.obs.mediaInput || "";
+    $("#vj-root").value = d.obs.videoRoot || "";
+    $("#vj-mute").checked = !!d.obs.vjMute;
+  } catch { /* 瞬断 */ }
+}
+$("#vj-save").addEventListener("click", async () => {
+  const r = await put("/settings", {obs: {
+    projectorMonitor: $v("#vj-mon"), mediaInput: $v("#vj-media"),
+    videoRoot: $v("#vj-root"), vjMute: $("#vj-mute").checked}});
+  alert(r.ok ? "VJ 配置已应用" : "失败：" + r.error);
+});
+
+// ---- 设置页 ----
+async function refreshSettings() {
+  try {
+    const d = await (await fetch("/settings")).json();
+    $("#st-clock").value = d.clockHint;
+    $("#st-vj").value = d.vjHint;
+    $("#st-kb").value = d.kbHint;
+    $("#st-auto").checked = d.autoAdvance;
+    $("#st-cont").checked = d.autoPlay;
+    $("#st-top").checked = d.topMost;
+    $("#st-confirm").checked = d.switchConfirm;
+    $("#st-exit").checked = d.exitCloseApps;
+    $("#st-root").value = d.projectsRoot;
+    $("#st-exe").value = d.dawExe;
+    $("#st-autosave").checked = d.autoSave;
+    $("#st-web").checked = d.web.enabled;
+    $("#st-mode").value = d.web.mode;
+    $("#st-srv").value = d.web.serverPort;
+    $("#st-app").value = d.web.appPort;
+    $("#st-tsk").value = d.web.taskerPort;
+    $("#st-pg").value = d.web.midiIn;
+    const ip = $("#st-ip");
+    ip.innerHTML = "";
+    d.adapters.forEach(n => {
+      const o = document.createElement("option");
+      o.value = n;
+      o.textContent = n;
+      if (n === d.web.ip || (n === "自动" && !d.web.ip)) o.selected = true;
+      ip.appendChild(o);
+    });
+  } catch { /* 瞬断 */ }
+}
+$("#st-save").addEventListener("click", async () => {
+  const r = await put("/settings", {
+    clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
+    autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
+    topMost: $("#st-top").checked, switchConfirm: $("#st-confirm").checked,
+    exitCloseApps: $("#st-exit").checked,
+    projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
+    autoSave: $("#st-autosave").checked,
+    web: {enabled: $("#st-web").checked, mode: $v("#st-mode"),
+          serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
+          taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
+          ip: $v("#st-ip") === "自动" ? "" : $v("#st-ip")}});
+  alert(r.ok ? "设置已保存并应用" : "失败：" + r.error);
+});
+refreshPedal();
+refreshKbd();
+refreshVj();
+refreshSettings();
+
