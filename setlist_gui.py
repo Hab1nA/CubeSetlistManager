@@ -1819,6 +1819,279 @@ class App:
             return self._points_sync_list(lib_key)
         return "未知操作"
 
+    def _monitor_web(self):
+        """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
+        return {"/".join(k): list(v.cget("text") and
+                                  (v.cget("text"), v.cget("foreground")))
+                for k, v in self.rows.items()}
+
+    def _settings_get_web(self):
+        """设置页数据：当前生效值 + 可选列表（显示器/网卡/在线端口）。"""
+        cfg = _load_config()
+        obs = cfg.get("obs") or {}
+        web = self._web_config_payload()
+        ips = ["自动"] + [name for ip, name in hotspot.lan_ips()
+                          if web_remote.valid_push_ip(ip)]
+        return {
+            "clockHint": self.clock_hint, "vjHint": self.vj_hint,
+            "kbHint": self.kb_hint,
+            "autoAdvance": self.watch.armed if self.watch else False,
+            "autoPlay": self.cont_play, "topMost": self.top_most,
+            "switchConfirm": self.switch_confirm,
+            "exitCloseApps": self.exit_close_apps,
+            "projectsRoot": self.ccfg.get("projectsRoot", ""),
+            "dawExe": self.ccfg.get("dawExe", ""),
+            "autoSave": bool(self.ccfg.get("autoSave", True)),
+            "obs": {"projectorMonitor": obs.get("projectorMonitor", ""),
+                    "vjMute": bool(obs.get("vjMute", True)),
+                    "videoRoot": obs.get("videoRoot", ""),
+                    "mediaInput": obs.get("mediaInput", "")},
+            "web": {k: web.get(k) for k in
+                    ("enabled", "serverPort", "appPort", "taskerPort",
+                     "midiIn", "mode", "ip")},
+            "screens": [n for n, _r in list_screens()],
+            "adapters": ips,
+            "ports": [n for _i, n in mb._in_devices()],
+        }
+
+    def _settings_apply_web(self, p):
+        """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
+        热应用链（端口/工程库/OBS/遥控/持久化），取值来自 payload。"""
+        g = lambda k, d="": str(p.get(k, d))
+        mon = g("projectorMonitor")
+        mon = "" if mon in ("无",) else mon
+        vj = "" if g("vjHint") == "无" else g("vjHint")
+        kb = "" if g("kbHint") == "无" else g("kbHint")
+        ck = "" if g("clockHint") == "无" else g("clockHint")
+
+        def pint(k, d):
+            try:
+                v = int(str(p.get(k, d)).strip())
+                assert v > 0
+                return v
+            except (ValueError, AssertionError):
+                return d
+        web_in = p.get("web") or {}
+        web_fields = {"enabled": bool(web_in.get("enabled")),
+                      "serverPort": pint("serverPort", 8765) if "serverPort"
+                      in web_in else self.web_cfg.get("serverPort", 8765),
+                      "appPort": web_in.get("appPort",
+                                            self.web_cfg.get("appPort", 8767)),
+                      "taskerPort": web_in.get(
+                          "taskerPort", self.web_cfg.get("taskerPort", 8766)),
+                      "midiIn": str(web_in.get("midiIn") or ""),
+                      "mode": web_in.get("mode", self.web_cfg.get("mode")),
+                      "ip": str(web_in.get("ip") or "")}
+        web_changed = any(self.web_cfg.get(k) != v
+                          for k, v in web_fields.items())
+        self.web_cfg.update(web_fields)
+        cont = bool(p.get("autoPlay"))
+        auto = bool(p.get("autoAdvance")) or cont
+        self.cont_play = cont
+        self.auto_var.set(auto)
+        self._toggle_auto()
+        self.top_most = bool(p.get("topMost"))
+        self.root.attributes("-topmost", self.top_most)
+        self.switch_confirm = bool(p.get("switchConfirm"))
+        self.exit_close_apps = bool(p.get("exitCloseApps"))
+        mute = bool((p.get("obs") or {}).get("vjMute", True))
+        vid = str((p.get("obs") or {}).get("videoRoot") or "")
+        proj_mon = str((p.get("obs") or {}).get("projectorMonitor") or "")
+
+        def apply_obs():
+            ctl = self.ctl
+            if ctl is None:
+                return
+            with self._obs_apply_lock:
+                ctl.cfg["vjMute"] = mute
+                if vid:
+                    ctl.cfg["videoRoot"] = vid
+                ctl.cfg["projectorMonitor"] = proj_mon
+                if ctl.is_connected() and not ctl.apply_mute():
+                    self.q.put("VJ静音未生效：%s" % ctl.last_error)
+                if proj_mon and not ctl.apply_projector():
+                    self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
+                elif not proj_mon:
+                    ctl.close_projector()
+        if self.ctl is not None:
+            threading.Thread(target=apply_obs, daemon=True).start()
+        proj = g("projectsRoot")
+        rescan = bool(proj) and proj != self.ccfg.get("projectsRoot")
+        if proj:
+            self.ccfg["projectsRoot"] = proj
+        if rescan:
+            self.q.put("工程库已变更，后台重扫…")
+            threading.Thread(target=self._load_songs, daemon=True).start()
+        ports_changed = ((vj != self.vj_hint) or (kb != self.kb_hint)
+                         or (ck != self.clock_hint))
+        self._clock_changed = ck != self.clock_hint
+        self.vj_hint, self.kb_hint, self.clock_hint = vj, kb, ck
+        try:
+            cfg = _load_config()
+            cfg.update({"autoAdvance": auto, "autoPlay": cont,
+                        "topMost": self.top_most,
+                        "switchConfirm": self.switch_confirm,
+                        "exitCloseApps": self.exit_close_apps,
+                        "vjPortHint": vj, "kbPortHint": kb,
+                        "clockPortHint": ck})
+            obs = cfg.get("obs") or {}
+            if vid:
+                obs["videoRoot"] = vid
+            obs["projectorMonitor"] = proj_mon
+            obs["vjMute"] = mute
+            cfg["obs"] = obs
+            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
+            daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
+            if p.get("dawExe"):
+                daw_sec["dawExe"] = g("dawExe")
+            if "autoSave" in p:
+                daw_sec["autoSave"] = bool(p.get("autoSave"))
+                self.ccfg["autoSave"] = bool(p.get("autoSave"))
+            cfg["dawSettings"] = daw_sec
+            cfg["webRemote"] = self._web_config_payload(**web_fields)
+            _save_config(cfg)
+        except (ValueError, OSError) as e:
+            self.q.put("配置保存失败：%s" % e)
+            return "配置保存失败：%s" % e
+        if ports_changed:
+            self._apply_ports()
+        if web_changed:
+            self._apply_web()
+        self.q.put("设置已保存")
+        return None
+
+    def _pedal_get_web(self):
+        return {"deviceHint": self.pedal_device_hint,
+                "hint": self.pedal_hint,
+                "binds": self.pedal_binds, "hid": self.pedal_hid,
+                "gestures": self.pedal_gestures,
+                "intercept": self.pedal_intercept,
+                "doubleWindow": self.pedal_double,
+                "remoteEnabled": self.pedal_remote_enabled,
+                "connected": bool(getattr(self.pedal, "connected", False))}
+
+    def _pedal_apply_web(self, p):
+        self.pedal_hint = str(p.get("hint") or self.pedal_hint)
+        self.pedal_device_hint = str(p.get("deviceHint")
+                                     if p.get("deviceHint") is not None
+                                     else self.pedal_device_hint)
+        self.pedal_binds = p.get("binds") or self.pedal_binds
+        if p.get("hid") is not None:
+            self.pedal_hid = p["hid"]
+        self.pedal_intercept = bool(p.get("intercept", self.pedal_intercept))
+        if p.get("gestures"):
+            self.pedal_gestures = p["gestures"]
+        try:
+            self.pedal_double = float(p.get("doubleWindow",
+                                            self.pedal_double))
+        except (TypeError, ValueError):
+            pass
+        self.pedal_remote_enabled = bool(p.get("remoteEnabled",
+                                               self.pedal_remote_enabled))
+        self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
+                         self.pedal_device_hint, self.pedal_intercept,
+                         self.pedal_gestures, self.pedal_double)
+        self.pedal.try_open()
+        self._persist_config(
+            pedal={"deviceHint": self.pedal_device_hint,
+                   "hint": self.pedal_hint, "binds": self.pedal_binds,
+                   "hidBindings": self.pedal_hid,
+                   "intercept": self.pedal_intercept,
+                   "gestures": self.pedal_gestures,
+                   "doubleWindow": self.pedal_double,
+                   "remoteEnabled": self.pedal_remote_enabled})
+        return None
+
+    def _kbd_get_web(self):
+        return {"junoIn": self.jcfg.get("inHint", ""),
+                "junoOut": self.jcfg.get("outHint", ""),
+                "axIn": self.axcfg.get("inHint", ""),
+                "axOut": self.axcfg.get("outHint", ""),
+                "junoShift": self.juno_shift, "axShift": self.ax_shift,
+                "slots": self.slots, "axSlots": self.ax_slots,
+                "song": (daw_ctrl.project_name_from_title(ws[1])
+                         if (ws := daw_ctrl.current_project()) else None)}
+
+    def _kbd_apply_web(self, p):
+        if p.get("junoIn") is not None:
+            self.jcfg["inHint"] = str(p["junoIn"])
+        if p.get("junoOut") is not None:
+            self.jcfg["outHint"] = str(p["junoOut"])
+        if p.get("axIn") is not None:
+            self.axcfg["inHint"] = str(p["axIn"])
+        if p.get("axOut") is not None:
+            self.axcfg["outHint"] = str(p["axOut"])
+        self._persist_config(juno=self.jcfg, ax=self.axcfg)
+        kb_changed = True
+        self._apply_ports_kbd(kb_changed)
+        return None
+
+    def _apply_ports_kbd(self, kb_changed):
+        """键盘自动化口/收发器热重建（_apply_ports 的键盘段抽离复用）。"""
+        if kb_changed and self.kb_port is not None:
+            try:
+                self.kb_port.close()
+            except Exception:
+                pass
+        if kb_changed:
+            self.kb_port = None
+            try:
+                self.switcher = kbd_auto.ToneSwitcher(self.jcfg, self.q.put,
+                                                      on_result=self.
+                                                      _on_kb_result)
+                self.ax_switcher = kbd_auto.ToneSwitcher(
+                    self.axcfg, self.q.put, on_result=self._on_kb_result)
+            except Exception as e:
+                self.q.put("音色收发器重建失败：%s" % _err(e))
+        if not self.kb_hint:
+            if kb_changed:
+                self.q.put("键盘自动化监听已停用")
+            return
+        if kb_changed or self.kb_port is None:
+            try:
+                self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
+                                                  self._on_kb_msg)
+                self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
+            except kbd_auto.PortNotFound as e:
+                self.kb_err = str(e)
+                self.q.put("键盘自动化停用：%s" % e)
+
+    def _kbd_test_web(self, inst, note):
+        slots = self.ax_slots if inst == "ax" else self.slots
+        sw = self.ax_switcher if inst == "ax" else self.switcher
+        slot = slots.get(int(note))
+        if slot is None:
+            return "音符 %d 未配置音色映射" % int(note)
+        if sw is None:
+            return "收发器未就绪"
+        sw.submit(slot, why="web 测试")
+        return None
+
+    def _kbd_shift_web(self, inst, total):
+        total = max(-24 if inst != "ax" else -12,
+                    min(24 if inst != "ax" else 12, int(total)))
+        if inst == "ax":
+            self.ax_shift = total
+            self.ax_switcher.submit_shift(total, why="web 移调")
+        else:
+            self.juno_shift = total
+            self.switcher.submit_shift(total, why="web 移调")
+        return None
+
+    def _slots_save_web(self, inst, slots):
+        if not self.cur_song_path:
+            return "当前没有打开的工程"
+        key = "ax" if inst == "ax" else "slots"
+        clean = {int(k): v for k, v in (slots or {}).items()
+                 if isinstance(v, dict)}
+        kbd_auto.save_slots(self.cur_song_path, clean, key=key)
+        with self._load_lock:
+            if inst == "ax":
+                self.ax_slots = clean
+            else:
+                self.slots = clean
+        return None
+
     def _pl_cmd_web(self, op, key):
         """/plcmd：编排动作（op: add/remove/up/down/clear）。返回 None=成功。"""
         if op == "clear":

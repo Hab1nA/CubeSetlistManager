@@ -67,11 +67,84 @@
         <label class="chk"><input type="checkbox" id="pt-on"> 启用定位点</label>
       </div>
     </section>
-    <section class="page" id="p-pedal"><h2>踩钉</h2><div id="pedal-sum" class="sumlist"></div></section>
-    <section class="page" id="p-kbd"><h2>键盘自动化</h2><div id="kbd-sum" class="sumlist"></div></section>
-    <section class="page" id="p-vj"><h2>VJ 联动</h2><div id="vj-sum" class="sumlist"></div></section>
-    <section class="page" id="p-settings"><h2>设置</h2><div id="set-sum" class="sumlist"></div>
-      <p class="dim">完整设置请用旧版设置窗（后续版本迁入）</p></section>
+    <section class="page" id="p-pedal">
+      <h2>踩钉 <span id="pedal-conn" class="dim"></span></h2>
+      <div class="form">
+        <label>提示名 <input id="pd-hint"></label>
+        <label>设备名过滤 <input id="pd-dev"></label>
+        <label>单踩动作
+          <select id="pd-g-play"><option value="play">播放/暂停</option>
+            <option value="next">下一首</option></select></label>
+        <label>双踩动作
+          <select id="pd-g-next"><option value="play">播放/暂停</option>
+            <option value="next">下一首</option></select></label>
+        <label>双踩窗秒 <input id="pd-win" class="num"></label>
+        <label class="chk"><input type="checkbox" id="pd-intercept"> 拦截硬件原键</label>
+        <label class="chk"><input type="checkbox" id="pd-remote"> 平板转发踩钉</label>
+        <button id="pd-save">保存并应用</button>
+      </div>
+      <p class="dim">单踩=播放/暂停切换，双踩=下一首；动作可对调。改配置后点「保存并应用」即时生效。</p>
+    </section>
+    <section class="page" id="p-kbd">
+      <h2>键盘自动化 <span id="kbd-song" class="dim"></span></h2>
+      <div class="form">
+        <label>JUNO 输入 <input id="kb-jin"></label>
+        <label>JUNO 输出 <input id="kb-jout"></label>
+        <label>AX-09 输入 <input id="kb-ain"></label>
+        <label>AX-09 输出 <input id="kb-aout"></label>
+        <button id="kb-save">保存并应用</button>
+      </div>
+      <h3>JUNO 音色槽 <span class="dim">移调
+        <button id="kb-jdown" class="mini">−1</button>
+        <span id="kb-jshift">0</span>
+        <button id="kb-jup" class="mini">+1</button></span></h3>
+      <div id="kb-slots" class="list"></div>
+      <h3>AX-09 音色槽 <span class="dim">移调
+        <button id="kb-adown" class="mini">−1</button>
+        <span id="kb-ashift">0</span>
+        <button id="kb-aup" class="mini">+1</button></span></h3>
+      <div id="kb-axslots" class="list"></div>
+    </section>
+    <section class="page" id="p-vj">
+      <h2>VJ 联动 <span id="vj-obs" class="dim"></span></h2>
+      <div class="form">
+        <label>VJ显示位置 <select id="vj-mon"></select></label>
+        <label>媒体输入名 <input id="vj-media"></label>
+        <label>视频目录 <input id="vj-root" class="wide"></label>
+        <label class="chk"><input type="checkbox" id="vj-mute"> 静音播放</label>
+        <button id="vj-save">保存并应用</button>
+      </div>
+      <div id="vj-sum" class="sumlist"></div>
+    </section>
+    <section class="page" id="p-settings">
+      <h2>设置</h2>
+      <div class="form">
+        <h3>联动端口</h3>
+        <label>时码端口 <input id="st-clock" class="wide"></label>
+        <label>VJ 端口 <input id="st-vj" class="wide"></label>
+        <label>键盘端口 <input id="st-kb" class="wide"></label>
+        <h3>行为</h3>
+        <label class="chk"><input type="checkbox" id="st-auto"> 播完自动切换</label>
+        <label class="chk"><input type="checkbox" id="st-cont"> 切完自动播放</label>
+        <label class="chk"><input type="checkbox" id="st-top"> 窗口置顶</label>
+        <label class="chk"><input type="checkbox" id="st-confirm"> 切歌确认</label>
+        <label class="chk"><input type="checkbox" id="st-exit"> 退出时关闭被控软件</label>
+        <h3>目录与工程</h3>
+        <label>工程库根 <input id="st-root" class="wide"></label>
+        <label>Cubase 程序 <input id="st-exe" class="wide"></label>
+        <label class="chk"><input type="checkbox" id="st-autosave"> 切歌自动保存</label>
+        <h3>移动端遥控</h3>
+        <label class="chk"><input type="checkbox" id="st-web"> 启用遥控</label>
+        <label>模式 <select id="st-mode"><option value="hotspot">热点</option>
+          <option value="lan">局域网</option></select></label>
+        <label>网页端口 <input id="st-srv" class="num"></label>
+        <label>APP 端口 <input id="st-app" class="num"></label>
+        <label>翻谱端口 <input id="st-tsk" class="num"></label>
+        <label>翻谱 MIDI 口 <input id="st-pg" class="wide"></label>
+        <label>网卡 <select id="st-ip"></select></label>
+        <button id="st-save" class="go">保存并应用</button>
+      </div>
+    </section>
     <section class="page" id="p-log">
       <h2>日志</h2>
       <div id="log" class="log"></div>
