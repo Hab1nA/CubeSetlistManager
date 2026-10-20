@@ -74,6 +74,7 @@ class _FakeWebApp:
             return None
 
         self._points_cmd_web = pt_cmd
+        self._pickdir_web = lambda: {"path": "D:/选目录"}
 
 
 def _drain(app):
@@ -140,6 +141,24 @@ def test_playlist_points_log_endpoints():
                                       "key": "A/歌一",
                                       "payload": {"on": False}})["ok"] is True
         assert app.pl_log[1][0] == "toggle"
+    finally:
+        srv.shutdown()
+
+
+def test_pickdir_endpoint():
+    """/pickdir：主线程对话框结果回传；简化版拒绝。"""
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    threading.Thread(target=_drain, args=(app,), daemon=True).start()
+    try:
+        assert _post(port, "/pickdir", {}) == {"path": "D:/选目录"}
+        app.lite = True
+        code, body = _req("POST", port, "/pickdir", {})
+        assert code == 403
     finally:
         srv.shutdown()
 

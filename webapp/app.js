@@ -296,7 +296,7 @@ $$(".lamp").forEach(el => el.addEventListener("click",
 // ---- 定位点快跳 chips（当前曲目的定位点 → /cmd switch 即 GOTO）----
 function drawChips(st, cur) {
   const box = $("#chips");
-  if (!plCache || cur < 0 || !plCache.pl[cur]) {
+  if (!plCache || !plCache.pl || cur < 0 || !plCache.pl[cur]) {
     box.hidden = true;
     return;
   }
@@ -398,7 +398,7 @@ function libRow(s, inPl) {
   return div;
 }
 function drawLib() {
-  if (!plCache) return;
+  if (!plCache || !plCache.lib || !plCache.pl) return;
   const lib = $("#lib");
   const inPl = new Set(plCache.pl.map(it => it.key.startsWith("pt:")
       ? it.key.slice(3).split("#")[0] : it.key));
@@ -496,7 +496,7 @@ async function movePl(from, to) {
   refreshPlaylist();
 }
 function drawPl() {
-  if (!plCache || dragKey) return;     // 拖拽中不重绘（防行从指针下消失）
+  if (!plCache || !plCache.pl || dragKey) return;  // 拖拽中不重绘（防行从指针下消失）
   const el = $("#pl");
   const want = plCache.pl.map(it => it.key).join("|");
   const curIdx = typeof stCur === "number" ? stCur : -1;
@@ -922,15 +922,32 @@ function slotEditor(anchor, inst, note, slot) {
 }
 function slotRow(note, slot, inst) {
   const div = document.createElement("div");
-  div.className = "row";
-  const nm = document.createElement("span");
-  nm.className = "nm";
-  nm.textContent = "音 " + noteName(note);
-  const dur = document.createElement("span");
-  dur.className = "dur";
-  dur.textContent = slot ? ("PC " + slot.pc + (slot.msb !== undefined
-      ? " · MSB " + slot.msb + " · LSB " + slot.lsb : "")) : "（未配置）";
-  div.append(nm, dur);
+  div.className = "slot" + (slot ? "" : " unconfigured");
+  const n = document.createElement("span");
+  n.className = "s-note";
+  n.textContent = "音 " + noteName(note);
+  const pc = document.createElement("span");
+  pc.className = "s-pc";
+  pc.textContent = slot ? "PC " + slot.pc : "（未配置）";
+  const sub = document.createElement("span");
+  sub.className = "s-sub";
+  sub.textContent = slot && slot.msb !== undefined
+      ? "MSB " + slot.msb + " · LSB " + slot.lsb : "";
+  const test = document.createElement("button");
+  test.className = "btn ghost xs s-test";
+  test.textContent = "试";
+  test.title = "向琴发送该音色（连通测试）";
+  test.addEventListener("click", ev => {
+    ev.stopPropagation();
+    if (!slot) {
+      toast("该音符未配置音色映射", "err");
+      return;
+    }
+    post("/kbdtest", {inst, note}).then(j => {
+      if (j.ok) toast("已发送测试：音 " + noteName(note));
+    });
+  });
+  div.append(n, pc, sub, test);
   div.title = "点击编辑音色";
   div.addEventListener("click", () => slotEditor(div, inst, note, slot));
   return div;
@@ -1087,12 +1104,259 @@ $("#st-save").addEventListener("click", async () => {
     refreshSettings();
   }
 });
+// ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
+async function pickDir(inputId) {
+  toast("请在弹出的窗口中选择目录…");
+  try {
+    const r = await fetch("/pickdir", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: "{}"});
+    const j = await r.json();
+    if (!r.ok) {
+      toast(j.error || "目录选择失败", "err");
+      return;
+    }
+    if (j.path) {
+      $("#" + inputId).value = j.path;
+      $("#" + inputId).dispatchEvent(new Event("input", {bubbles: true}));
+      toast("已选择：" + j.path);
+    }
+  } catch {
+    toast("目录选择失败（网络）", "err");
+  }
+}
+$$(".browse").forEach(b =>
+    b.addEventListener("click", () => pickDir(b.dataset.pick)));
+
+// ---- 编排窄窗 tab（<900px 双列折叠为单列）----
+$$("#sl-tabs button").forEach(b => b.addEventListener("click", () => {
+  $$("#sl-tabs button").forEach(x => x.classList.toggle("on", x === b));
+  const want = "#" + b.dataset.col;
+  $$(".cols .col").forEach(c =>
+      c.classList.toggle("show", !!c.querySelector(want)));
+}));
+
+// ---- QR 码（无依赖最小实现：字节模式、ECC L、版本 1-5、8 掩码择优）----
+// 算法移植自公有域实现（Project Nayuki 思路）：GF(256)/RS/函数图案/格式位
+// 均按标准；掩码罚分仅影响择优（任何掩码都是合法可扫的 QR）。
+const QR_DATA_CW = [0, 19, 34, 55, 80, 108];
+const QR_EC_CW = [0, 7, 10, 15, 20, 26];
+function qrMul(x, y) {
+  let z = 0;
+  for (let i = 7; i >= 0; i--) {
+    z = (z << 1) ^ ((z >>> 7) * 0x11D);
+    z ^= ((y >>> i) & 1) * x;
+  }
+  return z & 0xFF;
+}
+function qrRs(data, ecCw) {
+  const gen = new Array(ecCw).fill(0);
+  gen[ecCw - 1] = 1;
+  let root = 1;
+  for (let i = 0; i < ecCw; i++) {
+    for (let j = 0; j < ecCw; j++) {
+      gen[j] = qrMul(gen[j], root);
+      if (j + 1 < ecCw) gen[j] ^= gen[j + 1];
+    }
+    root = qrMul(root, 2);
+  }
+  const rem = new Array(ecCw).fill(0);
+  for (const b of data) {
+    const factor = b ^ rem[0];
+    rem.shift();
+    rem.push(0);
+    for (let i = 0; i < ecCw; i++) rem[i] ^= qrMul(gen[i], factor);
+  }
+  return rem;
+}
+function qrMaskBit(mask, x, y) {
+  switch (mask) {
+    case 0: return (x + y) % 2 === 0;
+    case 1: return y % 2 === 0;
+    case 2: return x % 3 === 0;
+    case 3: return (x + y) % 3 === 0;
+    case 4: return (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0;
+    case 5: return x * y % 2 + x * y % 3 === 0;
+    case 6: return (x * y % 2 + x * y % 3) % 2 === 0;
+    default: return ((x + y) % 2 + x * y % 3) % 2 === 0;
+  }
+}
+function qrBuild(text, forceMask) {
+  const bytes = Array.from(new TextEncoder().encode(text));
+  let ver = 1;
+  while (ver <= 5 && bytes.length * 8 + 12 > QR_DATA_CW[ver] * 8) ver++;
+  if (ver > 5) return null;
+  const dataCw = QR_DATA_CW[ver], ecCw = QR_EC_CW[ver];
+  const size = ver * 4 + 17;
+  const M = Array.from({length: size}, () => new Array(size).fill(false));
+  const F = Array.from({length: size}, () => new Array(size).fill(false));
+  const set = (x, y, v) => { M[y][x] = v; F[y][x] = true; };
+  // 计时图案
+  for (let i = 0; i < size; i++) {
+    set(6, i, i % 2 === 0);
+    set(i, 6, i % 2 === 0);
+  }
+  // 三个定位图案（9x9 含分隔带，越界部分跳过——角上超出矩阵）
+  const finder = (cx, cy) => {
+    for (let dy = -4; dy <= 4; dy++)
+      for (let dx = -4; dx <= 4; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (0 <= x && x < size && 0 <= y && y < size) {
+          const d = Math.max(Math.abs(dx), Math.abs(dy));
+          set(x, y, d !== 2 && d !== 4);
+        }
+      }
+  };
+  finder(3, 3);
+  finder(size - 4, 3);
+  finder(3, size - 4);
+  // 校正图案（v≥2）：位置列表角落与定位图案重叠的三组跳过
+  if (ver >= 2) {
+    const n = Math.floor(ver / 7) + 2;
+    const step = Math.floor((ver * 4 + n * 2 + 1) / (n * 2 - 2)) * 2;
+    const pos = [6];
+    for (let p = ver * 4 + 10; pos.length < n; p -= step) pos.unshift(p);
+    const max = Math.max(...pos);
+    for (const cy of pos)
+      for (const cx of pos)
+        if (!((cx === 6 && cy === 6) || (cx === 6 && cy === max)
+              || (cx === max && cy === 6)))
+          for (let dy = -2; dy <= 2; dy++)
+            for (let dx = -2; dx <= 2; dx++)
+              set(cx + dx, cy + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+  }
+  // 格式位（先占位，最终值依掩码回写）
+  const drawFmt = mask => {
+    const data = (1 << 3) | mask;              // ECC L = 01
+    let rem = data;
+    for (let i = 0; i < 10; i++)
+      rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+    const bits = ((data << 10) | rem) ^ 0x5412;
+    const bit = i => ((bits >>> i) & 1) !== 0;
+    for (let i = 0; i <= 5; i++) set(8, i, bit(i));
+    set(8, 7, bit(6));
+    set(8, 8, bit(7));
+    set(7, 8, bit(8));
+    for (let i = 9; i < 15; i++) set(14 - i, 8, bit(i));
+    for (let i = 0; i < 8; i++) set(size - 1 - i, 8, bit(i));
+    for (let i = 8; i < 15; i++) set(8, size - 15 + i, bit(i));
+    set(8, size - 8, true);
+  };
+  drawFmt(0);
+  // 数据位流 → 码字（字节模式 + 终止符 + 填充 + RS 纠错）
+  const bits = [];
+  const push = (v, n) => {
+    for (let i = n - 1; i >= 0; i--) bits.push((v >>> i) & 1);
+  };
+  push(4, 4);
+  push(bytes.length, 8);
+  bytes.forEach(b => push(b, 8));
+  push(0, Math.min(4, dataCw * 8 - bits.length));
+  while (bits.length % 8) bits.push(0);
+  const cw = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let v = 0;
+    for (let j = 0; j < 8; j++) v = v * 2 + bits[i + j];
+    cw.push(v);
+  }
+  for (let i = 0; cw.length < dataCw; i++) cw.push(i % 2 ? 0x11 : 0xEC);
+  const all = cw.concat(qrRs(cw, ecCw));
+  // 之字放置
+  let i = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let vert = 0; vert < size; vert++)
+      for (let j = 0; j < 2; j++) {
+        const x = right - j;
+        const y = ((right + 1) & 2) === 0 ? size - 1 - vert : vert;
+        if (!F[y][x] && i < all.length * 8) {
+          M[y][x] = ((all[i >>> 3] >>> (7 - (i & 7))) & 1) !== 0;
+          i++;
+        }
+      }
+  }
+  // 掩码：罚分择优（规则 1/2/3/4；仅影响择优不影响合法性）
+  const R3A = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0];
+  const R3B = R3A.slice().reverse();
+  const eqPat = (get, x, pat) =>
+      pat.every((v, k) => get(x + k) === !!v);
+  const penalty = () => {
+    let s = 0;
+    for (let y = 0; y < size; y++) {           // 规则1：行/列同色长跑
+      let rx = 1, cx = 1;
+      for (let x = 1; x < size; x++) {
+        if (M[y][x] === M[y][x - 1]) rx++;
+        else { if (rx >= 5) s += rx - 2; rx = 1; }
+        if (M[x][y] === M[x - 1][y]) cx++;
+        else { if (cx >= 5) s += cx - 2; cx = 1; }
+      }
+      if (rx >= 5) s += rx - 2;
+      if (cx >= 5) s += cx - 2;
+    }
+    for (let y = 0; y < size - 1; y++)         // 规则2：2x2 同色块
+      for (let x = 0; x < size - 1; x++) {
+        const v = M[y][x];
+        if (v === M[y][x + 1] && v === M[y + 1][x]
+            && v === M[y + 1][x + 1])
+          s += 3;
+      }
+    for (let y = 0; y < size; y++)             // 规则3：finder 样式
+      for (let x = 0; x + 11 <= size; x++)
+        if (eqPat(k => M[y][x + k], 0, R3A)
+            || eqPat(k => M[y][x + k], 0, R3B)
+            || eqPat(k => M[x + k][y], 0, R3A)
+            || eqPat(k => M[x + k][y], 0, R3B))
+          s += 40;
+    let dark = 0;                              // 规则4：暗模块占比
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) if (M[y][x]) dark++;
+    s += Math.floor(Math.abs(dark * 20 - size * size * 10)
+                    / size / size) * 10;
+    return s;
+  };
+  let best = null, bestMask = 0, bestScore = Infinity;
+  const from = forceMask === undefined ? 0 : forceMask;
+  const to = forceMask === undefined ? 7 : forceMask;
+  for (let m = from; m <= to; m++) {
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++)
+        if (!F[y][x]) M[y][x] ^= qrMaskBit(m, x, y);
+    drawFmt(m);
+    const sc = penalty();
+    if (sc < bestScore) { bestScore = sc; best = M.map(r => r.slice()); bestMask = m; }
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++)
+        if (!F[y][x]) M[y][x] ^= qrMaskBit(m, x, y);   // 异或还原试下一掩码
+  }
+  return {size, matrix: best, mask: bestMask};
+}
+function qrSvg(text) {
+  const q = qrBuild(text);
+  if (!q) return "";
+  const s = q.size, qz = 2;                    // 四周 2 模块静区
+  let d = "";
+  for (let y = 0; y < s; y++)
+    for (let x = 0; x < s; x++)
+      if (q.matrix[y][x]) d += "M" + (x + qz) + "," + (y + qz) + "h1v1h-1z";
+  return "<svg viewBox=\"0 0 " + (s + qz * 2) + " " + (s + qz * 2)
+      + "\" xmlns=\"http://www.w3.org/2000/svg\" shape-rendering=\"crispEdges\">"
+      + "<rect width=\"" + (s + qz * 2) + "\" height=\"" + (s + qz * 2)
+      + "\" fill=\"#fff\"/><path d=\"" + d + "\" fill=\"#101418\"/></svg>";
+}
+window.__qr = {build: qrBuild, svg: qrSvg};   // 测试钩子（探针/控制台校验用）
+
 function renderAppAddr() {
   const wrap = $("#app-addr-wrap");
   const a = stState && stState.webIp && stState.appPort
       ? "http://" + stState.webIp + ":" + stState.appPort + "/" : "";
   wrap.hidden = !a;
-  if (a) $("#app-addr").textContent = a;
+  if (a) {
+    $("#app-addr").textContent = a;
+    const qr = $("#qr-box");
+    if (qr.dataset.addr !== a) {
+      qr.dataset.addr = a;
+      qr.innerHTML = qrSvg(a);
+    }
+  }
 }
 $("#app-addr").addEventListener("click", () =>
     copyText($("#app-addr").textContent, "已复制：" + $("#app-addr").textContent));
