@@ -31,3 +31,10 @@ mobile/local.properties
 
 # APK 构建产物副本（源头 mobile/app/build；dist 内由 build.bat 拷入）
 /CubeRemote.apk
+
+# 可再生调试产物（日志/工具工作目录）
+out/*.log
+stall*.log
+tmp*.log
+.video_agent/
+.v2c/
