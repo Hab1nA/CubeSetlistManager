@@ -177,8 +177,26 @@ $("#smart").addEventListener("click", () => {
   const a = $("#smart").dataset.action;
   if (a) cmd(a);
 });
+// 切歌统一入口（全部 switch 命令经此）：设置开了「切歌确认」且当前有
+// 打开工程时走两段式（首点武装按钮，3 秒内再操作执行），否则直发。
+// dbl=双击行场景：按钮是 hover 才现的行内「切歌」，武装时补 toast 提示；
+// 双击的第二击已执行发包，随后的 dblclick 事件用 swLastFire 挡掉不重复武装。
+let swLastFire = 0;
+function switchTo(i, btn, dbl) {
+  const st = stState;
+  const fire = () => { swLastFire = Date.now(); cmd("switch", i); };
+  if (dbl && Date.now() - swLastFire < 400) return;
+  if (st && st.confirm && st.open && typeof st.cur === "number"
+      && i !== st.cur) {
+    if (dbl && btn && !btn.dataset.armed)
+      toast("再操作一次确认切换");
+    armConfirm(btn, fire, "确认切换？");
+    return;
+  }
+  fire();
+}
 $("#next-go").addEventListener("click", () => {
-  if (typeof stCur === "number") cmd("switch", stCur + 1);
+  if (typeof stCur === "number") switchTo(stCur + 1, $("#next-go"));
 });
 
 const fmt = s => {
@@ -212,7 +230,9 @@ function render(st) {
   smart.textContent = m[0];
   smart.dataset.action = m[1];
   smart.disabled = !!st.busy;
-  $$("#transport [data-cmd]").forEach(b => b.disabled = !!st.busy);
+  // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用
+  $$("#transport [data-cmd]").forEach(b =>
+      b.disabled = !!st.busy && b.dataset.cmd !== "panic");
   // NEXT 卡
   const rows = st.songs || [];
   const cur = typeof st.cur === "number" ? st.cur : -1;
@@ -256,13 +276,13 @@ function consoleRow(s, i, cur) {
   go.textContent = "切歌";
   go.addEventListener("click", ev => {
     ev.stopPropagation();
-    cmd("switch", i);
+    switchTo(i, go);
   });
   const dur = document.createElement("span");
   dur.className = "dur";
   dur.textContent = s.dur;
   div.append(no, eq, nm, go, dur);
-  div.addEventListener("dblclick", () => cmd("switch", i));
+  div.addEventListener("dblclick", () => switchTo(i, go, true));
   return div;
 }
 
@@ -296,8 +316,13 @@ $$(".lamp").forEach(el => el.addEventListener("click",
 // ---- 定位点快跳 chips（当前曲目的定位点 → /cmd switch 即 GOTO）----
 function drawChips(st, cur) {
   const box = $("#chips");
-  if (!plCache || !plCache.pl || cur < 0 || !plCache.pl[cur]) {
+  const off = () => {          // 隐藏时清残留（含签名：同数据回来要重建）
     box.hidden = true;
+    box.innerHTML = "";
+    delete box.dataset.sig;
+  };
+  if (!plCache || !plCache.pl || cur < 0 || !plCache.pl[cur]) {
+    off();
     return;
   }
   const baseKey = plCache.pl[cur].key.startsWith("pt:")
@@ -309,7 +334,7 @@ function drawChips(st, cur) {
       items.push({i, name: it.name.split(" · ").pop(), cur: i === cur});
   });
   if (!items.length) {
-    box.hidden = true;
+    off();
     return;
   }
   const sig = baseKey + ":" + items.map(x => x.name + x.cur).join("|");
@@ -326,7 +351,7 @@ function drawChips(st, cur) {
     b.className = "chip-btn" + (x.cur ? " cur" : "");
     b.textContent = x.name;
     b.title = "点击切到该定位点（同工程免重开）";
-    b.addEventListener("click", () => cmd("switch", x.i));
+    b.addEventListener("click", () => switchTo(x.i, b));
     box.appendChild(b);
   });
 }
@@ -400,10 +425,11 @@ function libRow(s, inPl) {
 function drawLib() {
   if (!plCache || !plCache.lib || !plCache.pl) return;
   const lib = $("#lib");
-  const inPl = new Set(plCache.pl.map(it => it.key.startsWith("pt:")
-      ? it.key.slice(3).split("#")[0] : it.key));
-  const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0)).join("|")
-      + "#" + slQ;
+  // 精确键匹配：素材库视图（含展开的 pt 条目）与播放列表同一键空间，
+  // 部分移除的点条目要能单独加回（宿主归一会把它们全标「已加入」）
+  const inPl = new Set(plCache.pl.map(it => it.key));
+  const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0))
+      .join("|") + "#" + slQ;
   if (lib.dataset.sig === sig) return;
   lib.dataset.sig = sig;
   lib.innerHTML = "";
@@ -722,8 +748,9 @@ $("#pt-save").addEventListener("click", () => {
 $("#pt-goto").addEventListener("click", () => {
   const i = ptGotoIndex();
   if (i !== null) {
-    cmd("switch", i);
-    toast("定位到《" + $("#pt-name").value + "》");
+    switchTo(i, $("#pt-goto"));
+    if (!$("#pt-goto").dataset.armed)
+      toast("定位到《" + $("#pt-name").value + "》");
   }
 });
 $("#pt-up").addEventListener("click", () =>
@@ -1048,9 +1075,12 @@ function stDirty() {
   $("#st-dirty").hidden = !dirty;
   $("#st-save").disabled = dirty ? false : true;
 }
-async function refreshSettings() {
+async function refreshSettings(force) {
   try {
     const d = await (await fetch("/settings")).json();
+    // 用户已弄脏时不覆盖：慢响应迟到会静默吃掉正在编辑的值
+    // （保存成功后的回读走 force=true 重抓基线）
+    if (!force && stBase !== null && stSnap() !== stBase) return;
     $("#st-clock").value = d.clockHint;
     $("#st-vj").value = d.vjHint;
     $("#st-kb").value = d.kbHint;
@@ -1069,17 +1099,35 @@ async function refreshSettings() {
     $("#st-tsk").value = d.web.taskerPort;
     $("#st-pg").value = d.web.midiIn;
     const ip = $("#st-ip");
-    const isig = d.adapters.join("|") + "#" + (d.web.ip || "");
+    // 候选 {name, ip}：显示网卡名、value=IP（后端 lan_ip 存 IP，提交网卡
+    // 名永远配不上）；「自动」（值空串）= 不指定
+    const isig = d.adapters.map(a => a.name + "=" + a.ip).join("|")
+        + "#" + (d.web.ip || "");
     if (ip.dataset.sig !== isig) {
       ip.dataset.sig = isig;
       ip.innerHTML = "";
-      d.adapters.forEach(n => {
+      const auto = document.createElement("option");
+      auto.value = "";
+      auto.textContent = "自动";
+      auto.selected = !d.web.ip;
+      ip.appendChild(auto);
+      (d.adapters || []).forEach(a => {
         const o = document.createElement("option");
-        o.value = n;
-        o.textContent = n;
-        if (n === d.web.ip || (n === "自动" && !d.web.ip)) o.selected = true;
+        o.value = a.ip;
+        o.textContent = a.name;
+        o.title = a.ip;
+        if (a.ip && a.ip === d.web.ip) o.selected = true;
         ip.appendChild(o);
       });
+      // 已存 IP 不在当前候选（网卡换了/未上电）：幽灵项保住显示与提交值，
+      // 不保会被浏览器回落「自动」→ 保存即静默清空绑定
+      if (d.web.ip && !(d.adapters || []).some(a => a.ip === d.web.ip)) {
+        const o = document.createElement("option");
+        o.value = d.web.ip;
+        o.textContent = d.web.ip + "（不在场）";
+        o.selected = true;
+        ip.appendChild(o);
+      }
     }
     stBase = stSnap();
     stDirty();
@@ -1098,10 +1146,10 @@ $("#st-save").addEventListener("click", async () => {
     web: {enabled: $("#st-web").checked, mode: $v("#st-mode"),
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
-          ip: $v("#st-ip") === "自动" ? "" : $v("#st-ip")}});
+          ip: $v("#st-ip")}});
   if (r.ok) {
     toast("设置已保存并应用");
-    refreshSettings();
+    refreshSettings(true);
   }
 });
 // ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
