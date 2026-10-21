@@ -7,9 +7,12 @@ import pathlib
 import queue
 import sys
 import threading
+import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import kbd_auto
+import setlist_gui as sg
 import web_remote
 
 _LOOPBACK = "127.0.0.1"
@@ -177,3 +180,53 @@ def test_app_asset_whitelist():
         assert code == 404, "穿越路径必须 404"
     finally:
         srv.shutdown()
+
+
+class _SwitcherStub:
+    """ToneSwitcher 替身：记录 submit_msgs / submit_shift 调用。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def submit_msgs(self, msgs, why=""):
+        self.calls.append(("msgs", msgs, why))
+
+    def submit_shift(self, total, why=""):
+        self.calls.append(("shift", total, why))
+
+
+def test_kbd_shift_web_ax_uses_pitch_msgs():
+    """A5：ax 分支发弯音钉位序列（AX-09 不收 SysEx），JUNO 分支不变。"""
+    ax, juno = _SwitcherStub(), _SwitcherStub()
+    fake = types.SimpleNamespace(ax_switcher=ax, switcher=juno,
+                                 ax_shift=0, juno_shift=0, axcfg={"ch": 1})
+    assert sg.App._kbd_shift_web(fake, "ax", 3) is None
+    assert ax.calls and ax.calls[0][0] == "msgs"
+    assert ax.calls[0][1] == kbd_auto.ax_shift_msgs(3, 1)
+    assert all(k == "short" for k, _p, _g in ax.calls[0][1])
+    assert fake.ax_shift == 3
+    assert sg.App._kbd_shift_web(fake, "juno", 2) is None
+    assert juno.calls[0][0] == "shift"
+
+
+def _pl_app():
+    return types.SimpleNamespace(
+        pl_keys=["B/歌二"], cur=0,
+        by_key={"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
+                           "path": "/p1"}},
+        points={"A/歌一": {"enabled": True, "counter": 1, "points": [
+            {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}},
+        durations={}, dur_src={},
+        _persist=lambda: None, _refresh=lambda: None)
+
+
+def test_plcmd_add_pt_key():
+    """A6：素材库点条目（pt: 键）可加入；点已删/未启用/库缺则拒绝。"""
+    app = _pl_app()
+    assert sg.App._pl_cmd_web(app, "add", "pt:A/歌一#1") is None
+    assert app.pl_keys == ["B/歌二", "pt:A/歌一#1"]
+    app2 = _pl_app()
+    app2.points["A/歌一"]["enabled"] = False
+    assert sg.App._pl_cmd_web(app2, "add", "pt:A/歌一#1") \
+        == "该定位点不存在或未启用"
+    assert sg.App._pl_cmd_web(app2, "add", "X/不在库") == "素材库里没有该工程"

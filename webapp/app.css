@@ -23,6 +23,9 @@
   *, *::before, *::after { transition:none!important; animation:none!important; }
 }
 * { box-sizing: border-box; }
+/* [hidden] 必须压过一切 display 覆盖（.empty-state/.chips/#pt-form 的
+   display:flex 曾把它打穿——JS 设了 hidden 也不隐藏） */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;

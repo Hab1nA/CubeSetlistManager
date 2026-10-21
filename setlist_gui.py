@@ -1838,8 +1838,11 @@ class App:
         cfg = _load_config()
         obs = cfg.get("obs") or {}
         web = self._web_config_payload()
-        ips = ["自动"] + [name for ip, name in hotspot.lan_ips()
-                          if web_remote.valid_push_ip(ip)]
+        # 服务网卡候选带 {name, ip}：前端显示名、提交 IP（后端 lan_ip 存的
+        # 是 IP，只报名永远配不上）；排除环回——_rebuild_lan 不认它
+        adapters = [{"name": name, "ip": ip} for ip, name in
+                    hotspot.lan_ips() if web_remote.valid_push_ip(ip)
+                    and not ip.startswith("127.")]
         return {
             "clockHint": self.clock_hint, "vjHint": self.vj_hint,
             "kbHint": self.kb_hint,
@@ -1858,7 +1861,7 @@ class App:
                     ("enabled", "serverPort", "appPort", "taskerPort",
                      "midiIn", "mode", "ip")},
             "screens": [n for n, _r in list_screens()],
-            "adapters": ips,
+            "adapters": adapters,
             "ports": [n for _i, n in mb._in_devices()],
         }
 
@@ -2080,10 +2083,18 @@ class App:
                     min(24 if inst != "ax" else 12, int(total)))
         if inst == "ax":
             self.ax_shift = total
-            self.ax_switcher.submit_shift(total, why="web 移调")
+            if self.ax_switcher is None:
+                return "收发器未就绪"
+            # AX-09 不收 SysEx：移调走弯音钉位序列（与 _on_kb_msg 同口径），
+            # submit_shift 是 JUNO 的 Master Coarse Tuning SysEx
+            self.ax_switcher.submit_msgs(
+                kbd_auto.ax_shift_msgs(total, self.axcfg["ch"]),
+                why="AX-09 全局移调 %+d 半音" % total)
         else:
             self.juno_shift = total
-            self.switcher.submit_shift(total, why="web 移调")
+            if self.switcher is None:
+                return "收发器未就绪"
+            self.switcher.submit_shift(total, why="JUNO 移调 %+d 半音" % total)
         return None
 
     def _slots_save_web(self, inst, slots):
@@ -2109,8 +2120,18 @@ class App:
             self._refresh()
             return None
         if op == "add":
-            if key not in self.by_key:
-                return "素材库里没有该工程"
+            pt = points.parse_pt_key(key)
+            if pt is None:
+                if key not in self.by_key:
+                    return "素材库里没有该工程"
+            else:       # 定位点条目（素材库已展开视图的加入路径）
+                song = self.by_key.get(pt[0])
+                data = self.points.get(pt[0])
+                if song is None:
+                    return "素材库里没有该工程"
+                if not (data and data["enabled"]
+                        and points.get_point(data, pt[1])):
+                    return "该定位点不存在或未启用"
             if key in self.pl_keys:
                 return "已在播放列表里"
             self.pl_keys.append(key)

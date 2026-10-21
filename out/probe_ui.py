@@ -68,12 +68,15 @@ def boot():
     ws.send(json.dumps({"id": 0, "method": "Runtime.enable"}))
     # 启动健康门：等 /state 快照建成（Tk 主线程 _tick_banner 首轮）。
     # 本机已知停摆病偶发在启动期卡住 Tk 线程——那不是前端问题，明确分流。
+    # /settings 也要等到（页内 stBase 基线依赖它；迟到会让设置页断言竞态）。
     healthy = False
     for i in range(30):
         r = send("Runtime.evaluate", {
             "expression": "(async()=>{const r=await fetch('/state');"
                           "const j=await r.json();"
-                          "return 'songs' in j && 'tstate' in j})()",
+                          "if(!('songs' in j)) return false;"
+                          "const s=await fetch('/settings');"
+                          "return s.ok})()",
             "awaitPromise": True, "returnByValue": True})
         if r.get("result", {}).get("value") is True:
             healthy = True
@@ -84,6 +87,7 @@ def boot():
               "——终止本轮，不代表前端失败）", flush=True)
         probe.terminate()
         sys.exit(2)
+    time.sleep(1.5)      # 让页内 refreshSettings 落完（stBase 基线就绪）
     return probe, send
 
 
@@ -783,16 +787,224 @@ def stage_p2(send):
     ok("p2.no-js-errors", not errs, str(errs)[:300])
 
 
+def _state_stub(confirm, cur=0, busy=False):
+    """A 批共用 /state 桩（其它请求记录后回 ok；/playlist 必须透真——
+    1.5s 的 refreshPlaylist 会用它的 cur 覆盖 stCur，回 ok:true 会让
+    next-go 的 handler 门 typeof stCur==="number" 失效）。"""
+    st = ("{ready:true,busy:%s,open:true,projName:'歌一',tstate:'playing',"
+          "pos:3,dur:90,cur:%d,confirm:%s,"
+          "songs:[{name:'歌一',dur:'1:30'},{name:'歌二',dur:'2:00'}],"
+          "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767}"
+          % ("true" if busy else "false", cur,
+             "true" if confirm else "false"))
+    return (UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+            "window.fetch=(u,o)=>{"
+            "window.__posts.push([String(u),(o&&o.body)||'']);"
+            "if(String(u)==='/state')return Promise.resolve(new Response("
+            "JSON.stringify(%s),{status:200}));"
+            "if(String(u)==='/playlist')"
+            "return window.__fetch0(u,o);"
+            "return Promise.resolve(new Response('{\"ok\":true}',"
+            "{status:200,headers:{'Content-Type':'application/json'}}))};"
+            % st)
+
+
+def stage_a(send):
+    # ---- A1：[hidden] 计算样式级（hidden 属性 ⇒ computed display:none）----
+    nav(send, "console")
+    a1 = js(send, "const d=id=>getComputedStyle(document.getElementById(id));"
+            "return {"
+            "emptyHid:document.getElementById('console-empty').hidden,"
+            "emptyD:d('console-empty').display,"
+            "chipsHid:document.getElementById('chips').hidden,"
+            "chipsD:d('chips').display}")
+    ok("ba.a1.hidden-console-empty",
+       a1.get("emptyHid") is (a1.get("emptyD") == "none"),
+       json.dumps(a1))
+    ok("ba.a1.hidden-chips",
+       a1.get("chipsHid") is (a1.get("chipsD") == "none"),
+       json.dumps(a1))
+    nav(send, "points")
+    a1b = js(send, "const d=id=>getComputedStyle(document.getElementById(id));"
+             "return {formHid:document.getElementById('pt-form').hidden,"
+             "formD:d('pt-form').display,"
+             "noneHid:document.getElementById('pt-none').hidden,"
+             "noneD:d('pt-none').display}")
+    ok("ba.a1.hidden-pt-form", a1b.get("formHid") is (a1b.get("formD") == "none")
+       and a1b.get("noneHid") is (a1b.get("noneD") == "none"),
+       json.dumps(a1b))
+    # 选中一个点后互斥（有定位点数据的机器上才跑强断言）
+    rowsn = js(send, "return document.querySelectorAll('#pt-list .row').length")
+    if rowsn:
+        js(send, "document.querySelector('#pt-list .row').click()")
+        time.sleep(1.2)
+        a1c = js(send, "const d=id=>getComputedStyle(document.getElementById(id));"
+                 "return {formD:d('pt-form').display,"
+                 "noneD:d('pt-none').display}")
+        ok("ba.a1.pt-mutex-on-select",
+           a1c.get("formD") != "none" and a1c.get("noneD") == "none",
+           json.dumps(a1c))
+    else:
+        ok("ba.a1.pt-mutex-on-select", True, "（本机无定位点工程）")
+
+    # ---- A2：busy 态全停放行 ----
+    js(send, _state_stub(False, busy=True))
+    time.sleep(1.2)
+    a2 = js(send, "return {panic:document.querySelector('[data-cmd=panic]')"
+            ".disabled,"
+            "others:[...document.querySelectorAll("
+            "'#transport [data-cmd]')].filter(b=>b.dataset.cmd!=='panic')"
+            ".map(b=>b.disabled),"
+            "smart:document.getElementById('smart').disabled}")
+    ok("ba.a2.busy-panic-live", a2.get("panic") is False
+       and bool(a2.get("others")) and all(a2["others"])
+       and a2.get("smart") is True, json.dumps(a2))
+
+    # ---- A3：切歌确认两段式（confirm=true 首点不发包，再点才发）----
+    nav(send, "console")
+    js(send, _state_stub(True))
+    time.sleep(1.2)
+    _a3dbg = js(send, "return {dis:document.getElementById('next-go')"
+                ".disabled,"
+                "cur:document.querySelector('#console-list .row.cur')"
+                "?document.querySelectorAll('#console-list .row').length:-1}")
+    if _a3dbg.get("dis") or _a3dbg.get("cur", -1) < 0:
+        print("  [diag ba.a3]", json.dumps(_a3dbg), flush=True)
+    # 首点只武装（单独一次 evaluate，读回武装态与按钮文本）
+    p1_ = js(send, "window.__posts=[];"
+             "const b=document.getElementById('next-go');"
+             "b.disabled=false;"      # 防 render 轮询把 click 卡在禁用瞬态
+             "b.click();"
+             "return {posts:(window.__posts||[]).filter(x=>x[0]==='/cmd'),"
+             "armed:!!b.dataset.armed,txt:b.textContent}")
+    ok("ba.a3.confirm-first-noop", not p1_.get("posts")
+       and p1_.get("armed") and "确认" in p1_.get("txt", ""),
+       json.dumps(p1_, ensure_ascii=False))
+    # 再点执行（同一 evaluate 内连点：armConfirm 3s 武装窗无跨调用超时）
+    p2_ = js(send, "window.__posts=[];"
+             "document.getElementById('next-go').click();"
+             "return {posts:(window.__posts||[]).filter(x=>x[0]==='/cmd')}")
+    ok("ba.a3.confirm-second-fires",
+       any("switch" in b for _u, b in p2_.get("posts", [])),
+       str(p2_.get("posts"))[:160])
+    # confirm=false：首点直发（行内切歌按钮）
+    js(send, _state_stub(False))
+    time.sleep(1.2)
+    js(send, "window.__posts=[];const b=document.querySelector("
+        "'#console-list .row:not(.cur) .go-switch');"
+        "if(b)b.click();return b?1:0")
+    time.sleep(0.3)
+    p3_ = js(send, "return {posts:(window.__posts||[]).filter(x=>x[0]==='/cmd')}")
+    ok("ba.a3.no-confirm-direct",
+       any("switch" in b for _u, b in p3_.get("posts", [])),
+       str(p3_.get("posts"))[:160])
+    js(send, RESTORE)
+
+    # ---- A6：素材库 pt 条目精确键匹配（部分加入场景可单独加回）----
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'A/歌一',team:'A',name:'歌一'},"
+        "{key:'pt:A/歌一#1',team:'A',name:'歌一 · 主歌'},"
+        "{key:'pt:A/歌一#2',team:'A',name:'歌一 · 副歌'}],"
+        "pl:[{key:'pt:A/歌一#1',name:'歌一 · 主歌',dur:'1:00',pt:true}],"
+        "cur:0}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    nav(send, "setlist")
+    a6 = js(send, "return [...document.querySelectorAll('#lib .row')].map("
+            "r=>({k:r.dataset.k,"
+            "txt:r.querySelector('.lib-add').textContent,"
+            "inpl:r.querySelector('.lib-add').classList"
+            ".contains('in-pl')}))")
+    ok("ba.a6.lib-pt-exact", len(a6) == 3
+       and a6[0]["txt"] == "＋" and not a6[0]["inpl"]
+       and a6[1]["inpl"] and a6[1]["txt"] == "已加入"
+       and a6[2]["txt"] == "＋" and not a6[2]["inpl"],
+       json.dumps(a6, ensure_ascii=False))
+    # 已移除的点条目点 ＋ 应发精确 pt: 键的 add（先拆上段自定义桩再装
+    # INTERCEPT——嵌套时它只切 fmode 不换桩，/plcmd 会漏到真 fetch）
+    js(send, UNSTUB + INTERCEPT + "const b=[...document.querySelectorAll("
+        "'#lib .row')][2].querySelector('.lib-add');b&&b.click();"
+        "return 1")
+    posts = js(send, "return window.__posts||[]")
+    ok("ba.a6.pt-readd-posts",
+       any("/plcmd" in u and "pt:A/歌一#2" in b for u, b in posts),
+       str(posts)[:160])
+    js(send, RESTORE)
+
+    # ---- A4：真后端 adapters 契约（{name, ip}）----
+    a4 = js(send, "const r=await fetch('/settings');const j=await r.json();"
+            "return {arr:Array.isArray(j.adapters),"
+            "ok:j.adapters.every(a=>a&&typeof a.name==='string'"
+            "&&typeof a.ip==='string'&&a.ip.includes('.')),"
+            "n:j.adapters.length,sample:j.adapters[0]||null}")
+    ok("ba.a4.adapters-mapping", a4.get("arr") and a4.get("ok"),
+       json.dumps(a4, ensure_ascii=False))
+    # stub /settings：回显按 IP 选中 + 提交值是 IP
+    nav(send, "settings")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/settings'&&(!o||o.method!=='POST')"
+        "&&window.__fmode!=='post')return Promise.resolve(new Response("
+        "JSON.stringify({clockHint:'',vjHint:'',kbHint:'',autoAdvance:true,"
+        "autoPlay:false,topMost:true,switchConfirm:true,exitCloseApps:false,"
+        "projectsRoot:'',dawExe:'',autoSave:true,"
+        "obs:{projectorMonitor:'',vjMute:true,videoRoot:'',mediaInput:''},"
+        "web:{enabled:false,serverPort:8765,appPort:8767,taskerPort:8766,"
+        "midiIn:'',mode:'hotspot',ip:'192.168.137.1'},"
+        "screens:[],adapters:[{name:'以太网',ip:'192.168.1.5'},"
+        "{name:'热点',ip:'192.168.137.1'}],ports:[]}),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    # 弄脏 + 保存 → POST ok → refreshSettings 读 stub 重建下拉
+    js(send, "const el=document.getElementById('st-srv');"
+        "el.value=(Number(el.value)||8765)+1;"
+        "el.dispatchEvent(new Event('input',{bubbles:true}));"
+        "document.getElementById('st-save').click()")
+    time.sleep(0.8)
+    a4b = js(send, "const s=document.getElementById('st-ip');"
+             "return {vals:[...s.options].map(o=>o.value),"
+             "txts:[...s.options].map(o=>o.textContent),"
+             "sel:s.value}")
+    ok("ba.a4.ip-select-echo", a4b.get("vals") == ["", "192.168.1.5",
+                                                   "192.168.137.1"]
+       and a4b.get("sel") == "192.168.137.1",
+       json.dumps(a4b, ensure_ascii=False))
+    # 改选第一块网卡保存：提交的 web.ip 必须是 IP
+    js(send, "const s=document.getElementById('st-ip');"
+        "s.value='192.168.1.5';"
+        "s.dispatchEvent(new Event('change',{bubbles:true}));"
+        "window.__posts=[];"
+        "document.getElementById('st-save').click()")
+    time.sleep(0.8)
+    a4c = js(send, "const ps=(window.__posts||[]).filter("
+             "x=>x[0]==='/settings');"
+             "let ip=null;"
+             "ps.forEach(([u,b])=>{try{const j=JSON.parse(b);"
+             "if(j.web)ip=j.web.ip}catch(e){}});"
+             "return {n:ps.length,ip}")
+    ok("ba.a4.submit-ip", a4c.get("ip") == "192.168.1.5",
+       json.dumps(a4c))
+    js(send, RESTORE)
+    time.sleep(0.6)
+
+    # ---- JS 错误汇总 ----
+    errs = js(send, "return window.__errs")
+    ok("ba.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
-    stage = sys.argv[1] if len(sys.argv) > 1 else "all"
+    stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
     try:
-        if stage in ("p0", "all"):
+        if stages & {"p0", "all"}:
             stage_p0(send)
-        if stage in ("p1", "all"):
+        if stages & {"p1", "all"}:
             stage_p1(send)
-        if stage in ("p2", "all"):
+        if stages & {"p2", "all"}:
             stage_p2(send)
+        if stages & {"a", "all"}:
+            stage_a(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]
