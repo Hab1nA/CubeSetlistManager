@@ -400,6 +400,11 @@ async function poll() {
 // ================= 编排页 =================
 let plSel = null, slQ = "", dragKey = null;
 
+// ---- 编排时长三态（自动绿/手动黄/未知红「未知」；pt=段长按绿显示）----
+const durCls = src => src === "manual" ? "dur-manual"
+    : src === "unknown" ? "dur-unknown" : "dur-auto";
+const durText = it => it.durSrc === "unknown" ? "未知" : (it.dur || "未知");
+
 function libRow(s, inPl) {
   const div = document.createElement("div");
   div.className = "row";
@@ -410,16 +415,19 @@ function libRow(s, inPl) {
   const nm = document.createElement("span");
   nm.className = "nm";
   nm.textContent = s.name;
+  const dur = document.createElement("span");
+  dur.className = "dur " + durCls(s.durSrc);
+  dur.textContent = durText(s);
   const add = document.createElement("button");
   add.className = "lib-add";
   add.textContent = inPl ? "已加入" : "＋";
   if (inPl) add.classList.add("in-pl");
   else add.addEventListener("click", ev => {
     ev.stopPropagation();
-    plcmd("add", s.key);
+    plcmd2("add", s.key);
   });
-  div.append(tag, nm, add);
-  div.addEventListener("click", () => { if (!inPl) plcmd("add", s.key); });
+  div.append(tag, nm, dur, add);
+  div.addEventListener("click", () => { if (!inPl) plcmd2("add", s.key); });
   return div;
 }
 function drawLib() {
@@ -428,8 +436,8 @@ function drawLib() {
   // 精确键匹配：素材库视图（含展开的 pt 条目）与播放列表同一键空间，
   // 部分移除的点条目要能单独加回（宿主归一会把它们全标「已加入」）
   const inPl = new Set(plCache.pl.map(it => it.key));
-  const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0))
-      .join("|") + "#" + slQ;
+  const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0)
+      + (s.durSrc || "") + (s.dur || "")).join("|") + "#" + slQ;
   if (lib.dataset.sig === sig) return;
   lib.dataset.sig = sig;
   lib.innerHTML = "";
@@ -439,6 +447,68 @@ function drawLib() {
     if (!hit) return;
     const r = libRow(s, inPl.has(s.key));
     lib.appendChild(r);
+  });
+}
+// 播放列表行 ⋯ 菜单：写入时长（手动，B5）/重新识别（回工程内原值）
+function plMoreMenu(anchor, it) {
+  popover(anchor, (box, close) => {
+    menuItem(box, "写入时长…", "", () => {
+      close();
+      durPopover(anchor, it);
+    });
+    menuItem(box, "重新识别时长", "", () => {
+      plcmd2("redict", it.key);
+      close();
+    });
+  });
+}
+// 时长输入严格版（与后端 parse_mmss 对齐：拒 0/空段/科学计数/inf/nan/超界）
+const parseDur = t => {
+  const m = String(t || "").trim().match(/^(\d+)(?::(\d{1,2}))?$/);
+  if (!m) return null;
+  const v = m[2] !== undefined ? Number(m[1]) * 60 + Number(m[2])
+      : Number(m[1]);
+  return v > 0 && v < 1e7 ? v : null;
+};
+function durPopover(anchor, it) {
+  popover(anchor, (box, close) => {
+    const h = document.createElement("h4");
+    h.textContent = "写入时长";
+    box.appendChild(h);
+    const sub = document.createElement("div");
+    sub.className = "dim sm-txt";
+    sub.textContent = it.name;
+    box.appendChild(sub);
+    const l = document.createElement("label");
+    l.textContent = "秒数或 分:秒";
+    const inp = document.createElement("input");
+    inp.placeholder = "如 213 或 3:33";
+    inp.inputMode = "numeric";
+    if (it.durSrc !== "unknown" && it.dur) inp.value = it.dur;
+    l.appendChild(inp);
+    box.appendChild(l);
+    const err = document.createElement("div");
+    err.className = "field-err";
+    box.appendChild(err);
+    const btns = document.createElement("div");
+    btns.className = "btns";
+    const cancel = document.createElement("button");
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", close);
+    const okBtn = document.createElement("button");
+    okBtn.className = "primary";
+    okBtn.textContent = "写入";
+    okBtn.addEventListener("click", () => {
+      if (parseDur(inp.value) === null) {
+        err.textContent = "格式应为 秒数 或 分:秒（如 3:33）";
+        return;
+      }
+      plcmd2("setdur", it.key, {dur: inp.value.trim()});
+      close();
+    });
+    btns.append(cancel, okBtn);
+    box.appendChild(btns);
+    setTimeout(() => { inp.focus(); inp.select(); });
   });
 }
 function plRow(i, it) {
@@ -454,18 +524,40 @@ function plRow(i, it) {
   const nm = document.createElement("span");
   nm.className = "nm";
   const dur = document.createElement("span");
-  dur.className = "dur";
+  dur.className = "dur " + durCls(it.durSrc);
+  dur.textContent = durText(it);
+  if (it.durSrc === "manual")
+    dur.title = "手动时长（⋯ 菜单可重新识别）";
   const ops = document.createElement("span");
   ops.className = "ops";
-  const del = document.createElement("button");
-  del.className = "danger";
-  del.textContent = "✕";
-  del.title = "移出播放列表";
+  const mk = (txt, title, cls) => {
+    const b = document.createElement("button");
+    b.textContent = txt;
+    b.title = title;
+    if (cls) b.className = cls;
+    ops.appendChild(b);
+    return b;
+  };
+  const up = mk("↑", "上移");
+  up.addEventListener("click", ev => {
+    ev.stopPropagation();
+    movePl(i, i - 1);
+  });
+  const down = mk("↓", "下移");
+  down.addEventListener("click", ev => {
+    ev.stopPropagation();
+    movePl(i, i + 1);
+  });
+  const more = mk("⋯", "写入时长 / 重新识别");
+  more.addEventListener("click", ev => {
+    ev.stopPropagation();
+    plMoreMenu(more, it);
+  });
+  const del = mk("✕", "移出播放列表", "danger");
   del.addEventListener("click", ev => {
     ev.stopPropagation();
-    armConfirm(del, () => plcmd("remove", it.key), "确认移除？");
+    armConfirm(del, () => plcmd2("remove", it.key), "确认移除？");
   });
-  ops.appendChild(del);
   div.append(handle, no, nm, dur, ops);
   div.addEventListener("click", () => { plSel = it.key; markPlSel(); });
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）
@@ -507,18 +599,15 @@ function plRow(i, it) {
   });
   no.textContent = (i + 1) + ".";
   nm.textContent = it.name;
-  dur.textContent = it.dur;
   return div;
 }
 async function movePl(from, to) {
-  if (from === to || from < 0 || to < 0 || !plCache) return;
+  if (from === to || from < 0 || to < 0 || !plCache
+      || to >= plCache.pl.length) return;
   const item = plCache.pl[from];
-  const times = Math.abs(to - from);
-  const op = to > from ? "down" : "up";
   dragKey = null;                      // 拖拽收尾：恢复轮询重绘
-  for (let n = 0; n < times; n++)
-    await post("/plcmd", {op, key: item.key});
-  toast("已移动《" + item.name + "》");
+  const j = await post("/plcmd", {op: "move", payload: {from, to}});
+  if (j.ok) toast("已移动《" + item.name + "》");
   refreshPlaylist();
 }
 function drawPl() {
@@ -528,7 +617,8 @@ function drawPl() {
   const curIdx = typeof stCur === "number" ? stCur : -1;
   const sel = plSel;
   const sig = want + "#" + curIdx + "#" + sel + "#" + slQ
-      + "#" + plCache.pl.map(x => x.name + x.dur).join("~");
+      + "#" + plCache.pl.map(x => x.name + x.dur + (x.durSrc || ""))
+          .join("~");
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   el.innerHTML = "";
@@ -554,7 +644,7 @@ $("#sl-search").addEventListener("input", e => {
 $("#pl-more").addEventListener("click", ev => {
   popover(ev.currentTarget, (box, close) => {
     menuItem(box, "清空播放列表", "danger", b =>
-        armConfirm(b, () => { plcmd("clear", ""); close(); }, "确认清空？"));
+        armConfirm(b, () => { plcmd2("clear", ""); close(); }, "确认清空？"));
   });
 });
 async function refreshPlaylist() {
@@ -568,9 +658,11 @@ async function refreshPlaylist() {
     drawPl();
   } catch { /* 瞬断 */ }
 }
-async function plcmd(op, key) {
-  const j = await post("/plcmd", {op, key});
+async function plcmd2(op, key, payload) {
+  const j = await post("/plcmd", {op, key, payload: payload || {}});
   if (j.ok && op === "add") toast("已加入播放列表");
+  if (j.ok && op === "setdur") toast("时长已写入");
+  if (j.ok && op === "redict") toast("重新识别中…");
   refreshPlaylist();
 }
 
@@ -1025,19 +1117,7 @@ $("#kb-areset").addEventListener("click", () => shift("ax", 0));
 async function refreshVj() {
   try {
     const d = await (await fetch("/settings")).json();
-    const sel = $("#vj-mon");
-    const sig = (d.screens || []).join("|") + "#" + d.obs.projectorMonitor;
-    if (sel.dataset.sig !== sig) {
-      sel.dataset.sig = sig;
-      sel.innerHTML = "";
-      (d.screens || []).forEach(n => {
-        const o = document.createElement("option");
-        o.value = n;
-        o.textContent = n;
-        if (n === d.obs.projectorMonitor) o.selected = true;
-        sel.appendChild(o);
-      });
-    }
+    fillSel("vj-mon", d.obs.projectorMonitor, d.screens || [], "（不在场）");
     $("#vj-media").value = d.obs.mediaInput || "";
     $("#vj-root").value = d.obs.videoRoot || "";
     $("#vj-mute").checked = !!d.obs.vjMute;
@@ -1075,15 +1155,84 @@ function stDirty() {
   $("#st-dirty").hidden = !dirty;
   $("#st-save").disabled = dirty ? false : true;
 }
+// ---- 端口/显示器下拉共用填充：首项「无」（值空串=停用）+ 在线候选 +
+// 幽灵项（已存名不在清单时显示「原名（未接入）」，value=原名：保存即保名，
+// 设备回来自动接上）。cur 为已存提示名，前缀命中在线口时选中完整名。
+function fillSel(id, cur, list, absentTxt) {
+  const el = $("#" + id);
+  const hit = cur && list.find(n => n.includes(cur));
+  const sig = id + ":" + list.join("|") + "#" + (hit || cur || "");
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "无";
+  el.appendChild(none);
+  list.forEach(n => {
+    const o = document.createElement("option");
+    o.value = n;
+    o.textContent = n;
+    el.appendChild(o);
+  });
+  if (hit) {
+    el.value = hit;
+  } else if (cur) {
+    const o = document.createElement("option");
+    o.value = cur;
+    o.textContent = cur + absentTxt;
+    el.appendChild(o);
+    el.value = cur;
+  } else {
+    none.selected = true;   // 空值不高亮任何候选（保存「无」=停用/关闭）
+  }
+}
+
+// ---- 遥控网络状态行（B4）：热点/局域网五态 + 双端口监听指示 +
+//      浏览器遥控完整地址（webStatus 来自后端缓存线程，/state 的 webIp）----
+const NET_TXT = {
+  "hot-on": ["热点已开", "ok"], "hot-off": ["热点未开", ""],
+  "hot-bad": ["热点不可用", "err"], "lan-ready": ["局域网就绪", "ok"],
+  "lan-none": ["无可用局域网地址", "err"], "lan-multi": ["多网卡待指定",
+                                                            "warn"]
+};
+function renderNetStat(d) {
+  const el = $("#st-netstat");
+  const ws = d.webStatus || {};
+  const ls = ws.listen || {};
+  el.innerHTML = "";
+  const mk = (txt, cls) => {
+    const s = document.createElement("span");
+    s.className = "pill" + (cls ? " " + cls : "");
+    s.textContent = txt;
+    el.appendChild(s);
+  };
+  const net = NET_TXT[ws.net] || ["状态未知", ""];
+  mk(net[0], net[1]);
+  mk("网页端口 " + (ls.serverPort ? "监听中" : "未监听"),
+     ls.serverPort ? "ok" : "err");
+  mk("APP 端口 " + (ls.appPort ? "监听中" : "未监听"),
+     ls.appPort ? "ok" : "err");
+  if (stState && stState.webIp) {
+    const a = document.createElement("span");
+    a.className = "dim sm-txt";
+    a.textContent = "浏览器遥控 http://" + stState.webIp + ":"
+        + $v("#st-srv") + "/";
+    el.appendChild(a);
+  }
+}
+
 async function refreshSettings(force) {
   try {
     const d = await (await fetch("/settings")).json();
+    renderNetStat(d);   // 状态行不受脏保护（非表单字段，随时可刷）
     // 用户已弄脏时不覆盖：慢响应迟到会静默吃掉正在编辑的值
     // （保存成功后的回读走 force=true 重抓基线）
     if (!force && stBase !== null && stSnap() !== stBase) return;
-    $("#st-clock").value = d.clockHint;
-    $("#st-vj").value = d.vjHint;
-    $("#st-kb").value = d.kbHint;
+    fillSel("st-clock", d.clockHint, d.ports || [], "（未接入）");
+    fillSel("st-vj", d.vjHint, d.ports || [], "（未接入）");
+    fillSel("st-kb", d.kbHint, d.ports || [], "（未接入）");
+    fillSel("st-pg", d.web.midiIn, d.ports || [], "（未接入）");
     $("#st-auto").checked = d.autoAdvance;
     $("#st-cont").checked = d.autoPlay;
     $("#st-top").checked = d.topMost;
@@ -1097,7 +1246,6 @@ async function refreshSettings(force) {
     $("#st-srv").value = d.web.serverPort;
     $("#st-app").value = d.web.appPort;
     $("#st-tsk").value = d.web.taskerPort;
-    $("#st-pg").value = d.web.midiIn;
     const ip = $("#st-ip");
     // 候选 {name, ip}：显示网卡名、value=IP（后端 lan_ip 存 IP，提交网卡
     // 名永远配不上）；「自动」（值空串）= 不指定
@@ -1129,6 +1277,7 @@ async function refreshSettings(force) {
         ip.appendChild(o);
       }
     }
+    renderNetStat(d);
     stBase = stSnap();
     stDirty();
   } catch { /* 瞬断 */ }

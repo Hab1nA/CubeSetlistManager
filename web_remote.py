@@ -503,9 +503,9 @@ def build_snapshot(app, has_project, proj_name=None):
     cur_entry = resolve(key) if (resolve is not None and key) else None
     if cur_entry is not None and cur_entry["point"] is not None:
         p = cur_entry["point"]
-        dur = p["end"] - p["start"]
+        dur = cpr_meta.safe_dur(p["end"] - p["start"])
     else:
-        dur = float(app.durations.get(key) or 0.0) if key else 0.0
+        dur = cpr_meta.safe_dur(app.durations.get(key)) if key else 0.0
     pos = min(dur, max(0.0, w.played())) if (w is not None and dur > 0) else 0.0
     # 平板转发踩钉路健康（远程注入；GIL 原子读桥上的 float 时间戳）。
     # link：心跳/事件 15 秒内有=ok，从无=never，超时=stale。
@@ -1512,27 +1512,41 @@ class _Handler(BaseHTTPRequestHandler):
     def _h_playlist(self):
         """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+
         播放列表解析视图 + 当前指针。只读快照（GIL 原子性足够，与 /state
-        同一容错语义）。"""
+        同一容错语义）。durSec/durSrc 供前端时长三态着色（自动绿/手动黄/
+        未知红，定位点=段长）。"""
         app = self.server.app
         resolve = getattr(app, "_resolve_entry", None)
         if resolve is None:
             self._json(403, {"error": "简化版无编排遥控"})
             return
-        lib = [{"key": s["key"], "team": s["team"], "name": s["name"]}
-               for s in getattr(app, "_lib_view", list)()]
-        pl = []
-        for k in app.pl_keys:
-            e = resolve(k)
-            if e is not None:
-                p = e["point"]
-                dur = (p["end"] - p["start"] if p
-                       else app.durations.get(k) or 0.0)
-                pl.append({"key": k, "name": e["display"],
-                           "dur": _fmt_dur(dur),
-                           "pt": p is not None})
-            else:
-                pl.append({"key": k, "name": k.split("/")[-1], "dur": "",
-                           "pt": False})
+        durations = getattr(app, "durations", {})
+        dur_src = getattr(app, "dur_src", {})
+
+        def dur_info(key, point):
+            if point is not None:
+                return cpr_meta.safe_dur(point["end"] - point["start"]), "pt"
+            d = cpr_meta.safe_dur(durations.get(key))
+            if not d:
+                return 0.0, "unknown"
+            return d, "manual" if dur_src.get(key) == "manual" else "auto"
+
+        def view(key, name):
+            e = resolve(key)
+            p = e["point"] if e else None
+            if e is None:
+                return {"key": key, "name": name or key.split("/")[-1],
+                        "dur": "", "durSec": 0.0, "durSrc": "unknown",
+                        "pt": False}
+            sec, src = dur_info(key, p)
+            return {"key": key, "name": e["display"], "dur": _fmt_dur(sec),
+                    "durSec": sec, "durSrc": src, "pt": p is not None}
+
+        lib = []
+        for s in getattr(app, "_lib_view", list)():
+            v = view(s["key"], s["name"])
+            v["team"] = s["team"]
+            lib.append(v)
+        pl = [view(k, None) for k in app.pl_keys]
         self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
 
     def _h_points(self):
@@ -1547,7 +1561,11 @@ class _Handler(BaseHTTPRequestHandler):
             song = app.by_key.get(key)
             out[key] = {"name": song["name"] if song else key,
                         "enabled": bool(data["enabled"]),
-                        "points": data["points"]}
+                        # 出口防御：内存毒化值（NaN/Infinity）不得进 JSON
+                        "points": [{"id": p["id"], "name": p["name"],
+                                    "start": cpr_meta.safe_dur(p["start"]),
+                                    "end": cpr_meta.safe_dur(p["end"])}
+                                   for p in data["points"]]}
         self._json(200, {"projects": out})
 
     def _h_log(self):
@@ -1597,7 +1615,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无编排遥控"})
             return
         self._run_on_app(lambda: app._pl_cmd_web(
-            str(body.get("op") or ""), str(body.get("key") or "")))
+            str(body.get("op") or ""), str(body.get("key") or ""),
+            body.get("payload") or {}))
 
     def _h_ptcmd(self, body, _ip):
         app = self.server.app

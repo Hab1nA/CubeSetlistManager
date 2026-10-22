@@ -259,12 +259,14 @@
       <div class="card"><h3>联动端口</h3>
         <div class="grid2">
           <div class="field"><label for="st-clock">时码端口</label>
-            <input id="st-clock"></div>
+            <select id="st-clock"></select></div>
           <div class="field"><label for="st-vj">VJ 端口</label>
-            <input id="st-vj"></div>
+            <select id="st-vj"></select></div>
           <div class="field"><label for="st-kb">键盘端口</label>
-            <input id="st-kb"></div>
+            <select id="st-kb"></select></div>
         </div>
+        <p class="dim sm-txt">「无」=停用该联动；「（未接入）」=已存端口当前
+          不在场，保存保留原名。</p>
       </div>
       <div class="card"><h3>行为</h3>
         <div class="grid2">
@@ -308,9 +310,10 @@
             <input id="st-app" class="num" inputmode="numeric"></div>
           <div class="field"><label for="st-tsk">翻谱端口</label>
             <input id="st-tsk" class="num" inputmode="numeric"></div>
-          <div class="field wide"><label for="st-pg">翻谱 MIDI 口</label>
-            <input id="st-pg"></div>
+          <div class="field"><label for="st-pg">翻谱 MIDI 口</label>
+            <select id="st-pg"></select></div>
         </div>
+        <div id="st-netstat" class="netstat"></div>
         <div id="app-addr-wrap" class="addr" hidden>
           <div class="lbl">APP 连接地址（点击复制）</div>
           <button id="app-addr" class="addr-txt" title="点击复制"></button>
