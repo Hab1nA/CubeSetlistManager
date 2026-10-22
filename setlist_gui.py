@@ -492,6 +492,7 @@ class App:
         self.points_win = None          # 定位点设置窗单例守卫槽
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
+        self._pedal_learner = None   # web 学习会话 (action, Learner, deadline)
         self.start_err = ""
         self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
         self._build()
@@ -2095,6 +2096,7 @@ class App:
         return None
 
     def _pedal_get_web(self):
+        p = self.pedal
         return {"deviceHint": self.pedal_device_hint,
                 "hint": self.pedal_hint,
                 "binds": self.pedal_binds, "hid": self.pedal_hid,
@@ -2102,22 +2104,157 @@ class App:
                 "intercept": self.pedal_intercept,
                 "doubleWindow": self.pedal_double,
                 "remoteEnabled": self.pedal_remote_enabled,
-                "connected": bool(getattr(self.pedal, "connected", False))}
+                "connected": bool(getattr(p, "connected", False)),
+                "hidActive": bool(getattr(p, "hid_active", False)),
+                "deviceOnline": (p.device_online() if p is not None
+                                 else False),
+                "muted": bool(getattr(p, "muted", False))}
+
+    def _pedal_devices_web(self):
+        """在线键盘类设备 [(身份子串, 展示名)]（Raw Input 枚举）。已选设备
+        不在场时补幽灵项（友好名查注册表，回来自动接上）。"""
+        devs = pedal.pedal_list_devices_safe()
+        cur = self.pedal_device_hint
+        if cur and cur not in {h for h, _n in devs}:
+            devs = list(devs) + [(cur, pedal.device_display(cur))]
+        return {"devices": devs}
+
+    def _pedal_learn_start_web(self, action):
+        """web 学习启动（镜像 PedalWindow._learn）：页面静音须已开（进页置位，
+        静音已让出 MIDI 口给学习器）。"""
+        if action not in dict(pedal.ACTIONS):
+            return "未知动作"
+        self._pedal_learn_cancel_web()
+        try:
+            learner = pedal.Learner(
+                self.pedal_hint, self.pedal_device_hint, self.pedal.bridge,
+                double_window=self.pedal_double,
+                kb_ports=((self.jcfg["inHint"], kbd_auto._in_dev(self.jcfg)),
+                          (self.axcfg["inHint"],
+                           kbd_auto._in_dev(self.axcfg))))
+        except BaseException:
+            return "学习启动失败（口被占用？）"
+        self._pedal_learner = (action, learner,
+                               time.time() + pedal.LEARN_TIMEOUT)
+        return None
+
+    def _pedal_learn_cancel_web(self):
+        """取消学习：关学习器 + 桥配置回灌（保持页面静音，离页才恢复）。"""
+        tup = getattr(self, "_pedal_learner", None)
+        if tup is None:
+            return
+        tup[1].close()
+        self._pedal_learner = None
+        if self.pedal is not None:
+            self.pedal.apply(self.pedal_hint, self.pedal_binds,
+                             self.pedal_hid, self.pedal_device_hint,
+                             self.pedal_intercept, self.pedal_gestures,
+                             self.pedal_double)
+
+    def _pedal_learn_poll_web(self):
+        """web 学习轮询（镜像 _tick_once 学习分支）：分类/改绑迁移/应用/落盘
+        在 Tk 线程一次完成，回前端展示包。"""
+        tup = getattr(self, "_pedal_learner", None)
+        if tup is None:
+            return {"active": False}
+        action, learner, deadline = tup
+        res = learner.result()
+        if res is not None:
+            kind, dev, code, gesture = res
+            learner.close()
+            self._pedal_learner = None
+            # 改绑身份=(码, 手势)：同键同手势只能属一个动作（自旧动作摘除）
+            moved = []
+            if kind == "hid":
+                moved = [a for a, v in self.pedal_hid.items()
+                         if v == code and a != action
+                         and self.pedal_gestures.get(a, "single") == gesture]
+                for a in moved:
+                    del self.pedal_hid[a]
+                    if self.pedal_binds.get(a) is None:
+                        self.pedal_gestures.pop(a, None)
+                self.pedal_hid[action] = code
+                label = "按键「%s」%s" % (dev, pedal._GNAME.get(gesture, ""))
+            else:
+                self.pedal_hint = dev
+                moved = [a for a, v in self.pedal_binds.items()
+                         if v == code and a != action
+                         and self.pedal_gestures.get(a, "single") == gesture]
+                for a in moved:
+                    del self.pedal_binds[a]
+                    if self.pedal_hid.get(a) is None:
+                        self.pedal_gestures.pop(a, None)
+                self.pedal_binds[action] = code
+                label = "%s 的 CC %d%s" % (dev, code,
+                                           pedal._GNAME.get(gesture, ""))
+            self.pedal_gestures[action] = gesture
+            if moved:
+                label += "（自「%s」改绑）" % "、".join(
+                    dict(pedal.ACTIONS)[a] for a in moved)
+            self._pedal_apply_web({})       # 应用当前态并落盘
+            return {"active": False, "done": True,
+                    "result": {"action": action, "gesture": gesture,
+                               "label": label}}
+        if time.time() > deadline:
+            self._pedal_learn_cancel_web()
+            return {"active": False, "done": True, "error": (
+                "学习超时：所选设备没发按键（踏板连接/模式请检查）"
+                if self.pedal_device_hint
+                else "学习超时：未选输入设备，没等到 MIDI CC")}
+        return {"active": True, "remain": max(0.0, deadline - time.time())}
+
+    def _pedal_mute_web(self, on):
+        """页面存活期静音（进页 on / 离页 off，镜像 PedalWindow 开关页）。
+        off 先收学习会话再恢复——学习者占着候选 MIDI 口，不关则踩钉哑到
+        下次进页（旧窗 _close 同序）。"""
+        p = self.pedal
+        if p is None:
+            return None
+        if on:
+            self._pedal_learn_cancel_web()
+            p.mute()
+        else:
+            self._pedal_learn_cancel_web()
+            p.unmute()
+            p.try_open()
+        return None
 
     def _pedal_apply_web(self, p):
+        gest = p.get("gestures")
+        if gest:
+            if not isinstance(gest, dict) or not all(
+                    k in dict(pedal.ACTIONS) and v in pedal.GESTURES
+                    for k, v in gest.items()):
+                return "手势载荷非法（动作或手势名不认识）"
+        for field, lo, hi in (("binds", 0, 127), ("hid", 1, 0xFF)):
+            vals = p.get(field)
+            if vals is None:
+                continue
+            if not isinstance(vals, dict) or not all(
+                    k in dict(pedal.ACTIONS) and isinstance(v, int)
+                    and not isinstance(v, bool) and lo <= v <= hi
+                    for k, v in vals.items()):
+                return "%s 载荷非法" % ("绑定（CC 0-127）" if field == "binds"
+                                       else "按键绑定（VK 码）")
         self.pedal_hint = str(p.get("hint") or self.pedal_hint)
         self.pedal_device_hint = str(p.get("deviceHint")
                                      if p.get("deviceHint") is not None
                                      else self.pedal_device_hint)
-        self.pedal_binds = p.get("binds") or self.pedal_binds
+        # 在场检测：清空最后一个绑定要能落下去（`or` 回退旧值会让末位
+        # 清除静默失败、gestures 残条目永存）；null 与缺席同义（显式
+        # JSON null 不得把整表写成 None）
+        if p.get("binds") is not None:
+            self.pedal_binds = p["binds"]
         if p.get("hid") is not None:
             self.pedal_hid = p["hid"]
+        if p.get("gestures") is not None:
+            self.pedal_gestures = p["gestures"] or {}
         self.pedal_intercept = bool(p.get("intercept", self.pedal_intercept))
-        if p.get("gestures"):
-            self.pedal_gestures = p["gestures"]
         try:
-            self.pedal_double = float(p.get("doubleWindow",
-                                            self.pedal_double))
+            # 运行期夹取（与 load_gestures 同区间）：API 直写超界值不再
+            # 带着哑窗口撑到重启
+            self.pedal_double = min(1.0, max(
+                0.12, float(p.get("doubleWindow", self.pedal_double))))
         except (TypeError, ValueError):
             pass
         self.pedal_remote_enabled = bool(p.get("remoteEnabled",
@@ -2126,10 +2263,13 @@ class App:
                          self.pedal_device_hint, self.pedal_intercept,
                          self.pedal_gestures, self.pedal_double)
         self.pedal.try_open()
+        # 键名对齐启动加载器（load_binding/load_hid/load_device_cfg）与
+        # PedalWindow._save：deviceHint=MIDI 口名、hidDeviceHint=设备身份
         self._persist_config(
-            pedal={"deviceHint": self.pedal_device_hint,
-                   "hint": self.pedal_hint, "binds": self.pedal_binds,
+            pedal={"deviceHint": self.pedal_hint,
+                   "bindings": self.pedal_binds,
                    "hidBindings": self.pedal_hid,
+                   "hidDeviceHint": self.pedal_device_hint,
                    "intercept": self.pedal_intercept,
                    "gestures": self.pedal_gestures,
                    "doubleWindow": self.pedal_double,

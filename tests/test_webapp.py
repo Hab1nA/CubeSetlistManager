@@ -267,6 +267,116 @@ def test_plcmd_setdur_and_move():
     assert sg.App._pl_cmd_web(app, "redict", "pt:A/歌一#1", {}) is not None
 
 
+class _PedalStub:
+    def __init__(self):
+        self.calls = []
+        self.connected = False
+        self.hid_active = False
+        self.muted = False
+        self.bridge = None
+
+    def apply(self, *a):
+        self.calls.append(("apply",) + a)
+
+    def try_open(self):
+        self.calls.append(("try_open",))
+        return False
+
+    def mute(self):
+        self.calls.append(("mute",))
+
+    def unmute(self):
+        self.calls.append(("unmute",))
+
+    def device_online(self):
+        return False
+
+
+class _PedalApp:
+    """挂真方法的最小 app：mute→learn_cancel→apply 跨方法互调可解析。"""
+
+    _pedal_apply_web = sg.App._pedal_apply_web
+    _pedal_learn_cancel_web = sg.App._pedal_learn_cancel_web
+    _pedal_mute_web = sg.App._pedal_mute_web
+
+    def __init__(self):
+        self.pedal = _PedalStub()
+        self.pedal_hint = "h"
+        self.pedal_binds = {"pause": 74}
+        self.pedal_hid = {"next": 0xB0}
+        self.pedal_device_hint = ""
+        self.pedal_intercept = True
+        self.pedal_gestures = {"pause": "double"}
+        self.pedal_double = 0.35
+        self.pedal_remote_enabled = False
+        self._pedal_learner = None
+        self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
+        self.axcfg = dict(kbd_auto.DEFAULT_AX)
+        self._persist_config = lambda **k: None
+        self.q = _Q()
+
+
+def test_pedal_web_validation_and_learn():
+    """C3 载荷校验 / C1-C2 学习入口 / C5 静音（真方法 + pedal 替身）。"""
+    fake = _PedalApp()
+    # C3：非法手势（旧 P0：动作名当手势值写入→引擎全哑火）/越界绑定拒绝
+    assert sg.App._pedal_apply_web(fake, {"gestures": {"play": "play"}})
+    assert sg.App._pedal_apply_web(fake, {"gestures": {"xx": "single"}})
+    assert sg.App._pedal_apply_web(fake, {"binds": {"pause": 999}})
+    assert sg.App._pedal_apply_web(fake, {"binds": {"pause": True}})
+    assert sg.App._pedal_apply_web(fake, {"hid": {"next": 0}})
+    assert fake.pedal.calls == []          # 非法载荷不得触达应用链
+    # 合法保存即应用（不再需重启）+ 落盘 schema 对齐启动加载器
+    saved = {}
+    fake._persist_config = lambda **k: saved.update(k)
+    assert sg.App._pedal_apply_web(
+        fake, {"hint": "h2", "gestures": {"pause": "single"},
+               "binds": {"pause": 74}, "hid": {"next": 0xB0},
+               "doubleWindow": 0.4}) is None
+    assert fake.pedal_hint == "h2"
+    assert [c[0] for c in fake.pedal.calls] == ["apply", "try_open"]
+    ped = saved["pedal"]
+    assert ped["deviceHint"] == "h2" and ped["bindings"] == {"pause": 74}
+    assert ped["hidBindings"] == {"next": 0xB0}
+    assert "hidDeviceHint" in ped and "hint" not in ped
+    # 双踩窗运行期夹取（load_gestures 同区间 0.12-1.0）
+    assert sg.App._pedal_apply_web(fake, {"doubleWindow": 5.0}) is None
+    assert fake.pedal_double == 1.0
+    # 清空最后一个绑定能落下去（`or` 回退会让末位清除静默失败）；
+    # 显式 JSON null 与缺席同义（不得把整表写成 None）
+    assert sg.App._pedal_apply_web(
+        fake, {"binds": {}, "hid": {}, "gestures": {}}) is None
+    assert (fake.pedal_binds == {} and fake.pedal_hid == {}
+            and fake.pedal_gestures == {})
+    assert saved["pedal"]["bindings"] == {}
+    assert sg.App._pedal_apply_web(
+        fake, {"binds": {"pause": 74}, "gestures": {"pause": "double"}}) \
+        is None
+    assert sg.App._pedal_apply_web(fake, {"binds": None,
+                                          "gestures": None}) is None
+    assert fake.pedal_binds == {"pause": 74}
+    assert fake.pedal_gestures == {"pause": "double"}
+    # 学习：未知动作拒；无会话轮询 → inactive
+    assert sg.App._pedal_learn_start_web(fake, "xx") == "未知动作"
+    assert sg.App._pedal_learn_poll_web(fake) == {"active": False}
+    # 静音开关（进页/离页）；off 先收学习会话（镜像旧窗 _close 顺序）
+    class _LearnerStub:
+        closed = False
+
+        def close(self):
+            _LearnerStub.closed = True
+
+    fake._pedal_learner = ("play", _LearnerStub(), 0)
+    assert sg.App._pedal_mute_web(fake, True) is None
+    assert _LearnerStub.closed and fake._pedal_learner is None
+    assert fake.pedal.calls[-1][0] == "mute"
+    fake._pedal_learner = ("play", _LearnerStub(), 0)
+    assert sg.App._pedal_mute_web(fake, False) is None
+    # 尾序：apply（学习取消回灌）、unmute、try_open
+    assert fake.pedal.calls[-2][0] == "unmute"
+    assert fake.pedal.calls[-1][0] == "try_open"
+
+
 def test_ptcmd_poison_rejected():
     """定位点通道毒化防御（红队第 3 轮 P0）：edit/add 的 NaN/Infinity
     一律拒绝，validate_point 对 NaN 失明的老洞补 finite 检查。"""

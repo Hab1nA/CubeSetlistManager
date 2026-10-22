@@ -1446,6 +1446,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/pedal":
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._pedal_get_web)
+        elif path == "/pedal/devices":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_devices_web)
+        elif path == "/pedal/learn":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_learn_poll_web)
         elif path == "/kbd":
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._kbd_get_web)
@@ -1496,6 +1502,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_settings_set, "/settings"),
                           (self._h_pickdir, "/pickdir"),
                           (self._h_pedal_set, "/pedalset"),
+                          (self._h_pedal_learn, "/pedal/learn"),
+                          (self._h_pedal_mute, "/pedal/mute"),
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_shift, "/kbdshift"),
@@ -1651,6 +1659,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无踩钉"})
             return
         self._run_on_app(lambda: self.server.app._pedal_apply_web(body))
+
+    def _h_pedal_learn(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        self._run_on_app(lambda: self.server.app._pedal_learn_start_web(
+            str(body.get("action") or "")))
+
+    def _h_pedal_mute(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        self._run_on_app(lambda: self.server.app._pedal_mute_web(
+            bool(body.get("on"))))
 
     def _h_kbd_set(self, body, _ip):
         if getattr(self.server.app, "lite", False):
