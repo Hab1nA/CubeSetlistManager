@@ -384,6 +384,15 @@ input.invalid { border-color: var(--err) !important; }
 .stat-big.warn { color: var(--warn); }
 .stat-big.err { color: var(--err); }
 .gesture-row { display: flex; gap: var(--s6); flex-wrap: wrap; }
+/* 六项绑定表（踩钉页）*/
+.bind-list { display: flex; flex-direction: column; gap: 4px; }
+.bind-row { display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px; background: var(--sur-2); border-radius: 8px; }
+.bind-row .b-name { width: 104px; flex: none; font-weight: 700; }
+.bind-row .b-bind { flex: 1; min-width: 0; color: var(--dim); }
+.bind-row .b-bind.has { color: var(--fg); }
+.bind-row .btn.sm { padding: 4px 12px; }
+.warn-txt { color: var(--warn); }
 .gesture { display: flex; align-items: center; gap: var(--s3);
   background: var(--sur-2); border: 1px solid var(--line);
   border-radius: 8px; padding: 10px 14px; }

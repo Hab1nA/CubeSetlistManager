@@ -534,10 +534,11 @@ def stage_p1(send):
     pd = js(send, "return {conn:document.getElementById('pedal-conn')"
            ".textContent,link:document.getElementById('pedal-link')"
            ".textContent,"
-           "gestures:!!document.querySelector('.gesture-row'),"
+           "binds:document.querySelectorAll('.bind-row').length,"
+           "devSel:document.getElementById('pd-dev').tagName,"
            "adv:!!document.querySelector('details.card')}")
-    ok("p1.pedal.stat-cards", pd.get("conn") in ("已连接", "未连接")
-       and pd.get("gestures") and pd.get("adv"),
+    ok("p1.pedal.stat-cards", pd.get("conn") and pd.get("binds") == 6
+       and pd.get("devSel") == "SELECT" and pd.get("adv"),
        json.dumps(pd, ensure_ascii=False))
 
     # ---- 键盘页：stepper 重置 ----
@@ -790,9 +791,9 @@ def stage_p2(send):
 
 
 def _state_stub(confirm, cur=0, busy=False):
-    """A 批共用 /state 桩（其它请求记录后回 ok；/playlist 必须透真——
-    1.5s 的 refreshPlaylist 会用它的 cur 覆盖 stCur，回 ok:true 会让
-    next-go 的 handler 门 typeof stCur==="number" 失效）。"""
+    """A 批共用 /state+/playlist 桩（其它请求记录后回 ok）。/playlist 须给
+    合法 shape 且 cur 与 /state 一致——refreshPlaylist 会用它的 cur 覆盖
+    stCur，透真（真实 cur=null）或回 ok:true 都会把 next-go 的门洗失效。"""
     st = ("{ready:true,busy:%s,open:true,projName:'歌一',tstate:'playing',"
           "pos:3,dur:90,cur:%d,confirm:%s,"
           "songs:[{name:'歌一',dur:'1:30'},{name:'歌二',dur:'2:00'}],"
@@ -805,10 +806,13 @@ def _state_stub(confirm, cur=0, busy=False):
             "if(String(u)==='/state')return Promise.resolve(new Response("
             "JSON.stringify(%s),{status:200}));"
             "if(String(u)==='/playlist')"
-            "return window.__fetch0(u,o);"
+            "return Promise.resolve(new Response(JSON.stringify({lib:[],"
+            "pl:[{key:'a',name:'歌一',dur:'1:30',durSec:90,durSrc:'auto',"
+            "pt:false},{key:'b',name:'歌二',dur:'2:00',durSec:120,"
+            "durSrc:'auto',pt:false}],cur:%d}),{status:200}));"
             "return Promise.resolve(new Response('{\"ok\":true}',"
             "{status:200,headers:{'Content-Type':'application/json'}}))};"
-            % st)
+            % (st, cur))
 
 
 def stage_a(send):
@@ -1183,6 +1187,117 @@ def stage_b(send):
     ok("bb.no-js-errors", not errs, str(errs)[:300])
 
 
+def stage_c(send):
+    # ---- C5：进页 mute on / 离页 mute off ----
+    nav(send, "console")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    js(send, "document.querySelector('.b-pedal').click()")
+    time.sleep(0.6)
+    js(send, "document.querySelector('.b-console').click()")
+    time.sleep(0.6)
+    mutes = [b for u, b in (js(send, "return window.__posts||[]") or [])
+             if u == "/pedal/mute"]
+    ok("bc.c5.mute-toggle",
+       any('"on":true' in b for b in mutes)
+       and any('"on":false' in b for b in mutes), str(mutes)[:160])
+    js(send, RESTORE)
+
+    # ---- C1/C2/C4：stub /pedal → 绑定表/连接副行/设备下拉/学习/清除 ----
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/pedal')return Promise.resolve(new Response("
+        "JSON.stringify({deviceHint:'',hint:'Pedal口',"
+        "binds:{pause:74},hid:{next:176},gestures:{pause:'double'},"
+        "intercept:true,doubleWindow:0.35,remoteEnabled:false,"
+        "connected:true,hidActive:false,deviceOnline:false,muted:true}),"
+        "{status:200}));"
+        "if(String(u)==='/pedal/learn'&&(!o||o.method!=='POST'))"
+        "return Promise.resolve(new Response("
+        "JSON.stringify({active:true,remain:5.2}),{status:200}));"
+        "if(String(u)==='/pedal/devices')return Promise.resolve(new Response("
+        "JSON.stringify({devices:[['HINT1','CUBE TURNER [AB12]'],"
+        "['HINT2','USB Input Device [0001:0002]']]}),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    js(send, "document.querySelector('.b-pedal').click()")
+    time.sleep(1.0)
+    c4 = js(send, "return {rows:document.querySelectorAll('.bind-row').length,"
+            "bind0:document.querySelector("
+            "'.bind-row[data-action=pause] .b-bind').textContent,"
+            "bindNext:document.querySelector("
+            "'.bind-row[data-action=next] .b-bind').textContent,"
+            "unset:document.querySelector("
+            "'.bind-row[data-action=play] .b-bind').textContent,"
+            "sub:document.getElementById('pedal-conn-sub').textContent,"
+            "devOpts:[...document.getElementById('pd-dev').options]"
+            ".map(o=>o.textContent)}")
+    ok("bc.c2.bind-table", c4.get("rows") == 6
+       and c4.get("bind0") == "CC 74·双踩"
+       and c4.get("bindNext") == "按键 下一曲"
+       and c4.get("unset") == "未设置",
+       json.dumps(c4, ensure_ascii=False))
+    ok("bc.c4.conn-sub",
+       "MIDI" in (c4.get("sub") or "") and "设备" in (c4.get("sub") or "")
+       and "HID" in (c4.get("sub") or ""),
+       json.dumps(c4.get("sub"), ensure_ascii=False))
+    ok("bc.c1.device-select",
+       any("仅 MIDI" in t for t in c4.get("devOpts", []))
+       and any("TURNER" in t for t in c4.get("devOpts", [])),
+       json.dumps(c4.get("devOpts"), ensure_ascii=False))
+    # 学习 → POST + 轮询 + 行内倒计时
+    js(send, "window.__posts=[];"
+        "document.querySelector('.bind-row[data-action=play] .b-learn')"
+        ".click()")
+    time.sleep(0.9)
+    lc = js(send, "return {posts:(window.__posts||[]).map(x=>x[0]),"
+            "txt:document.querySelector("
+            "'.bind-row[data-action=play] .b-learn').textContent}")
+    ok("bc.c2.learn-flow",
+       (lc.get("posts") or []).count("/pedal/learn") >= 2
+       and "学习中" in (lc.get("txt") or ""),
+       json.dumps(lc, ensure_ascii=False))
+    # 清除（有绑定的行）→ /pedalset 载荷去掉该动作、保留其余
+    js(send, "window.__posts=[];"
+        "document.querySelector('.bind-row[data-action=next] .btn.danger')"
+        ".click()")
+    time.sleep(0.6)
+    cl = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+            "{if(u==='/pedalset')body=b});"
+            "return {has:!!body,"
+            "noNext:body?!('next' in JSON.parse(body).hid):null,"
+            "keepPause:body?('pause' in JSON.parse(body).binds):null}")
+    ok("bc.c2.clear-bind", cl.get("has") and cl.get("noNext")
+       and cl.get("keepPause"), json.dumps(cl))
+    # 拆桩（真 /pedal/learn 会答 inactive，学习轮询自然收口）后离页
+    js(send, RESTORE)
+    time.sleep(0.8)
+    js(send, "document.querySelector('.b-console').click()")
+    time.sleep(0.4)
+
+    # ---- C3：真后端非法载荷 400 ----
+    bad = js(send, "const r=await fetch('/pedalset',{method:'POST',"
+            "headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({gestures:{play:'play'}})});"
+            "return r.status")
+    ok("bc.c3.illegal-gesture-400", bad == 400, str(bad))
+    bad2 = js(send, "const r=await fetch('/pedalset',{method:'POST',"
+             "headers:{'Content-Type':'application/json'},"
+             "body:JSON.stringify({binds:{pause:999}})});"
+             "return r.status")
+    ok("bc.c3.illegal-bind-400", bad2 == 400, str(bad2))
+    bad3 = js(send, "const r=await fetch('/pedal/learn',{method:'POST',"
+             "headers:{'Content-Type':'application/json'},"
+             "body:JSON.stringify({action:'xx'})});"
+             "return r.status")
+    ok("bc.c3.learn-bad-action-400", bad3 == 400, str(bad3))
+
+    errs = js(send, "return window.__errs")
+    ok("bc.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1197,6 +1312,8 @@ def main():
             stage_a(send)
         if stages & {"b", "all"}:
             stage_b(send)
+        if stages & {"c", "all"}:
+            stage_c(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]

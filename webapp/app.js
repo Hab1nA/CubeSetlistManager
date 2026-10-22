@@ -87,6 +87,15 @@ function menuItem(box, text, cls, fn) {
 // ---- 导航 ----
 let curPage = "console", booted = false;
 function nav(page) {
+  if (booted && page !== curPage) {
+    // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）
+    if (curPage === "pedal") pedalMute(false);
+    if (page === "pedal") {
+      pedalMute(true);
+      refreshPedal();
+      refreshPedalDevices();
+    }
+  }
   curPage = page;
   $$(".nav").forEach(b => b.classList.toggle("on", b.dataset.page === page));
   $$(".page").forEach(p => p.classList.toggle("on", p.id === "p-" + page));
@@ -97,6 +106,13 @@ function nav(page) {
     else if (page === "log") refreshLog();
   }
 }
+// 刷新/关闭兜底：踩钉页打开时页面卸载，静音必须撤（否则踩钉永久哑火）
+addEventListener("pagehide", () => {
+  if (curPage === "pedal")
+    fetch("/pedal/mute", {method: "POST", keepalive: true,
+                          headers: {"Content-Type": "application/json"},
+                          body: JSON.stringify({on: false})}).catch(() => {});
+});
 $$(".nav").forEach(b => b.addEventListener("click", () => nav(b.dataset.page)));
 document.addEventListener("click", ev => {
   const b = ev.target.closest("[data-nav]");
@@ -196,7 +212,8 @@ function switchTo(i, btn, dbl) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  if (typeof stCur === "number") switchTo(stCur + 1, $("#next-go"));
+  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0
+  switchTo(typeof stCur === "number" ? stCur + 1 : 0, $("#next-go"));
 });
 
 const fmt = s => {
@@ -360,14 +377,20 @@ function drawChips(st, cur) {
 function pedalLive(st) {
   const pr = st.pedalRemote;
   const link = $("#pedal-link");
+  const sub = $("#pedal-link-sub");
   if (pr) {
     link.textContent = pr.link === "ok" ? "健康" :
         pr.link === "stale" ? "超时" : "无信号";
     link.className = "stat-big " +
         (pr.link === "ok" ? "ok" : pr.link === "stale" ? "warn" : "err");
+    sub.textContent = pr.unknown > 0
+        ? "未识别键 " + pr.unknown + " 个（链路活但键路不通）"
+        : (pr.enabled ? "心跳正常" : "未启用");
+    sub.className = "dim sm-txt" + (pr.unknown > 0 ? " warn-txt" : "");
   } else {
     link.textContent = "—";
     link.className = "stat-big";
+    sub.textContent = "";
   }
   const age = pr && pr.lastEventAge;
   const flash = $("#pedal-flash");
@@ -930,31 +953,208 @@ function fallbackCopy(txt, msg) {
 // ================= 四页表单（踩钉/键盘/VJ/设置）=================
 const $v = id => $(id).value;
 
-// ---- 踩钉 ----
-async function refreshPedal() {
+// ---- 踩钉（六项绑定表 + 学习/清除 + 设备枚举 + 页面静音）----
+const PD_ACTIONS = [["pause", "暂停/继续"], ["play", "开始"],
+                    ["rewind", "回零"], ["panic", "全停"],
+                    ["prev", "上一首"], ["next", "下一首"]];
+const HID_NAMES = {0x08: "退格", 0x0D: "回车", 0x20: "空格",
+                   0x21: "上翻页", 0x22: "下翻页", 0x23: "End", 0x24: "Home",
+                   0x25: "左", 0x26: "上", 0x27: "右", 0x28: "下",
+                   0x2E: "Delete", 0xAD: "静音", 0xAE: "音量−",
+                   0xAF: "音量＋", 0xB0: "下一曲", 0xB1: "上一曲",
+                   0xB2: "停止", 0xB3: "播放/暂停"};
+const hidName = vk => vk >= 0x70 && vk <= 0x87 ? "F" + (vk - 0x6F)
+    : (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A)
+      ? String.fromCharCode(vk)
+    : HID_NAMES[vk] || "VK 0x" + vk.toString(16).toUpperCase()
+        .padStart(2, "0");
+const pdActionName = a => (PD_ACTIONS.find(x => x[0] === a) || [ "", a ])[1];
+let pdData = null, pdFormInit = false, learnAction = null, learnTimer = null;
+
+function pedalMute(on) {
+  fetch("/pedal/mute", {method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({on})}).catch(() => {});
+}
+
+async function refreshPedalDevices() {
   try {
-    const d = await (await fetch("/pedal")).json();
-    const c = $("#pedal-conn");
-    c.textContent = d.connected ? "已连接" : "未连接";
-    c.className = "stat-big " + (d.connected ? "ok" : "err");
-    $("#pd-hint").value = d.hint || "";
-    $("#pd-dev").value = d.deviceHint || "";
-    $("#pd-g-play").value = d.gestures.play || "play";
-    $("#pd-g-next").value = d.gestures.next || "next";
-    $("#pd-win").value = d.doubleWindow || 0.35;
-    $("#pd-intercept").checked = !!d.intercept;
-    $("#pd-remote").checked = !!d.remoteEnabled;
+    const d = await (await fetch("/pedal/devices")).json();
+    const sel = $("#pd-dev");
+    const cur = pdData ? pdData.deviceHint : "";
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "（不区分来源，仅 MIDI 踩钉）";
+    sel.appendChild(none);
+    let hit = !cur;
+    (d.devices || []).forEach(dev => {
+      const o = document.createElement("option");
+      o.value = dev[0];
+      o.textContent = dev[1];
+      if (dev[0] === cur) { o.selected = true; hit = true; }
+      sel.appendChild(o);
+    });
+    if (cur && !hit) {            // 幽灵项：已选设备当前不在场
+      const o = document.createElement("option");
+      o.value = cur;
+      o.textContent = cur + "（离线）";
+      o.selected = true;
+      sel.appendChild(o);
+    }
   } catch { /* 瞬断 */ }
 }
-$("#pd-save").addEventListener("click", async () => {
-  const r = await post("/pedalset", {
-    hint: $v("#pd-hint"), deviceHint: $v("#pd-dev"),
-    gestures: {play: $v("#pd-g-play"), next: $v("#pd-g-next")},
-    doubleWindow: parseFloat($v("#pd-win")) || 0.35,
-    intercept: $("#pd-intercept").checked,
-    remoteEnabled: $("#pd-remote").checked});
-  if (r.ok) toast("踩钉配置已应用");
+
+function bindText(d, action) {
+  const g = {single: "", double: "·双踩"}[d.gestures[action] || "single"];
+  const parts = [];
+  if (d.binds[action] !== undefined)
+    parts.push("CC " + d.binds[action] + g);
+  if (d.hid[action] !== undefined)
+    parts.push("按键 " + hidName(d.hid[action]) + g);
+  return parts.join("＋") || "未设置";
+}
+
+function drawBinds(d) {
+  const el = $("#pd-binds");
+  const sig = JSON.stringify([d.binds, d.hid, d.gestures, learnAction]);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = "";
+  PD_ACTIONS.forEach(([a, name]) => {
+    const row = document.createElement("div");
+    row.className = "bind-row";
+    row.dataset.action = a;
+    const nm = document.createElement("span");
+    nm.className = "b-name";
+    nm.textContent = name;
+    const bd = document.createElement("span");
+    bd.className = "b-bind" + (bindText(d, a) !== "未设置" ? " has" : "");
+    bd.textContent = bindText(d, a);
+    const learn = document.createElement("button");
+    learn.className = "btn ghost sm b-learn";
+    learn.textContent = a === learnAction ? "学习中…" : "学习";
+    learn.addEventListener("click", () => startLearn(a));
+    const clr = document.createElement("button");
+    clr.className = "btn danger sm";
+    clr.textContent = "清除";
+    clr.addEventListener("click", () => clearBind(a));
+    row.append(nm, bd, learn, clr);
+    el.appendChild(row);
+  });
+}
+
+async function refreshPedal(force) {
+  try {
+    const d = await (await fetch("/pedal")).json();
+    pdData = d;
+    const c = $("#pedal-conn");
+    // 三态：无绑定提示 / 通道异常警示 / 静音中（本页打开期间，如实标注）
+    let txt = "已静音", cls = "";
+    if (!Object.keys(d.binds || {}).length
+        && !Object.keys(d.hid || {}).length) {
+      txt = "无绑定"; cls = "";
+    } else if (d.hid && Object.keys(d.hid).length && !d.deviceOnline
+               && !d.deviceHint) {
+      txt = "未选设备"; cls = "warn";
+    } else if (d.hint && !d.connected && !d.hidActive) {
+      txt = "口未连"; cls = "warn";
+    } else if (d.muted) {
+      txt = "已静音（关本页恢复）";
+    } else {
+      txt = "已连接"; cls = "ok";
+    }
+    c.textContent = txt;
+    c.className = "stat-big " + cls;
+    $("#pedal-conn-sub").textContent =
+        "MIDI " + (d.connected ? "连接" : "未连")
+        + " · 设备 " + (d.deviceOnline ? "在线" : "离线")
+        + " · HID 桥 " + (d.hidActive ? "运行" : "停");
+    // 表单字段只在首拉/保存后回填：1.5s 轮询无条件回写会打穿正在编辑的
+    // 提示名/双踩窗/勾选（改一半被洗掉、开关视觉回弹）
+    if (force || !pdFormInit) {
+      $("#pd-hint").value = d.hint || "";
+      $("#pd-win").value = d.doubleWindow || 0.35;
+      $("#pd-intercept").checked = !!d.intercept;
+      $("#pd-remote").checked = !!d.remoteEnabled;
+      pdFormInit = true;
+    }
+    drawBinds(d);
+    if (!$("#pd-dev").options.length) refreshPedalDevices();
+  } catch { /* 瞬断 */ }
+}
+
+async function pedalPayload() {
+  const win = parseFloat($v("#pd-win"));
+  return {hint: $v("#pd-hint"), deviceHint: $v("#pd-dev"),
+          binds: pdData ? pdData.binds : {}, hid: pdData ? pdData.hid : {},
+          gestures: pdData ? pdData.gestures : {},
+          doubleWindow: isNaN(win) ? 0.35 : win,
+          intercept: $("#pd-intercept").checked,
+          remoteEnabled: $("#pd-remote").checked};
+}
+
+async function startLearn(action) {
+  const j = await post("/pedal/learn", {action});
+  if (!j.ok) return;
+  // 未选设备时键盘踩钉抓不到（raw 归属门）——学习前提醒，别让人白等 8 秒
+  if (pdData && !pdData.deviceHint
+      && Object.keys(pdData.hid || {}).length)
+    toast("未选输入设备：踏板按键不会被学习抓取（只等 MIDI CC）", "err");
+  learnAction = action;
+  drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
+  pollLearn();
+}
+function pollLearn() {
+  clearTimeout(learnTimer);
+  learnTimer = setTimeout(async () => {
+    if (learnAction === null) return;
+    try {
+      const d = await (await fetch("/pedal/learn")).json();
+      const btn = $('.bind-row[data-action="%s"] .b-learn'
+                    .replace("%s", learnAction));
+      if (d.active) {
+        if (btn) btn.textContent = "学习中 剩" + Math.ceil(d.remain) + "秒";
+        pollLearn();
+      } else if (d.done && d.result) {
+        const act = learnAction;
+        learnAction = null;
+        toast("「" + pdActionName(act) + "」已绑定 " + d.result.label);
+        refreshPedal();       // 服务端已迁移+落盘，拉新态重绘
+      } else if (d.done && d.error) {
+        learnAction = null;
+        if (btn) btn.textContent = "学习";
+        toast(d.error, "err");
+      } else {
+        learnAction = null;
+        refreshPedal();
+      }
+    } catch {
+      if (learnAction !== null) pollLearn();
+    }
+  }, 300);
+}
+async function clearBind(action) {
+  if (!pdData) return;
+  const binds = {...pdData.binds}, hid = {...pdData.hid},
+        gestures = {...pdData.gestures};
+  if (binds[action] === undefined && hid[action] === undefined) return;
+  delete binds[action];
+  delete hid[action];
+  delete gestures[action];
+  // 只发三个绑定表：隐式提交设备/提示名等未保存编辑会把表单之外的
+  // 状态一并写死（旧窗 _clear 只动该动作）
+  const r = await post("/pedalset", {binds, hid, gestures});
+  if (r.ok) toast("已清除「" + pdActionName(action) + "」");
   refreshPedal();
+}
+$("#pd-refresh").addEventListener("click", refreshPedalDevices);
+$("#pd-save").addEventListener("click", async () => {
+  const r = await post("/pedalset", await pedalPayload());
+  if (r.ok) {
+    toast("踩钉配置已应用");
+    refreshPedal(true);
+  }
 });
 
 // ---- 键盘自动化 ----
@@ -1565,6 +1765,7 @@ setInterval(() => {
   if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
 setInterval(() => { if (pageOn("points")) refreshPoints(); }, 1500);
+setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);
 refreshPlaylist();
 refreshPoints();
