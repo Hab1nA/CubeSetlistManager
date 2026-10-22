@@ -205,10 +205,13 @@ def _load_playlist():
         except ValueError:
             data = {}        # 损坏降级：空播放列表（durations 启动探测会重建）
         keys = data.get("playlist") or data.get("order") or []
+        durations = {}
+        for k, v in data.get("durations", {}).items():
+            d = cpr_meta.safe_dur(v)   # 历史毒化（NaN/Infinity/超界）归零
+            if d > 0:
+                durations[str(k)] = d
         return {"playlist": [str(k) for k in keys],
-                "durations": {k: float(v)
-                              for k, v in data.get("durations", {}).items()
-                              if isinstance(v, (int, float))},
+                "durations": durations,
                 "durSrc": {k: "manual"
                            for k, v in data.get("durSrc", {}).items()
                            if v == "manual"}}
@@ -243,21 +246,25 @@ def scan_library(root, ext=".cpr"):
 
 
 def _read_duration(path):
-    """按工程扩展名分发时长解析：.cpr→RIFF 定位条，.song→ZIP/XML 事件终点。"""
-    return (song_meta.read_duration(path)
-            if path.lower().endswith(".song")
-            else cpr_meta.read_duration(path))
+    """按工程扩展名分发时长解析：.cpr→RIFF 定位条，.song→ZIP/XML 事件终点。
+    值域钳制（safe_dur）：伪造工程文件里的 inf/nan 不进 durations。"""
+    return cpr_meta.safe_dur(
+        song_meta.read_duration(path)
+        if path.lower().endswith(".song")
+        else cpr_meta.read_duration(path))
 
 
 def _read_span(path):
     """(时长, 左定位条偏移)：左定位条是时码位置→歌内已播秒的换算原点
-    （.song 无定位条概念 → 左=0；.cpr 解析不出 → (0, 0) 手填兜底）。"""
+    （.song 无定位条概念 → 左=0；.cpr 解析不出 → (0, 0) 手填兜底）。
+    同 _read_duration 钳制（伪造定位条 inf 不得毒化 watch/时码）。"""
     if path.lower().endswith(".song"):
-        return (song_meta.read_duration(path) or 0.0, 0.0)
+        return (cpr_meta.safe_dur(song_meta.read_duration(path)), 0.0)
     loc = cpr_meta.read_locators(path)
     if not loc:
         return (0.0, 0.0)
-    return ((loc[1] - loc[0]) if loc[1] > loc[0] else 0.0, loc[0])
+    return (cpr_meta.safe_dur(loc[1] - loc[0]) if loc[1] > loc[0] else 0.0,
+            cpr_meta.safe_dur(loc[0]))
 
 
 def _reprobe(songs, durations, dur_src):
@@ -486,6 +493,7 @@ class App:
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self.start_err = ""
+        self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
         self._build()
         # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
         # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
@@ -1043,6 +1051,57 @@ class App:
             if self._pending_ports:      # 消费启动期票据：补热切换（幂等清零）
                 self._pending_ports = False
                 self.calls.put(self._apply_ports)
+        threading.Thread(target=self._web_status_loop, daemon=True,
+                         name="web-status-probe").start()
+
+    def _web_status_loop(self):
+        """遥控网络状态缓存（/settings GET 的 webStatus 数据源）：热点态
+        PS 查询与端口 connect 探测都是秒级慢操作，不能在 Tk 主线程做——
+        专职线程每 5 秒刷新，GET 只读缓存（GIL 原子）。"""
+        while True:
+            try:
+                self._web_status_probe()
+            except Exception:      # 单轮故障不得杀死线程（死=状态永久陈旧）
+                pass
+            time.sleep(5.0)
+
+    def _web_status_probe(self):
+        out = {"net": "?"}
+        try:
+            if str(self.web_cfg.get("mode") or "hotspot") == "lan":
+                cands = [ip for ip, _n in hotspot.lan_ips()
+                         if web_remote.valid_push_ip(ip)
+                         and not ip.startswith("127.")]
+                if self.web_cfg.get("ip") or len(cands) == 1:
+                    out["net"] = "lan-ready"
+                elif not cands:
+                    out["net"] = "lan-none"
+                else:
+                    out["net"] = "lan-multi"
+            else:
+                st = hotspot.state()
+                out["net"] = ("hot-on" if st.get("on") else
+                              "hot-off" if st.get("ok") else "hot-bad")
+        except Exception:
+            pass
+        srv_ip = "127.0.0.1"
+        try:
+            web = self.web
+            if web is not None and web.server is not None:
+                srv_ip = web.server.server_address[0]
+        except Exception:          # 服务重建竞态（_stop_server 置 None）
+            pass
+        out["listen"] = {}
+        for key, port in (("serverPort",
+                           self.web_cfg.get("serverPort") or 8765),
+                          ("appPort", self.web_cfg.get("appPort") or 8767)):
+            try:
+                s = socket.create_connection((srv_ip, port), timeout=0.8)
+                s.close()
+                out["listen"][key] = True
+            except OSError:
+                out["listen"][key] = False
+        self._web_status = out
 
     def _entry_alive(self, key):
         """播放列表条目存活判定：pt 条目 ⇔ 宿主在库且启用且点存在。"""
@@ -1778,9 +1837,17 @@ class App:
             start = payload.get("start")
             if start is None:
                 start = self.mtc.position() if self.mtc is not None else 0.0
+            else:
+                start = points.finite_tc(start)
+                if start is None:
+                    return "开始时码必须为有限数字"
             end = payload.get("end")
             if end is None:
                 end = left + d_file if d_file else 0.0
+            else:
+                end = points.finite_tc(end)
+                if end is None:
+                    return "结束时码必须为有限数字"
             pt, data = points.next_point(data, start, end)
             self.points[lib_key] = data
             return self._points_sync_list(lib_key)
@@ -1863,103 +1930,159 @@ class App:
             "screens": [n for n, _r in list_screens()],
             "adapters": adapters,
             "ports": [n for _i, n in mb._in_devices()],
+            "webStatus": dict(self._web_status),
         }
 
     def _settings_apply_web(self, p):
         """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
-        热应用链（端口/工程库/OBS/遥控/持久化），取值来自 payload。"""
-        g = lambda k, d="": str(p.get(k, d))
-        mon = g("projectorMonitor")
-        mon = "" if mon in ("无",) else mon
-        vj = "" if g("vjHint") == "无" else g("vjHint")
-        kb = "" if g("kbHint") == "无" else g("kbHint")
-        ck = "" if g("clockHint") == "无" else g("clockHint")
+        热应用链（端口/工程库/OBS/遥控/持久化），取值来自 payload。
+        在场检测：payload 缺席的键既不动内存也不落盘——VJ 页只发 obs
+        节、设置页发全量，缺席按 False/空处理曾把四端口/行为开关/遥控
+        服务跨页静默清空（互 wipe）。"""
+        def hint(k):               # 端口名：None=不在场，""=停用（「无」）
+            if k not in p:
+                return None
+            v = str(p.get(k) or "")
+            return "" if v == "无" else v
 
-        def pint(k, d):
+        vj, kb, ck = hint("vjHint"), hint("kbHint"), hint("clockHint")
+        obs_in = p.get("obs")
+        obs_in = obs_in if isinstance(obs_in, dict) else {}
+        mon = (None if "projectorMonitor" not in obs_in else
+               "" if str(obs_in.get("projectorMonitor") or "") in ("无",)
+               else str(obs_in.get("projectorMonitor") or ""))
+        mute = bool(obs_in["vjMute"]) if "vjMute" in obs_in else None
+        vid = (str(obs_in.get("videoRoot") or "")
+               if "videoRoot" in obs_in else None)
+        media = (str(obs_in.get("mediaInput") or "")
+                 if "mediaInput" in obs_in else None)
+
+        def pint(src, k, d):
             try:
-                v = int(str(p.get(k, d)).strip())
+                v = int(str(src.get(k, d)).strip())
                 assert v > 0
                 return v
             except (ValueError, AssertionError):
                 return d
-        web_in = p.get("web") or {}
-        web_fields = {"enabled": bool(web_in.get("enabled")),
-                      "serverPort": pint("serverPort", 8765) if "serverPort"
-                      in web_in else self.web_cfg.get("serverPort", 8765),
-                      "appPort": web_in.get("appPort",
-                                            self.web_cfg.get("appPort", 8767)),
-                      "taskerPort": web_in.get(
-                          "taskerPort", self.web_cfg.get("taskerPort", 8766)),
-                      "midiIn": str(web_in.get("midiIn") or ""),
-                      "mode": web_in.get("mode", self.web_cfg.get("mode")),
-                      "ip": str(web_in.get("ip") or "")}
+
+        web_in = p.get("web")
+        web_in = web_in if isinstance(web_in, dict) else {}
+        web_fields = {}
+        if "enabled" in web_in:
+            web_fields["enabled"] = bool(web_in["enabled"])
+        if "serverPort" in web_in:
+            web_fields["serverPort"] = pint(web_in, "serverPort", 8765)
+        if "appPort" in web_in:
+            web_fields["appPort"] = pint(web_in, "appPort", 8767)
+        if "taskerPort" in web_in:
+            web_fields["taskerPort"] = pint(web_in, "taskerPort", 8766)
+        if "midiIn" in web_in:
+            web_fields["midiIn"] = str(web_in.get("midiIn") or "")
+        if "mode" in web_in:
+            web_fields["mode"] = web_in.get("mode")
+        if "ip" in web_in:
+            web_fields["ip"] = str(web_in.get("ip") or "")
         web_changed = any(self.web_cfg.get(k) != v
                           for k, v in web_fields.items())
         self.web_cfg.update(web_fields)
-        cont = bool(p.get("autoPlay"))
-        auto = bool(p.get("autoAdvance")) or cont
-        self.cont_play = cont
-        self.auto_var.set(auto)
-        self._toggle_auto()
-        self.top_most = bool(p.get("topMost"))
-        self.root.attributes("-topmost", self.top_most)
-        self.switch_confirm = bool(p.get("switchConfirm"))
-        self.exit_close_apps = bool(p.get("exitCloseApps"))
-        mute = bool((p.get("obs") or {}).get("vjMute", True))
-        vid = str((p.get("obs") or {}).get("videoRoot") or "")
-        proj_mon = str((p.get("obs") or {}).get("projectorMonitor") or "")
+        if "autoAdvance" in p or "autoPlay" in p:
+            cont = (bool(p["autoPlay"]) if "autoPlay" in p
+                    else self.cont_play)
+            auto = (bool(p["autoAdvance"]) if "autoAdvance" in p
+                    else self.auto_var.get()) or cont
+            self.cont_play = cont
+            self.auto_var.set(auto)
+            self._toggle_auto()
+        if "topMost" in p:
+            self.top_most = bool(p["topMost"])
+            self.root.attributes("-topmost", self.top_most)
+        if "switchConfirm" in p:
+            self.switch_confirm = bool(p["switchConfirm"])
+        if "exitCloseApps" in p:
+            self.exit_close_apps = bool(p["exitCloseApps"])
 
         def apply_obs():
             ctl = self.ctl
             if ctl is None:
                 return
             with self._obs_apply_lock:
-                ctl.cfg["vjMute"] = mute
+                if mute is not None:
+                    ctl.cfg["vjMute"] = mute
                 if vid:
                     ctl.cfg["videoRoot"] = vid
-                ctl.cfg["projectorMonitor"] = proj_mon
-                if ctl.is_connected() and not ctl.apply_mute():
+                if media is not None:
+                    ctl.cfg["mediaInput"] = media
+                if mon is not None:
+                    ctl.cfg["projectorMonitor"] = mon
+                if mute is not None and ctl.is_connected() \
+                        and not ctl.apply_mute():
                     self.q.put("VJ静音未生效：%s" % ctl.last_error)
-                if proj_mon and not ctl.apply_projector():
+                if mon is None:
+                    return
+                if mon and not ctl.apply_projector():
                     self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-                elif not proj_mon:
+                else:
                     ctl.close_projector()
-        if self.ctl is not None:
+        if obs_in and self.ctl is not None:
             threading.Thread(target=apply_obs, daemon=True).start()
-        proj = g("projectsRoot")
+        proj = str(p.get("projectsRoot") or "") if "projectsRoot" in p else ""
         rescan = bool(proj) and proj != self.ccfg.get("projectsRoot")
         if proj:
             self.ccfg["projectsRoot"] = proj
         if rescan:
             self.q.put("工程库已变更，后台重扫…")
             threading.Thread(target=self._load_songs, daemon=True).start()
-        ports_changed = ((vj != self.vj_hint) or (kb != self.kb_hint)
-                         or (ck != self.clock_hint))
-        self._clock_changed = ck != self.clock_hint
-        self.vj_hint, self.kb_hint, self.clock_hint = vj, kb, ck
+        ports_changed = any(v is not None and v != cur for v, cur in
+                            ((vj, self.vj_hint), (kb, self.kb_hint),
+                             (ck, self.clock_hint)))
+        self._clock_changed = ck is not None and ck != self.clock_hint
+        if vj is not None:
+            self.vj_hint = vj
+        if kb is not None:
+            self.kb_hint = kb
+        if ck is not None:
+            self.clock_hint = ck
         try:
             cfg = _load_config()
-            cfg.update({"autoAdvance": auto, "autoPlay": cont,
-                        "topMost": self.top_most,
-                        "switchConfirm": self.switch_confirm,
-                        "exitCloseApps": self.exit_close_apps,
-                        "vjPortHint": vj, "kbPortHint": kb,
-                        "clockPortHint": ck})
-            obs = cfg.get("obs") or {}
-            if vid:
-                obs["videoRoot"] = vid
-            obs["projectorMonitor"] = proj_mon
-            obs["vjMute"] = mute
-            cfg["obs"] = obs
+            flags = {}
+            if "autoAdvance" in p or "autoPlay" in p:
+                flags.update({"autoAdvance": self.auto_var.get(),
+                              "autoPlay": self.cont_play})
+            if "topMost" in p:
+                flags["topMost"] = self.top_most
+            if "switchConfirm" in p:
+                flags["switchConfirm"] = self.switch_confirm
+            if "exitCloseApps" in p:
+                flags["exitCloseApps"] = self.exit_close_apps
+            if vj is not None:
+                flags["vjPortHint"] = vj
+            if kb is not None:
+                flags["kbPortHint"] = kb
+            if ck is not None:
+                flags["clockPortHint"] = ck
+            cfg.update(flags)
+            if obs_in:
+                obs = cfg.get("obs") or {}
+                if vid:
+                    obs["videoRoot"] = vid
+                if mon is not None:
+                    obs["projectorMonitor"] = mon
+                if mute is not None:
+                    obs["vjMute"] = mute
+                if media is not None:
+                    obs["mediaInput"] = media
+                cfg["obs"] = obs
             daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
-            daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
-            if p.get("dawExe"):
-                daw_sec["dawExe"] = g("dawExe")
+            if proj:
+                daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
+            if "dawExe" in p and p.get("dawExe"):
+                daw_sec["dawExe"] = str(p["dawExe"])
             if "autoSave" in p:
-                daw_sec["autoSave"] = bool(p.get("autoSave"))
-                self.ccfg["autoSave"] = bool(p.get("autoSave"))
+                daw_sec["autoSave"] = bool(p["autoSave"])
+                self.ccfg["autoSave"] = bool(p["autoSave"])
             cfg["dawSettings"] = daw_sec
-            cfg["webRemote"] = self._web_config_payload(**web_fields)
+            if web_fields:
+                cfg["webRemote"] = self._web_config_payload(**web_fields)
             _save_config(cfg)
         except (ValueError, OSError) as e:
             self.q.put("配置保存失败：%s" % e)
@@ -2111,11 +2234,78 @@ class App:
                 self.slots = clean
         return None
 
-    def _pl_cmd_web(self, op, key):
-        """/plcmd：编排动作（op: add/remove/up/down/clear）。返回 None=成功。"""
+    def _pl_cmd_web(self, op, key, payload=None):
+        """/plcmd：编排动作（op: add/remove/up/down/clear/move/setdur/
+        redict）。返回 None=成功。"""
+        payload = payload or {}
         if op == "clear":
             self.pl_keys = []
             self.cur = None
+            self._persist()
+            self._refresh()
+            return None
+        if op == "setdur":        # 手动写入时长（秒数或 分:秒）
+            if points.parse_pt_key(key):
+                return "定位点条目时长由起止点决定，不手填"
+            if key not in self.by_key:
+                return "素材库里没有该工程"
+            sec = cpr_meta.parse_mmss(str(payload.get("dur") or ""))
+            if not sec:
+                return "时长格式：秒数或 分:秒（如 213 或 3:33）"
+            self.durations[key] = sec
+            self.dur_src[key] = "manual"
+            self._persist()
+            self._refresh()
+            loaded = (self.pl_keys[self.cur] if self.cur is not None
+                      and self.cur < len(self.pl_keys) else None)
+            if key == loaded and self.watch is not None:
+                self.watch.set_duration(sec)   # watch 缺席降级态同 _switch
+            self.q.put("《%s》手动时长已写为 %s"
+                       % (key.split("/")[-1], cpr_meta.fmt_mmss(sec)))
+            return None
+        if op == "redict":        # 清手填值，重读工程内原时长（后台读文件）
+            if points.parse_pt_key(key):
+                return "定位点条目时长由起止点决定，无需识别"
+            song = self.by_key.get(key)
+            if song is None:
+                return "素材库里没有该工程"
+            loaded = (self.pl_keys[self.cur] if self.cur is not None
+                      and self.cur < len(self.pl_keys) else None)
+            path, name = song["path"], song["name"]
+
+            def run():
+                d, left = _read_span(path)
+                if not d:
+                    self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
+                               % name)
+                    return
+                self.durations[key] = d
+                self.dur_src.pop(key, None)     # 回归自动来源
+                self._persist()
+                if key == loaded and self.watch is not None:
+                    self.watch.set_duration(d, left)
+                self.calls.put(self._refresh)
+                self.q.put("已识别《%s》工程内原时长 %s"
+                           % (name, cpr_meta.fmt_mmss(d)))
+            threading.Thread(target=run, daemon=True).start()
+            return None
+        if op == "move":          # 原子重排（拖拽一次一发；from/to 0 基）
+            frm, to = payload.get("from"), payload.get("to")
+            if not all(isinstance(x, int) and not isinstance(x, bool)
+                       for x in (frm, to)):
+                return "move 参数非法"
+            if not 0 <= frm < len(self.pl_keys) \
+                    or not 0 <= to < len(self.pl_keys):
+                return None
+            item = self.pl_keys.pop(frm)
+            self.pl_keys.insert(to, item)
+            if self.cur is not None:
+                if self.cur == frm:
+                    self.cur = to
+                elif frm < self.cur <= to:
+                    self.cur -= 1
+                elif to <= self.cur < frm:
+                    self.cur += 1
             self._persist()
             self._refresh()
             return None

@@ -48,14 +48,16 @@ def read_duration(path):
 
 
 def fmt_mmss(sec):
-    """213.4 → '3:33'；None/0 → '未知'。"""
-    if not sec or sec <= 0:
+    """213.4 → '3:33'；None/0/非有限 → '未知'（毒化数据不得炸调用方）。"""
+    if not sec or sec <= 0 or sec != sec or sec > 1e9:
         return "未知"
     return "%d:%02d" % (int(sec) // 60, int(sec) % 60)
 
 
 def parse_mmss(text):
-    """'3:33' 或 '213' → 秒（float）；解析失败返回 None。"""
+    """'3:33' 或 '213' → 秒（float）；解析失败/非有限/非正返回 None。
+    float() 接受 'inf'/'nan'/科学计数——inf/nan 会毒化 durations 并炸
+    fmt_mmss（/playlist 与 /state 快照全线 500），必须在此拦死。"""
     text = (text or "").strip()
     if not text:
         return None
@@ -63,9 +65,23 @@ def parse_mmss(text):
         parts = text.split(":")
         if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
             return None
-        m, s = (int(p) for p in parts)
-        return m * 60 + s
+        try:    # isdigit 对 '²' 等上标数字也 True，int() 拒收——不能裸转
+            m, s = (int(p.strip()) for p in parts)
+        except ValueError:
+            return None
+        v = m * 60 + s
+        return float(v) if 0 < v < 1e7 else None   # 冒号分支同样有界
     try:
-        return float(text)
+        v = float(text)
     except ValueError:
         return None
+    return v if 0 < v < 1e7 else None
+
+
+def safe_dur(v):
+    """durations 值域过滤（读回/透传防御）：bool/非数/非有限/非正/超界
+    → 0.0。历史毒化数据（playlist.json 手改出的 NaN/Infinity/1e400）经
+    此归零，/playlist、/state 快照与 JSON 序列化不再被打穿。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0.0
+    return float(v) if v == v and 0 < v < 1e9 else 0.0

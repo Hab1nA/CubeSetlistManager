@@ -413,7 +413,9 @@ def stage_p1(send):
         ok("p1.setlist.dnd.skipped", True, "（播放列表不足 2 行）")
     else:
         moves = [b for u, b in posts if "/plcmd" in u]
-        ok("p1.setlist.dnd-posts", any('"op":"up"' in b for b in moves),
+        ok("p1.setlist.dnd-posts",
+           len(moves) == 1 and '"op":"move"' in moves[0]
+           and '"from":2' in moves[0] and '"to":0' in moves[0],
            str(moves)[:160])
     js(send, RESTORE)
 
@@ -522,7 +524,7 @@ def stage_p1(send):
     else:
         moves = [b for u, b in posts if "/plcmd" in u]
         ok("p1.setlist.dnd-posts",
-           moves.count('{"op":"up","key":"pt:A/歌一#2"}') == 2,
+           len(moves) == 1 and '"from":2' in moves[0] and '"to":0' in moves[0],
            str(moves)[:200])
     js(send, RESTORE)
     time.sleep(1.8)
@@ -993,6 +995,194 @@ def stage_a(send):
     ok("ba.no-js-errors", not errs, str(errs)[:300])
 
 
+SETTINGS_STUB = ("{clockHint:'CK口',vjHint:'VJ口',kbHint:'KB口',"
+                 "autoAdvance:true,autoPlay:false,topMost:true,"
+                 "switchConfirm:true,exitCloseApps:false,projectsRoot:'',"
+                 "dawExe:'',autoSave:true,"
+                 "obs:{projectorMonitor:'缺席屏',vjMute:true,videoRoot:'',"
+                 "mediaInput:'Media1'},"
+                 "web:{enabled:false,serverPort:8765,appPort:8767,"
+                 "taskerPort:8766,midiIn:'旧口',mode:'hotspot',ip:''},"
+                 "screens:['\\\\\\.\\DISPLAY1','\\\\\\.\\DISPLAY2'],"
+                 "adapters:[],ports:['loopMIDI 1','VJ口在线','别的口'],"
+                 "webStatus:{net:'hot-on',listen:{serverPort:true,"
+                 "appPort:false}}}")
+
+
+def stage_b(send):
+    # ---- B4：真后端 webStatus 契约 + 状态行渲染 ----
+    b4 = js(send, "const r=await fetch('/settings');const j=await r.json();"
+            "return {has:!!j.webStatus&&'net' in j.webStatus,"
+            "listen:typeof j.webStatus.listen}")
+    ok("bb.b4.webstatus", b4.get("has") and b4.get("listen") == "object",
+       json.dumps(b4))
+
+    # ---- B2/B3/B4 stub 态：设置页端口下拉 + VJ 位置「无」/幽灵 + 状态行 ----
+    nav(send, "settings")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/settings'&&(!o||o.method!=='POST'))"
+        "return Promise.resolve(new Response(JSON.stringify("
+        + SETTINGS_STUB + "),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    js(send, "const el=document.getElementById('st-srv');"
+        "el.value=(Number(el.value)||8765)+1;"
+        "el.dispatchEvent(new Event('input',{bubbles:true}));"
+        "document.getElementById('st-save').click()")
+    time.sleep(0.8)
+    b2 = js(send, "const info=id=>{const s=document.getElementById(id);"
+            "return {vals:[...s.options].map(o=>o.value),"
+            "txts:[...s.options].map(o=>o.textContent),sel:s.value}};"
+            "return {clock:info('st-clock'),vj:info('st-vj'),pg:info('st-pg')}")
+    ok("bb.b2.port-select", b2["clock"]["vals"][0] == ""
+       and b2["clock"]["txts"][0] == "无"
+       and "loopMIDI 1" in b2["clock"]["vals"]
+       and b2["vj"]["sel"] == "VJ口在线"      # 前缀命中在线口→完整名
+       and b2["clock"]["sel"] == "CK口"       # 不在场→幽灵项保名
+       and "CK口（未接入）" in b2["clock"]["txts"]
+       and b2["pg"]["sel"] == "旧口"
+       and "旧口（未接入）" in b2["pg"]["txts"],
+       json.dumps(b2, ensure_ascii=False))
+    b4b = js(send, "return {pills:[...document.querySelectorAll("
+            "'#st-netstat .pill')].map(p=>p.textContent),"
+            "addr:document.querySelector('#st-netstat .sm-txt')"
+            "?document.querySelector('#st-netstat .sm-txt').textContent:''}")
+    ok("bb.b4.netstat-render", any("热点" in p for p in b4b["pills"])
+       and any("网页端口 监听中" == p for p in b4b["pills"])
+       and any("APP 端口 未监听" == p for p in b4b["pills"]),
+       json.dumps(b4b, ensure_ascii=False))
+    # 选「无」保存 → 提交空串（停用）
+    js(send, "const s=document.getElementById('st-clock');"
+        "s.value='';s.dispatchEvent(new Event('change',{bubbles:true}));"
+        "window.__posts=[];"
+        "document.getElementById('st-save').click()")
+    time.sleep(0.8)
+    b2b = js(send, "let clock=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/settings'){try{clock=JSON.parse(b).clockHint}"
+             "catch(e){}}});return {clock}")
+    ok("bb.b2.none-submits-empty", b2b.get("clock") == "",
+       json.dumps(b2b))
+    js(send, RESTORE)
+    time.sleep(0.5)
+
+    # ---- B3：VJ 位置「无」+ 幽灵项；保存「无」提交空 ----
+    nav(send, "vj")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/settings'&&(!o||o.method!=='POST'))"
+        "return Promise.resolve(new Response(JSON.stringify("
+        + SETTINGS_STUB + "),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    js(send, "document.getElementById('vj-save').click()")
+    time.sleep(0.8)
+    b3 = js(send, "const s=document.getElementById('vj-mon');"
+            "return {vals:[...s.options].map(o=>o.value),"
+            "txts:[...s.options].map(o=>o.textContent),sel:s.value}")
+    ok("bb.b3.mon-none-ghost", b3["vals"][0] == ""
+       and b3["txts"][0] == "无" and b3["sel"] == "缺席屏"
+       and "缺席屏（不在场）" in b3["txts"],
+       json.dumps(b3, ensure_ascii=False))
+    # VJ 页保存载荷只含 obs 键（B1 前端侧：窄载荷）
+    b1 = js(send, "window.__posts=[];"
+             "document.getElementById('vj-save').click();return 1")
+    time.sleep(0.6)
+    b1_ = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/settings'&&b&&!body)body=b});"   # GET 的空 body 跳过
+             "return {keys:body?Object.keys(JSON.parse(body)):null,"
+             "obsKeys:body?Object.keys(JSON.parse(body).obs||{}):null}")
+    ok("bb.b1.vj-payload-narrow",
+       b1_.get("keys") == ["obs"]
+       and set(b1_.get("obsKeys") or []) >= {"projectorMonitor",
+                                             "mediaInput", "vjMute"},
+       json.dumps(b1_))
+    # 选「无」保存 → obs.projectorMonitor 为空串
+    js(send, "const s=document.getElementById('vj-mon');"
+        "s.value='';s.dispatchEvent(new Event('change',{bubbles:true}));"
+        "window.__posts=[];"
+        "document.getElementById('vj-save').click()")
+    time.sleep(0.6)
+    b3b = js(send, "let mon=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/settings'){try{mon=JSON.parse(b).obs"
+             ".projectorMonitor}catch(e){}}});return {mon}")
+    ok("bb.b3.none-closes-projector", b3b.get("mon") == "",
+       json.dumps(b3b))
+    js(send, RESTORE)
+    time.sleep(0.5)
+
+    # ---- B5/B6：时长三态 + 行级菜单 + ↑↓ 原子 move ----
+    # 专用桩：/playlist 回固定 stub（1.5s 的 refreshPlaylist 吃 {ok:true}
+    # 会把 plCache.pl 洗成 undefined，movePl 直接炸）、/plcmd 记录后回 ok
+    PLCMD_STUB = (UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+                  "window.fetch=(u,o)=>{"
+                  "window.__posts.push([String(u),(o&&o.body)||'']);"
+                  "if(String(u)==='/playlist')return Promise.resolve("
+                  "new Response(JSON.stringify({lib:[],pl:["
+                  "{key:'a',name:'A',dur:'2:00',durSec:120,durSrc:'auto',"
+                  "pt:false},"
+                  "{key:'b',name:'B',dur:'1:30',durSec:90,durSrc:'manual',"
+                  "pt:false},"
+                  "{key:'c',name:'C',dur:'',durSec:0,durSrc:'unknown',"
+                  "pt:false},"
+                  "{key:'d',name:'D',dur:'0:40',durSec:40,durSrc:'pt',"
+                  "pt:true}],cur:0}),{status:200}));"
+                  "if(String(u)==='/plcmd')return Promise.resolve("
+                  "new Response('{\"ok\":true}',{status:200,"
+                  "headers:{'Content-Type':'application/json'}}));"
+                  "return window.__fetch0(u,o)};")
+    js(send, PLCMD_STUB)
+    nav(send, "setlist")
+    b5 = js(send, "return [...document.querySelectorAll('#pl .row .dur')]"
+            ".map(d=>({t:d.textContent,cls:d.className}))")
+    ok("bb.b5.dur-three-state",
+       len(b5) == 4 and "dur-auto" in b5[0]["cls"]
+       and "dur-manual" in b5[1]["cls"]
+       and b5[2]["t"] == "未知" and "dur-unknown" in b5[2]["cls"],
+       json.dumps(b5, ensure_ascii=False))
+    # ⋯ 菜单 → 写入时长表单 → 提交 setdur
+    mclick = js(send, "const row=document.querySelectorAll('#pl .row')[1];"
+                "if(!row)return {none:1};"
+                "const b=[...row.querySelectorAll('.ops button')]"
+                ".find(x=>x.title.includes('写入时长'));"
+                "if(!b)return {nobtn:1};"
+                "b.click();"
+                "return {pop:!!document.querySelector('.pop')}")
+    m1 = js(send, "const m=[...document.querySelectorAll('.pop .menu-item')]"
+            ".map(x=>x.textContent);return {m}")
+    ok("bb.b5.more-menu", mclick.get("pop")
+       and any("写入时长" in x for x in m1.get("m", []))
+       and any("重新识别" in x for x in m1.get("m", [])),
+       "%s %s" % (json.dumps(mclick, ensure_ascii=False),
+                  json.dumps(m1, ensure_ascii=False)))
+    js(send, "[...document.querySelectorAll('.pop .menu-item')]"
+        ".find(x=>x.textContent.includes('写入时长')).click();return 1")
+    time.sleep(0.3)
+    js(send, "const p=document.querySelector('.pop');"
+        "p.querySelector('input').value='1:30';"
+        "p.querySelector('.btns .primary').click();return 1")
+    time.sleep(0.4)
+    posts = js(send, "return window.__posts||[]")
+    ok("bb.b5.setdur-posts",
+       any("/plcmd" in u and '"op":"setdur"' in b and '"dur":"1:30"' in b
+           for u, b in posts), str(posts)[:200])
+    # ↑ 按钮（第 2 行上移）发原子 move
+    js(send, "window.__posts=[];"
+        "const rows=[...document.querySelectorAll('#pl .row')];"
+        "const b=rows[1].querySelector('.ops button[title=上移]');"
+        "if(b)b.click();return !!b")
+    time.sleep(0.4)
+    posts = js(send, "return window.__posts||[]")
+    ok("bb.b6.arrow-move",
+       any("/plcmd" in u and '"op":"move"' in b and '"from":1' in b
+           and '"to":0' in b for u, b in posts), str(posts)[:200])
+    js(send, RESTORE)
+
+    # ---- JS 错误汇总 ----
+    errs = js(send, "return window.__errs")
+    ok("bb.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1005,6 +1195,8 @@ def main():
             stage_p2(send)
         if stages & {"a", "all"}:
             stage_a(send)
+        if stages & {"b", "all"}:
+            stage_b(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]

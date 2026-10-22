@@ -23,6 +23,19 @@ SOFT_SPAN = 3.0                 # 软提示：段过短吃停止重试窗，只�
 MHDR_DONE = 0x1
 
 
+def finite_tc(v):
+    """时码有限性过滤（web 入口与读回防御）：NaN/Infinity/负数/超界/
+    非数 → None。毒化值不得进 points 表——JSON 序列化与 end-start 运算
+    会被 NaN/Infinity 打穿。数字字符串仍容忍（load_points 历史口径）。"""
+    if isinstance(v, bool):
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v == v and 0 <= v < 1e9 else None
+
+
 def empty_data():
     return {"enabled": False, "counter": 0, "points": []}
 
@@ -69,8 +82,11 @@ def load_points(song_dir):
     pts = []
     for p in data.get("points") or []:
         try:
+            s, e = finite_tc(p["start"]), finite_tc(p["end"])
+            if s is None or e is None:
+                continue        # 毒化行（NaN/Infinity 手改）跳过，不拖垮整表
             pts.append({"id": int(p["id"]), "name": str(p["name"]),
-                        "start": float(p["start"]), "end": float(p["end"])})
+                        "start": s, "end": e})
         except (KeyError, TypeError, ValueError):
             continue            # 单条脏数据跳过，不拖垮整表
     out["points"] = pts
@@ -100,7 +116,10 @@ def get_point(data, pid):
 
 
 def validate_point(start, end):
-    """(拒绝原因, 软提示)：拒绝原因非 None 不得保存/入列。"""
+    """(拒绝原因, 软提示)：拒绝原因非 None 不得保存/入列。
+    NaN 与任何比较都为 False（end<=start 拦不住）——有限性先查。"""
+    if finite_tc(start) is None or finite_tc(end) is None:
+        return ("时码必须为有限数字", None)
     if end <= start:
         return ("结束点必须大于开始点", None)
     if end - start < MIN_SPAN:
