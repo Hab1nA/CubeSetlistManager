@@ -416,6 +416,9 @@ details.card .grid2 { margin-top: var(--s3); }
 /* ---- 键盘页 ---- */
 .cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3);
   margin-bottom: var(--s3); }
+.port-stat { font-weight: 400; color: var(--dim); }
+.port-stat:not(:empty)::before { content: "· "; }
+.kb-actions { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
 .cards2 .card { margin-bottom: 0; }
 .card .field { margin-bottom: var(--s2); }
 .card .field:last-child { margin-bottom: 0; }

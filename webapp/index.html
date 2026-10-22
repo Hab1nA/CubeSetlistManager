@@ -192,18 +192,32 @@
     </section>
 
     <section class="page" id="p-kbd">
-      <h2>键盘自动化 <span id="kbd-song" class="dim"></span></h2>
+      <div class="page-head">
+        <h2>键盘自动化</h2>
+        <select id="kb-song" title="要配置映射的曲目（默认跟随已装载曲）"
+          style="max-width:340px"></select>
+      </div>
+      <div id="kb-status" class="dim sm-txt"></div>
       <div class="cards2">
-        <div class="card"><h3>JUNO 端口</h3>
-          <div class="field"><label for="kb-jin">输入</label><input id="kb-jin"></div>
-          <div class="field"><label for="kb-jout">输出</label><input id="kb-jout"></div>
+        <div class="card"><h3>JUNO 端口
+          <span id="kb-jstat" class="port-stat"></span></h3>
+          <div class="field"><label for="kb-jin">输入</label>
+            <select id="kb-jin"></select></div>
+          <div class="field"><label for="kb-jout">输出</label>
+            <select id="kb-jout"></select></div>
         </div>
-        <div class="card"><h3>AX-09 端口</h3>
-          <div class="field"><label for="kb-ain">输入</label><input id="kb-ain"></div>
-          <div class="field"><label for="kb-aout">输出</label><input id="kb-aout"></div>
+        <div class="card"><h3>AX-09 端口
+          <span id="kb-astat" class="port-stat"></span></h3>
+          <div class="field"><label for="kb-ain">输入</label>
+            <select id="kb-ain"></select></div>
+          <div class="field"><label for="kb-aout">输出</label>
+            <select id="kb-aout"></select></div>
         </div>
       </div>
-      <button id="kb-save" class="btn primary">保存并应用</button>
+      <div class="kb-actions">
+        <button id="kb-refresh" class="btn ghost sm">刷新端口</button>
+        <button id="kb-save" class="btn primary sm">保存端口</button>
+      </div>
       <div class="card slotcard">
         <h3>JUNO 音色槽
           <span class="stepper"><button id="kb-jdown" class="btn icon sm" title="移调 −1">−</button>
@@ -220,7 +234,12 @@
             <button id="kb-areset" class="btn ghost xs">重置</button></span></h3>
         <div id="kb-axslots" class="slot-grid"></div>
       </div>
-      <p class="dim sm-txt">点击卡片编辑音色（PC/MSB/LSB）；「试」=向琴发送该音色做连通测试。</p>
+      <p class="dim sm-txt">点击卡片编辑音色（PC/MSB/LSB，可用「录制」在琴上
+        选音色捕获）；「试」=向琴发送该音色做连通测试。可为未装载曲预配
+        映射，写入其专属文件。</p>
+      <p class="dim sm-txt">移调键位（键盘自动化端口收听）：JUNO C2降1半音
+        C#2升1半音 D2降1八度 D#2升1八度；AX-09 F2降1半音 F#2升1半音
+        G2降1八度 G#2升1八度。</p>
     </section>
 
     <section class="page" id="p-vj">

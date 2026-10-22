@@ -208,8 +208,21 @@ def stage_p0(send):
         "el.dispatchEvent(new Event('input',{bubbles:true}));}"
         "document.getElementById('toasts').innerHTML=''")
 
-    # 5. 键盘音色槽 popover（替代 prompt 链；P2 起槽为 .slot 网格卡）
+    # 5. 键盘音色槽 popover（替代 prompt 链；P2 起槽为 .slot 网格卡）。
+    #    /kbd 打桩给 songKey（无装载曲时保存被新守卫正当禁用，须先有目标）
     nav(send, "kbd")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/kbd')return Promise.resolve(new Response("
+        "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',"
+        "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:0,axShift:0,"
+        "songKey:'X/桩曲',songs:[{key:'X/桩曲',team:'X',name:'桩曲'}],"
+        "lastResult:'',ports:{in:[],out:[]},portStatus:{},"
+        "editSong:{key:'X/桩曲',name:'桩曲',loading:false,slots:{},"
+        "axSlots:{}}}),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    time.sleep(0.6)
     pop = js(send, "const r=document.querySelector('#kb-slots .slot');"
              "if(!r)return {none:1};r.click();"
              "return {pop:!!document.querySelector('.pop'),"
@@ -225,7 +238,7 @@ def stage_p0(send):
            "dis:ok.disabled}")
     ok("p0.popover.pc-validate", v.get("dis") and v.get("err"),
        json.dumps(v, ensure_ascii=False))
-    js(send, INTERCEPT + "const p=document.querySelector('.pop');"
+    js(send, "const p=document.querySelector('.pop');"
         "p.querySelector('#sp-pc').value='63';"
         "p.querySelector('#sp-pc').dispatchEvent(new Event('input',"
         "{bubbles:true}));p.querySelector('.btns .primary').click();")
@@ -722,7 +735,10 @@ def stage_p2(send):
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
         "if(String(u)==='/kbd')return Promise.resolve(new Response("
         "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',junoShift:0,"
-        "axShift:0,song:null,slots:{60:{pc:63,msb:1,lsb:2}},axSlots:{}}),"
+        "axShift:0,songKey:null,songs:[],lastResult:'',"
+        "ports:{in:[],out:[]},portStatus:{},"
+        "editSong:{key:null,name:null,loading:false,"
+        "slots:{60:{pc:63,msb:1,lsb:2,desc:'USER:0521'}},axSlots:{}}}),"
         "{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
@@ -1298,6 +1314,136 @@ def stage_c(send):
     ok("bc.no-js-errors", not errs, str(errs)[:300])
 
 
+KBD_STUB = ("{junoIn:'JUNO-DS',junoOut:'JUNO-DS',axIn:'AX-09',"
+            "axOut:'JUNO-DS',junoShift:2,axShift:-1,songKey:'A/歌一',"
+            "songs:[{key:'A/歌一',team:'A',name:'歌一'},"
+            "{key:'B/歌二',team:'B',name:'歌二'}],lastResult:'已发送：X',"
+            "ports:{in:[{label:'JUNO-DS',name:'JUNO-DS',dev:0},"
+            "{label:'USB-Midi（第1个）',name:'USB-Midi',dev:0},"
+            "{label:'USB-Midi（第2个）',name:'USB-Midi',dev:1}],"
+            "out:[{label:'JUNO-DS',name:'JUNO-DS',dev:0}]},"
+            "portStatus:{junoIn:{hit:true,name:'JUNO-DS',pos:1,total:1},"
+            "junoOut:{hit:true,name:'JUNO-DS',pos:1,total:1},"
+            "axIn:{hit:false},"
+            "axOut:{hit:true,name:'JUNO-DS',pos:1,total:1}},"
+            "editSong:{key:'A/歌一',name:'歌一',loading:false,"
+            "slots:{'60':{pc:63,msb:1,lsb:2,desc:'USER:0521'}},"
+            "axSlots:{'72':{pc:5,desc:'SYNTH/PAD #5'}}}}")
+
+
+def stage_d(send):
+    # ---- D1/D2/D4：stub /kbd → 曲目下拉/端口下拉（同名序号/状态行/幽灵
+    #      项）/槽卡人话描述/最近结果行 ----
+    nav(send, "console")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
+        "return Promise.resolve(new Response(JSON.stringify("
+        + KBD_STUB + "),{status:200}));"
+        "if(String(u)==='/kbd/record')return Promise.resolve(new Response("
+        "JSON.stringify({active:true,inst:'juno',"
+        "slot:{pc:70,msb:87,lsb:0}}),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    js(send, "document.querySelector('.b-kbd').click()")
+    time.sleep(0.6)
+    # boot 期端口下拉已用真实端口初始化（kbPortsInit 门不重建）——点
+    # 「刷新端口」走产品同款强制重建路径
+    js(send, "document.getElementById('kb-refresh').click()")
+    time.sleep(0.8)
+    d1 = js(send, "const s=document.getElementById('kb-song');"
+            "return {opts:[...s.options].map(o=>o.textContent),sel:s.value,"
+            "last:document.getElementById('kb-status').textContent}")
+    ok("bd.d1.song-select",
+       any("跟随已装载曲" in t for t in d1["opts"])
+       and "歌一" in d1["opts"] and "歌二" in d1["opts"]
+       and d1["sel"] == "" and "最近切换" in d1["last"],
+       json.dumps(d1, ensure_ascii=False))
+    d2 = js(send, "const info=id=>{const s=document.getElementById(id);"
+            "return {labels:[...s.options].map(o=>o.textContent),"
+            "sel:s.options[s.selectedIndex]"
+            "?s.options[s.selectedIndex].textContent:''}};"
+            "return {jin:info('kb-jin'),ain:info('kb-ain'),"
+            "jstat:document.getElementById('kb-jstat').textContent,"
+            "astat:document.getElementById('kb-astat').textContent}")
+    ok("bd.d2.port-select",
+       any("第2个" in t for t in d2["jin"]["labels"])
+       and d2["jin"]["sel"] == "JUNO-DS"
+       and "未接入" in d2["ain"]["sel"]
+       and "✔" in d2["jstat"] and "❌" in d2["astat"],
+       json.dumps(d2, ensure_ascii=False))
+    # 保存端口：选第2只同名盒 → 载荷带 name+dev 序号；AX 幽灵保名
+    js(send, "document.getElementById('kb-jin').value='2';"
+        "window.__posts=[];"
+        "document.getElementById('kb-save').click()")
+    time.sleep(0.6)
+    d2b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/kbdset')body=b});"
+             "return {body:body?JSON.parse(body):null}")
+    ok("bd.d2.save-with-dev",
+       d2b["body"] and d2b["body"]["junoIn"] == "USB-Midi"
+       and d2b["body"]["junoInDev"] == 1
+       and d2b["body"]["axIn"] == "AX-09",
+       json.dumps(d2b, ensure_ascii=False))
+    d4 = js(send, "const s=document.querySelector('#kb-slots .slot "
+            ".s-sub');const ax=document.querySelector("
+            "'#kb-axslots .slot .s-sub');"
+            "return {juno:s?s.textContent:'',ax:ax?ax.textContent:''}")
+    ok("bd.d4.slot-desc", d4.get("juno") == "USER:0521"
+       and d4.get("ax") == "SYNTH/PAD #5",
+       json.dumps(d4, ensure_ascii=False))
+    # ---- D3/D5：popover 录制回填 + MSB 校验 + songKey 定向保存 ----
+    js(send, "document.querySelector('#kb-slots .slot').click()")
+    time.sleep(0.3)
+    js(send, "const p=document.querySelector('.pop');"
+        "[...p.querySelectorAll('button')].find(b=>b.textContent==="
+        "'录制').click()")
+    time.sleep(0.9)          # 轮询两轮回填捕获值
+    d3 = js(send, "const p=document.querySelector('.pop');"
+            "return {pc:p.querySelector('#sp-pc').value,"
+            "msb:p.querySelector('#sp-msb').value,"
+            "lsb:p.querySelector('#sp-lsb').value,"
+            "err:p.querySelector('#sp-err').textContent}")
+    ok("bd.d3.record-fill", d3.get("pc") == "70" and d3.get("msb") == "87",
+       json.dumps(d3, ensure_ascii=False))
+    # MSB 越界禁保存
+    d5 = js(send, "const p=document.querySelector('.pop');"
+            "p.querySelector('#sp-msb').value='200';"
+            "p.querySelector('#sp-msb').dispatchEvent(new Event('input',"
+            "{bubbles:true}));"
+            "return {dis:p.querySelector('.btns .primary').disabled,"
+            "err:p.querySelector('#sp-err').textContent}")
+    ok("bd.d5.msb-validate", d5.get("dis") and "0-127" in d5.get("err", ""),
+       json.dumps(d5, ensure_ascii=False))
+    # 复原 MSB 保存 → /slotset 带捕获值 + songKey
+    js(send, "const p=document.querySelector('.pop');"
+        "p.querySelector('#sp-msb').value='87';"
+        "p.querySelector('#sp-msb').dispatchEvent(new Event('input',"
+        "{bubbles:true}));"
+        "window.__posts=[];"
+        "p.querySelector('.btns .primary').click()")
+    time.sleep(0.6)
+    d3b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/slotset')body=b});"
+             "return {body:body?JSON.parse(body):null,"
+             "stops:(window.__posts||[]).filter(x=>x[0]==='/kbdrecord'"
+             "&&x[1]&&JSON.parse(x[1]).stop).length}")
+    ok("bd.d3.save-songkey",
+       d3b["body"] and d3b["body"]["songKey"] == "A/歌一"
+       and d3b["body"]["slots"]["60"]["pc"] == 70
+       and (d3b["stops"] or 0) >= 1,
+       json.dumps(d3b, ensure_ascii=False))
+    # D5 脚注键位表
+    fn = js(send, "return document.querySelector('#p-kbd').textContent"
+            ".includes('移调键位')")
+    ok("bd.d5.keymap-footnote", fn)
+    js(send, RESTORE)
+    time.sleep(0.5)
+
+    errs = js(send, "return window.__errs")
+    ok("bd.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1314,6 +1460,8 @@ def main():
             stage_b(send)
         if stages & {"c", "all"}:
             stage_c(send)
+        if stages & {"d", "all"}:
+            stage_d(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]

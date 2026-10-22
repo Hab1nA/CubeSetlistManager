@@ -2276,15 +2276,136 @@ class App:
                    "remoteEnabled": self.pedal_remote_enabled})
         return None
 
-    def _kbd_get_web(self):
-        return {"junoIn": self.jcfg.get("inHint", ""),
-                "junoOut": self.jcfg.get("outHint", ""),
-                "axIn": self.axcfg.get("inHint", ""),
-                "axOut": self.axcfg.get("outHint", ""),
-                "junoShift": self.juno_shift, "axShift": self.ax_shift,
-                "slots": self.slots, "axSlots": self.ax_slots,
-                "song": (daw_ctrl.project_name_from_title(ws[1])
-                         if (ws := daw_ctrl.current_project()) else None)}
+    def _kbd_song_key(self):
+        """当前装载映射的曲 key（cur_song_path 反查；未装载/游离=None）。"""
+        if not self.cur_song_path:
+            return None
+        for k, s in self.by_key.items():
+            if s["path"] == self.cur_song_path:
+                return k
+        return None
+
+    def _kbd_get_web(self, song_key=None):
+        """/kbd 数据面：live 态 + 曲目清单（任意曲预配映射）+ 端口候选与
+        命中态 + 槽位人话描述 + 最近一次切换结果。song_key 给定时返回
+        该曲的映射（后台装载，首答 loading）。"""
+        loaded = self._kbd_song_key()
+        out = {"junoIn": self.jcfg.get("inHint", ""),
+               "junoOut": self.jcfg.get("outHint", ""),
+               "axIn": self.axcfg.get("inHint", ""),
+               "axOut": self.axcfg.get("outHint", ""),
+               "junoInDev": kbd_auto._in_dev(self.jcfg),
+               "junoOutDev": self.jcfg.get("dev", 0),
+               "axInDev": kbd_auto._in_dev(self.axcfg),
+               "axOutDev": self.axcfg.get("dev", 0),
+               "junoShift": self.juno_shift, "axShift": self.ax_shift,
+               "songKey": loaded,
+               "songs": [{"key": s["key"], "team": s["team"],
+                          "name": s["name"]} for s in self.songs],
+               "lastResult": self._kb_last[0]}
+        # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）
+        ins = kbd_auto._all_in_devices()
+        outs = kbd_auto._all_out_devices()
+
+        def entries(devs):
+            return [{"label": l, "name": n, "dev": k} for l, n, k
+                    in kbd_auto._device_entries([n for _, n in devs])]
+
+        def side(devs, hint, dev):
+            hit = kbd_auto._pick_hit(devs, hint, dev)
+            if hit is None:
+                return {"hit": False}
+            pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+            return {"hit": True, "name": hit[1], "pos": pos, "total": total}
+
+        out["ports"] = {"in": entries(ins), "out": entries(outs)}
+        out["portStatus"] = {
+            "junoIn": side(ins, self.jcfg.get("inHint", ""),
+                           kbd_auto._in_dev(self.jcfg)),
+            "junoOut": side(outs, self.jcfg.get("outHint", ""),
+                            self.jcfg.get("dev", 0)),
+            "axIn": side(ins, self.axcfg.get("inHint", ""),
+                         kbd_auto._in_dev(self.axcfg)),
+            "axOut": side(outs, self.axcfg.get("outHint", ""),
+                          self.axcfg.get("dev", 0))}
+
+        def with_desc(slots, fn):
+            return {str(n): dict(v, desc=fn(v))
+                    for n, v in (slots or {}).items()}
+
+        def edit_song(key, name, loading, slots, ax):
+            return {"key": key, "name": name, "loading": loading,
+                    "slots": with_desc(slots, kbd_auto.describe_slot),
+                    "axSlots": with_desc(ax, kbd_auto.describe_ax)}
+
+        if song_key and song_key != loaded:
+            song = self.by_key.get(song_key)
+            if song is None:
+                out["editSong"] = {"key": None, "loading": False,
+                                   "slots": {}, "axSlots": {}}
+                return out
+            if not hasattr(self, "_kbd_song_cache"):
+                self._kbd_song_cache = {}
+            if song_key in self._kbd_song_cache:
+                slots, ax = self._kbd_song_cache[song_key]
+                out["editSong"] = edit_song(song_key, song["name"],
+                                            False, slots, ax)
+            else:               # 后台装载（网络盘 IO 不进 Tk 线程）；代际
+                out["editSong"] = {"key": song_key, "name": song["name"],
+                                   "loading": True, "slots": {}, "axSlots": {}}
+                path = song["path"]
+                if not hasattr(self, "_kbd_cache_gen"):
+                    self._kbd_cache_gen = {}
+                self._kbd_cache_gen[song_key] = \
+                    self._kbd_cache_gen.get(song_key, 0) + 1
+                gen = self._kbd_cache_gen[song_key]
+
+                def run():
+                    slots = kbd_auto.load_slots(path)
+                    ax = kbd_auto.load_slots(path, "ax")
+                    if self._kbd_cache_gen.get(song_key) != gen:
+                        return    # IO 期间已保存失效：不回写旧数据
+                    self._kbd_song_cache[song_key] = (slots, ax)
+                threading.Thread(target=run, daemon=True).start()
+            return out
+        song = self.by_key.get(loaded) if loaded else None
+        out["editSong"] = edit_song(loaded, song["name"] if song else None,
+                                    False, self.slots, self.ax_slots)
+        return out
+
+    def _kbd_record_web(self, inst, stop=False):
+        """录制（琴上捕获）：镜像 KeyboardAutoWindow 录制半程——开该琴
+        输入口持续跟踪最近一次 BS/PC；stop 关口保留最后捕获值。"""
+        cap_old = getattr(self, "_kbd_cap", None)
+        if cap_old is not None:
+            try:
+                cap_old["port"].close()
+            except OSError:
+                pass
+        if stop:
+            if cap_old is not None:
+                cap_old["closed"] = True
+            else:
+                self._kbd_cap = None
+            return None
+        cfg = self.axcfg if inst == "ax" else self.jcfg
+        cap = kbd_auto.SlotCapture()
+        try:
+            port = kbd_auto.RawMidiIn(cfg["inHint"], cap.feed,
+                                      dev=kbd_auto._in_dev(cfg))
+        except kbd_auto.PortNotFound as e:
+            self._kbd_cap = None
+            return str(e)
+        self._kbd_cap = {"inst": inst, "cap": cap, "port": port,
+                         "closed": False}
+        return None
+
+    def _kbd_record_poll_web(self):
+        cap = getattr(self, "_kbd_cap", None)
+        if cap is None:
+            return {"active": False}
+        return {"active": not cap["closed"], "inst": cap["inst"],
+                "slot": cap["cap"].slot}
 
     def _kbd_apply_web(self, p):
         if p.get("junoIn") is not None:
@@ -2295,6 +2416,13 @@ class App:
             self.axcfg["inHint"] = str(p["axIn"])
         if p.get("axOut") is not None:
             self.axcfg["outHint"] = str(p["axOut"])
+        # 同名端口序号（两只同型号盒消歧）：out 行落 dev、in 行落 inDev
+        for cfg, ipfx, opfx in ((self.jcfg, "junoInDev", "junoOutDev"),
+                                (self.axcfg, "axInDev", "axOutDev")):
+            if p.get(ipfx) is not None:
+                cfg["inDev"] = kbd_auto._norm_dev(p[ipfx])
+            if p.get(opfx) is not None:
+                cfg["dev"] = kbd_auto._norm_dev(p[opfx])
         self._persist_config(juno=self.jcfg, ax=self.axcfg)
         kb_changed = True
         self._apply_ports_kbd(kb_changed)
@@ -2338,6 +2466,15 @@ class App:
             return "音符 %d 未配置音色映射" % int(note)
         if sw is None:
             return "收发器未就绪"
+        # 端口同步预检：输出口不在场时提交也是石沉大海，直接给明确报错
+        cfg = self.axcfg if inst == "ax" else self.jcfg
+        devs = kbd_auto._all_out_devices()
+        hit = kbd_auto._pick_hit(devs, cfg.get("outHint", ""),
+                                 cfg.get("dev", 0))
+        if hit is None:
+            return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
+                cfg.get("outHint", ""),
+                "、".join(n for _, n in devs) or "无")
         sw.submit(slot, why="web 测试")
         return None
 
@@ -2360,18 +2497,52 @@ class App:
             self.switcher.submit_shift(total, why="JUNO 移调 %+d 半音" % total)
         return None
 
-    def _slots_save_web(self, inst, slots):
-        if not self.cur_song_path:
-            return "当前没有打开的工程"
+    def _slots_save_web(self, inst, slots, song_key=None):
+        """槽位保存（镜像 kbd 窗 _persist_async 语义）：song_key 给定时写
+        那首歌的旁挂文件（任意曲预配），缺省写当前装载曲；仅当目标=当前
+        装载曲时热更新 live 映射。"""
+        if song_key:
+            song = self.by_key.get(song_key)
+            if song is None:
+                return "曲目不在素材库"
+            path = song["path"]
+        else:
+            if not self.cur_song_path:
+                return "当前没有打开的工程"
+            path = self.cur_song_path
         key = "ax" if inst == "ax" else "slots"
-        clean = {int(k): v for k, v in (slots or {}).items()
-                 if isinstance(v, dict)}
-        kbd_auto.save_slots(self.cur_song_path, clean, key=key)
-        with self._load_lock:
-            if inst == "ax":
-                self.ax_slots = clean
-            else:
-                self.slots = clean
+        clean = {}
+        for k, v in (slots or {}).items():
+            if not (str(k).isdigit() and isinstance(v, dict)):
+                continue
+            pc = v.get("pc")
+            if not isinstance(pc, int) or isinstance(pc, bool) \
+                    or not 0 <= pc <= 127:
+                return "PC 须为 0-127"
+            slot = {"pc": pc}
+            for f in ("msb", "lsb"):
+                x = v.get(f)
+                if x is None:
+                    continue
+                if not isinstance(x, int) or isinstance(x, bool) \
+                        or not 0 <= x <= 127:
+                    return "%s 须为 0-127" % f.upper()
+                slot[f] = x
+            clean[int(k)] = slot
+        kbd_auto.save_slots(path, clean, key=key)
+        if hasattr(self, "_kbd_song_cache"):
+            self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
+            self._kbd_cache_gen[song_key] = \
+                self._kbd_cache_gen.get(song_key, 0) + 1
+            self._kbd_song_cache.pop(song_key or self._kbd_song_key(),
+                                     None)                  # 脏缓存重装载
+        if path == self.cur_song_path:
+            with self._load_lock:
+                if path == self.cur_song_path:   # 锁内复核：IO 期间切歌不串写
+                    if inst == "ax":
+                        self.ax_slots = clean
+                    else:
+                        self.slots = clean
         return None
 
     def _pl_cmd_web(self, op, key, payload=None):
