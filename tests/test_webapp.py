@@ -377,6 +377,68 @@ def test_pedal_web_validation_and_learn():
     assert fake.pedal.calls[-1][0] == "try_open"
 
 
+def test_kbd_web_song_slots_and_validation(tmp_path):
+    """D1/D5：songKey 定向保存任意曲、装载曲热更新、MSB/LSB 校验、
+    脏缓存失效。"""
+    import kbd_auto
+    a_cpr = tmp_path / "a.cpr"
+    a_cpr.write_text("", encoding="utf-8")
+    b_cpr = tmp_path / "b.cpr"
+    b_cpr.write_text("", encoding="utf-8")
+    fake = types.SimpleNamespace(
+        by_key={"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
+                           "path": str(a_cpr)},
+                "B/歌二": {"key": "B/歌二", "team": "B", "name": "歌二",
+                           "path": str(b_cpr)}},
+        cur_song_path=str(a_cpr), slots={}, ax_slots={},
+        _load_lock=threading.Lock(), _kbd_song_key=lambda: "A/歌一")
+    fake._kbd_song_cache = {"B/歌二": ({}, {})}
+    # 未装载目标曲也能保存（song_key 定向）
+    assert sg.App._slots_save_web(
+        fake, "ax", {"72": {"pc": 5, "msb": 87}}, song_key="B/歌二") is None
+    loaded = kbd_auto.load_slots(str(b_cpr), "ax")
+    assert loaded[72]["msb"] == 87
+    assert fake.ax_slots == {}            # 非装载曲：live 映射不动
+    assert "B/歌二" not in fake._kbd_song_cache   # 脏缓存已失效
+    # 装载曲保存：热更新 live
+    assert sg.App._slots_save_web(
+        fake, "juno", {"60": {"pc": 63}}, song_key="A/歌一") is None
+    assert fake.slots == {60: {"pc": 63}}
+    assert kbd_auto.load_slots(str(a_cpr))[60]["pc"] == 63
+    # D5 校验：PC/MSB/LSB 越界拒绝
+    for bad in ({"60": {"pc": 128}}, {"60": {"pc": 5, "msb": 128}},
+                {"60": {"pc": 5, "lsb": -1}}, {"60": {"pc": True}}):
+        assert sg.App._slots_save_web(fake, "juno", bad) is not None, bad
+    assert sg.App._slots_save_web(fake, "juno", {},
+                                  song_key="X/不在库") == "曲目不在素材库"
+    # 装载曲缺省路径（song_key=None）沿用旧行为
+    assert sg.App._slots_save_web(fake, "juno", {}) is None
+
+
+def test_kbd_record_and_get_shape():
+    """D3/D4：录制会话启动/停止；/kbd GET 附 ports/portStatus/songs/
+    editSong/lastResult。"""
+    fake = types.SimpleNamespace(
+        jcfg=dict(kbd_auto.DEFAULT_JUNO), axcfg=dict(kbd_auto.DEFAULT_AX),
+        juno_shift=0, ax_shift=0, cur_song_path=None, by_key={}, songs=[],
+        slots={}, ax_slots={}, _kb_last=("待机", None), _kbd_cap=None)
+    fake.jcfg["inHint"] = "不存在的测试口XYZ"   # 确定性：端口必不在场
+    fake._kbd_song_key = lambda: None
+    # 启动（端口不存在→报错）；停止（无会话→幂等）
+    err = sg.App._kbd_record_web(fake, "juno")
+    assert err and "未找到" in err
+    assert fake._kbd_cap is None
+    assert sg.App._kbd_record_web(fake, "juno", stop=True) is None
+    assert sg.App._kbd_record_poll_web(fake) == {"active": False}
+    # GET shape（_pick_hit/_device_entries 为纯函数，端口枚举在本机跑）
+    out = sg.App._kbd_get_web(fake)
+    for k in ("ports", "portStatus", "songs", "editSong", "lastResult",
+              "songKey"):
+        assert k in out, k
+    assert set(out["ports"]) == {"in", "out"}
+    assert set(out["portStatus"]) == {"junoIn", "junoOut", "axIn", "axOut"}
+
+
 def test_ptcmd_poison_rejected():
     """定位点通道毒化防御（红队第 3 轮 P0）：edit/add 的 NaN/Infinity
     一律拒绝，validate_point 对 NaN 失明的老洞补 finite 检查。"""

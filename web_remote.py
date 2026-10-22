@@ -16,6 +16,7 @@ import threading
 import time
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1453,8 +1454,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._pedal_learn_poll_web)
         elif path == "/kbd":
+            song = self.path.split("?", 1)
+            song_key = None
+            if len(song) > 1:
+                for kv in song[1].split("&"):
+                    if kv.startswith("song="):
+                        song_key = urllib.parse.unquote(kv[5:])
+            self._run_on_app(lambda: None, result_fn=lambda:
+                             self.server.app._kbd_get_web(song_key))
+        elif path == "/kbd/record":
             self._run_on_app(lambda: None,
-                             result_fn=self.server.app._kbd_get_web)
+                             result_fn=self.server.app._kbd_record_poll_web)
         elif path == "/state":
             snap = getattr(self.server.app, "_web_snap", None) or {}
             self._json(200, snap)
@@ -1506,6 +1516,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_pedal_mute, "/pedal/mute"),
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
+                          (self._h_kbd_record, "/kbdrecord"),
                           (self._h_kbd_shift, "/kbdshift"),
                           (self._h_slot_set, "/slotset")):
                 if path == p:
@@ -1699,7 +1710,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无键盘自动化"})
             return
         self._run_on_app(lambda: self.server.app._slots_save_web(
-            str(body.get("inst") or "juno"), body.get("slots") or {}))
+            str(body.get("inst") or "juno"), body.get("slots") or {},
+            song_key=body.get("songKey") or None))
+
+    def _h_kbd_record(self, body, _ip):
+        """录制（琴上捕获）：POST 启动/停止（stop=true 关口保留最后值）。"""
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_record_web(
+            str(body.get("inst") or "juno"), stop=bool(body.get("stop"))))
 
     def _h_pedal(self, body, ip):
         """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP
