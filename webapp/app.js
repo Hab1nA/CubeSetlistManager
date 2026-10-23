@@ -328,7 +328,9 @@ function lamps(st) {
   set("l-daw", st.open ? "ok" : "err",
       st.open ? "工程已打开：" + (st.projName || "") : "未打开工程");
   set("l-obs", st.obs ? "ok" : "warn",
-      st.obs ? "obs-websocket 已连接" : "OBS 未连接");
+      st.obs ? "obs-websocket 已连接"
+      : (st.vj && st.vj.obsErr ? "OBS 未连接（" + st.vj.obsErr + "）"
+         : "OBS 未连接"));
   set("l-loop", st.loop ? "ok" : "warn",
       st.loop ? "loopMIDI 运行中" : "loopMIDI 未运行");
   const pr = st.pedalRemote;
@@ -1260,7 +1262,11 @@ function renderKbdSong(force) {
   $("#kb-status").textContent =
       (kbData.editSong && kbData.editSong.loading)
       ? "曲目映射装载中…"
-      : (kbData.lastResult ? "最近切换：" + kbData.lastResult : "");
+      : (kbData.counts
+         ? "JUNO " + kbData.counts.juno + "/10 + AX " + kbData.counts.ax
+           + "/6" + (kbData.lastResult ? " ｜ 最近切换：" + kbData.lastResult
+                                      : "")
+         : (kbData.lastResult || ""));
 }
 
 // 录制（琴上捕获）：popover 内启动，捕获值实时回填表单；closePop 统一停录
@@ -1531,8 +1537,27 @@ $("#vj-save").addEventListener("click", async () => {
 function renderVjState() {
   const el = $("#vj-obs");
   if (!stState) return;
+  const vj = stState.vj || {};
+  // OBS 卡：连接态 + 错误详情副行（断连原因/启动失败文案，不进日志翻找）
+  const err = vj.obsErr || "";
   el.textContent = stState.obs ? "已连接" : "未连接";
   el.className = "stat-big " + (stState.obs ? "ok" : "warn");
+  $("#vj-obs-sub").textContent =
+      err || (stState.ready ? "" : "正在启动…");
+  // 走带跟随卡（与旧监控格同源文案，值域 playing/paused/stopped/off）
+  const f = $("#vj-follow");
+  const FOLLOW_TXT = {playing: "播放中", paused: "已暂停",
+                      stopped: "未在播放", off: "未跟随"};
+  f.textContent = FOLLOW_TXT[vj.follow] || "—";
+  f.className = "stat-big " +
+      (vj.follow === "playing" ? "ok"
+       : vj.follow === "paused" ? "warn" : "");
+  f.title = vj.vjEnabled === false ? "VJ 联动已停用（未配端口）"
+      : vj.portOn === false ? "端口未启动" : "";
+  // 视频名只在播放/暂停时挂出（同旧监控格；stopped/播完不带）
+  $("#vj-video").textContent =
+      (vj.follow === "playing" || vj.follow === "paused") && vj.video
+      ? "视频：" + vj.video : "";
 }
 
 // ---- 设置页（分组卡 + 脏标记）----

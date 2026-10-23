@@ -526,6 +526,29 @@ def build_snapshot(app, has_project, proj_name=None):
                   "unknown": br.remote_unknown,
                   "lastEventAge": (round(now - br.remote_event_t, 1)
                                    if br.remote_event_t > 0.0 else None)}
+    # VJ/监控状态块（与主窗 _tick_body 的 VJ 监控格同源同语义）：
+    # follow=走带跟随（playing/paused/off，off=未启用或未收到时码）、
+    # video=当前视频文件名、obsErr=OBS 错误详情/启动中过渡文本
+    vj_state = None
+    sync_vj = getattr(app, "sync", None)
+    start_err = getattr(app, "start_err", "")
+    if not lite and (sync_vj is not None or obs_ctl is not None
+                     or start_err):
+        # VJ 链构造失败（ctl/sync 双 None）也要带出 start_err——否则
+        # 失败原因在新 UI 永远不可见
+        if sync_vj is None or not sync_vj.is_following():
+            follow = "off"
+        else:
+            follow = sync_vj.video_state
+        vj_state = {
+            "follow": follow,
+            "video": (getattr(sync_vj, "current_video", None)
+                      if sync_vj is not None else None),
+            "portOn": getattr(app, "port", None) is not None,
+            "vjEnabled": bool(getattr(app, "vj_hint", "")),
+            "obsErr": ((getattr(obs_ctl, "last_error", "") or "")
+                       if obs_ctl is not None else "") or start_err,
+        }
     return {
         "ready": ctrl is not None or lite,
         "busy": bool(ctrl is not None and ctrl.busy),
@@ -542,6 +565,7 @@ def build_snapshot(app, has_project, proj_name=None):
         # 联动健康（状态灯真实化）：OBS=obs-websocket 连接；loop=loopMIDI 进程
         # 在场；webIp=移动端遥控服务实际绑定地址（未启用为空串）
         "obs": bool(obs_ctl is not None and obs_ctl.is_connected()),
+        "vj": vj_state,
         "loop": _loopmidi_online(),
         "webIp": (web_srv.server_address[0] if web_srv is not None else ""),
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
