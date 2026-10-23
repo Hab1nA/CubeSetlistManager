@@ -1317,7 +1317,8 @@ def stage_c(send):
 KBD_STUB = ("{junoIn:'JUNO-DS',junoOut:'JUNO-DS',axIn:'AX-09',"
             "axOut:'JUNO-DS',junoShift:2,axShift:-1,songKey:'A/歌一',"
             "songs:[{key:'A/歌一',team:'A',name:'歌一'},"
-            "{key:'B/歌二',team:'B',name:'歌二'}],lastResult:'已发送：X',"
+            "{key:'B/歌二',team:'B',name:'歌二'}],"
+            "lastResult:'已发送：X',counts:{juno:1,ax:0},"
             "ports:{in:[{label:'JUNO-DS',name:'JUNO-DS',dev:0},"
             "{label:'USB-Midi（第1个）',name:'USB-Midi',dev:0},"
             "{label:'USB-Midi（第2个）',name:'USB-Midi',dev:1}],"
@@ -1444,6 +1445,127 @@ def stage_d(send):
     ok("bd.no-js-errors", not errs, str(errs)[:300])
 
 
+def stage_e(send):
+    # ---- E1/E2：真 /state vj 契约（完整版必有 sync/ctl → vj 非 null）----
+    ev = js(send, "const r=await fetch('/state');const j=await r.json();"
+            "return {has:'vj' in j,keys:j.vj?Object.keys(j.vj):null,"
+            "follow:j.vj?j.vj.follow:null}")
+    ok("be.e1.state-vj-contract", ev.get("has") is True
+       and (ev.get("keys") is None or set(ev["keys"]) ==
+            {"follow", "video", "portOn", "vjEnabled", "obsErr"}),
+       json.dumps(ev, ensure_ascii=False))
+
+    # ---- stub /state：VJ 页三卡渲染（follow 三态/视频名/OBS 错误详情）----
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:true,projName:'歌一',"
+        "tstate:'stopped',pos:0,dur:90,cur:0,confirm:false,"
+        "songs:[{name:'歌一',dur:'1:30'}],pedalRemote:null,"
+        "obs:false,loop:false,webIp:'',appPort:8767,"
+        "vj:{follow:'playing',video:'开场.mp4',portOn:true,vjEnabled:true,"
+        "obsErr:'连接超时 (10060)'}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    e1 = js(send, "const f=document.getElementById('vj-follow');"
+            "const cs=getComputedStyle(f);"
+            "return {follow:f.textContent,fCls:f.className,"
+            "fColor:cs.color,video:document.getElementById('vj-video')"
+            ".textContent,"
+            "obsSub:document.getElementById('vj-obs-sub').textContent,"
+            "obs:document.getElementById('vj-obs').textContent}")
+    ok("be.e1.follow-card", e1.get("follow") == "播放中"
+       and "ok" in (e1.get("fCls") or "") and e1.get("fColor") ==
+       "rgb(127, 212, 135)" and "开场.mp4" in e1.get("video", ""),
+       json.dumps(e1, ensure_ascii=False))
+    ok("be.e2.obs-err-visible", "连接超时" in e1.get("obsSub", "")
+       and e1.get("obs") == "未连接", json.dumps(e1, ensure_ascii=False))
+    e2 = js(send, "return document.getElementById('l-obs').dataset.tip")
+    ok("be.e2.lamp-tooltip-err", "连接超时" in e2, str(e2))
+    # off 态 + 无视频
+    js(send, UNSTUB + "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
+        "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
+        "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767,"
+        "vj:{follow:'off',video:null,portOn:false,vjEnabled:false,"
+        "obsErr:''}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    e1b = js(send, "return {follow:document.getElementById('vj-follow')"
+             ".textContent,video:document.getElementById('vj-video')"
+             ".textContent}")
+    ok("be.e1.follow-off", e1b.get("follow") == "未跟随"
+       and e1b.get("video") == "", json.dumps(e1b, ensure_ascii=False))
+    # paused 黄态 + stopped 文案 + 视频名仅在播放/暂停挂出
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
+        "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
+        "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767,"
+        "vj:{follow:'paused',video:'暂停片.mp4',portOn:true,vjEnabled:true,"
+        "obsErr:''}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    ep = js(send, "const f=document.getElementById('vj-follow');"
+            "const cs=getComputedStyle(f);"
+            "return {t:f.textContent,cls:f.className,color:cs.color,"
+            "video:document.getElementById('vj-video').textContent}")
+    ok("be.e1.follow-paused", ep.get("t") == "已暂停"
+       and "warn" in (ep.get("cls") or "") and ep.get("color") ==
+       "rgb(232, 194, 104)" and "暂停片.mp4" in ep.get("video", ""),
+       json.dumps(ep, ensure_ascii=False))
+    js(send, "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
+        "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
+        "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767,"
+        "vj:{follow:'stopped',video:'旧片.mp4',portOn:true,vjEnabled:true,"
+        "obsErr:''}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    es = js(send, "return {t:document.getElementById('vj-follow')"
+            ".textContent,video:document.getElementById('vj-video')"
+            ".textContent}")
+    ok("be.e1.follow-stopped", es.get("t") == "未在播放"
+       and es.get("video") == "", json.dumps(es, ensure_ascii=False))
+    # vj=null（lite/双无源）：VJ 卡不炸、显「—」
+    js(send, "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
+        "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
+        "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767,"
+        "vj:null}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    en = js(send, "return {t:document.getElementById('vj-follow')"
+            ".textContent,errs:window.__errs||[]}")
+    ok("be.e1.null-safe", en.get("t") == "—" and not en.get("errs"),
+       json.dumps(en, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.8)
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/kbd')return Promise.resolve(new Response("
+        "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',"
+        "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:0,"
+        "axShift:0,songKey:'X',songs:[],lastResult:'已发送：USER:0521',"
+        "counts:{juno:3,ax:2},ports:{in:[],out:[]},portStatus:{},"
+        "editSong:{key:'X',name:null,loading:false,slots:{},axSlots:{}}}),"
+        "{status:200}));"
+        "return window.__fetch0(u,o)};")
+    nav(send, "kbd")
+    e3 = js(send, "return document.getElementById('kb-status').textContent")
+    ok("be.e3.kbd-summary",
+       "JUNO 3/10" in e3 and "AX 2/6" in e3 and "USER:0521" in e3, e3)
+    js(send, RESTORE)
+    time.sleep(0.6)
+
+    errs = js(send, "return window.__errs")
+    ok("be.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1462,6 +1584,8 @@ def main():
             stage_c(send)
         if stages & {"d", "all"}:
             stage_d(send)
+        if stages & {"e", "all"}:
+            stage_e(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]

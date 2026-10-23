@@ -2302,7 +2302,9 @@ class App:
                "songKey": loaded,
                "songs": [{"key": s["key"], "team": s["team"],
                           "name": s["name"]} for s in self.songs],
-               "lastResult": self._kb_last[0]}
+               "lastResult": self._kb_last[0],
+               "counts": {"juno": len(self.slots),
+                          "ax": len(self.ax_slots)}}
         # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）
         ins = kbd_auto._all_in_devices()
         outs = kbd_auto._all_out_devices()

@@ -439,6 +439,54 @@ def test_kbd_record_and_get_shape():
     assert set(out["portStatus"]) == {"junoIn", "junoOut", "axIn", "axOut"}
 
 
+def test_snapshot_vj_block():
+    """E1/E2：/state vj 状态块契约（完整版五键、lite 或无源时 None）。"""
+    import web_remote
+
+    def mk_app(**over):
+        base = dict(
+            pl_keys=[], durations={}, cur=None, switch_confirm=False,
+            watch=None, ctrl=None,
+            ctl=types.SimpleNamespace(is_connected=lambda: False,
+                                      last_error="boom"),
+            sync=types.SimpleNamespace(
+                is_following=lambda: True, video_state="playing",
+                current_video="开场.mp4"),
+            web=None, lite=False,
+            port=types.SimpleNamespace(name="VJ口"), vj_hint="VJ口",
+            start_err="", pedal=None)
+        base.update(over)
+        return types.SimpleNamespace(**base)
+
+    snap = web_remote.build_snapshot(mk_app(), True, "x")
+    assert snap["vj"] == {"follow": "playing", "video": "开场.mp4",
+                          "portOn": True, "vjEnabled": True,
+                          "obsErr": "boom"}
+    # 跟随源缺席 → off；lite → 不携带（旧平板语义不变）
+    snap2 = web_remote.build_snapshot(
+        mk_app(sync=None, port=None, vj_hint=""), True, None)
+    assert snap2["vj"]["follow"] == "off"
+    assert snap2["vj"]["portOn"] is False and snap2["vj"]["vjEnabled"] is False
+    assert web_remote.build_snapshot(mk_app(lite=True), True, None)["vj"] \
+        is None
+    # stopped 值域（首个时码脉冲即 following、视频未触发——现场常见态）
+    snap3 = web_remote.build_snapshot(
+        mk_app(sync=types.SimpleNamespace(
+            is_following=lambda: True, video_state="stopped",
+            current_video="x.mp4")), True, None)
+    assert snap3["vj"]["follow"] == "stopped"
+    # VJ 链构造失败（ctl/sync 双 None + start_err）：错误必须带出
+    snap4 = web_remote.build_snapshot(
+        mk_app(ctl=None, sync=None, start_err="VJ 链未启动：boom"),
+        True, None)
+    assert snap4["vj"]["follow"] == "off"
+    assert snap4["vj"]["obsErr"] == "VJ 链未启动：boom"
+    # ctl 在场时 last_error 优先于 start_err
+    snap5 = web_remote.build_snapshot(
+        mk_app(start_err="旧错"), True, None)
+    assert snap5["vj"]["obsErr"] == "boom"
+
+
 def test_ptcmd_poison_rejected():
     """定位点通道毒化防御（红队第 3 轮 P0）：edit/add 的 NaN/Infinity
     一律拒绝，validate_point 对 NaN 失明的老洞补 finite 检查。"""
