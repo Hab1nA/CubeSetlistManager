@@ -345,7 +345,7 @@ def stage_p1(send):
     ok("p1.side.width-200", side.get("w") == 200, str(side.get("w")))
     ok("p1.side.groups", side.get("groups") == ["演出", "准备", "系统"],
        str(side.get("groups")))
-    ok("p1.side.icons", side.get("icons") == 9 and side.get("navN") == 9,
+    ok("p1.side.icons", side.get("icons") == 8 and side.get("navN") == 8,
        "%s/%s" % (side.get("icons"), side.get("navN")))
 
     # ---- 主控台 hero + 智能钮 + 时钟 ----
@@ -624,8 +624,8 @@ def stage_p1(send):
        json.dumps(ad, ensure_ascii=False))
     shot(send, "x_p1_settings")
 
-    # ---- 日志：工具条 + 增量 append（stub 行数据：安静启动时环形缓冲为空）----
-    nav(send, "log")
+    # ---- 运行日志卡（主控台页内）：工具条 + 增量 append + 独立页已删 ----
+    nav(send, "console")
     js(send, UNSTUB + "window.__logstub=[{t:100,msg:'启动'},{t:105,"
            "msg:'界面异常：X'}];"
            "window.__fetch0=window.fetch;"
@@ -1586,7 +1586,7 @@ def stage_e(send):
 
 
 def stage_f(send):
-    # ---- F1：主控台运行反馈行（/log 反馈类行常显）----
+    # ---- F1（R3 改版）：日志卡在主控台页内，反馈类行同屏可见 ----
     nav(send, "console")
     js(send, UNSTUB + "window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{"
@@ -1595,10 +1595,16 @@ def stage_f(send):
         "msg:'回零：「继续」忽略（状态互锁）'}]}),{status:200}));"
         "return window.__fetch0(u,o)};")
     time.sleep(2.0)
-    f1 = js(send, "const e=document.getElementById('cmd-feed');"
-            "return {hid:e.hidden,txt:e.textContent,cls:e.className}")
-    ok("bf.f1.cmd-feed", f1.get("hid") is False
-       and "互锁" in f1.get("txt", "") and "warn" in f1.get("cls", ""),
+    f1 = js(send, "const box=document.getElementById('logcard');"
+            "const log=document.getElementById('log');"
+            "return {inConsole:!!box&&!!box.closest('#p-console'),"
+            "feed:log.textContent,"
+            "noLogPage:!document.getElementById('p-log')"
+            "&&!document.querySelector('.b-log'),"
+            "noCmdFeed:!document.getElementById('cmd-feed')}")
+    ok("bf.f1.log-in-console", f1.get("inConsole")
+       and "互锁" in (f1.get("feed") or "")
+       and f1.get("noLogPage") and f1.get("noCmdFeed"),
        json.dumps(f1, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(0.5)
