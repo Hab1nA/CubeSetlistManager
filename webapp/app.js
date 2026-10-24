@@ -13,18 +13,19 @@ addEventListener("unhandledrejection",
 
 let stState = null, plCache = null, stCur = null;
 
-// ---- toast（替代全部 alert）----
+// ---- toast（替代全部 alert；err 档 5 秒+可手动点关）----
 function toast(msg, kind) {
   const box = $("#toasts");
   while (box.children.length >= 4) box.firstChild.remove();
   const t = document.createElement("div");
   t.className = "toast" + (kind === "err" ? " err" : "");
   t.textContent = msg;
+  t.addEventListener("click", () => t.remove());   // 手动关（err 长驻）
   box.appendChild(t);
   setTimeout(() => {
     t.classList.add("out");
     setTimeout(() => t.remove(), 200);
-  }, 2600);
+  }, kind === "err" ? 5000 : 2600);
 }
 
 // ---- 两段式确认（替代 confirm）：首点变「确认…？」3s 回弹，再点执行 ----
@@ -49,7 +50,7 @@ function armConfirm(btn, fn, confirmText) {
 }
 
 // ---- popover（替代 prompt 链 / ⋯ 菜单）：锚定面板，外点/ESC 关闭 ----
-let popEl = null;
+let popEl = null, popAnchor = null;
 function _popOut(e) { if (popEl && !popEl.contains(e.target)) closePop(); }
 function _popEsc(e) { if (e.key === "Escape") closePop(); }
 function closePop() {
@@ -59,9 +60,13 @@ function closePop() {
   stopRecord();       // 录制随层关闭统一收口（外点/ESC/清除都经此）
   document.removeEventListener("pointerdown", _popOut, true);
   document.removeEventListener("keydown", _popEsc, true);
+  if (popAnchor && popAnchor.isConnected)   // 焦点还回锚点（键盘流不丢）
+    popAnchor.focus();
+  popAnchor = null;
 }
 function popover(anchor, build) {
   closePop();
+  popAnchor = anchor;
   popEl = document.createElement("div");
   popEl.className = "pop";
   build(popEl, closePop);
@@ -160,6 +165,18 @@ document.addEventListener("keydown", e => {
     setShow(false);
   }
 });
+// 空格=智能三态钮（主控台/演出模式；输入框与弹层内不劫持）
+document.addEventListener("keydown", e => {
+  if (e.key !== " " || e.repeat) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT"
+            || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (popEl) return;
+  if (!pageOn("console")) return;
+  e.preventDefault();
+  const a = $("#smart").dataset.action;
+  if (a) cmd(a);
+});
 
 // ---- HTTP（失败可见，不静默）----
 async function cmd(action, index) {
@@ -235,6 +252,22 @@ let pedalPrevAge = null;
 function render(st) {
   if (!$("#p-console")) return;
   $("#now").textContent = st.open ? st.projName : "（无打开的工程）";
+  // 超长歌名跑马灯：文本变化才重测重挂（每 500ms remove/add 会把
+  // 14s 动画永远打回 0）；测量时临时 nowrap 拿单行宽（平时 break-all
+  // 折行恒不溢出）
+  const nowEl = $("#now");
+  if (nowEl.dataset.txt !== nowEl.textContent) {
+    nowEl.dataset.txt = nowEl.textContent;
+    nowEl.classList.remove("marq");
+    const probeW = nowEl.offsetWidth;
+    nowEl.style.whiteSpace = "nowrap";
+    const fullW = nowEl.scrollWidth;
+    nowEl.style.whiteSpace = "";
+    if (fullW > probeW + 2) {
+      nowEl.style.setProperty("--marq", -(fullW - probeW) + "px");
+      nowEl.classList.add("marq");
+    }
+  }
   // 状态 chip + 时钟
   const chip = $("#tchip");
   const ts = st.busy ? "busy" : (st.tstate || "stopped");
@@ -244,8 +277,10 @@ function render(st) {
       || "未在播放";
   const live = st.tstate === "playing" || st.tstate === "paused";
   const pos = live ? st.pos : 0;
-  $("#clock").textContent = "已播 " + fmt(pos) + " · 剩余 " +
-      fmt(Math.max(0, (st.dur || 0) - pos));
+  $("#clock").textContent = !live && pos <= 0 && !(st.dur > 0)
+      ? "时长未知" : "已播 " + fmt(pos) + " · "
+        + (st.dur > 0 ? "剩余 " + fmt(Math.max(0, st.dur - pos))
+           : "时长未知");
   $("#clock").classList.toggle("dim", !live);
   $("#clock").classList.toggle("playing", live);
   $("#barfill").style.width =
@@ -256,6 +291,7 @@ function render(st) {
   smart.textContent = m[0];
   smart.dataset.action = m[1];
   smart.disabled = !!st.busy;
+  smart.classList.toggle("pulse", !!st.busy);   // busy 脉动（F 批）
   // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用
   $$("#transport [data-cmd]").forEach(b =>
       b.disabled = !!st.busy && b.dataset.cmd !== "panic");
@@ -287,12 +323,14 @@ function render(st) {
   pedalLive(st);
   renderVjState();
   renderAppAddr();
+  if (st.ver) $("#side-ver").textContent = st.ver;   // 版本号（git describe）
 }
 function consoleRow(s, i, cur) {
   const div = document.createElement("div");
   div.className = "row" + (i === cur ? " cur" : "")
       + (i < cur ? " played" : "");
   div.dataset.i = i;
+  div.tabIndex = 0;              // 键盘可达：Enter=切歌（F3）
   const no = document.createElement("span");
   no.className = "no";
   no.textContent = (i + 1) + ".";
@@ -314,6 +352,12 @@ function consoleRow(s, i, cur) {
   dur.textContent = s.dur;
   div.append(no, eq, nm, go, dur);
   div.addEventListener("dblclick", () => switchTo(i, go, true));
+  div.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      switchTo(i, go);
+    }
+  });
   return div;
 }
 
@@ -344,7 +388,12 @@ function lamps(st) {
       st.ready ? "遥控服务就绪" : "遥控服务未就绪");
 }
 $$(".lamp").forEach(el => el.addEventListener("click",
-    () => nav(el.dataset.pageNav)));
+  () => nav(el.dataset.pageNav)));
+// 侧栏退出钮：两段式确认（误触代价=整场演出中断）
+$("#btn-exit").addEventListener("click", ev =>
+    armConfirm(ev.currentTarget, () => {
+      post("/exit", {}).then(() => toast("正在退出…"));
+    }, "确认退出？"));
 
 // ---- 定位点快跳 chips（当前曲目的定位点 → /cmd switch 即 GOTO）----
 function drawChips(st, cur) {
@@ -423,15 +472,53 @@ function pedalLive(st) {
   }
 }
 
+// ---- 主控台运行反馈行：/cmd 的「未就绪/互锁忽略/已排队/核验告警」都在
+//      后端日志里——取最近 30 秒内一条反馈类行常显（瞬态类不滞留）----
+const FEED_RE = /失败|异常|错误|未生效|超时|未就绪|忽略|已排队|请手动|未响应/;
+async function refreshCmdFeed() {
+  if (!pageOn("console")) return;
+  try {
+    const r = await fetch("/log");
+    if (!r.ok) return;
+    const lines = (await r.json()).lines || [];
+    const fresh = Date.now() / 1000 - 30;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].t < fresh) break;         // 只看近 30 秒
+      if (FEED_RE.test(lines[i].msg)) {
+        const el = $("#cmd-feed");
+        el.hidden = false;
+        el.textContent = lines[i].msg;
+        el.className = "feed sm-txt "
+            + (/失败|异常|错误|请手动|未响应/.test(lines[i].msg)
+               ? "err" : "warn");
+        return;
+      }
+    }
+    $("#cmd-feed").hidden = true;
+  } catch { /* 瞬断 */ }
+}
+
+let pollFails = 0;
 async function poll() {
   try {
     const r = await fetch("/state");
     if (r.ok) {
+      if (pollFails >= 3) toast("连接已恢复");
+      pollFails = 0;
+      $("#tstate").classList.remove("err");
       stState = await r.json();
       render(stState);
       stCur = stState.cur;
+    } else {
+      throw new Error(r.status);
     }
   } catch {
+    pollFails++;
+    if (pollFails >= 3) {          // 连续失败：常驻断连标识（恢复即灭）
+      const el = $("#tstate");
+      el.textContent = "连接中断…重试中";
+      el.classList.add("err");
+    }
     /* 热点瞬断：下轮再取 */
   }
 }
@@ -466,7 +553,10 @@ function libRow(s, inPl) {
     plcmd2("add", s.key);
   });
   div.append(tag, nm, dur, add);
-  div.addEventListener("click", () => { if (!inPl) plcmd2("add", s.key); });
+  div.addEventListener("click", () => {
+    // ＋ 为唯一加入入口（防误触）；行单击只选中（视觉反馈）
+    div.classList.toggle("sel");
+  });
   return div;
 }
 function drawLib() {
@@ -480,13 +570,30 @@ function drawLib() {
   if (lib.dataset.sig === sig) return;
   lib.dataset.sig = sig;
   lib.innerHTML = "";
-  $("#lib-n").textContent = plCache.lib.length + " 首";
+  const shown = [];
   plCache.lib.forEach(s => {
     const hit = !slQ || (s.name + " " + s.team).toLowerCase().includes(slQ);
-    if (!hit) return;
-    const r = libRow(s, inPl.has(s.key));
-    lib.appendChild(r);
+    if (hit) shown.push(s);
   });
+  const emptyEl = $("#lib-empty");
+  emptyEl.hidden = shown.length > 0;
+  // 场景区分：真空库引导设根；搜索无果提示清词（文本独立节点，
+  // 不覆盖容器——按钮是静态子节点）
+  if (!shown.length) {
+    const btn = emptyEl.querySelector("button");
+    let txt = emptyEl.querySelector(".empty-txt");
+    if (!txt) {
+      txt = document.createElement("div");
+      txt.className = "empty-txt";
+      emptyEl.insertBefore(txt, btn);
+    }
+    const libEmpty = !plCache.lib.length;
+    txt.textContent = libEmpty ? "素材库为空"
+        : "没有匹配「" + (slQ || "") + "」的曲目，试试清空搜索词";
+    btn.style.display = libEmpty ? "" : "none";
+  }
+  $("#lib-n").textContent = plCache.lib.length + " 首";
+  shown.forEach(s => lib.appendChild(libRow(s, inPl.has(s.key))));
 }
 // 播放列表行 ⋯ 菜单：写入时长（手动，B5）/重新识别（回工程内原值）
 function plMoreMenu(anchor, it) {
@@ -599,8 +706,11 @@ function plRow(i, it) {
   });
   div.append(handle, no, nm, dur, ops);
   div.addEventListener("click", () => { plSel = it.key; markPlSel(); });
-  // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）
+  // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
+  // dragstart 的复位（F 批：拖拽细节）
   handle.addEventListener("pointerdown", () => div.draggable = true);
+  handle.addEventListener("pointerup", () => div.draggable = false);
+  handle.addEventListener("pointercancel", () => div.draggable = false);
   div.addEventListener("dragstart", ev => {
     dragKey = it.key;
     div.classList.add("dragging");
@@ -706,7 +816,7 @@ async function plcmd2(op, key, payload) {
 }
 
 // ================= 定位点页 =================
-let ptProj = null, ptData = null, ptSel = null;
+let ptProj = null, ptData = null, ptSel = null, ptCap = null;
 const parseTC = t => {
   const raw = String(t || "").trim();
   if (!raw || !/^\d+(?::\d{0,2}){0,2}$/.test(raw)) return null;
@@ -723,7 +833,8 @@ const fmtTC = s => {
              String(x).padStart(2, "0")
            : m + ":" + String(x).padStart(2, "0");
 };
-// 时码即时校验：红框+原因文案，保存随校验禁用（根治静默失败）
+// 时码即时校验：红框+原因文案，保存随校验禁用（根治静默失败）；
+// <3 秒段软提示（黄色）不禁保存（停止重试窗可能吃掉自动推进）
 function validatePt() {
   if (ptSel === null) return false;
   const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
@@ -735,7 +846,16 @@ function validatePt() {
   $("#pt-e").classList.toggle("invalid", e === null || (s !== null && e <= s));
   $("#pt-save").disabled = !!msg;
   $("#pt-save").title = msg;
-  $("#pt-hint").textContent = msg;
+  const hint = $("#pt-hint");
+  if (msg) {
+    hint.textContent = msg;
+    hint.className = "field-err";
+  } else if (s !== null && e - s < 3) {
+    hint.textContent = "段长不足 3 秒：停止重试窗可能吃掉自动推进";
+    hint.className = "field-err warn-txt";
+  } else {
+    hint.textContent = "";
+  }
   return !msg;
 }
 ["pt-s", "pt-e"].forEach(id =>
@@ -747,6 +867,13 @@ async function refreshPoints() {
     if (!r.ok) return;
     const d = await r.json();
     ptData = d.projects;
+    ptCap = {cubase: d.cubase !== false, mmcReady: d.mmcReady !== false};
+    // 能力位：非 Cubase 底座禁用开关；MMC 未就绪常驻提示（定位不可用）
+    const on = $("#pt-on");
+    on.disabled = !ptCap.cubase;
+    on.closest(".switch").title = ptCap.cubase
+        ? "启用后该工程条目展开为定位点播放" : "定位点仅 Cubase 支持";
+    $("#pt-mmc").hidden = ptCap.mmcReady || !ptCap.cubase;
     if (!ptProj || !ptData[ptProj]) {
       ptProj = Object.keys(ptData).find(k => ptData[k].enabled) ||
                Object.keys(ptData)[0];
@@ -759,7 +886,9 @@ async function refreshPoints() {
     if (sel.dataset.sig !== sig) {       // 无变化不重建：不打断展开选择
       sel.dataset.sig = sig;
       sel.innerHTML = "";
-      Object.keys(ptData).forEach(k => {
+      const keys = Object.keys(ptData).sort((a, b) =>
+          (ptData[b].enabled ? 1 : 0) - (ptData[a].enabled ? 1 : 0));
+      keys.forEach(k => {
         const o = document.createElement("option");
         o.value = k;
         o.textContent = ptData[k].name + (ptData[k].enabled ? " ✓" : "");
@@ -864,13 +993,33 @@ $("#pt-proj").addEventListener("change", e => {
   $("#pt-none").hidden = false;
   refreshPoints();
 });
-$("#pt-add").addEventListener("click", () => ptcmd("add", {}));
+// add 后自动选中末点（新点追加在表尾）；工程下拉启用项优先展示
+$("#pt-add").addEventListener("click", async () => {
+  const j = await post("/ptcmd", {op: "add", key: ptProj, payload: {}});
+  if (!j.ok) return;
+  await refreshPoints();
+  const dd = ptData[ptProj];
+  const last = dd && dd.points[dd.points.length - 1];
+  if (last) {
+    selectPt(last.id);
+    if (!last.end) {    // 工程末尾未知：黄字提醒补填（同旧窗）
+      $("#pt-hint").textContent = "结束点未定（工程末尾未知）：请补填后保存";
+      $("#pt-hint").className = "field-err warn-txt";
+    }
+  }
+  toast("定位点已更新");
+});
 $("#pt-del").addEventListener("click", ev => {
   if (ptSel !== null)
     armConfirm(ev.currentTarget, () => ptcmd("del", {id: ptSel}),
                "确认删除？");
 });
 $("#pt-save").addEventListener("click", () => {
+  if (!$("#pt-name").value.trim()) {
+    $("#pt-hint").textContent = "名称不能为空";
+    $("#pt-hint").className = "field-err";
+    return;
+  }
   if (!validatePt()) return;
   ptcmd("edit", {id: ptSel, name: $("#pt-name").value,
                  start: parseTC($("#pt-s").value),
@@ -1439,6 +1588,7 @@ function slotRow(note, slot, inst) {
   });
   div.append(n, pc, sub, test);
   div.title = slot && slot.desc ? slot.desc : "点击编辑音色";
+  div.tabIndex = 0;             // 可聚焦（关层焦点还回 + 键盘可达）
   div.addEventListener("click", () => slotEditor(div, inst, note, slot));
   return div;
 }
@@ -1452,6 +1602,16 @@ async function refreshKbd(force) {
     kbData = d;
     $("#kb-jshift").textContent = kbData.junoShift;
     $("#kb-ashift").textContent = kbData.axShift;
+    for (const id of ["kb-jshift", "kb-ashift"]) {   // 移调数值变化脉冲
+      const el = $("#" + id);
+      if (el.dataset.v !== undefined && el.dataset.v !== String(kbData[
+          id === "kb-jshift" ? "junoShift" : "axShift"])) {
+        el.classList.remove("pulse");
+        void el.offsetWidth;                 // 重启动画
+        el.classList.add("pulse");
+      }
+      el.dataset.v = kbData[id === "kb-jshift" ? "junoShift" : "axShift"];
+    }
     renderKbdPorts(force);
     renderKbdSong(force);
     const es = kbData.editSong || {slots: {}, axSlots: {}};
@@ -1562,7 +1722,7 @@ function renderVjState() {
 
 // ---- 设置页（分组卡 + 脏标记）----
 const ST_FIELDS = ["st-clock", "st-vj", "st-kb", "st-auto", "st-cont",
-                   "st-top", "st-confirm", "st-exit", "st-root", "st-exe",
+                   "st-confirm", "st-exit", "st-root", "st-exe",
                    "st-autosave", "st-web", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
@@ -1570,10 +1730,19 @@ const stSnap = () => ST_FIELDS.map(id => {
   const el = $("#" + id);
   return el.type === "checkbox" ? el.checked : el.value;
 }).join("¦");
+const portOk = id => {
+  const v = Number($("#" + id).value);
+  return Number.isInteger(v) && v >= 1 && v <= 65535;
+};
 function stDirty() {
+  const ports = ["st-srv", "st-app", "st-tsk"];
+  const bad = ports.some(id => !portOk(id));
+  ports.forEach(id =>
+      $("#" + id).classList.toggle("invalid", !portOk(id)));
   const dirty = stBase !== null && stSnap() !== stBase;
   $("#st-dirty").hidden = !dirty;
-  $("#st-save").disabled = dirty ? false : true;
+  $("#st-save").disabled = dirty && !bad ? false : true;
+  $("#st-save").title = bad ? "端口须为 1-65535 的整数" : "";
 }
 // ---- 端口/显示器下拉共用填充：首项「无」（值空串=停用）+ 在线候选 +
 // 幽灵项（已存名不在清单时显示「原名（未接入）」，value=原名：保存即保名，
@@ -1655,7 +1824,6 @@ async function refreshSettings(force) {
     fillSel("st-pg", d.web.midiIn, d.ports || [], "（未接入）");
     $("#st-auto").checked = d.autoAdvance;
     $("#st-cont").checked = d.autoPlay;
-    $("#st-top").checked = d.topMost;
     $("#st-confirm").checked = d.switchConfirm;
     $("#st-exit").checked = d.exitCloseApps;
     $("#st-root").value = d.projectsRoot;
@@ -1708,7 +1876,7 @@ $("#st-save").addEventListener("click", async () => {
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
     autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
-    topMost: $("#st-top").checked, switchConfirm: $("#st-confirm").checked,
+    switchConfirm: $("#st-confirm").checked,
     exitCloseApps: $("#st-exit").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
     autoSave: $("#st-autosave").checked,
@@ -1984,6 +2152,7 @@ poll();
 setInterval(() => {
   if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
+setInterval(refreshCmdFeed, 1500);
 setInterval(() => { if (pageOn("points")) refreshPoints(); }, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);

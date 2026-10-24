@@ -41,6 +41,10 @@
     <button id="btn-show" title="演出模式（大字全屏，ESC 退出）">
       <svg viewBox="0 0 16 16"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>
       演出</button>
+    <button id="btn-exit" class="nav" title="退出程序">
+      <svg viewBox="0 0 16 16"><path d="M6 2h6a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6M6 2v12M2 8h6"/></svg>
+      退出</button>
+    <div id="side-ver" class="dim sm-txt"></div>
   </nav>
   <main id="main">
     <section class="page" id="p-console">
@@ -52,6 +56,7 @@
         <div id="now" class="big">…</div>
         <div id="clock" class="mid dim">—</div>
         <div id="bar"><div id="barfill"></div></div>
+        <div id="cmd-feed" class="feed dim sm-txt" hidden></div>
       </div>
       <div id="transport">
         <button id="smart" class="btn primary lg">▶ 开始</button>
@@ -88,6 +93,10 @@
         <div class="col show">
           <div class="colhead">素材库 <span class="badge" id="lib-n"></span></div>
           <div id="lib" class="list"></div>
+          <div id="lib-empty" class="empty-state sm" hidden>
+            <div class="empty-txt">素材库为空</div>
+            <button class="btn ghost sm" data-nav="settings">去设置工程库根</button>
+          </div>
         </div>
         <div class="col">
           <div class="colhead">播放列表 <span class="badge" id="pl-n"></span>
@@ -107,6 +116,8 @@
         <label class="switch" title="启用后该工程条目展开为定位点播放">
           <input type="checkbox" id="pt-on"><i></i><span>启用</span></label>
       </div>
+      <div id="pt-mmc" class="field-err warn-txt" hidden>
+        MMC 输出口未就绪：定位不可用（检查时码口配置）</div>
       <div class="md">
         <div class="md-master card">
           <div class="md-head">定位点列表
@@ -295,8 +306,6 @@
             <span>播完自动切换</span></label>
           <label class="switch"><input type="checkbox" id="st-cont"><i></i>
             <span>切完自动播放</span></label>
-          <label class="switch"><input type="checkbox" id="st-top"><i></i>
-            <span>窗口置顶</span></label>
           <label class="switch"><input type="checkbox" id="st-confirm"><i></i>
             <span>切歌确认</span></label>
           <label class="switch"><input type="checkbox" id="st-exit"><i></i>
@@ -340,6 +349,9 @@
           <button id="app-addr" class="addr-txt" title="点击复制"></button>
           <div id="qr-box" title="扫码连接 APP"></div>
         </div>
+      </div>
+      <div class="page-foot">
+        <span class="dim sm-txt">保存并应用上方全部设置</span>
         <button id="st-save" class="btn primary" disabled>保存并应用</button>
       </div>
     </section>
@@ -363,12 +375,12 @@
   </main>
 </div>
 <footer id="statusbar">
-  <span class="lamp" id="l-daw" data-page-nav="console">DAW <i>·</i></span>
-  <span class="lamp" id="l-obs" data-page-nav="vj">OBS <i>·</i></span>
-  <span class="lamp" id="l-loop" data-page-nav="settings">loopMIDI <i>·</i></span>
-  <span class="lamp" id="l-pedal" data-page-nav="pedal">踩钉 <i>·</i></span>
-  <span class="lamp" id="l-hot" data-page-nav="settings">热点 <i>·</i></span>
-  <span class="lamp" id="l-remote" data-page-nav="settings">遥控 <i>·</i></span>
+  <button class="lamp" id="l-daw" data-page-nav="console">DAW <i>·</i></button>
+  <button class="lamp" id="l-obs" data-page-nav="vj">OBS <i>·</i></button>
+  <button class="lamp" id="l-loop" data-page-nav="settings">loopMIDI <i>·</i></button>
+  <button class="lamp" id="l-pedal" data-page-nav="pedal">踩钉 <i>·</i></button>
+  <button class="lamp" id="l-hot" data-page-nav="settings">热点 <i>·</i></button>
+  <button class="lamp" id="l-remote" data-page-nav="settings">遥控 <i>·</i></button>
   <span id="tstate" class="dim"></span>
 </footer>
 <button id="show-exit" title="退出演出模式（ESC / F11）">⨯ 退出演出</button>

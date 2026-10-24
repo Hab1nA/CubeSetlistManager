@@ -330,7 +330,7 @@ def stage_p1(send):
     ok("p1.side.width-200", side.get("w") == 200, str(side.get("w")))
     ok("p1.side.groups", side.get("groups") == ["演出", "准备", "系统"],
        str(side.get("groups")))
-    ok("p1.side.icons", side.get("icons") == 8 and side.get("navN") == 8,
+    ok("p1.side.icons", side.get("icons") == 9 and side.get("navN") == 9,
        "%s/%s" % (side.get("icons"), side.get("navN")))
 
     # ---- 主控台 hero + 智能钮 + 时钟 ----
@@ -350,8 +350,9 @@ def stage_p1(send):
              "heroCard:!!document.querySelector('.hero.card')}")
     ok("p1.console.hero", hero.get("heroCard") and hero.get("chip"),
        json.dumps(hero, ensure_ascii=False))
-    ok("p1.console.clock-format", "已播" in hero.get("clock", "")
-       and "剩余" in hero.get("clock", ""),
+    ok("p1.console.clock-format",
+       ("已播" in hero.get("clock", "") and "剩余" in hero.get("clock", ""))
+       or hero.get("clock", "") == "时长未知",
        hero.get("clock", ""))
     ok("p1.console.smart-btn", hero.get("smart") in
        ("▶ 开始", "⏸ 暂停", "▷ 继续", "切换中…")
@@ -1566,6 +1567,143 @@ def stage_e(send):
     ok("be.no-js-errors", not errs, str(errs)[:300])
 
 
+def stage_f(send):
+    # ---- F1：主控台运行反馈行（/log 反馈类行常显）----
+    nav(send, "console")
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/log')return Promise.resolve(new Response("
+        "JSON.stringify({lines:[{t:1,msg:'启动'},{t:Date.now()/1000-2,"
+        "msg:'回零：「继续」忽略（状态互锁）'}]}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(2.0)
+    f1 = js(send, "const e=document.getElementById('cmd-feed');"
+            "return {hid:e.hidden,txt:e.textContent,cls:e.className}")
+    ok("bf.f1.cmd-feed", f1.get("hid") is False
+       and "互锁" in f1.get("txt", "") and "warn" in f1.get("cls", ""),
+       json.dumps(f1, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.5)
+
+    # ---- F3：空格=智能钮（console 页、BODY 焦点；断言实际发帖）----
+    nav(send, "console")
+    f3a = js(send, UNSTUB + INTERCEPT +
+             "window.__posts=[];"
+             "document.body.focus();"
+             "const a=document.getElementById('smart').dataset.action;"
+             "if(a){document.body.dispatchEvent(new KeyboardEvent('keydown',"
+             "{key:' ',bubbles:true}));}"
+             "return {act:a||''}")
+    sf = js(send, "return {act:arguments0,posts:(window.__posts||[])"
+            ".filter(x=>x[0]==='/cmd')}".replace("arguments0",
+            json.dumps(f3a.get("act", ""))))
+    ok("bf.f3.space-smart",
+       (not f3a.get("act")) or len(sf.get("posts", [])) == 1,
+       json.dumps(sf))
+    js(send, RESTORE)
+
+    # ---- F5：设置页吸底保存钮 + 端口即时校验 ----
+    nav(send, "settings")
+    f5 = js(send, "const s=document.getElementById('st-save');"
+            "const cs=getComputedStyle(s.closest('.page-foot'));"
+            "return {sticky:cs.position,foot:!!s.closest('.page-foot')}")
+    ok("bf.f5.sticky-save", f5.get("foot") and f5.get("sticky") == "sticky",
+       json.dumps(f5))
+    f5b = js(send, "const el=document.getElementById('st-srv');"
+             "window.__srv0=el.value;el.value='99999';"
+             "el.dispatchEvent(new Event('input',{bubbles:true}));"
+             "return {inv:el.classList.contains('invalid'),"
+             "dis:document.getElementById('st-save').disabled,"
+             "tip:document.getElementById('st-save').title}")
+    ok("bf.f5.port-validate", f5b.get("inv") and f5b.get("dis")
+       and "1-65535" in f5b.get("tip", ""), json.dumps(f5b))
+    js(send, "const el=document.getElementById('st-srv');"
+        "el.value=window.__srv0;"
+        "el.dispatchEvent(new Event('input',{bubbles:true}))")
+
+    # ---- F 置顶开关隐藏 + 侧栏版本号 + 退出钮在场 ----
+    f6 = js(send, "return {topGone:!document.getElementById('st-top'),"
+            "exit:!!document.getElementById('btn-exit'),"
+            "ver:document.getElementById('side-ver').textContent,"
+            "lampBtn:document.getElementById('l-obs').tagName}")
+    ok("bf.f.misc", f6.get("topGone") and f6.get("exit")
+       and f6.get("lampBtn") == "BUTTON" and f6.get("ver"),
+       json.dumps(f6, ensure_ascii=False))
+
+    # ---- 退出钮：两段式 + loopback 端点存在（不真退出——只验首点不发包）----
+    js(send, UNSTUB + INTERCEPT +
+        "window.__posts=[];document.getElementById('btn-exit').click();"
+        "return {armed:document.getElementById('btn-exit').textContent}")
+    ef = js(send, "return {posts:(window.__posts||[]).filter("
+            "x=>x[0]==='/exit'),"
+            "txt:document.getElementById('btn-exit').textContent}")
+    ok("bf.f.exit-twostep", "确认" in (ef.get("txt") or "")
+       and not ef.get("posts"), json.dumps(ef, ensure_ascii=False))
+    js(send, RESTORE + "const b=document.getElementById('btn-exit');"
+        "delete b.dataset.armed;b.classList.remove('armed');"
+        "b.textContent='退出'")
+
+    # ---- F 定位点：名称非空校验 + <3s 软提示（stub /points）----
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/points')return Promise.resolve(new Response("
+        "JSON.stringify({cubase:true,mmcReady:true,projects:{"
+        "'A/歌一':{name:'歌一',enabled:true,points:["
+        "{id:1,name:'主歌',start:0,end:2}]}}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    nav(send, "points")
+    js(send, "document.querySelector('#pt-list .row').click()")
+    time.sleep(0.8)
+    fp = js(send, "document.getElementById('pt-name').value=' ';"
+            "document.getElementById('pt-save').click();"
+            "return {hint:document.getElementById('pt-hint').textContent}")
+    ok("bf.f.pt-name-required", "名称不能为空" in fp.get("hint", ""),
+       json.dumps(fp, ensure_ascii=False))
+    fp2 = js(send, "document.getElementById('pt-name').value='主歌';"
+             "document.getElementById('pt-s').value='0:00';"
+             "document.getElementById('pt-s').dispatchEvent(new Event("
+             "'input',{bubbles:true}));"
+             "document.getElementById('pt-e').value='0:02';"
+             "document.getElementById('pt-e').dispatchEvent(new Event("
+             "'input',{bubbles:true}));"
+             "return {hint:document.getElementById('pt-hint').textContent,"
+             "cls:document.getElementById('pt-hint').className,"
+             "dis:document.getElementById('pt-save').disabled}")
+    ok("bf.f.pt-soft-span", "3 秒" in fp2.get("hint", "")
+       and "warn" in fp2.get("cls", "") and not fp2.get("dis"),
+       json.dumps(fp2, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.6)
+
+    # ---- F popover 入场动画（计算样式 animation-name=pop-in）----
+    nav(send, "kbd")
+    js(send, "document.querySelector('#kb-slots .slot').click()")
+    pf = js(send, "const p=document.querySelector('.pop');"
+            "const cs=p?getComputedStyle(p):null;"
+            "return {name:cs?cs.animationName:null,"
+            "dur:cs?cs.animationDuration:null}")
+    ok("bf.f.pop-anim", pf.get("name") == "pop-in"
+       and pf.get("dur") in ("0.12s", "120ms"), json.dumps(pf))
+    js(send, "document.querySelector('.pop')"
+        "&&document.querySelector('.pop').remove()")
+
+    # ---- F 断连指示（/state 连续失败 3 次 → tstate 常驻中断）----
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.reject(new Error('x'));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(2.2)
+    fd = js(send, "const e=document.getElementById('tstate');"
+            "return {txt:e.textContent,cls:e.className}")
+    ok("bf.f.disconnected", fd.get("txt") == "连接中断…重试中"
+       and "err" in fd.get("cls", ""), json.dumps(fd, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(1.2)
+
+    errs = js(send, "return window.__errs")
+    ok("bf.no-js-errors", not errs, str(errs)[:300])
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1586,6 +1724,8 @@ def main():
             stage_d(send)
         if stages & {"e", "all"}:
             stage_e(send)
+        if stages & {"f", "all"}:
+            stage_f(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]
