@@ -235,9 +235,6 @@ input.invalid { border-color: var(--err) !important; }
 #clock.playing { color: var(--fg); }
 #bar { height: 12px; background: var(--sur-2); border-radius: 6px;
   overflow: hidden; margin-top: var(--s3); }
-#cmd-feed { margin-top: var(--s2); min-height: 18px; }
-#cmd-feed.warn { color: var(--warn); }
-#cmd-feed.err { color: var(--err); }
 #barfill { height: 100%; width: 0; background: var(--ok);
   border-radius: 6px;
   transition: width 500ms linear;   /* 与 /state 500ms 轮询咬合 */ }
@@ -518,10 +515,12 @@ details.card .grid2 { margin-top: var(--s3); }
   .md { flex-direction: column; }
   .md-master { width: auto; }
   #pt-list { max-height: 34vh; }
-  .log { height: calc(100vh - 280px); }
+  #logcard .log { height: 160px; }
 }
 
-/* ---- 日志页 ---- */
+/* ---- 运行日志卡（主控台页内）：播放中同屏盯状态 ---- */
+#logcard { max-width: 1012px; }
+#logcard .log { height: 224px; }
 .log-tools { display: flex; align-items: center; gap: var(--s2);
   margin-left: auto; }
 .log-tools select { background: #0d1116; color: var(--fg);

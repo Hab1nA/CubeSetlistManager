@@ -108,8 +108,8 @@ function nav(page) {
   // 切页即时拉数据（不等轮询节拍；boot 前各页状态量尚未初始化）
   if (booted) {
     if (page === "console" || page === "setlist") refreshPlaylist();
+    if (page === "console") refreshLog();
     else if (page === "points") refreshPoints();
-    else if (page === "log") refreshLog();
     else if (page === "kbd") refreshKbd();
   }
 }
@@ -470,32 +470,6 @@ function pedalLive(st) {
   } else {
     $("#pedal-when").textContent = "";
   }
-}
-
-// ---- 主控台运行反馈行：/cmd 的「未就绪/互锁忽略/已排队/核验告警」都在
-//      后端日志里——取最近 30 秒内一条反馈类行常显（瞬态类不滞留）----
-const FEED_RE = /失败|异常|错误|未生效|超时|未就绪|忽略|已排队|请手动|未响应/;
-async function refreshCmdFeed() {
-  if (!pageOn("console")) return;
-  try {
-    const r = await fetch("/log");
-    if (!r.ok) return;
-    const lines = (await r.json()).lines || [];
-    const fresh = Date.now() / 1000 - 30;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].t < fresh) break;         // 只看近 30 秒
-      if (FEED_RE.test(lines[i].msg)) {
-        const el = $("#cmd-feed");
-        el.hidden = false;
-        el.textContent = lines[i].msg;
-        el.className = "feed sm-txt "
-            + (/失败|异常|错误|请手动|未响应/.test(lines[i].msg)
-               ? "err" : "warn");
-        return;
-      }
-    }
-    $("#cmd-feed").hidden = true;
-  } catch { /* 瞬断 */ }
 }
 
 let pollFails = 0;
@@ -1038,7 +1012,7 @@ $("#pt-up").addEventListener("click", () =>
 $("#pt-down").addEventListener("click", () =>
     ptSel !== null && ptcmd("move", {id: ptSel, step: 1}));
 
-// ================= 日志页（增量 append + 工具条）=================
+// ============ 运行日志卡（主控台页内，增量 append + 工具条） ============
 let logLast = null;
 function logLevel(msg) {
   if (/界面异常|失败|异常|错误/.test(msg)) return "err";
@@ -1059,7 +1033,7 @@ function logLine(l) {
   return div;
 }
 async function refreshLog() {
-  if (!pageOn("log")) return;
+  if (!pageOn("console")) return;
   try {
     const r = await fetch("/log");
     if (!r.ok) return;
@@ -2130,7 +2104,6 @@ poll();
 setInterval(() => {
   if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
-setInterval(refreshCmdFeed, 1500);
 setInterval(() => { if (pageOn("points")) refreshPoints(); }, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);

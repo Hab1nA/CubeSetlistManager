@@ -13,7 +13,7 @@ import websocket
 
 OUTD = pathlib.Path("out") / "ui_shots"
 OUTD.mkdir(parents=True, exist_ok=True)
-PAGES = ["console", "setlist", "points", "log", "pedal", "kbd", "vj",
+PAGES = ["console", "setlist", "points", "pedal", "kbd", "vj",
          "settings"]
 
 env = dict(os.environ)
