@@ -208,13 +208,21 @@ def stage_p0(send):
         "el.dispatchEvent(new Event('input',{bubbles:true}));}"
         "document.getElementById('toasts').innerHTML=''")
 
-    # 5. 键盘音色槽 popover：录制直写流（点卡片→录制→捕获→停止并保存
-    #    → /slotset）；不再有手填数字输入。/kbd 与 /kbd/record 打桩给
-    #    songKey 与已捕获音色（无装载曲时录制被守卫正当禁用，须先有目标）
-    nav(send, "kbd")
+    # 5. 键盘音色槽 popover（编排页详情面板）：录制直写流（点卡片→录制
+    #    →捕获→停止并保存→ /slotset）；不再有手填数字输入。/playlist、
+    #    /points、/kbd、/kbd/record 打桩给选中曲与已捕获音色
+    nav(send, "setlist")
     js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
-        "if(String(u)==='/kbd')return Promise.resolve(new Response("
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'X/桩曲',team:'X',name:'桩曲',"
+        "dur:'1:00',durSrc:'auto'}],pl:[{key:'X/桩曲',name:'桩曲',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
+        "if(String(u)==='/points')return Promise.resolve(new Response("
+        "JSON.stringify({cubase:true,mmcReady:true,projects:{}}),"
+        "{status:200}));"
+        "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
+        "return Promise.resolve(new Response("
         "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',"
         "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:2,axShift:0,"
         "songKey:'X/桩曲',songs:[{key:'X/桩曲',team:'X',name:'桩曲'}],"
@@ -226,8 +234,9 @@ def stage_p0(send):
         "desc:'USER:0564'}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    time.sleep(0.6)
-    pop = js(send, "const r=document.querySelector('#kb-slots .slot');"
+    time.sleep(0.8)
+    pick_song(send, 1.0)
+    pop = js(send, "const r=document.querySelector('#dt-slots .slot');"
              "if(!r)return {none:1};r.click();"
              "return {pop:!!document.querySelector('.pop'),"
              "rec:!!document.querySelector('.pop .btns .primary'),"
@@ -256,10 +265,14 @@ def stage_p0(send):
     ok("p0.popover.slotset-post",
        any("/slotset" in u and '"pc":63' in b for u, b in posts),
        str(posts)[:140])
-    shiftRo = js(send, "return {j:document.getElementById('kb-jshift')"
-               ".textContent,noStepper:!document.getElementById('kb-jup')}")
-    ok("p0.kbd.shift-readonly", "移调 +2" in shiftRo.get("j", "")
-       and shiftRo.get("noStepper"), json.dumps(shiftRo, ensure_ascii=False))
+    dt = js(send, "return {head:document.getElementById('dt-head')"
+            ".textContent,slots:document.querySelectorAll("
+            "'#dt-slots .slot').length,"
+            "ax:document.querySelectorAll('#dt-axslots .slot').length,"
+            "noPtsPage:!document.getElementById('p-points')}")
+    ok("p0.dt.panel", "桩曲" in dt.get("head", "")
+       and dt.get("slots") == 10 and dt.get("ax") == 6
+       and dt.get("noPtsPage"), json.dumps(dt, ensure_ascii=False))
     js(send, RESTORE + "document.querySelector('.pop')"
         "&&document.querySelector('.pop').remove()")
 
@@ -280,8 +293,9 @@ def stage_p0(send):
     shot(send, "x_p0_twostep")
     js(send, RESTORE)
 
-    # 7. 定位点时码即时校验
-    nav(send, "points")
+    # 7. 定位点时码即时校验（编排页选中曲后的详情面板）
+    nav(send, "setlist")
+    pick_song(send, 1.2)
     pts = js(send, "return {rows:document.querySelectorAll("
              "'#pt-list .row').length}")
     if pts.get("rows"):
@@ -345,7 +359,7 @@ def stage_p1(send):
     ok("p1.side.width-200", side.get("w") == 200, str(side.get("w")))
     ok("p1.side.groups", side.get("groups") == ["演出", "准备", "系统"],
        str(side.get("groups")))
-    ok("p1.side.icons", side.get("icons") == 8 and side.get("navN") == 8,
+    ok("p1.side.icons", side.get("icons") == 7 and side.get("navN") == 7,
        "%s/%s" % (side.get("icons"), side.get("navN")))
 
     # ---- 主控台 hero + 智能钮 + 时钟 ----
@@ -448,8 +462,8 @@ def stage_p1(send):
            str(moves)[:160])
     js(send, RESTORE)
 
-    # ---- 定位点：stub 数据注入 master-detail（先过 setlist 页取 stub /playlist）----
-    nav(send, "points")
+    # ---- 曲目详情：stub 数据注入（定位点+音色映射同一面板）----
+    nav(send, "console")
     stub = (UNSTUB + "window.__fetch0=window.fetch;"
             "window.fetch=(u,o)=>{"
             "if(String(u)==='/points')return Promise.resolve(new Response("
@@ -462,6 +476,11 @@ def stage_p1(send):
             "{key:'pt:A/歌一#1',name:'歌一 · 主歌',dur:'1:00',pt:true},"
             "{key:'pt:A/歌一#2',name:'歌一 · 副歌',dur:'1:30',pt:true}],"
             "cur:1}),{status:200}));"
+            "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
+            "return Promise.resolve(new Response(JSON.stringify({"
+            "editSong:{key:'A/歌一',name:'歌一',loading:false,"
+            "slots:{'60':{pc:63,msb:1,lsb:2,desc:'USER:0521'}},"
+            "axSlots:{'72':{pc:5,desc:'SYNTH/PAD #5'}}}}),{status:200}));"
             "if(String(u)==='/state')return Promise.resolve(new Response("
             "JSON.stringify({ready:true,busy:false,open:true,"
             "projName:'歌一',tstate:'playing',pos:12,dur:60,cur:1,"
@@ -473,11 +492,20 @@ def stage_p1(send):
     js(send, stub)
     js(send, "document.querySelector('.b-setlist').click()")
     time.sleep(1.0)
-    js(send, "document.querySelector('.b-points').click()")
-    time.sleep(1.0)
+    pick_song(send, 1.2)          # 选首曲 A/歌一 → 详情面板跟随
     pt = js(send, "return {rows:document.querySelectorAll('#pt-list .row')"
-           ".length,none:document.getElementById('pt-none').hidden}")
-    ok("p1.points.master-list", pt.get("rows") == 2,
+           ".length,none:document.getElementById('pt-none').hidden,"
+           "dt:document.getElementById('dt-body').hidden,"
+           "head:document.getElementById('dt-head').textContent,"
+           "slots:document.querySelectorAll('#dt-slots .slot').length,"
+           "ax:document.querySelectorAll('#dt-axslots .slot').length,"
+           "kbdStat:document.getElementById('dt-kbd-stat').textContent}")
+    ok("p1.points.master-list", pt.get("rows") == 2
+       and pt.get("dt") is False,
+       json.dumps(pt, ensure_ascii=False))
+    ok("p1.dt.kbd-panel", "歌一" in (pt.get("head") or "")
+       and pt.get("slots") == 10 and pt.get("ax") == 6
+       and "JUNO 1/10" in (pt.get("kbdStat") or ""),
        json.dumps(pt, ensure_ascii=False))
     sel = js(send, "document.querySelector('#pt-list .row').click();"
              "return 1")
@@ -507,7 +535,7 @@ def stage_p1(send):
              "hint:document.getElementById('pt-hint').textContent}")
     ok("p1.points.validate-end", val.get("dis") and
        "晚于" in val.get("hint", ""), json.dumps(val, ensure_ascii=False))
-    shot(send, "x_p1_points")
+    shot(send, "x_p1_detail")
 
     # ---- 主控台 chips + 三态（同一 stub 态下顺带验证）----
     js(send, "document.querySelector('.b-console').click()")
@@ -570,16 +598,17 @@ def stage_p1(send):
        and pd.get("devSel") == "SELECT" and pd.get("adv"),
        json.dumps(pd, ensure_ascii=False))
 
-    # ---- 键盘页：移调只读（stepper 已删，轨上键位驱动）----
+    # ---- 键盘页：全局端口/移调只读（槽网格已移编排页详情）----
     nav(send, "kbd")
     kb = js(send, "return {cards:document.querySelectorAll("
            "'#p-kbd .cards2 .card').length,"
-           "slots:document.querySelectorAll('#kb-slots .slot').length,"
-           "ax:document.querySelectorAll('#kb-axslots .slot').length,"
+           "noSlots:!document.getElementById('kb-slots')"
+           "&&!document.getElementById('kb-axslots'),"
+           "noSongSel:!document.getElementById('kb-song'),"
            "ro:!!document.getElementById('kb-jshift'),"
            "noStepper:!document.getElementById('kb-jreset')}")
-    ok("p1.kbd.port-cards", kb.get("cards") == 2 and kb.get("slots") == 10
-       and kb.get("ax") == 6 and kb.get("ro") and kb.get("noStepper"),
+    ok("p1.kbd.port-cards", kb.get("cards") == 2 and kb.get("noSlots")
+       and kb.get("noSongSel") and kb.get("ro") and kb.get("noStepper"),
        json.dumps(kb))
     js(send, RESTORE)
 
@@ -734,30 +763,32 @@ def stage_p2(send):
     else:
         ok("p2.qr.cross-check", False, "qrcode 库缺失或 path 为空")
 
-    # ---- 音色槽网格卡 + 试听（/kbdtest）----
-    nav(send, "kbd")
-    sg = js(send, "return {grid:document.querySelectorAll('#kb-slots"
-           ".slot-grid .slot').length,"
-           "ax:document.querySelectorAll('#kb-axslots .slot').length,"
-           "unconf:document.querySelectorAll('.slot.unconfigured').length,"
-           "test:document.querySelectorAll('.slot .s-test').length}")
-    ok("p2.slots.grid", sg.get("grid") == 10 and sg.get("ax") == 6
-       and sg.get("test") == 16, json.dumps(sg))
-    # 试听 POST 路径：拦截 /kbd（回注一个已配置槽），nav 进页即
-    # refreshKbd 重排卡片 → 点「试」应 POST /kbdtest
+    # ---- 音色槽网格（编排页详情）+ 试听（/kbdtest）----
+    nav(send, "setlist")
     js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
-        "if(String(u)==='/kbd')return Promise.resolve(new Response("
-        "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',junoShift:0,"
-        "axShift:0,songKey:null,songs:[],lastResult:'',"
-        "ports:{in:[],out:[]},portStatus:{},"
-        "editSong:{key:null,name:null,loading:false,"
-        "slots:{60:{pc:63,msb:1,lsb:2,desc:'USER:0521'}},axSlots:{}}}),"
-        "{status:200}));"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'X/桩曲',team:'X',name:'桩曲',"
+        "dur:'1:00',durSrc:'auto'}],pl:[{key:'X/桩曲',name:'桩曲',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
+        "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
+        "return Promise.resolve(new Response("
+        "JSON.stringify({editSong:{key:'X/桩曲',name:'桩曲',loading:false,"
+        "slots:{'60':{pc:63,msb:1,lsb:2,desc:'USER:0521'}},"
+        "axSlots:{}}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    js(send, "document.querySelector('.b-kbd').click()")   # 进页触发 refreshKbd
-    time.sleep(0.6)                        # refreshKbd 读 stub /kbd 重排卡片
+    time.sleep(0.8)
+    pick_song(send, 1.0)
+    sg = js(send, "return {grid:document.querySelectorAll("
+           "'#dt-slots .slot').length,"
+           "ax:document.querySelectorAll('#dt-axslots .slot').length,"
+           "unconf:document.querySelectorAll('.slot.unconfigured').length,"
+           "test:document.querySelectorAll('#dt-slots .s-test').length"
+           "+document.querySelectorAll('#dt-axslots .s-test').length}")
+    ok("p2.slots.grid", sg.get("grid") == 10 and sg.get("ax") == 6
+       and sg.get("test") == 16, json.dumps(sg))
+    # 点「试」应 POST /kbdtest（桩已给 60 号槽配置）
     kt = js(send, "const t=document.querySelector("
             "'.slot:not(.unconfigured) .s-test');"
             "if(!t)return {none:1};t.click();return {clicked:1}")
@@ -767,7 +798,7 @@ def stage_p2(send):
        "%s %s" % (json.dumps(kt, ensure_ascii=False), str(posts)[:140]))
     js(send, RESTORE)
     time.sleep(0.4)
-    pop = js(send, "document.querySelector('#kb-slots .slot').click();"
+    pop = js(send, "document.querySelector('#dt-slots .slot').click();"
              "return {pop:!!document.querySelector('.pop')}")
     ok("p2.slots.popover", pop.get("pop"))
     js(send, "document.querySelector('.pop')"
@@ -856,7 +887,7 @@ def stage_a(send):
     ok("ba.a1.hidden-chips",
        a1.get("chipsHid") is (a1.get("chipsD") == "none"),
        json.dumps(a1))
-    nav(send, "points")
+    nav(send, "setlist")
     a1b = js(send, "const d=id=>getComputedStyle(document.getElementById(id));"
              "return {formHid:document.getElementById('pt-form').hidden,"
              "formD:d('pt-form').display,"
@@ -865,7 +896,8 @@ def stage_a(send):
     ok("ba.a1.hidden-pt-form", a1b.get("formHid") is (a1b.get("formD") == "none")
        and a1b.get("noneHid") is (a1b.get("noneD") == "none"),
        json.dumps(a1b))
-    # 选中一个点后互斥（有定位点数据的机器上才跑强断言）
+    # 选中曲+点后互斥（有定位点数据的机器上才跑强断言）
+    pick_song(send, 1.2)
     rowsn = js(send, "return document.querySelectorAll('#pt-list .row').length")
     if rowsn:
         js(send, "document.querySelector('#pt-list .row').click()")
@@ -1343,6 +1375,14 @@ def stage_c(send):
     ok("bc.no-js-errors", not errs, str(errs)[:300])
 
 
+
+def pick_song(send, sleep=1.2):
+    """编排页选中首曲（详情面板跟随）；/playlist 须能给出至少一行。"""
+    js(send, "const r=document.querySelector('#pl .row')"
+        "||document.querySelector('#lib .row');r&&r.click()")
+    time.sleep(sleep)
+
+
 KBD_STUB = ("{junoIn:'JUNO-DS',junoOut:'JUNO-DS',axIn:'AX-09',"
             "axOut:'JUNO-DS',junoShift:2,axShift:-1,songKey:'A/歌一',"
             "songs:[{key:'A/歌一',team:'A',name:'歌一'},"
@@ -1362,14 +1402,22 @@ KBD_STUB = ("{junoIn:'JUNO-DS',junoOut:'JUNO-DS',axIn:'AX-09',"
 
 
 def stage_d(send):
-    # ---- D1/D2/D4：stub /kbd → 曲目下拉/端口下拉（同名序号/状态行/幽灵
-    #      项）/槽卡人话描述/最近结果行 ----
+    # ---- D1/D2/D4：stub /kbd+/playlist → 键盘页无曲目下拉（映射在编排页
+    #      详情）/端口下拉（同名序号/状态行/幽灵项）/槽卡人话描述 ----
     nav(send, "console")
     js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
         "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
         "return Promise.resolve(new Response(JSON.stringify("
         + KBD_STUB + "),{status:200}));"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'A/歌一',team:'A',name:'歌一',"
+        "dur:'1:00',durSrc:'auto'},{key:'B/歌二',team:'B',name:'歌二',"
+        "dur:'2:00',durSrc:'auto'}],pl:[{key:'A/歌一',name:'歌一',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
+        "if(String(u)==='/points')return Promise.resolve(new Response("
+        "JSON.stringify({cubase:true,mmcReady:true,projects:{"
+        "'A/歌一':{name:'歌一',enabled:true,points:[]}}}),{status:200}));"
         "if(String(u)==='/kbd/record')return Promise.resolve(new Response("
         "JSON.stringify({active:true,inst:'juno',"
         "slot:{pc:70,msb:87,lsb:0}}),{status:200}));"
@@ -1381,13 +1429,10 @@ def stage_d(send):
     # 「刷新端口」走产品同款强制重建路径
     js(send, "document.getElementById('kb-refresh').click()")
     time.sleep(0.8)
-    d1 = js(send, "const s=document.getElementById('kb-song');"
-            "return {opts:[...s.options].map(o=>o.textContent),sel:s.value,"
+    d1 = js(send, "return {noSongSel:!document.getElementById('kb-song'),"
             "last:document.getElementById('kb-status').textContent}")
-    ok("bd.d1.song-select",
-       any("跟随已装载曲" in t for t in d1["opts"])
-       and "歌一" in d1["opts"] and "歌二" in d1["opts"]
-       and d1["sel"] == "" and "最近切换" in d1["last"],
+    ok("bd.d1.no-song-select",
+       d1.get("noSongSel") and "最近切换" in d1.get("last", ""),
        json.dumps(d1, ensure_ascii=False))
     d2 = js(send, "const info=id=>{const s=document.getElementById(id);"
             "return {labels:[...s.options].map(o=>o.textContent),"
@@ -1415,15 +1460,18 @@ def stage_d(send):
        and d2b["body"]["junoInDev"] == 1
        and d2b["body"]["axIn"] == "AX-09",
        json.dumps(d2b, ensure_ascii=False))
-    d4 = js(send, "const s=document.querySelector('#kb-slots .slot "
+    js(send, "document.querySelector('.b-setlist').click()")
+    time.sleep(0.8)
+    pick_song(send, 1.2)          # 选 A/歌一 → 详情面板音色映射
+    d4 = js(send, "const s=document.querySelector('#dt-slots .slot "
             ".s-sub');const ax=document.querySelector("
-            "'#kb-axslots .slot .s-sub');"
+            "'#dt-axslots .slot .s-sub');"
             "return {juno:s?s.textContent:'',ax:ax?ax.textContent:''}")
     ok("bd.d4.slot-desc", d4.get("juno") == "USER:0521"
        and d4.get("ax") == "SYNTH/PAD #5",
        json.dumps(d4, ensure_ascii=False))
     # ---- D3/D5：popover 录制直写（无手填数字输入）+ songKey 定向保存 ----
-    js(send, "document.querySelector('#kb-slots .slot').click()")
+    js(send, "document.querySelector('#dt-slots .slot').click()")
     time.sleep(0.3)
     js(send, "const p=document.querySelector('.pop');"
         "[...p.querySelectorAll('button')].find(b=>b.textContent==="
@@ -1674,8 +1722,13 @@ def stage_f(send):
         "JSON.stringify({cubase:true,mmcReady:true,projects:{"
         "'A/歌一':{name:'歌一',enabled:true,points:["
         "{id:1,name:'主歌',start:0,end:2}]}}}),{status:200}));"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'A/歌一',team:'A',name:'歌一',"
+        "dur:'1:00',durSrc:'auto'}],pl:[{key:'A/歌一',name:'歌一',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
         "return window.__fetch0(u,o)};")
-    nav(send, "points")
+    nav(send, "setlist")
+    pick_song(send, 1.2)
     js(send, "document.querySelector('#pt-list .row').click()")
     time.sleep(0.8)
     fp = js(send, "document.getElementById('pt-name').value=' ';"
@@ -1700,8 +1753,9 @@ def stage_f(send):
     time.sleep(0.6)
 
     # ---- F popover 入场动画（计算样式 animation-name=pop-in）----
-    nav(send, "kbd")
-    js(send, "document.querySelector('#kb-slots .slot').click()")
+    nav(send, "setlist")
+    pick_song(send, 1.0)
+    js(send, "document.querySelector('#dt-slots .slot').click()")
     pf = js(send, "const p=document.querySelector('.pop');"
             "const cs=p?getComputedStyle(p):null;"
             "return {name:cs?cs.animationName:null,"

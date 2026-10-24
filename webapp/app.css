@@ -375,15 +375,18 @@ input.invalid { border-color: var(--err) !important; }
   stroke: currentColor; stroke-width: 1.2; }
 .empty-state.sm { padding: 24px 12px; font-size: var(--f-sm); }
 
-/* ---- 定位点 master-detail ---- */
-.md { display: flex; gap: var(--s4); align-items: stretch; }
-.md-master { width: 320px; flex: none; display: flex;
-  flex-direction: column; }
+/* ---- 曲目详情列（定位点 + 音色映射）/ 卡头 ---- */
+#col-dt { flex: 1.3 1 340px; }
+#dt-scroll { flex: 1; overflow: auto; display: flex;
+  flex-direction: column; gap: 14px; padding-right: 2px; }
+#dt-scroll .card { margin: 0; }
+#dt-head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pt-list { max-height: 28vh; overflow: auto; flex: none; }
+.dt-inst { margin: 10px 0 6px; }
 .md-head { display: flex; align-items: center; gap: var(--s2);
-  font-weight: 700; margin-bottom: var(--s2); }
+  font-weight: 700; margin-bottom: var(--s2); flex-wrap: wrap; }
 .md-head .btn { margin-left: auto; }
 #pt-list { overflow: auto; }
-.md-detail { flex: 1; }
 #pt-form { display: flex; flex-direction: column; gap: var(--s3); }
 .tl-wrap { display: flex; flex-direction: column; gap: 6px; }
 .tl { position: relative; height: 22px; background: var(--sur-2);
@@ -513,7 +516,6 @@ details.card .grid2 { margin-top: var(--s3); }
   .grid2 { grid-template-columns: 1fr; }
   .cards2 { grid-template-columns: 1fr; }
   .md { flex-direction: column; }
-  .md-master { width: auto; }
   #pt-list { max-height: 34vh; }
   #logcard .log { height: 160px; }
 }

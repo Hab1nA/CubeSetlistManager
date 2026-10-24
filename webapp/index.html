@@ -18,9 +18,6 @@
     <button class="nav b-setlist" data-page="setlist">
       <svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
       编排</button>
-    <button class="nav b-points" data-page="points">
-      <svg viewBox="0 0 16 16"><path d="M4 14V2.5M4 3.5h8l-2.5 3L12 9.5H4"/></svg>
-      定位点</button>
     <button class="nav b-pedal" data-page="pedal">
       <svg viewBox="0 0 16 16"><rect x="3" y="9" width="10" height="4" rx="1.5"/><path d="M8 9V6"/><circle cx="8" cy="4" r="1.5"/></svg>
       踩钉</button>
@@ -99,9 +96,10 @@
       <div id="sl-tabs">
         <button class="on" data-col="lib">素材库</button>
         <button data-col="pl">播放列表</button>
+        <button data-col="dt">详情</button>
       </div>
       <div class="cols">
-        <div class="col show">
+        <div class="col show" data-col="lib">
           <div class="colhead">素材库 <span class="badge" id="lib-n"></span></div>
           <div id="lib" class="list"></div>
           <div id="lib-empty" class="empty-state sm" hidden>
@@ -109,7 +107,7 @@
             <button class="btn ghost sm" data-nav="settings">去设置工程库根</button>
           </div>
         </div>
-        <div class="col">
+        <div class="col" data-col="pl">
           <div class="colhead">播放列表 <span class="badge" id="pl-n"></span>
             <button id="pl-more" class="btn icon sm" title="更多操作">⋯</button></div>
           <div id="pl" class="list"></div>
@@ -117,50 +115,62 @@
             从左侧素材库点 ＋ 加入曲目
           </div>
         </div>
-      </div>
-    </section>
-
-    <section class="page" id="p-points">
-      <div class="page-head">
-        <h2>定位点</h2>
-        <select id="pt-proj"></select>
-        <label class="switch" title="启用后该工程条目展开为定位点播放">
-          <input type="checkbox" id="pt-on"><i></i><span>启用</span></label>
-      </div>
-      <div id="pt-mmc" class="field-err warn-txt" hidden>
-        MMC 输出口未就绪：定位不可用（检查时码口配置）</div>
-      <div class="md">
-        <div class="md-master card">
-          <div class="md-head">定位点列表
-            <button id="pt-add" class="btn ghost sm">＋ 添加（开始=当前时码）</button>
+        <div class="col" id="col-dt" data-col="dt">
+          <div class="colhead" id="dt-head">曲目详情</div>
+          <div id="dt-scroll">
+          <div id="dt-none" class="empty-state sm">
+            在左侧选择曲目，查看并编辑它的定位点与音色映射</div>
+          <div id="dt-body" hidden>
+            <div class="card">
+              <div class="md-head">定位点
+                <button id="pt-add" class="btn ghost sm"
+                  title="以当前 DAW 时码为开始点新建">＋ 添加</button>
+                <label class="switch sm" title="启用后该工程条目展开为
+                  定位点播放">
+                  <input type="checkbox" id="pt-on"><i></i><span>启用</span></label>
+              </div>
+              <div id="pt-mmc" class="field-err warn-txt" hidden>
+                MMC 输出口未就绪：定位不可用（检查时码口配置）</div>
+              <div id="pt-list" class="list"></div>
+              <div id="pt-none" class="empty-state sm" hidden>
+                在上方选择一个定位点编辑</div>
+              <div id="pt-form" hidden>
+                <div class="field"><label for="pt-name">名称</label>
+                  <input id="pt-name"></div>
+                <div class="field-row">
+                  <div class="field"><label for="pt-s">开始</label>
+                    <input id="pt-s" placeholder="分:秒 如 3:33" inputmode="numeric"></div>
+                  <div class="field"><label for="pt-e">结束</label>
+                    <input id="pt-e" placeholder="分:秒 如 4:05" inputmode="numeric"></div>
+                </div>
+                <div class="field-err" id="pt-hint"></div>
+                <div class="tl-wrap">
+                  <div class="lbl">时间轴分布（只读）</div>
+                  <div id="pt-tl" class="tl"></div>
+                  <div class="tl-scale"><span>0:00</span><span id="pt-tl-max">—</span></div>
+                </div>
+                <div class="md-actions">
+                  <button id="pt-save" class="btn primary sm">保存</button>
+                  <button id="pt-goto" class="btn ghost sm"
+                    title="同工程免重开，直接定位">跳到这点</button>
+                  <span class="tspacer"></span>
+                  <button id="pt-up" class="btn icon sm" title="上移">↑</button>
+                  <button id="pt-down" class="btn icon sm" title="下移">↓</button>
+                  <button id="pt-del" class="btn danger sm">删除</button>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="md-head">音色映射
+                <span id="dt-kbd-stat" class="dim sm-txt"></span></div>
+              <div class="lbl dt-inst">JUNO（C4 起 10 键）</div>
+              <div id="dt-slots" class="slot-grid"></div>
+              <div class="lbl dt-inst">AX-09（C5 起 6 键）</div>
+              <div id="dt-axslots" class="slot-grid"></div>
+              <p class="dim sm-txt">点卡片「录制」：到琴上选音色，捕获即写入
+                这首歌；「试」=连通测试。端口与移调状态在「键盘」页。</p>
+            </div>
           </div>
-          <div id="pt-list" class="list"></div>
-        </div>
-        <div class="md-detail card">
-          <div id="pt-none" class="empty-state sm">在左侧选择一个定位点编辑</div>
-          <div id="pt-form" hidden>
-            <div class="field"><label for="pt-name">名称</label>
-              <input id="pt-name"></div>
-            <div class="field-row">
-              <div class="field"><label for="pt-s">开始</label>
-                <input id="pt-s" placeholder="分:秒 如 3:33" inputmode="numeric"></div>
-              <div class="field"><label for="pt-e">结束</label>
-                <input id="pt-e" placeholder="分:秒 如 4:05" inputmode="numeric"></div>
-            </div>
-            <div class="field-err" id="pt-hint"></div>
-            <div class="tl-wrap">
-              <div class="lbl">时间轴分布（只读）</div>
-              <div id="pt-tl" class="tl"></div>
-              <div class="tl-scale"><span>0:00</span><span id="pt-tl-max">—</span></div>
-            </div>
-            <div class="md-actions">
-              <button id="pt-save" class="btn primary">保存</button>
-              <button id="pt-goto" class="btn ghost" title="同工程免重开，直接定位">跳到这点</button>
-              <span class="tspacer"></span>
-              <button id="pt-up" class="btn icon sm" title="上移">↑</button>
-              <button id="pt-down" class="btn icon sm" title="下移">↓</button>
-              <button id="pt-del" class="btn danger sm">删除</button>
-            </div>
           </div>
         </div>
       </div>
@@ -215,8 +225,6 @@
     <section class="page" id="p-kbd">
       <div class="page-head">
         <h2>键盘自动化</h2>
-        <select id="kb-song" title="要配置映射的曲目（默认跟随已装载曲）"
-          style="max-width:340px"></select>
       </div>
       <div id="kb-status" class="dim sm-txt"></div>
       <div class="cards2">
@@ -240,22 +248,17 @@
         <button id="kb-save" class="btn primary sm">保存端口</button>
       </div>
       <div class="card slotcard">
-        <h3>JUNO 音色槽
+        <h3>全局移调（只读）
           <span class="shift-ro" id="kb-jshift"
-            title="当前全局移调（半音）——由键盘自动化轨的移调键位驱动，此处只读">移调 0</span></h3>
-        <div id="kb-slots" class="slot-grid"></div>
-      </div>
-      <div class="card slotcard">
-        <h3>AX-09 音色槽
+            title="当前 JUNO 全局移调（半音）——由键盘自动化轨的移调键位驱动">JUNO 移调 0</span>
           <span class="shift-ro" id="kb-ashift"
-            title="当前全局移调（半音）——由键盘自动化轨的移调键位驱动，此处只读">移调 0</span></h3>
-        <div id="kb-axslots" class="slot-grid"></div>
+            title="当前 AX-09 全局移调（半音）——由键盘自动化轨的移调键位驱动">AX 移调 0</span></h3>
+        <p class="dim sm-txt">移调不走本页：由键盘自动化轨上的移调键位控制
+          （JUNO C2 降半音 C#2 升半音 D2 降八度 D#2 升八度；AX-09 对应
+          F2/F#2/G2/G#2），上方只读显示当前累计值，变化时脉冲提示。</p>
       </div>
-      <p class="dim sm-txt">点击卡片可「录制」：到琴上选音色，捕获即写入该曲
-        映射；「试」=向琴发送该音色做连通测试。</p>
-      <p class="dim sm-txt">移调不走本页：由键盘自动化轨上的移调键位控制
-        （JUNO C2 降半音 C#2 升半音 D2 降八度 D#2 升八度；AX-09 对应
-        F2/F#2/G2/G#2），卡片标题处只读显示当前累计值。</p>
+      <p class="dim sm-txt">各首歌的音色槽映射在「编排」页选中曲目后的详情
+        面板里录制维护。</p>
     </section>
 
     <section class="page" id="p-vj">
