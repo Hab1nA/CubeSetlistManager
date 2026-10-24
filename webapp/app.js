@@ -94,11 +94,12 @@ function menuItem(box, text, cls, fn) {
 let curPage = "console", booted = false;
 function nav(page) {
   if (booted && page !== curPage) {
+    if (popEl) closePop();   // 换页收口弹层（录制随层停口，不悬到新页）
     // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）
     if (curPage === "pedal") pedalMute(false);
     if (page === "pedal") {
       pedalMute(true);
-      refreshPedal();
+      refreshPedal(true);       // 重建表单基线（别处改过配置时不再显旧态）
       refreshPedalDevices();
     }
   }
@@ -374,9 +375,10 @@ function lamps(st) {
       st.loop ? "loopMIDI 运行中" : "loopMIDI 未运行");
   const pr = st.pedalRemote;
   set("l-pedal", !pr ? "" : pr.link === "ok" ? "ok" : "warn",
-      !pr ? "踩钉桥未就绪" : (pr.link === "ok"
+      (!pr ? "踩钉桥未就绪" : (pr.link === "ok"
       ? "转发链路健康（15s 内有信号）" : pr.link === "stale"
-      ? "转发链路超时（>15s 无信号）" : "未收到转发信号"));
+      ? "转发链路超时（>15s 无信号）" : "未收到转发信号"))
+      + "；点击进入踩钉页（打开期间踩钉临时静音）");
   set("l-hot", st.webIp ? "ok" : "",
       st.webIp ? "服务地址 " + st.webIp : "移动端遥控服务未启动");
   set("l-remote", st.ready ? "ok" : "err",
@@ -564,7 +566,13 @@ function drawLib() {
     btn.style.display = libEmpty ? "" : "none";
   }
   $("#lib-n").textContent = plCache.lib.length + " 首";
-  shown.forEach(s => lib.appendChild(libRow(s, inPl.has(s.key))));
+  shown.forEach(s => {
+    const row = libRow(s, inPl.has(s.key));
+    const base = s.key.startsWith("pt:")
+        ? s.key.slice(3).split("#")[0] : s.key;
+    if (base === plSel) row.classList.add("sel");
+    lib.appendChild(row);
+  });
 }
 // 播放列表行 ⋯ 菜单：写入时长（手动，B5）/重新识别（回工程内原值）
 function plMoreMenu(anchor, it) {
@@ -745,11 +753,22 @@ function drawPl() {
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   el.innerHTML = "";
+  // 团队匹配与素材库同口径（pt 条目经宿主工程查团队）
+  const teamOf = it => {
+    const base = it.key.startsWith("pt:")
+        ? it.key.slice(3).split("#")[0] : it.key;
+    const lib = plCache.lib.find(x => x.key === base);
+    return lib ? (lib.team || "").toLowerCase() : "";
+  };
   plCache.pl.forEach((it, i) => {
-    if (!slQ || it.name.toLowerCase().includes(slQ)) {
+    if (!slQ || it.name.toLowerCase().includes(slQ)
+        || teamOf(it).includes(slQ)) {
       const r = plRow(i, it);
       if (i === curIdx) r.classList.add("cur");
-      if (it.key === sel) r.classList.add("sel");
+      if (it.key === sel
+          || (it.key.startsWith("pt:")
+              && it.key.slice(3).split("#")[0] === sel))
+        r.classList.add("sel");
       el.appendChild(r);
     }
   });
@@ -766,9 +785,22 @@ function selectSong(key) {
   if (plSel === key) { markPlSel(); return; }
   plSel = key;
   ptSel = null;
+  // 数据在途时先清面板（红队 P0-1：旧曲映射不得残留在新曲名下可编辑）。
+  // dataset.sig 必须一并清：否则 buildSlots 差量守卫见「签名同」跳过重绘，
+  // 换到映射内容相同的另一首时网格停在空态（探针 p1 实证）
+  dtKbd = null;
+  $("#dt-kbd-stat").textContent = "映射装载中…";
+  for (const id of ["dt-slots", "dt-axslots"]) {
+    const el = $("#" + id);
+    el.innerHTML = "";
+    delete el.dataset.sig;
+  }
   markPlSel();
   refreshPoints();
   refreshKbdDetail();
+  // 窄窗（页签可见）选中后切到详情列，给可见反馈
+  if (getComputedStyle($("#sl-tabs")).display !== "none")
+    $('#sl-tabs [data-col="dt"]').click();
 }
 $("#sl-search").addEventListener("input", e => {
   slQ = e.target.value.trim().toLowerCase();
@@ -825,7 +857,7 @@ function validatePt() {
   const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
   let msg = "";
   if (s === null) msg = "开始时码格式应为 分:秒（如 3:33）或秒数";
-  else if (e === null) msg = "结束时码格式应为 分:秒（如 3:33）或秒数";
+  else if (e === 0) msg = "结束点未定（工程末尾未知）：请补填后保存";
   else if (e <= s) msg = "结束必须晚于开始";
   $("#pt-s").classList.toggle("invalid", s === null);
   $("#pt-e").classList.toggle("invalid", e === null || (s !== null && e <= s));
@@ -868,9 +900,10 @@ async function refreshPoints() {
     const song = plCache && (plCache.lib.find(x => x.key === plSel)
                               || (plCache.pl || []).find(x => x.key === plSel));
     $("#dt-head").textContent = "曲目详情 · "
-        + (song ? song.name.split(" · ")[0] : plSel);
+        + ((song ? song.name.split(" · ")[0] : "")
+           || (ptData[plSel] || {}).name || plSel);
     const dd = ptData[ptProj] || {enabled: false, points: []};
-    $("#pt-on").checked = dd.enabled;
+    if (!ptOnPending) $("#pt-on").checked = dd.enabled;
     // 主列表（差量：签名不变不动 DOM）
     const el = $("#pt-list");
     const lsig = ptProj + ":" + dd.points.map(
@@ -955,11 +988,15 @@ function drawTimeline(points) {
 async function ptcmd(op, payload) {
   const j = await post("/ptcmd", {op, key: ptProj, payload: payload || {}});
   if (j.ok && op !== "move") toast("定位点已更新");
+  await refreshPlaylist();   // 先列表后定位点：跳到这点按钮即时就位
   refreshPoints();
-  refreshPlaylist();
 }
-$("#pt-on").addEventListener("change", e =>
-    ptcmd("toggle", {on: e.target.checked}));
+let ptOnPending = false;    // toggle 在途：轮询回写跳过（防视觉回弹诱发双击）
+$("#pt-on").addEventListener("change", async e => {
+  ptOnPending = true;
+  await ptcmd("toggle", {on: e.target.checked});
+  ptOnPending = false;
+});
 // add 后自动选中末点（新点追加在表尾）
 $("#pt-add").addEventListener("click", async () => {
   if (!ptProj) return;                    // 未选曲：详情为空态不可加
@@ -1053,9 +1090,19 @@ async function refreshLog() {
 $("#lg-filter").addEventListener("change", e =>
     $("#log").classList.toggle("hide-ok", e.target.value === "err"));
 $("#lg-clear").addEventListener("click", ev => {
-  if (logLast) logLast = {count: 0, first: ""};
-  armConfirm(ev.currentTarget, () => {
+  armConfirm(ev.currentTarget, async () => {
     $("#log").innerHTML = "";
+    // 以服务器现值建增量水位（红队 P1-4：确认前轮询会把清空打回）：
+    // 清空后只追加确认时刻之后的新行
+    try {
+      const r = await fetch("/log");
+      if (r.ok) {
+        const lines = (await r.json()).lines || [];
+        logLast = {count: lines.length,
+                   first: lines.length
+                       ? lines[0].t + "|" + lines[0].msg : ""};
+      } else logLast = {count: 0, first: ""};
+    } catch { logLast = {count: 0, first: ""}; }
     toast("日志已清空（仅本页视图，环形缓冲不受影响）");
   }, "确认清空？");
 });
@@ -1112,7 +1159,9 @@ function pedalMute(on) {
 
 async function refreshPedalDevices() {
   try {
-    const d = await (await fetch("/pedal/devices")).json();
+    const r0 = await fetch("/pedal/devices");
+    if (!r0.ok) return;
+    const d = await r0.json();
     const sel = $("#pd-dev");
     const cur = pdData ? pdData.deviceHint : "";
     sel.innerHTML = "";
@@ -1179,7 +1228,9 @@ function drawBinds(d) {
 
 async function refreshPedal(force) {
   try {
-    const d = await (await fetch("/pedal")).json();
+    const r0 = await fetch("/pedal");
+    if (!r0.ok) return;                   // 504 错误体不当数据（P1-2）
+    const d = await r0.json();
     pdData = d;
     const c = $("#pedal-conn");
     // 三态：无绑定提示 / 通道异常警示 / 静音中（本页打开期间，如实标注）
@@ -1408,9 +1459,11 @@ function pollRecord(inst, onCap) {
 function slotEditor(anchor, inst, note, slot) {
   popover(anchor, (box, close) => {
     const editKey = plSel;
-    const src = dtKbd && dtKbd.editSong
-        ? (inst === "ax" ? dtKbd.editSong.axSlots : dtKbd.editSong.slots)
-        : {};
+    // 快照来源三重校验（红队 P0-1）：数据须属于当前选中曲且装载完成，
+    // 否则整表替换保存会把别曲/空表写进目标曲的旁挂文件
+    const es = dtKbd && dtKbd.editSong;
+    const ready = !!(editKey && es && es.key === editKey && !es.loading);
+    const src = ready ? (inst === "ax" ? es.axSlots : es.slots) : {};
     const editSlots = {};
     Object.keys(src || {}).forEach(k => editSlots[Number(k)] = {...src[k]});
     const h = document.createElement("h4");
@@ -1423,8 +1476,9 @@ function slotEditor(anchor, inst, note, slot) {
     const err = document.createElement("div");
     err.className = "field-err";
     err.id = "sp-err";
-    // 未选曲：保存目标不定——禁止录制，引导先在左侧选曲
+    // 未选曲/映射未就绪：保存目标不定——禁止录制，防串曲整表覆写
     if (!editKey) err.textContent = "未选择曲目：先在左侧选择";
+    else if (!ready) err.textContent = "该曲映射装载中…稍候再试";
     box.appendChild(err);
     const btns = document.createElement("div");
     btns.className = "btns";
@@ -1443,7 +1497,7 @@ function slotEditor(anchor, inst, note, slot) {
     rec.className = "primary";
     rec.textContent = "● 录制";
     rec.title = "按下后到琴上选该槽位音色，再按一次停止并保存";
-    rec.disabled = !editKey;
+    rec.disabled = !ready;
     rec.addEventListener("click", async () => {
       if (recInst === inst) {       // 再按一次=停止并保存最后捕获
         const cap = captured;
@@ -1469,11 +1523,11 @@ function slotEditor(anchor, inst, note, slot) {
       });
     });
     btns.appendChild(rec);
-    if (slot && editKey) {
+    if (slot && ready) {
       const clr = document.createElement("button");
       clr.className = "danger";
       clr.textContent = "清除";
-      clr.disabled = !editKey;
+      clr.disabled = !ready;
       clr.addEventListener("click", () => {
         const cur2 = editSlots;
         delete cur2[note];
@@ -1514,7 +1568,7 @@ function slotRow(note, slot, inst) {
       toast("该音符未配置音色映射", "err");
       return;
     }
-    post("/kbdtest", {inst, note}).then(j => {
+    post("/kbdtest", {inst, note, songKey: plSel}).then(j => {
       if (j.ok) toast("已发送测试：音 " + noteName(note));
     });
   });
@@ -1527,7 +1581,9 @@ function slotRow(note, slot, inst) {
 async function refreshKbd(force) {
   try {
     const seq = refreshKbd.seq = (refreshKbd.seq || 0) + 1;
-    const d = await (await fetch("/kbd")).json();
+    const r = await fetch("/kbd");
+    if (!r.ok) return;                    // 504 错误体不当数据（P1-2）
+    const d = await r.json();
     if (seq !== refreshKbd.seq) return;   // 旧响应不覆盖新请求
     kbData = d;
     $("#kb-jshift").textContent = "JUNO " + fmtShift(kbData.junoShift || 0);
@@ -1564,11 +1620,21 @@ async function refreshKbdDetail() {
   }
   try {
     const seq = refreshKbdDetail.seq = (refreshKbdDetail.seq || 0) + 1;
-    const d = await (await fetch("/kbd?song="
-        + encodeURIComponent(plSel))).json();
+    const r = await fetch("/kbd?song=" + encodeURIComponent(plSel));
+    if (!r.ok) return;                    // 504 错误体不当数据（P1-2）
+    const d = await r.json();
     if (seq !== refreshKbdDetail.seq) return;
+    // 数据须属于当前选中曲且非装载中才渲染：导航/换曲瞬间的陈旧 plSel
+    // 响应不得把别曲映射画到新曲名下（显示层与编辑层同一口径）
+    const es0 = d.editSong;
+    if (!es0 || es0.key !== plSel || es0.loading) {
+      dtKbd = null;
+      if (!es0 || es0.loading)
+        $("#dt-kbd-stat").textContent = "映射装载中…";
+      return;
+    }
     dtKbd = d;
-    const es = d.editSong || {slots: {}, axSlots: {}};
+    const es = es0;
     $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…"
         : "JUNO " + Object.keys(es.slots || {}).length + "/10 · AX "
           + Object.keys(es.axSlots || {}).length + "/6";
@@ -2085,8 +2151,10 @@ poll();
 setInterval(() => {
   if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
-setInterval(() => { if (pageOn("setlist"))
-  { refreshPoints(); refreshKbdDetail(); } }, 1500);
+setInterval(() => {
+  if (pageOn("setlist")) { refreshPoints(); refreshKbdDetail(); }
+  if (pageOn("kbd")) refreshKbd();   // 状态行/移调徽标随切歌走
+}, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);
 refreshPlaylist();
