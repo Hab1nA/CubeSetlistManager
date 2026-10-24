@@ -388,6 +388,48 @@ def test_kbd_web_song_slots_and_validation(tmp_path):
     assert sg.App._slots_save_web(fake, "juno", {}) is None
 
 
+def test_kbd_test_web_song_key(tmp_path, monkeypatch):
+    """R5：试听带 songKey——未装载曲从旁挂文件现读，装载曲走 live；
+    未配置给明确报错（红队 P1-5）。"""
+    import kbd_auto
+    a_cpr = tmp_path / "a.cpr"
+    a_cpr.write_text("", encoding="utf-8")
+    b_cpr = tmp_path / "b.cpr"
+    b_cpr.write_text("", encoding="utf-8")
+    kbd_auto.save_slots(str(b_cpr), {60: {"pc": 70, "msb": 87}}, "slots")
+
+    class _Sw:
+        def __init__(self):
+            self.sent = []
+
+        def submit(self, slot, why=""):
+            self.sent.append(slot)
+
+    sw = _Sw()
+    fake = types.SimpleNamespace(
+        by_key={"B/歌二": {"key": "B/歌二", "team": "B", "name": "歌二",
+                           "path": str(b_cpr)}},
+        cur_song_path=str(a_cpr), slots={60: {"pc": 63}}, ax_slots={},
+        switcher=sw, ax_switcher=None, _kbd_song_key=lambda: None,
+        jcfg=dict(kbd_auto.DEFAULT_JUNO),
+        axcfg=dict(kbd_auto.DEFAULT_AX))
+    # 端口预检确定性：输出口恒在场
+    monkeypatch.setattr(kbd_auto, "_all_out_devices",
+                        lambda: [(0, "JUNO-DS")])
+    # 未装载曲：按旁挂文件发（pc 70），不是装载曲的 pc 63
+    assert sg.App._kbd_test_web(fake, "juno", 60, song_key="B/歌二") is None
+    assert sw.sent == [{"pc": 70, "msb": 87}]
+    # 无 song_key：走 live（装载曲映射）
+    fake._kbd_song_key = lambda: None
+    assert sg.App._kbd_test_web(fake, "juno", 60) is None
+    assert sw.sent[-1] == {"pc": 63}
+    # 未配置槽位：明确报错
+    assert "未配置" in sg.App._kbd_test_web(fake, "juno", 61,
+                                            song_key="B/歌二")
+    assert "不在素材库" in sg.App._kbd_test_web(fake, "juno", 60,
+                                                song_key="X/无")
+
+
 def test_kbd_record_and_get_shape():
     """D3/D4：录制会话启动/停止；/kbd GET 附 ports/portStatus/songs/
     editSong/lastResult。"""

@@ -346,7 +346,6 @@ input.invalid { border-color: var(--err) !important; }
   font-weight: 700; margin-bottom: var(--s2); }
 .colhead .btn.icon.sm { margin-left: auto; padding: 3px 9px; }
 .col .list { flex: 1; overflow: auto; }
-.row.hide { display: none; }
 .lib-add { color: var(--dim); border: 1px solid var(--line);
   background: transparent; border-radius: 6px; cursor: pointer;
   padding: 2px 9px; font-size: var(--f-sm); flex: none; }
@@ -408,7 +407,6 @@ input.invalid { border-color: var(--err) !important; }
 .stat-big.ok { color: var(--ok); }
 .stat-big.warn { color: var(--warn); }
 .stat-big.err { color: var(--err); }
-.gesture-row { display: flex; gap: var(--s6); flex-wrap: wrap; }
 /* 六项绑定表（踩钉页）*/
 .bind-list { display: flex; flex-direction: column; gap: 4px; }
 .bind-row { display: flex; align-items: center; gap: 10px;
@@ -418,12 +416,6 @@ input.invalid { border-color: var(--err) !important; }
 .bind-row .b-bind.has { color: var(--fg); }
 .bind-row .btn.sm { padding: 4px 12px; }
 .warn-txt { color: var(--warn); }
-.gesture { display: flex; align-items: center; gap: var(--s3);
-  background: var(--sur-2); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px 14px; }
-.gesture select { background: #0d1116; color: var(--fg);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
-.g-arrow { color: var(--dim); }
 #pedal-flash { display: inline-block; width: 10px; height: 10px;
   border-radius: 50%; background: #3a434d; margin-right: 8px;
   transition: background-color var(--t-fast) var(--ease); }
@@ -436,7 +428,6 @@ details.card summary::before { content: "▸"; transition:
 details.card[open] summary::before { transform: rotate(90deg); }
 details.card summary:hover { color: var(--fg); }
 details.card .grid2 { margin-top: var(--s3); }
-#p-pedal > .btn { margin-top: var(--s3); }
 
 /* ---- 键盘页 ---- */
 .cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3);
@@ -447,7 +438,6 @@ details.card .grid2 { margin-top: var(--s3); }
 .cards2 .card { margin-bottom: 0; }
 .card .field { margin-bottom: var(--s2); }
 .card .field:last-child { margin-bottom: 0; }
-#p-kbd > .btn { margin-bottom: var(--s3); }
 .slotcard { margin-bottom: var(--s3); }
 /* 移调只读徽标：轨上键位驱动，页面仅显示当前累计值 */
 .card h3 .shift-ro { margin-left: auto; font-size: var(--f-xs);
@@ -538,7 +528,7 @@ details.card .grid2 { margin-top: var(--s3); }
   font-variant-numeric: tabular-nums; }
 .log .ln.err { color: var(--err); border-left-color: var(--err); }
 .log .ln.warn { color: var(--warn); border-left-color: var(--warn); }
-.log.hide-ok .ln:not(.err):not(.warn) { display: none; }
+.log.hide-ok .ln:not(.err) { display: none; }
 
 /* ---- toast / popover / 两段式（沿用 P0）---- */
 #toasts {

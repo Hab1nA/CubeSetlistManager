@@ -2305,31 +2305,39 @@ class App:
                "lastResult": self._kb_last[0],
                "counts": {"juno": len(self.slots),
                           "ax": len(self.ax_slots)}}
-        # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）
-        ins = kbd_auto._all_in_devices()
-        outs = kbd_auto._all_out_devices()
+        # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）。
+        # 3 秒快照缓存：键盘页/详情面板 1.5s 轮询不再每拍都在 Tk 线程
+        # 枚举 winmm/BLE 端口（枚举本身快，但别给演出中的主线程加压）
+        now = time.monotonic()
+        snap = getattr(self, "_kbd_ports_snap", None)
+        if snap and now - snap[0] < 3.0:
+            out["ports"], out["portStatus"] = snap[1], snap[2]
+        else:
+            ins = kbd_auto._all_in_devices()
+            outs = kbd_auto._all_out_devices()
 
-        def entries(devs):
-            return [{"label": l, "name": n, "dev": k} for l, n, k
-                    in kbd_auto._device_entries([n for _, n in devs])]
+            def entries(devs):
+                return [{"label": l, "name": n, "dev": k} for l, n, k
+                        in kbd_auto._device_entries([n for _, n in devs])]
 
-        def side(devs, hint, dev):
-            hit = kbd_auto._pick_hit(devs, hint, dev)
-            if hit is None:
-                return {"hit": False}
-            pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
-            return {"hit": True, "name": hit[1], "pos": pos, "total": total}
+            def side(devs, hint, dev):
+                hit = kbd_auto._pick_hit(devs, hint, dev)
+                if hit is None:
+                    return {"hit": False}
+                pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+                return {"hit": True, "name": hit[1], "pos": pos, "total": total}
 
-        out["ports"] = {"in": entries(ins), "out": entries(outs)}
-        out["portStatus"] = {
-            "junoIn": side(ins, self.jcfg.get("inHint", ""),
-                           kbd_auto._in_dev(self.jcfg)),
-            "junoOut": side(outs, self.jcfg.get("outHint", ""),
-                            self.jcfg.get("dev", 0)),
-            "axIn": side(ins, self.axcfg.get("inHint", ""),
-                         kbd_auto._in_dev(self.axcfg)),
-            "axOut": side(outs, self.axcfg.get("outHint", ""),
-                          self.axcfg.get("dev", 0))}
+            out["ports"] = {"in": entries(ins), "out": entries(outs)}
+            out["portStatus"] = {
+                "junoIn": side(ins, self.jcfg.get("inHint", ""),
+                               kbd_auto._in_dev(self.jcfg)),
+                "junoOut": side(outs, self.jcfg.get("outHint", ""),
+                                self.jcfg.get("dev", 0)),
+                "axIn": side(ins, self.axcfg.get("inHint", ""),
+                             kbd_auto._in_dev(self.axcfg)),
+                "axOut": side(outs, self.axcfg.get("outHint", ""),
+                              self.axcfg.get("dev", 0))}
+            self._kbd_ports_snap = (now, out["ports"], out["portStatus"])
 
         def with_desc(slots, fn):
             return {str(n): dict(v, desc=fn(v))
@@ -2465,12 +2473,23 @@ class App:
                 self.kb_err = str(e)
                 self.q.put("键盘自动化停用：%s" % e)
 
-    def _kbd_test_web(self, inst, note):
-        slots = self.ax_slots if inst == "ax" else self.slots
-        sw = self.ax_switcher if inst == "ax" else self.switcher
-        slot = slots.get(int(note))
+    def _kbd_test_web(self, inst, note, song_key=None):
+        """试听：向琴发送一个槽位音色。song_key 给定且非当前装载曲时，
+        从该曲旁挂文件现读映射（详情面板可试任意预配曲），其余走 live。"""
+        note = int(note)
+        if song_key and song_key != self._kbd_song_key():
+            song = self.by_key.get(song_key)
+            if song is None:
+                return "曲目不在素材库"
+            slots = kbd_auto.load_slots(
+                song["path"], "ax" if inst == "ax" else "slots")
+            slot = slots.get(note)
+        else:
+            slots = self.ax_slots if inst == "ax" else self.slots
+            slot = slots.get(note)
         if slot is None:
-            return "音符 %d 未配置音色映射" % int(note)
+            return "音符 %d 未配置音色映射" % note
+        sw = self.ax_switcher if inst == "ax" else self.switcher
         if sw is None:
             return "收发器未就绪"
         # 端口同步预检：输出口不在场时提交也是石沉大海，直接给明确报错
