@@ -1273,6 +1273,25 @@ def stage_c(send):
        any("仅 MIDI" in t for t in c4.get("devOpts", []))
        and any("TURNER" in t for t in c4.get("devOpts", [])),
        json.dumps(c4.get("devOpts"), ensure_ascii=False))
+    # R2：提示名已删（MIDI 口只读展示）/无保存钮/转发开关在链路卡内
+    r2 = js(send, "return {noHint:!document.getElementById('pd-hint'),"
+            "noSave:!document.getElementById('pd-save'),"
+            "remoteInCard:!!document.querySelector("
+            "'#p-pedal .stat-cards #pd-remote'),"
+            "midiport:document.getElementById('pd-midiport').textContent}")
+    ok("bc.r2.pedal-simplified", r2.get("noHint") and r2.get("noSave")
+       and r2.get("remoteInCard") and "Pedal口" in (r2.get("midiport") or ""),
+       json.dumps(r2, ensure_ascii=False))
+    # 即改即生效：转发开关单键载荷（不带 binds 等其余配置）
+    js(send, "window.__posts=[];document.getElementById('pd-remote')"
+        ".click()")
+    time.sleep(0.5)
+    im = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+            "{if(u==='/pedalset')body=b});"
+            "return {body:body?JSON.parse(body):null}")
+    ok("bc.r2.remote-instant", im.get("body")
+       and im["body"].get("remoteEnabled") is True
+       and "binds" not in im["body"], json.dumps(im, ensure_ascii=False))
     # 学习 → POST + 轮询 + 行内倒计时
     js(send, "window.__posts=[];"
         "document.querySelector('.bind-row[data-action=play] .b-learn')"

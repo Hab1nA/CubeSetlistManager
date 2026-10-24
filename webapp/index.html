@@ -163,23 +163,24 @@
           <div class="dim sm-txt" id="pedal-conn-sub"></div></div>
         <div class="card stat"><div class="lbl">平板转发链路</div>
           <div class="stat-big" id="pedal-link">—</div>
-          <div class="dim sm-txt" id="pedal-link-sub"></div></div>
+          <div class="dim sm-txt" id="pedal-link-sub"></div>
+          <label class="switch sm" title="踏板 USB-C 连平板经 APP 转发；
+            平板端 APP 设置里也要开；即改即生效">
+            <input type="checkbox" id="pd-remote"><i></i>
+            <span>允许平板转发踩钉</span></label></div>
         <div class="card stat"><div class="lbl">最近踩钉事件</div>
           <div class="stat-big"><span id="pedal-flash">·</span>
             <span class="dim" id="pedal-when"></span></div></div>
       </div>
-      <div class="card"><h3>基本</h3>
-        <div class="grid2">
-          <div class="field"><label for="pd-hint">提示名</label>
-            <input id="pd-hint"></div>
-          <div class="field"><label for="pd-dev">输入设备</label>
-            <div class="input-row">
-              <select id="pd-dev"></select>
-              <button id="pd-refresh" class="btn ghost sm">刷新</button>
-            </div></div>
+      <div class="card"><h3>输入设备</h3>
+        <div class="input-row">
+          <select id="pd-dev"></select>
+          <button id="pd-refresh" class="btn ghost sm">刷新</button>
         </div>
+        <p class="dim sm-txt" id="pd-midiport"></p>
         <p class="dim sm-txt">「（不区分来源，仅 MIDI 踩钉）」=只听 MIDI 口；
-          未选设备时键盘踩钉不生效；离线设备可先选，上电自动接上。</p>
+          未选设备时键盘踩钉不生效；离线设备可先选，上电自动接上。
+          本页所有设置即改即生效，无保存步骤。</p>
       </div>
       <div class="card"><h3>功能绑定</h3>
         <div id="pd-binds" class="bind-list"></div>
@@ -192,14 +193,12 @@
           <div class="field"><label for="pd-win">双踩窗（秒）</label>
             <input id="pd-win" class="num" inputmode="decimal"></div>
           <div class="field"><label>硬件原键</label>
-            <label class="switch"><input type="checkbox" id="pd-intercept"><i></i>
+            <label class="switch" title="勾选后被绑定按键经系统热键截留，
+              不送达其它软件；即改即生效"><input type="checkbox"
+              id="pd-intercept"><i></i>
               <span>拦截硬件原键</span></label></div>
-          <div class="field"><label>平板转发</label>
-            <label class="switch"><input type="checkbox" id="pd-remote"><i></i>
-              <span>允许平板转发踩钉</span></label></div>
         </div>
       </details>
-      <button id="pd-save" class="btn primary">保存并应用</button>
     </section>
 
     <section class="page" id="p-kbd">

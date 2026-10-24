@@ -1236,28 +1236,48 @@ async function refreshPedal(force) {
         + " · 设备 " + (d.deviceOnline ? "在线" : "离线")
         + " · HID 桥 " + (d.hidActive ? "运行" : "停");
     // 表单字段只在首拉/保存后回填：1.5s 轮询无条件回写会打穿正在编辑的
-    // 提示名/双踩窗/勾选（改一半被洗掉、开关视觉回弹）
+    // 双踩窗/开关（改一半被洗掉、开关视觉回弹）；即改即生效控件在
+    // 各自 change 后置 force 刷新基线
     if (force || !pdFormInit) {
-      $("#pd-hint").value = d.hint || "";
       $("#pd-win").value = d.doubleWindow || 0.35;
       $("#pd-intercept").checked = !!d.intercept;
       $("#pd-remote").checked = !!d.remoteEnabled;
       pdFormInit = true;
     }
+    // MIDI 踩钉口是学习 CC 时自动记录的内部端口名：只读展示，不可手填
+    $("#pd-midiport").textContent = d.hint
+        ? "MIDI 踩钉口：" + d.hint + "（学习 CC 踩钉时自动记录）"
+        : "MIDI 踩钉口：未记录（学习 CC 踩钉时自动写入）";
     drawBinds(d);
     if (!$("#pd-dev").options.length) refreshPedalDevices();
   } catch { /* 瞬断 */ }
 }
 
-async function pedalPayload() {
-  const win = parseFloat($v("#pd-win"));
-  return {hint: $v("#pd-hint"), deviceHint: $v("#pd-dev"),
-          binds: pdData ? pdData.binds : {}, hid: pdData ? pdData.hid : {},
-          gestures: pdData ? pdData.gestures : {},
-          doubleWindow: isNaN(win) ? 0.35 : win,
-          intercept: $("#pd-intercept").checked,
-          remoteEnabled: $("#pd-remote").checked};
+// 即改即生效：每控件单发自己的键，后端在场检测不动其余配置
+async function pedalApply(payload, msg) {
+  const r = await post("/pedalset", payload);
+  if (r.ok) {
+    if (msg) toast(msg);
+    refreshPedal(true);
+  }
 }
+$("#pd-dev").addEventListener("change", () =>
+    pedalApply({deviceHint: $v("#pd-dev")}, "输入设备已应用"));
+$("#pd-remote").addEventListener("change", e =>
+    pedalApply({remoteEnabled: e.target.checked},
+               e.target.checked ? "已允许平板转发踩钉"
+                                : "已停用平板转发踩钉"));
+$("#pd-intercept").addEventListener("change", e =>
+    pedalApply({intercept: e.target.checked}, "拦截硬件原键已应用"));
+$("#pd-win").addEventListener("change", () => {
+  const v = parseFloat($v("#pd-win"));
+  if (isNaN(v)) {          // 脏输入回滚为当前生效值（后端夹取 0.12-1.0）
+    toast("双踩窗须为数字（秒）", "err");
+    refreshPedal(true);
+    return;
+  }
+  pedalApply({doubleWindow: v}, "双踩窗已应用");
+});
 
 async function startLearn(action) {
   const j = await post("/pedal/learn", {action});
@@ -1314,13 +1334,6 @@ async function clearBind(action) {
   refreshPedal();
 }
 $("#pd-refresh").addEventListener("click", refreshPedalDevices);
-$("#pd-save").addEventListener("click", async () => {
-  const r = await post("/pedalset", await pedalPayload());
-  if (r.ok) {
-    toast("踩钉配置已应用");
-    refreshPedal(true);
-  }
-});
 
 // ---- 键盘自动化（曲目选择 / 端口下拉 / 录制 / 人话描述 / 试听预检）----
 let kbData = null, kbPortsInit = false, kbSongInit = false;
