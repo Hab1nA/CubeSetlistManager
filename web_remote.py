@@ -402,6 +402,21 @@ class DeviceRegistry:
         return out, None
 
 
+def _ver():
+    """git describe（开发仓库；打包态/失败为空——侧栏版本号缺省不显示）。"""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "describe", "--tags"],
+                             capture_output=True, text=True, timeout=3,
+                             cwd=os.path.dirname(os.path.abspath(__file__)))
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+_VER = None           # 首次 build_snapshot 时算一次
+
+
 # ---- /state 快照（App._tick_banner 每 400ms 在 Tk 主线程重建） ----
 
 def _fmt_dur(d):
@@ -529,6 +544,9 @@ def build_snapshot(app, has_project, proj_name=None):
     # VJ/监控状态块（与主窗 _tick_body 的 VJ 监控格同源同语义）：
     # follow=走带跟随（playing/paused/off，off=未启用或未收到时码）、
     # video=当前视频文件名、obsErr=OBS 错误详情/启动中过渡文本
+    global _VER
+    if _VER is None:
+        _VER = _ver()
     vj_state = None
     sync_vj = getattr(app, "sync", None)
     start_err = getattr(app, "start_err", "")
@@ -570,6 +588,7 @@ def build_snapshot(app, has_project, proj_name=None):
         "webIp": (web_srv.server_address[0] if web_srv is not None else ""),
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
         "appPort": getattr(web, "app_port", None) if web is not None else None,
+        "ver": _VER,
     }
 
 
@@ -1538,6 +1557,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_pedal_set, "/pedalset"),
                           (self._h_pedal_learn, "/pedal/learn"),
                           (self._h_pedal_mute, "/pedal/mute"),
+                          (self._h_exit, "/exit"),
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_record, "/kbdrecord"),
@@ -1609,7 +1629,14 @@ class _Handler(BaseHTTPRequestHandler):
                                     "start": cpr_meta.safe_dur(p["start"]),
                                     "end": cpr_meta.safe_dur(p["end"])}
                                    for p in data["points"]]}
-        self._json(200, {"projects": out})
+        self._json(200, {"projects": out,
+                         # 定位点能力位：仅 Cubase 支持；MMC 输出口就绪与否
+                         "cubase": bool(getattr(
+                             app.facts, "get", lambda *_: None)("name")
+                             == "cubase") if getattr(app, "facts", None)
+                         else False,
+                         "mmcReady": getattr(app, "mmc_out", None)
+                         is not None})
 
     def _h_log(self):
         """日志环形缓冲（App 主线程 q 消费处追加）。"""
@@ -1736,6 +1763,16 @@ class _Handler(BaseHTTPRequestHandler):
         self._run_on_app(lambda: self.server.app._slots_save_web(
             str(body.get("inst") or "juno"), body.get("slots") or {},
             song_key=body.get("songKey") or None))
+
+    def _h_exit(self, _body, ip):
+        """退出程序（侧栏退出钮）：仅限本机 loopback——LAN 平板不得遥控
+        关闭电脑端。走 Tk 主线程 _on_exit（含退出确认弹窗与收尾链）。"""
+        app = self.server.app
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        app.calls.put(app._on_exit)
+        self._ok()
 
     def _h_kbd_record(self, body, _ip):
         """录制（琴上捕获）：POST 启动/停止（stop=true 关口保留最后值）。"""

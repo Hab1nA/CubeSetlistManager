@@ -200,6 +200,12 @@ input.invalid { border-color: var(--err) !important; }
 .page h2 { margin: 0; font-size: 20px; }
 .page-head { display: flex; align-items: center; gap: var(--s4);
   margin-bottom: var(--s4); }
+/* 页面级吸底操作行（设置页保存钮管四张卡，不缩在最后一张卡里） */
+.page-foot { position: sticky; bottom: 0; z-index: 5;
+  display: flex; align-items: center; gap: var(--s3);
+  margin: var(--s3) 0 -6px; padding: 10px var(--s3);
+  background: var(--sur-1); border-top: 1px solid var(--line);
+  border-radius: 10px; }
 .page-head h2 { margin: 0; }
 .page-head select { background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
@@ -214,11 +220,25 @@ input.invalid { border-color: var(--err) !important; }
   margin-bottom: var(--s2); }
 .big { font-size: var(--f-now); font-weight: 700; line-height: 1.15;
   word-break: break-all; }
+/* 超长歌名跑马灯：溢出才启用（JS 量滚动距离），往返循环带停顿。
+   reduced-motion 下不滚但保留可见性（截断+省略号，尾部不消失） */
+#now.marq { white-space: nowrap; word-break: keep-all; overflow: hidden;
+  text-overflow: ellipsis; animation: marq 14s var(--ease) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  #now.marq { animation: none; }
+}
+@keyframes marq {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--marq, -100px)); }
+}
 .mid { font-size: var(--f-xl); }
 #clock { font-variant-numeric: tabular-nums; margin-top: var(--s2); }
 #clock.playing { color: var(--fg); }
 #bar { height: 12px; background: var(--sur-2); border-radius: 6px;
   overflow: hidden; margin-top: var(--s3); }
+#cmd-feed { margin-top: var(--s2); min-height: 18px; }
+#cmd-feed.warn { color: var(--warn); }
+#cmd-feed.err { color: var(--err); }
 #barfill { height: 100%; width: 0; background: var(--ok);
   border-radius: 6px;
   transition: width 500ms linear;   /* 与 /state 500ms 轮询咬合 */ }
@@ -284,9 +304,10 @@ input.invalid { border-color: var(--err) !important; }
 @keyframes eq { 0%, 100% { height: 4px; } 30% { height: 13px; }
   60% { height: 7px; } }
 
-/* 行内「切歌」幽灵按钮：hover 才现 */
-.row .go-switch { visibility: hidden; flex: none; }
-.row:hover .go-switch { visibility: visible; }
+/* 行内「切歌」幽灵按钮：hover/聚焦才现（opacity 保持 Tab 序可达） */
+.row .go-switch { opacity: 0; flex: none;
+  transition: opacity var(--t-fast) var(--ease); }
+.row:hover .go-switch, .go-switch:focus-visible { opacity: 1; }
 
 /* ---- 状态条（灯位 tooltip + 点击跳页）---- */
 #statusbar {
@@ -298,7 +319,11 @@ input.invalid { border-color: var(--err) !important; }
   background: var(--sur-1);
   font-size: var(--f-sm);
 }
-.lamp { cursor: pointer; position: relative; }
+.lamp { cursor: pointer; position: relative; font: inherit;
+  background: none; border: 0; padding: 4px 6px; border-radius: 6px;
+  color: var(--fg); }
+.lamp:hover { background: var(--sur-2); }
+.lamp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .lamp i { font-style: normal; color: #4a525b;
   transition: color 300ms var(--ease); }
 .lamp.ok i { color: var(--ok); }
@@ -313,6 +338,7 @@ input.invalid { border-color: var(--err) !important; }
 }
 @keyframes lamp-err-pulse { 50% { opacity: .3; } }
 #tstate { margin-left: auto; }
+#tstate.err { color: var(--err); font-weight: 700; }
 
 /* ---- 编排页 ---- */
 #sl-search { background: #0d1116; color: var(--fg);
@@ -551,8 +577,10 @@ details.card .grid2 { margin-top: var(--s3); }
   flex-direction: column;
   gap: 10px;
   min-width: 240px;
-  animation: toast-in 160ms var(--ease);
+  animation: pop-in 120ms var(--ease);   /* 自锚点下沿展开（非 toast 右滑） */
 }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px)
+  scale(.98); } }
 .pop h4 { margin: 0; font-size: var(--f-md); }
 .pop label { display: flex; justify-content: space-between; align-items: center;
   gap: 10px; font-size: var(--f-sm); color: var(--dim); }
@@ -616,3 +644,15 @@ body.show #main { animation: show-in 200ms var(--ease); }
 body.show #show-exit { display: block; }
 #show-exit:hover { opacity: 1; color: var(--fg);
   background: rgba(35, 43, 52, .85); }
+/* 演出模式构图：大字水平居中；toast 让出右上退出钮位 */
+body.show .hero { text-align: center; }
+body.show #toasts { top: 56px; }
+/* busy 态智能钮脉动（切换中的活动反馈） */
+#smart.pulse { animation: smart-pulse 1.1s var(--ease) infinite; }
+@keyframes smart-pulse { 50% { opacity: .55; } }
+/* 移调数值变化脉冲 */
+.step-val.pulse { animation: val-pulse 400ms var(--ease); }
+@keyframes val-pulse { 30% { color: var(--accent); } }
+#side-ver { padding: 10px 12px 0; }
+#btn-exit { color: var(--err); opacity: .75; }
+#btn-exit:hover { color: var(--err); opacity: 1; background: var(--sur-2); }
