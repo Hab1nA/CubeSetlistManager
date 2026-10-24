@@ -208,43 +208,58 @@ def stage_p0(send):
         "el.dispatchEvent(new Event('input',{bubbles:true}));}"
         "document.getElementById('toasts').innerHTML=''")
 
-    # 5. 键盘音色槽 popover（替代 prompt 链；P2 起槽为 .slot 网格卡）。
-    #    /kbd 打桩给 songKey（无装载曲时保存被新守卫正当禁用，须先有目标）
+    # 5. 键盘音色槽 popover：录制直写流（点卡片→录制→捕获→停止并保存
+    #    → /slotset）；不再有手填数字输入。/kbd 与 /kbd/record 打桩给
+    #    songKey 与已捕获音色（无装载曲时录制被守卫正当禁用，须先有目标）
     nav(send, "kbd")
     js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
         "if(String(u)==='/kbd')return Promise.resolve(new Response("
         "JSON.stringify({junoIn:'',junoOut:'',axIn:'',axOut:'',"
-        "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:0,axShift:0,"
+        "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:2,axShift:0,"
         "songKey:'X/桩曲',songs:[{key:'X/桩曲',team:'X',name:'桩曲'}],"
         "lastResult:'',ports:{in:[],out:[]},portStatus:{},"
         "editSong:{key:'X/桩曲',name:'桩曲',loading:false,slots:{},"
         "axSlots:{}}}),{status:200}));"
+        "if(String(u)==='/kbd/record')return Promise.resolve(new Response("
+        "JSON.stringify({active:true,inst:'juno',slot:{pc:63,msb:1,lsb:2,"
+        "desc:'USER:0564'}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
     time.sleep(0.6)
     pop = js(send, "const r=document.querySelector('#kb-slots .slot');"
              "if(!r)return {none:1};r.click();"
              "return {pop:!!document.querySelector('.pop'),"
-             "pc:!!document.querySelector('.pop #sp-pc')}")
-    ok("p0.popover.open", pop.get("pop") and pop.get("pc"),
-       json.dumps(pop, ensure_ascii=False))
-    v = js(send, "const p=document.querySelector('.pop');"
-           "p.querySelector('#sp-pc').value='200';"
-           "p.querySelector('#sp-pc').dispatchEvent(new Event('input',"
-           "{bubbles:true}));"
-           "const ok=p.querySelector('.btns .primary');"
-           "return {err:p.querySelector('.field-err').textContent,"
-           "dis:ok.disabled}")
-    ok("p0.popover.pc-validate", v.get("dis") and v.get("err"),
-       json.dumps(v, ensure_ascii=False))
+             "rec:!!document.querySelector('.pop .btns .primary'),"
+             "noNumInput:!document.querySelector('.pop input')}")
+    ok("p0.popover.open", pop.get("pop") and pop.get("rec")
+       and pop.get("noNumInput"), json.dumps(pop, ensure_ascii=False))
+    js(send, "document.querySelector('.pop .btns .primary').click()")
+    time.sleep(0.4)            # post('/kbdrecord') 异步返回后才换按钮文案
+    rec = js(send, "const p=document.querySelector('.pop');"
+             "if(!p)return {gone:1};"
+             "return {txt:p.querySelector('.btns .primary').textContent}")
+    time.sleep(0.6)            # pollRecord 300ms 一拍吃到捕获桩
+    recE = js(send, "const p=document.querySelector('.pop');"
+              "if(!p)return {gone:1};"
+              "return {err:p.querySelector('.field-err').textContent,"
+              "stillOpen:1}")
     js(send, "const p=document.querySelector('.pop');"
-        "p.querySelector('#sp-pc').value='63';"
-        "p.querySelector('#sp-pc').dispatchEvent(new Event('input',"
-        "{bubbles:true}));p.querySelector('.btns .primary').click();")
+        "p&&p.querySelector('.btns .primary').click()")
+    time.sleep(0.3)
+    ok("p0.popover.record-flow", "停止并保存" in rec.get("txt", "")
+       and recE.get("stillOpen")
+       and "已捕获" in recE.get("err", ""),
+       "%s %s" % (json.dumps(rec, ensure_ascii=False),
+                  json.dumps(recE, ensure_ascii=False)))
     posts = js(send, "return window.__posts||[]")
     ok("p0.popover.slotset-post",
-       any("/slotset" in u for u, _b in posts), str(posts)[:120])
+       any("/slotset" in u and '"pc":63' in b for u, b in posts),
+       str(posts)[:140])
+    shiftRo = js(send, "return {j:document.getElementById('kb-jshift')"
+               ".textContent,noStepper:!document.getElementById('kb-jup')}")
+    ok("p0.kbd.shift-readonly", "移调 +2" in shiftRo.get("j", "")
+       and shiftRo.get("noStepper"), json.dumps(shiftRo, ensure_ascii=False))
     js(send, RESTORE + "document.querySelector('.pop')"
         "&&document.querySelector('.pop').remove()")
 
@@ -555,19 +570,17 @@ def stage_p1(send):
        and pd.get("devSel") == "SELECT" and pd.get("adv"),
        json.dumps(pd, ensure_ascii=False))
 
-    # ---- 键盘页：stepper 重置 ----
+    # ---- 键盘页：移调只读（stepper 已删，轨上键位驱动）----
     nav(send, "kbd")
     kb = js(send, "return {cards:document.querySelectorAll("
            "'#p-kbd .cards2 .card').length,"
            "slots:document.querySelectorAll('#kb-slots .slot').length,"
            "ax:document.querySelectorAll('#kb-axslots .slot').length,"
-           "reset:!!document.getElementById('kb-jreset')}")
+           "ro:!!document.getElementById('kb-jshift'),"
+           "noStepper:!document.getElementById('kb-jreset')}")
     ok("p1.kbd.port-cards", kb.get("cards") == 2 and kb.get("slots") == 10
-       and kb.get("ax") == 6, json.dumps(kb))
-    js(send, INTERCEPT + "document.getElementById('kb-jreset').click()")
-    posts = js(send, "return window.__posts||[]")
-    ok("p1.kbd.reset-posts", any("/kbdshift" in u and '"total":0' in b
-       for u, b in posts), str(posts)[:120])
+       and kb.get("ax") == 6 and kb.get("ro") and kb.get("noStepper"),
+       json.dumps(kb))
     js(send, RESTORE)
 
     # ---- VJ 页：真实 OBS 状态 ----
@@ -730,8 +743,8 @@ def stage_p2(send):
            "test:document.querySelectorAll('.slot .s-test').length}")
     ok("p2.slots.grid", sg.get("grid") == 10 and sg.get("ax") == 6
        and sg.get("test") == 16, json.dumps(sg))
-    # 试听 POST 路径：拦截 /kbd（回注一个已配置槽）+/slotset → 经 popover
-    # 保存触发 refreshKbd → 点「试」应 POST /kbdtest
+    # 试听 POST 路径：拦截 /kbd（回注一个已配置槽），nav 进页即
+    # refreshKbd 重排卡片 → 点「试」应 POST /kbdtest
     js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
         "if(String(u)==='/kbd')return Promise.resolve(new Response("
@@ -743,11 +756,7 @@ def stage_p2(send):
         "{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    js(send, "document.querySelector('#kb-slots .slot').click()")
-    js(send, "const p=document.querySelector('.pop');"
-        "p.querySelector('#sp-pc').value='63';"
-        "p.querySelector('#sp-pc').dispatchEvent(new Event('input',"
-        "{bubbles:true}));p.querySelector('.btns .primary').click()")
+    js(send, "document.querySelector('.b-kbd').click()")   # 进页触发 refreshKbd
     time.sleep(0.6)                        # refreshKbd 读 stub /kbd 重排卡片
     kt = js(send, "const t=document.querySelector("
             "'.slot:not(.unconfigured) .s-test');"
@@ -1394,36 +1403,26 @@ def stage_d(send):
     ok("bd.d4.slot-desc", d4.get("juno") == "USER:0521"
        and d4.get("ax") == "SYNTH/PAD #5",
        json.dumps(d4, ensure_ascii=False))
-    # ---- D3/D5：popover 录制回填 + MSB 校验 + songKey 定向保存 ----
+    # ---- D3/D5：popover 录制直写（无手填数字输入）+ songKey 定向保存 ----
     js(send, "document.querySelector('#kb-slots .slot').click()")
     time.sleep(0.3)
     js(send, "const p=document.querySelector('.pop');"
         "[...p.querySelectorAll('button')].find(b=>b.textContent==="
-        "'录制').click()")
-    time.sleep(0.9)          # 轮询两轮回填捕获值
+        "'● 录制').click()")
+    time.sleep(0.9)          # 轮询一拍吃到捕获桩
     d3 = js(send, "const p=document.querySelector('.pop');"
-            "return {pc:p.querySelector('#sp-pc').value,"
-            "msb:p.querySelector('#sp-msb').value,"
-            "lsb:p.querySelector('#sp-lsb').value,"
-            "err:p.querySelector('#sp-err').textContent}")
-    ok("bd.d3.record-fill", d3.get("pc") == "70" and d3.get("msb") == "87",
+            "return {err:p.querySelector('#sp-err').textContent,"
+            "btn:[...p.querySelectorAll('button')].map(b=>b.textContent),"
+            "noNumInput:!p.querySelector('input')}")
+    ok("bd.d3.record-capture", "已捕获" in d3.get("err", "")
+       and "PC 70" in d3.get("err", "") and d3.get("noNumInput")
+       and any("停止并保存" in t for t in d3.get("btn", [])),
        json.dumps(d3, ensure_ascii=False))
-    # MSB 越界禁保存
-    d5 = js(send, "const p=document.querySelector('.pop');"
-            "p.querySelector('#sp-msb').value='200';"
-            "p.querySelector('#sp-msb').dispatchEvent(new Event('input',"
-            "{bubbles:true}));"
-            "return {dis:p.querySelector('.btns .primary').disabled,"
-            "err:p.querySelector('#sp-err').textContent}")
-    ok("bd.d5.msb-validate", d5.get("dis") and "0-127" in d5.get("err", ""),
-       json.dumps(d5, ensure_ascii=False))
-    # 复原 MSB 保存 → /slotset 带捕获值 + songKey
+    # 停止并保存 → /slotset 带捕获值 + songKey；停止口令已发
     js(send, "const p=document.querySelector('.pop');"
-        "p.querySelector('#sp-msb').value='87';"
-        "p.querySelector('#sp-msb').dispatchEvent(new Event('input',"
-        "{bubbles:true}));"
         "window.__posts=[];"
-        "p.querySelector('.btns .primary').click()")
+        "[...p.querySelectorAll('button')].find(b=>b.textContent==="
+        "'■ 停止并保存').click()")
     time.sleep(0.6)
     d3b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
              "{if(u==='/slotset')body=b});"

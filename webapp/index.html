@@ -231,26 +231,21 @@
       </div>
       <div class="card slotcard">
         <h3>JUNO 音色槽
-          <span class="stepper"><button id="kb-jdown" class="btn icon sm" title="移调 −1">−</button>
-            <span class="step-val" id="kb-jshift">0</span>
-            <button id="kb-jup" class="btn icon sm" title="移调 +1">+</button>
-            <button id="kb-jreset" class="btn ghost xs">重置</button></span></h3>
+          <span class="shift-ro" id="kb-jshift"
+            title="当前全局移调（半音）——由键盘自动化轨的移调键位驱动，此处只读">移调 0</span></h3>
         <div id="kb-slots" class="slot-grid"></div>
       </div>
       <div class="card slotcard">
         <h3>AX-09 音色槽
-          <span class="stepper"><button id="kb-adown" class="btn icon sm" title="移调 −1">−</button>
-            <span class="step-val" id="kb-ashift">0</span>
-            <button id="kb-aup" class="btn icon sm" title="移调 +1">+</button>
-            <button id="kb-areset" class="btn ghost xs">重置</button></span></h3>
+          <span class="shift-ro" id="kb-ashift"
+            title="当前全局移调（半音）——由键盘自动化轨的移调键位驱动，此处只读">移调 0</span></h3>
         <div id="kb-axslots" class="slot-grid"></div>
       </div>
-      <p class="dim sm-txt">点击卡片编辑音色（PC/MSB/LSB，可用「录制」在琴上
-        选音色捕获）；「试」=向琴发送该音色做连通测试。可为未装载曲预配
-        映射，写入其专属文件。</p>
-      <p class="dim sm-txt">移调键位（键盘自动化端口收听）：JUNO C2降1半音
-        C#2升1半音 D2降1八度 D#2升1八度；AX-09 F2降1半音 F#2升1半音
-        G2降1八度 G#2升1八度。</p>
+      <p class="dim sm-txt">点击卡片可「录制」：到琴上选音色，捕获即写入该曲
+        映射；「试」=向琴发送该音色做连通测试。</p>
+      <p class="dim sm-txt">移调不走本页：由键盘自动化轨上的移调键位控制
+        （JUNO C2 降半音 C#2 升半音 D2 降八度 D#2 升八度；AX-09 对应
+        F2/F#2/G2/G#2），卡片标题处只读显示当前累计值。</p>
     </section>
 
     <section class="page" id="p-vj">

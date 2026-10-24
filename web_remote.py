@@ -1561,7 +1561,6 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_record, "/kbdrecord"),
-                          (self._h_kbd_shift, "/kbdshift"),
                           (self._h_slot_set, "/slotset")):
                 if path == p:
                     fn(body, ip)
@@ -1748,13 +1747,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._run_on_app(lambda: self.server.app._kbd_test_web(
             str(body.get("inst") or "juno"), int(body.get("note") or 0)))
-
-    def _h_kbd_shift(self, body, _ip):
-        if getattr(self.server.app, "lite", False):
-            self._json(403, {"error": "简化版无键盘自动化"})
-            return
-        self._run_on_app(lambda: self.server.app._kbd_shift_web(
-            str(body.get("inst") or "juno"), int(body.get("total") or 0)))
 
     def _h_slot_set(self, body, _ip):
         if getattr(self.server.app, "lite", False):

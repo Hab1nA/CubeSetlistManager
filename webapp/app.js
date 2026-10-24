@@ -1418,7 +1418,8 @@ function renderKbdSong(force) {
          : (kbData.lastResult || ""));
 }
 
-// 录制（琴上捕获）：popover 内启动，捕获值实时回填表单；closePop 统一停录
+// 录制（琴上捕获）：弹层内启动，捕获结果经 onCap 实时回报；
+// closePop 统一停口（外点/ESC/关闭都经此，winmm 输入口不被无限期占用）
 let recInst = null;
 function stopRecord() {
   if (recInst) {
@@ -1427,35 +1428,28 @@ function stopRecord() {
     clearTimeout(recTimer);
   }
 }
-function pollRecord(inst, recBtn, pc, msb, lsb, err) {
+function pollRecord(inst, onCap) {
   clearTimeout(recTimer);
   recTimer = setTimeout(async () => {
     try {
       const d = await (await fetch("/kbd/record")).json();
       if (d.active && d.inst === inst && recInst === inst) {
-        if (d.slot) {
-          pc.value = d.slot.pc;
-          msb.value = d.slot.msb !== undefined ? d.slot.msb : "";
-          lsb.value = d.slot.lsb !== undefined ? d.slot.lsb : "";
-          err.textContent = "已捕获（可继续在琴上选）";
-        } else {
-          err.textContent = "录制中：请在琴上选音色…";
-        }
-        pollRecord(inst, recBtn, pc, msb, lsb, err);
+        if (d.slot) onCap(d.slot);
+        pollRecord(inst, onCap);
       } else {
-        recBtn.textContent = "录制";
+        recInst = null;
       }
     } catch {
-      recBtn.textContent = "录制";
+      recInst = null;
     }
   }, 300);
 }
 
-// 音色槽编辑：popover 行内表单（PC 必填 0-127，MSB/LSB 可空）+ 录制捕获
+// 音色槽录制弹层：映射只从「录制」写入（琴上选音色捕获），无手填数字；
+// 「试」在槽卡上，「清除」删映射。快照（key+槽位字典）定格在打开时刻：
+// 切歌后旧弹层的保存必须仍写它打开时的那首歌与那份映射
 function slotEditor(anchor, inst, note, slot) {
   popover(anchor, (box, close) => {
-    // 编辑目标快照（key + 槽位字典都定格在打开时刻）：切歌后旧表单的
-    // 保存必须仍写它打开时的那首歌与那份映射，不得混入新装载曲内容
     const editKey = kbEditKey || (kbData ? kbData.songKey : null);
     const src = kbData && kbData.editSong
         ? (inst === "ax" ? kbData.editSong.axSlots : kbData.editSong.slots)
@@ -1465,56 +1459,69 @@ function slotEditor(anchor, inst, note, slot) {
     const h = document.createElement("h4");
     h.textContent = "音 " + noteName(note) + "（MIDI " + note + "）音色";
     box.appendChild(h);
-    const mk = (label, id, val) => {
-      const l = document.createElement("label");
-      l.textContent = label;
-      const i = document.createElement("input");
-      i.type = "number";
-      i.min = "0";
-      i.max = "127";
-      i.id = id;
-      if (val !== undefined && val !== null) i.value = val;
-      l.appendChild(i);
-      box.appendChild(l);
-      return i;
-    };
-    const pc = mk("PC（0-127）", "sp-pc", slot ? slot.pc : 0);
-    const msb = mk("MSB（可空）", "sp-msb",
-                   slot && slot.msb !== undefined ? slot.msb : null);
-    const lsb = mk("LSB（可空）", "sp-lsb",
-                   slot && slot.lsb !== undefined ? slot.lsb : null);
+    const cur = document.createElement("div");
+    cur.className = "slot-cur";
+    cur.textContent = slot ? (slot.desc || "PC " + slot.pc) : "（未配置）";
+    box.appendChild(cur);
     const err = document.createElement("div");
     err.className = "field-err";
     err.id = "sp-err";
-    // 无装载曲且未显式选曲：保存/清除目标不定（会整段替换保存时刻意外
-    // 装载的曲）——禁止落盘，引导先选曲
+    // 无装载曲且未显式选曲：保存目标不定（会整段替换保存时刻意外
+    // 装载的曲）——禁止录制，引导先选曲
     if (editKey === null) err.textContent = "未装载曲目：先在上方选择曲目";
     box.appendChild(err);
     const btns = document.createElement("div");
     btns.className = "btns";
     box.appendChild(btns);
-    const check = () => {
-      const bad = editKey === null || pc.value === ""
-                  || Number(pc.value) < 0 || Number(pc.value) > 127
-                  || (msb.value !== "" && (Number(msb.value) < 0
-                      || Number(msb.value) > 127))
-                  || (lsb.value !== "" && (Number(lsb.value) < 0
-                      || Number(lsb.value) > 127));
-      err.textContent = bad
-          ? (editKey === null ? "未装载曲目：先在上方选择曲目"
-             : "PC/MSB/LSB 须为 0-127 的数字") : "";
-      okBtn.disabled = bad;
+    let captured = null;
+    const saveCap = () => {
+      editSlots[note] = captured;
+      post("/slotset", {inst, slots: editSlots, songKey: editKey}).then(j => {
+        if (j.ok) toast("音 " + noteName(note) + " 已录制："
+            + (captured.desc || "PC " + captured.pc));
+        refreshKbd();
+      });
+      close();
     };
-    const curSlots = () => editSlots;
+    const rec = document.createElement("button");
+    rec.className = "primary";
+    rec.textContent = "● 录制";
+    rec.title = "按下后到琴上选该槽位音色，再按一次停止并保存";
+    rec.disabled = editKey === null;
+    rec.addEventListener("click", async () => {
+      if (recInst === inst) {       // 再按一次=停止并保存最后捕获
+        const cap = captured;
+        stopRecord();
+        rec.textContent = "● 录制";
+        if (!cap) {
+          err.textContent = "没收到音色信息（检查琴的 MIDI 输出口与录制端口）";
+          return;
+        }
+        saveCap();
+        return;
+      }
+      const j = await post("/kbdrecord", {inst});
+      if (!j.ok) return;
+      recInst = inst;
+      captured = null;
+      rec.textContent = "■ 停止并保存";
+      err.textContent = "录制中：请在琴上选音色…";
+      pollRecord(inst, cap => {
+        captured = cap;
+        err.textContent = "已捕获：" + (cap.desc || "PC " + cap.pc)
+            + "（可继续在琴上选，再按一次停止并保存）";
+      });
+    });
+    btns.appendChild(rec);
     if (slot && editKey !== null) {
       const clr = document.createElement("button");
       clr.className = "danger";
       clr.textContent = "清除";
       clr.disabled = editKey === null;
       clr.addEventListener("click", () => {
-        const cur = curSlots();
-        delete cur[note];
-        post("/slotset", {inst, slots: cur, songKey: editKey}).then(j => {
+        const cur2 = editSlots;
+        delete cur2[note];
+        post("/slotset", {inst, slots: cur2, songKey: editKey}).then(j => {
           if (j.ok) toast("音 " + noteName(note) + " 已清除");
           refreshKbd();
         });
@@ -1522,42 +1529,11 @@ function slotEditor(anchor, inst, note, slot) {
       });
       btns.appendChild(clr);
     }
-    const rec = document.createElement("button");
-    rec.textContent = "录制";
-    rec.title = "到琴上选音色，捕获自动回填";
-    rec.addEventListener("click", async () => {
-      const j = await post("/kbdrecord", {inst});
-      if (!j.ok) return;
-      recInst = inst;
-      rec.textContent = "录制中…";
-      err.textContent = "录制中：请在琴上选音色…";
-      pollRecord(inst, rec, pc, msb, lsb, err);
-    });
-    btns.appendChild(rec);
     const cancel = document.createElement("button");
-    cancel.textContent = "取消";
+    cancel.textContent = "关闭";
     cancel.addEventListener("click", close);   // closePop 会统一停录
-    const okBtn = document.createElement("button");
-    okBtn.className = "primary";
-    okBtn.textContent = "保存";
-    okBtn.addEventListener("click", () => {
-      const s = {pc: Number(pc.value)};
-      if (msb.value !== "") s.msb = Number(msb.value);
-      if (lsb.value !== "") s.lsb = Number(lsb.value);
-      const cur = curSlots();
-      cur[note] = s;
-      post("/slotset", {inst, slots: cur, songKey: editKey}).then(j => {
-        if (j.ok) toast("音 " + noteName(note) + " 已保存");
-        refreshKbd();
-      });
-      close();
-    });
-    btns.append(cancel, okBtn);
-    pc.addEventListener("input", check);
-    msb.addEventListener("input", check);
-    lsb.addEventListener("input", check);
-    check();
-    setTimeout(() => { pc.focus(); pc.select(); });
+    btns.appendChild(cancel);
+    setTimeout(() => rec.focus());
   });
 }
 function slotRow(note, slot, inst) {
@@ -1587,7 +1563,7 @@ function slotRow(note, slot, inst) {
     });
   });
   div.append(n, pc, sub, test);
-  div.title = slot && slot.desc ? slot.desc : "点击编辑音色";
+  div.title = slot && slot.desc ? slot.desc : "点击录制音色";
   div.tabIndex = 0;             // 可聚焦（关层焦点还回 + 键盘可达）
   div.addEventListener("click", () => slotEditor(div, inst, note, slot));
   return div;
@@ -1600,17 +1576,16 @@ async function refreshKbd(force) {
     const d = await (await fetch("/kbd" + q)).json();
     if (seq !== refreshKbd.seq) return;   // 旧响应不覆盖新请求
     kbData = d;
-    $("#kb-jshift").textContent = kbData.junoShift;
-    $("#kb-ashift").textContent = kbData.axShift;
+    $("#kb-jshift").textContent = fmtShift(kbData.junoShift || 0);
+    $("#kb-ashift").textContent = fmtShift(kbData.axShift || 0);
     for (const id of ["kb-jshift", "kb-ashift"]) {   // 移调数值变化脉冲
       const el = $("#" + id);
-      if (el.dataset.v !== undefined && el.dataset.v !== String(kbData[
-          id === "kb-jshift" ? "junoShift" : "axShift"])) {
+      if (el.dataset.v !== undefined && el.dataset.v !== el.textContent) {
         el.classList.remove("pulse");
         void el.offsetWidth;                 // 重启动画
         el.classList.add("pulse");
       }
-      el.dataset.v = kbData[id === "kb-jshift" ? "junoShift" : "axShift"];
+      el.dataset.v = el.textContent;
     }
     renderKbdPorts(force);
     renderKbdSong(force);
@@ -1661,18 +1636,8 @@ $("#kb-save").addEventListener("click", async () => {
     refreshKbd(true);
   }
 });
-const shift = (inst, total) => post("/kbdshift", {inst, total})
-    .then(refreshKbd);
-$("#kb-jup").addEventListener("click", () =>
-    shift("juno", (kbData.junoShift || 0) + 1));
-$("#kb-jdown").addEventListener("click", () =>
-    shift("juno", (kbData.junoShift || 0) - 1));
-$("#kb-jreset").addEventListener("click", () => shift("juno", 0));
-$("#kb-aup").addEventListener("click", () =>
-    shift("ax", (kbData.axShift || 0) + 1));
-$("#kb-adown").addEventListener("click", () =>
-    shift("ax", (kbData.axShift || 0) - 1));
-$("#kb-areset").addEventListener("click", () => shift("ax", 0));
+// 移调无手调入口：轨上键位驱动，页面只读显示（变化脉冲提示）
+const fmtShift = v => "移调 " + (v > 0 ? "+" : "") + v;
 
 // ---- VJ 联动 ----
 async function refreshVj() {
