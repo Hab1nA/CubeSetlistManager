@@ -109,7 +109,7 @@ function nav(page) {
   if (booted) {
     if (page === "console" || page === "setlist") refreshPlaylist();
     if (page === "console") refreshLog();
-    else if (page === "points") refreshPoints();
+    else if (page === "setlist") { refreshPoints(); refreshKbdDetail(); }
     else if (page === "kbd") refreshKbd();
   }
 }
@@ -313,11 +313,6 @@ function render(st) {
   }
   $("#console-empty").hidden = rows.length > 0;
   $("#tstate").textContent = chip.textContent;
-  // 切歌后键盘页跟随刷新（曲目下拉/映射换到新歌）
-  if (pageOn("kbd") && st.cur !== render.kbCur) {
-    render.kbCur = st.cur;
-    if (!kbEditKey) refreshKbd();   // 显式选中曲时不动用户的选择
-  }
   lamps(st);
   drawChips(st, cur);
   pedalLive(st);
@@ -528,8 +523,9 @@ function libRow(s, inPl) {
   });
   div.append(tag, nm, dur, add);
   div.addEventListener("click", () => {
-    // ＋ 为唯一加入入口（防误触）；行单击只选中（视觉反馈）
-    div.classList.toggle("sel");
+    // 行单击=选中（详情面板跟随）；＋ 为唯一加入入口（防误触）
+    selectSong(s.key.startsWith("pt:")
+               ? s.key.slice(3).split("#")[0] : s.key);
   });
   return div;
 }
@@ -540,7 +536,8 @@ function drawLib() {
   // 部分移除的点条目要能单独加回（宿主归一会把它们全标「已加入」）
   const inPl = new Set(plCache.pl.map(it => it.key));
   const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0)
-      + (s.durSrc || "") + (s.dur || "")).join("|") + "#" + slQ;
+      + (s.durSrc || "") + (s.dur || "")).join("|") + "#" + slQ
+      + "#" + (plSel || "");
   if (lib.dataset.sig === sig) return;
   lib.dataset.sig = sig;
   lib.innerHTML = "";
@@ -679,7 +676,10 @@ function plRow(i, it) {
     armConfirm(del, () => plcmd2("remove", it.key), "确认移除？");
   });
   div.append(handle, no, nm, dur, ops);
-  div.addEventListener("click", () => { plSel = it.key; markPlSel(); });
+  div.addEventListener("click", () => {
+    selectSong(it.key.startsWith("pt:")
+               ? it.key.slice(3).split("#")[0] : it.key);
+  });
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
   // dragstart 的复位（F 批：拖拽细节）
   handle.addEventListener("pointerdown", () => div.draggable = true);
@@ -758,6 +758,17 @@ function drawPl() {
 }
 function markPlSel() {
   $$("#pl .row").forEach(r => r.classList.toggle("sel", r.dataset.k === plSel));
+  $$("#lib .row").forEach(r => r.classList.toggle("sel", r.dataset.k === plSel));
+}
+// 选中曲（素材库/播放列表行点击，pt 条目归一到宿主工程）：
+// 详情面板（定位点+音色映射）跟随；换曲清定位点选择防串编辑
+function selectSong(key) {
+  if (plSel === key) { markPlSel(); return; }
+  plSel = key;
+  ptSel = null;
+  markPlSel();
+  refreshPoints();
+  refreshKbdDetail();
 }
 $("#sl-search").addEventListener("input", e => {
   slQ = e.target.value.trim().toLowerCase();
@@ -848,28 +859,17 @@ async function refreshPoints() {
     on.closest(".switch").title = ptCap.cubase
         ? "启用后该工程条目展开为定位点播放" : "定位点仅 Cubase 支持";
     $("#pt-mmc").hidden = ptCap.mmcReady || !ptCap.cubase;
-    if (!ptProj || !ptData[ptProj]) {
-      ptProj = Object.keys(ptData).find(k => ptData[k].enabled) ||
-               Object.keys(ptData)[0];
-    }
-    const dd = ptData[ptProj];
-    if (!dd) return;
-    const sel = $("#pt-proj");
-    const sig = Object.keys(ptData).map(
-        k => k + (ptData[k].enabled ? "1" : "0")).join("|");
-    if (sel.dataset.sig !== sig) {       // 无变化不重建：不打断展开选择
-      sel.dataset.sig = sig;
-      sel.innerHTML = "";
-      const keys = Object.keys(ptData).sort((a, b) =>
-          (ptData[b].enabled ? 1 : 0) - (ptData[a].enabled ? 1 : 0));
-      keys.forEach(k => {
-        const o = document.createElement("option");
-        o.value = k;
-        o.textContent = ptData[k].name + (ptData[k].enabled ? " ✓" : "");
-        if (k === ptProj) o.selected = true;
-        sel.appendChild(o);
-      });
-    }
+    // 详情面板跟随选中曲（未选=引导空态）；定位点数据缺席按空表渲染
+    const hasSel = !!plSel;
+    $("#dt-none").hidden = hasSel;
+    $("#dt-body").hidden = !hasSel;
+    if (!hasSel) return;
+    ptProj = plSel;
+    const song = plCache && (plCache.lib.find(x => x.key === plSel)
+                              || (plCache.pl || []).find(x => x.key === plSel));
+    $("#dt-head").textContent = "曲目详情 · "
+        + (song ? song.name.split(" · ")[0] : plSel);
+    const dd = ptData[ptProj] || {enabled: false, points: []};
     $("#pt-on").checked = dd.enabled;
     // 主列表（差量：签名不变不动 DOM）
     const el = $("#pt-list");
@@ -960,15 +960,9 @@ async function ptcmd(op, payload) {
 }
 $("#pt-on").addEventListener("change", e =>
     ptcmd("toggle", {on: e.target.checked}));
-$("#pt-proj").addEventListener("change", e => {
-  ptProj = e.target.value;
-  ptSel = null;
-  $("#pt-form").hidden = true;
-  $("#pt-none").hidden = false;
-  refreshPoints();
-});
-// add 后自动选中末点（新点追加在表尾）；工程下拉启用项优先展示
+// add 后自动选中末点（新点追加在表尾）
 $("#pt-add").addEventListener("click", async () => {
+  if (!ptProj) return;                    // 未选曲：详情为空态不可加
   const j = await post("/ptcmd", {op: "add", key: ptProj, payload: {}});
   if (!j.ok) return;
   await refreshPoints();
@@ -1309,9 +1303,8 @@ async function clearBind(action) {
 }
 $("#pd-refresh").addEventListener("click", refreshPedalDevices);
 
-// ---- 键盘自动化（曲目选择 / 端口下拉 / 录制 / 人话描述 / 试听预检）----
-let kbData = null, kbPortsInit = false, kbSongInit = false;
-let kbEditKey = null;        // null=跟随已装载曲；否则显式选中的曲 key
+// ---- 键盘自动化（键盘页=全局端口/移调只读；曲目映射在编排页详情面板）----
+let kbData = null, kbPortsInit = false;
 let recTimer = null;
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
                     "A#", "B"];
@@ -1373,36 +1366,13 @@ function renderKbdPorts(force) {
   portSelVal("kb-aout", kbData.axOut, (ps.axOut || {}).pos);
   kbPortsInit = true;
 }
-function renderKbdSong(force) {
-  const sel = $("#kb-song");
-  const songs = kbData.songs || [];
-  const sig = songs.map(x => x.key).join("|") + "#" + kbData.songKey;
-  if (force || !kbSongInit || sel.dataset.sig !== sig) {
-    sel.dataset.sig = sig;
-    sel.innerHTML = "";
-    const o = document.createElement("option");
-    o.value = "";
-    o.textContent = kbData.songKey ? "跟随已装载曲" : "（未装载曲目）";
-    sel.appendChild(o);
-    songs.forEach(x => {
-      const op = document.createElement("option");
-      op.value = x.key;
-      op.textContent = x.name;
-      op.title = x.key;
-      sel.appendChild(op);
-    });
-    kbSongInit = true;
-  }
-  sel.value = kbEditKey || "";       // null → 跟随项
-  if (sel.selectedIndex < 0) sel.value = "";
+function renderKbdStatus() {
   $("#kb-status").textContent =
-      (kbData.editSong && kbData.editSong.loading)
-      ? "曲目映射装载中…"
-      : (kbData.counts
-         ? "JUNO " + kbData.counts.juno + "/10 + AX " + kbData.counts.ax
-           + "/6" + (kbData.lastResult ? " ｜ 最近切换：" + kbData.lastResult
-                                      : "")
-         : (kbData.lastResult || ""));
+      kbData.counts
+      ? "当前曲 JUNO " + kbData.counts.juno + "/10 + AX " + kbData.counts.ax
+        + "/6" + (kbData.lastResult ? " ｜ 最近切换：" + kbData.lastResult
+                                   : "")
+      : (kbData.lastResult || "");
 }
 
 // 录制（琴上捕获）：弹层内启动，捕获结果经 onCap 实时回报；
@@ -1434,12 +1404,12 @@ function pollRecord(inst, onCap) {
 
 // 音色槽录制弹层：映射只从「录制」写入（琴上选音色捕获），无手填数字；
 // 「试」在槽卡上，「清除」删映射。快照（key+槽位字典）定格在打开时刻：
-// 切歌后旧弹层的保存必须仍写它打开时的那首歌与那份映射
+// 编辑目标是打开时刻选中的那首歌与那份映射，随后换选不动旧弹层
 function slotEditor(anchor, inst, note, slot) {
   popover(anchor, (box, close) => {
-    const editKey = kbEditKey || (kbData ? kbData.songKey : null);
-    const src = kbData && kbData.editSong
-        ? (inst === "ax" ? kbData.editSong.axSlots : kbData.editSong.slots)
+    const editKey = plSel;
+    const src = dtKbd && dtKbd.editSong
+        ? (inst === "ax" ? dtKbd.editSong.axSlots : dtKbd.editSong.slots)
         : {};
     const editSlots = {};
     Object.keys(src || {}).forEach(k => editSlots[Number(k)] = {...src[k]});
@@ -1453,9 +1423,8 @@ function slotEditor(anchor, inst, note, slot) {
     const err = document.createElement("div");
     err.className = "field-err";
     err.id = "sp-err";
-    // 无装载曲且未显式选曲：保存目标不定（会整段替换保存时刻意外
-    // 装载的曲）——禁止录制，引导先选曲
-    if (editKey === null) err.textContent = "未装载曲目：先在上方选择曲目";
+    // 未选曲：保存目标不定——禁止录制，引导先在左侧选曲
+    if (!editKey) err.textContent = "未选择曲目：先在左侧选择";
     box.appendChild(err);
     const btns = document.createElement("div");
     btns.className = "btns";
@@ -1466,7 +1435,7 @@ function slotEditor(anchor, inst, note, slot) {
       post("/slotset", {inst, slots: editSlots, songKey: editKey}).then(j => {
         if (j.ok) toast("音 " + noteName(note) + " 已录制："
             + (captured.desc || "PC " + captured.pc));
-        refreshKbd();
+        refreshKbdDetail();
       });
       close();
     };
@@ -1474,7 +1443,7 @@ function slotEditor(anchor, inst, note, slot) {
     rec.className = "primary";
     rec.textContent = "● 录制";
     rec.title = "按下后到琴上选该槽位音色，再按一次停止并保存";
-    rec.disabled = editKey === null;
+    rec.disabled = !editKey;
     rec.addEventListener("click", async () => {
       if (recInst === inst) {       // 再按一次=停止并保存最后捕获
         const cap = captured;
@@ -1500,17 +1469,17 @@ function slotEditor(anchor, inst, note, slot) {
       });
     });
     btns.appendChild(rec);
-    if (slot && editKey !== null) {
+    if (slot && editKey) {
       const clr = document.createElement("button");
       clr.className = "danger";
       clr.textContent = "清除";
-      clr.disabled = editKey === null;
+      clr.disabled = !editKey;
       clr.addEventListener("click", () => {
         const cur2 = editSlots;
         delete cur2[note];
         post("/slotset", {inst, slots: cur2, songKey: editKey}).then(j => {
           if (j.ok) toast("音 " + noteName(note) + " 已清除");
-          refreshKbd();
+          refreshKbdDetail();
         });
         close();
       });
@@ -1558,13 +1527,11 @@ function slotRow(note, slot, inst) {
 async function refreshKbd(force) {
   try {
     const seq = refreshKbd.seq = (refreshKbd.seq || 0) + 1;
-    const q = kbEditKey && kbData && kbEditKey !== kbData.songKey
-        ? "?song=" + encodeURIComponent(kbEditKey) : "";
-    const d = await (await fetch("/kbd" + q)).json();
+    const d = await (await fetch("/kbd")).json();
     if (seq !== refreshKbd.seq) return;   // 旧响应不覆盖新请求
     kbData = d;
-    $("#kb-jshift").textContent = fmtShift(kbData.junoShift || 0);
-    $("#kb-ashift").textContent = fmtShift(kbData.axShift || 0);
+    $("#kb-jshift").textContent = "JUNO " + fmtShift(kbData.junoShift || 0);
+    $("#kb-ashift").textContent = "AX " + fmtShift(kbData.axShift || 0);
     for (const id of ["kb-jshift", "kb-ashift"]) {   // 移调数值变化脉冲
       const el = $("#" + id);
       if (el.dataset.v !== undefined && el.dataset.v !== el.textContent) {
@@ -1575,28 +1542,43 @@ async function refreshKbd(force) {
       el.dataset.v = el.textContent;
     }
     renderKbdPorts(force);
-    renderKbdSong(force);
-    const es = kbData.editSong || {slots: {}, axSlots: {}};
-    const build = (el, from, to, slots, inst) => {
-      const sig = Object.keys(slots || {}).map(k =>
-          k + ":" + JSON.stringify(slots[k])).join("|");
-      if (el.dataset.sig === sig) return;
-      el.dataset.sig = sig;
-      el.innerHTML = "";
-      for (let n = from; n <= to; n++)
-        el.appendChild(slotRow(n, (slots || {})[String(n)], inst));
-    };
-    build($("#kb-slots"), 60, 69, es.slots, "juno");
-    build($("#kb-axslots"), 72, 77, es.axSlots, "ax");
-    // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
-    if (es.loading && pageOn("kbd"))
-      setTimeout(() => { if (pageOn("kbd")) refreshKbd(); }, 700);
+    renderKbdStatus();
   } catch { /* 瞬断 */ }
 }
-$("#kb-song").addEventListener("change", e => {
-  kbEditKey = e.target.value || null;
-  refreshKbd(true);
-});
+
+// ---- 编排页详情面板的音色映射（选中曲的 /kbd?song= 视图）----
+let dtKbd = null;
+function buildSlots(el, slots, from, to, inst) {
+  const sig = Object.keys(slots || {}).map(k =>
+      k + ":" + JSON.stringify(slots[k])).join("|");
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = "";
+  for (let n = from; n <= to; n++)
+    el.appendChild(slotRow(n, (slots || {})[String(n)], inst));
+}
+async function refreshKbdDetail() {
+  if (!plSel) {
+    dtKbd = null;
+    return;
+  }
+  try {
+    const seq = refreshKbdDetail.seq = (refreshKbdDetail.seq || 0) + 1;
+    const d = await (await fetch("/kbd?song="
+        + encodeURIComponent(plSel))).json();
+    if (seq !== refreshKbdDetail.seq) return;
+    dtKbd = d;
+    const es = d.editSong || {slots: {}, axSlots: {}};
+    $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…"
+        : "JUNO " + Object.keys(es.slots || {}).length + "/10 · AX "
+          + Object.keys(es.axSlots || {}).length + "/6";
+    buildSlots($("#dt-slots"), es.slots, 60, 69, "juno");
+    buildSlots($("#dt-axslots"), es.axSlots, 72, 77, "ax");
+    // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
+    if (es.loading && pageOn("setlist"))
+      setTimeout(() => { if (pageOn("setlist")) refreshKbdDetail(); }, 700);
+  } catch { /* 瞬断 */ }
+}
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
 $("#kb-save").addEventListener("click", async () => {
   const pick = (id, hint, dev) => {
@@ -1867,9 +1849,8 @@ $$(".browse").forEach(b =>
 // ---- 编排窄窗 tab（<900px 双列折叠为单列）----
 $$("#sl-tabs button").forEach(b => b.addEventListener("click", () => {
   $$("#sl-tabs button").forEach(x => x.classList.toggle("on", x === b));
-  const want = "#" + b.dataset.col;
   $$(".cols .col").forEach(c =>
-      c.classList.toggle("show", !!c.querySelector(want)));
+      c.classList.toggle("show", c.dataset.col === b.dataset.col));
 }));
 
 // ---- QR 码（无依赖最小实现：字节模式、ECC L、版本 1-5、8 掩码择优）----
@@ -2104,7 +2085,8 @@ poll();
 setInterval(() => {
   if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
-setInterval(() => { if (pageOn("points")) refreshPoints(); }, 1500);
+setInterval(() => { if (pageOn("setlist"))
+  { refreshPoints(); refreshKbdDetail(); } }, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);
 refreshPlaylist();
