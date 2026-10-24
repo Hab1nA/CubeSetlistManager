@@ -2406,8 +2406,13 @@ class App:
         cap = getattr(self, "_kbd_cap", None)
         if cap is None:
             return {"active": False}
+        slot = cap["cap"].slot
+        if slot is not None:      # 附人话描述：录制弹层直读琴显编号
+            slot = dict(slot, desc=(kbd_auto.describe_ax(slot)
+                                    if cap["inst"] == "ax"
+                                    else kbd_auto.describe_slot(slot)))
         return {"active": not cap["closed"], "inst": cap["inst"],
-                "slot": cap["cap"].slot}
+                "slot": slot}
 
     def _kbd_apply_web(self, p):
         if p.get("junoIn") is not None:
@@ -2478,25 +2483,6 @@ class App:
                 cfg.get("outHint", ""),
                 "、".join(n for _, n in devs) or "无")
         sw.submit(slot, why="web 测试")
-        return None
-
-    def _kbd_shift_web(self, inst, total):
-        total = max(-24 if inst != "ax" else -12,
-                    min(24 if inst != "ax" else 12, int(total)))
-        if inst == "ax":
-            self.ax_shift = total
-            if self.ax_switcher is None:
-                return "收发器未就绪"
-            # AX-09 不收 SysEx：移调走弯音钉位序列（与 _on_kb_msg 同口径），
-            # submit_shift 是 JUNO 的 Master Coarse Tuning SysEx
-            self.ax_switcher.submit_msgs(
-                kbd_auto.ax_shift_msgs(total, self.axcfg["ch"]),
-                why="AX-09 全局移调 %+d 半音" % total)
-        else:
-            self.juno_shift = total
-            if self.switcher is None:
-                return "收发器未就绪"
-            self.switcher.submit_shift(total, why="JUNO 移调 %+d 半音" % total)
         return None
 
     def _slots_save_web(self, inst, slots, song_key=None):

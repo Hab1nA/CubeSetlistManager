@@ -182,33 +182,6 @@ def test_app_asset_whitelist():
         srv.shutdown()
 
 
-class _SwitcherStub:
-    """ToneSwitcher 替身：记录 submit_msgs / submit_shift 调用。"""
-
-    def __init__(self):
-        self.calls = []
-
-    def submit_msgs(self, msgs, why=""):
-        self.calls.append(("msgs", msgs, why))
-
-    def submit_shift(self, total, why=""):
-        self.calls.append(("shift", total, why))
-
-
-def test_kbd_shift_web_ax_uses_pitch_msgs():
-    """A5：ax 分支发弯音钉位序列（AX-09 不收 SysEx），JUNO 分支不变。"""
-    ax, juno = _SwitcherStub(), _SwitcherStub()
-    fake = types.SimpleNamespace(ax_switcher=ax, switcher=juno,
-                                 ax_shift=0, juno_shift=0, axcfg={"ch": 1})
-    assert sg.App._kbd_shift_web(fake, "ax", 3) is None
-    assert ax.calls and ax.calls[0][0] == "msgs"
-    assert ax.calls[0][1] == kbd_auto.ax_shift_msgs(3, 1)
-    assert all(k == "short" for k, _p, _g in ax.calls[0][1])
-    assert fake.ax_shift == 3
-    assert sg.App._kbd_shift_web(fake, "juno", 2) is None
-    assert juno.calls[0][0] == "shift"
-
-
 def _pl_app():
     return types.SimpleNamespace(
         pl_keys=["B/歌二"], cur=0,
@@ -430,6 +403,12 @@ def test_kbd_record_and_get_shape():
     assert fake._kbd_cap is None
     assert sg.App._kbd_record_web(fake, "juno", stop=True) is None
     assert sg.App._kbd_record_poll_web(fake) == {"active": False}
+    # 活动会话带人话描述（录制弹层直读琴显编号，不再手填数字）
+    fake._kbd_cap = {"inst": "juno", "closed": False, "port": None,
+                     "cap": types.SimpleNamespace(
+                         slot={"pc": 5, "msb": 87, "lsb": 0})}
+    poll = sg.App._kbd_record_poll_web(fake)
+    assert poll["active"] and poll["slot"]["desc"] == "USER:0506"
     # GET shape（_pick_hit/_device_entries 为纯函数，端口枚举在本机跑）
     out = sg.App._kbd_get_web(fake)
     for k in ("ports", "portStatus", "songs", "editSong", "lastResult",
