@@ -1642,8 +1642,8 @@ async function refreshKbd(force) {
     const d = await r.json();
     if (seq !== refreshKbd.seq) return;   // 旧响应不覆盖新请求
     kbData = d;
-    $("#kb-jshift").textContent = "JUNO " + fmtShift(kbData.junoShift || 0);
-    $("#kb-ashift").textContent = "AX " + fmtShift(kbData.axShift || 0);
+    $("#kb-jshift").textContent = fmtShift(kbData.junoShift || 0);
+    $("#kb-ashift").textContent = fmtShift(kbData.axShift || 0);
     for (const id of ["kb-jshift", "kb-ashift"]) {   // 移调数值变化脉冲
       const el = $("#" + id);
       if (el.dataset.v !== undefined && el.dataset.v !== el.textContent) {
@@ -1651,6 +1651,8 @@ async function refreshKbd(force) {
         void el.offsetWidth;                 // 重启动画
         el.classList.add("pulse");
       }
+      el.closest(".shift-val")
+          .classList.toggle("hot", el.textContent !== "0");
       el.dataset.v = el.textContent;
     }
     renderKbdPorts(force);
@@ -1736,7 +1738,7 @@ $("#kb-save").addEventListener("click", async () => {
   }
 });
 // 移调无手调入口：轨上键位驱动，页面只读显示（变化脉冲提示）
-const fmtShift = v => "移调 " + (v > 0 ? "+" : "") + v;
+const fmtShift = v => (v > 0 ? "+" : "") + v;
 
 // ---- VJ 联动 ----
 async function refreshVj() {

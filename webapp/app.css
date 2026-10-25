@@ -467,16 +467,32 @@ details.card .grid2 { margin-top: var(--s3); }
   margin-bottom: var(--s3); }
 .port-stat { font-weight: 400; color: var(--dim); }
 .port-stat:not(:empty)::before { content: "· "; }
-.kb-actions { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
+.kb-actions { display: flex; gap: var(--s2); margin: 14px 0 var(--s3); }
 
 .card .field { margin-bottom: var(--s2); }
 .card .field:last-child { margin-bottom: 0; }
 .slotcard { margin-bottom: var(--s3); }
 /* 移调只读徽标：轨上键位驱动，页面仅显示当前累计值 */
-.card h3 .h3-tail { margin-left: auto; display: flex;
-  gap: var(--s3); }
-.card h3 .shift-ro { font-size: var(--f-xs); color: var(--dim);
-  font-weight: 600; font-variant-numeric: tabular-nums; }
+.card h3 .h3-note { margin-left: auto; font-size: var(--f-xs);
+  font-weight: 400; color: var(--dim); }
+/* 全局移调双列：每琴一列（琴名/大字值/键帽键位表） */
+.shift-grid { display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; }
+.shift-col { background: var(--sur-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; }
+.shift-val { font-size: var(--f-2xl); font-weight: 700;
+  font-variant-numeric: tabular-nums; margin-top: 4px;
+  display: flex; align-items: baseline; gap: 6px; }
+.shift-val.hot { color: var(--ok); }
+.shift-val .unit { font-size: var(--f-sm); color: var(--dim);
+  font-weight: 400; }
+.keymap { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.keychip { display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+  font-size: var(--f-xs); color: var(--dim); }
+.keychip b { color: var(--fg); font-family: Consolas, monospace;
+  background: var(--sur-3); border-radius: 4px; padding: 1px 6px;
+  font-weight: 600; }
 .input-row { display: flex; gap: var(--s3); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
@@ -544,7 +560,7 @@ details.card .grid2 { margin-top: var(--s3); }
   .cols .col.show { display: flex; }
   .col .list { max-height: 44vh; }
   .grid2 { grid-template-columns: 1fr; }
-  .cards2 { grid-template-columns: 1fr; }
+  .cards2, .shift-grid { grid-template-columns: 1fr; }
   .md { flex-direction: column; }
   #pt-list { max-height: 34vh; }
   #logcard .log { height: 160px; }
@@ -694,7 +710,7 @@ body.show #toasts { top: 56px; }
 #smart.pulse { animation: smart-pulse 1.1s var(--ease) infinite; }
 @keyframes smart-pulse { 50% { opacity: .55; } }
 /* 移调数值变化脉冲 */
-.shift-ro.pulse { animation: val-pulse 400ms var(--ease); }
+.shift-val > span.pulse { animation: val-pulse 400ms var(--ease); }
 @keyframes val-pulse { 30% { color: var(--accent); } }
 #side-ver { padding: 10px 12px 0; }
 #btn-exit { color: var(--err); opacity: .75; }

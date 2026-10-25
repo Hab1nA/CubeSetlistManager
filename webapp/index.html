@@ -246,16 +246,31 @@
         <button id="kb-save" class="btn primary sm">保存端口</button>
       </div>
       <div class="card slotcard">
-        <h3>全局移调（只读）
-          <span class="h3-tail">
-            <span class="shift-ro" id="kb-jshift"
-              title="当前 JUNO 全局移调（半音）——由键盘自动化轨的移调键位驱动">JUNO 移调 0</span>
-            <span class="shift-ro" id="kb-ashift"
-              title="当前 AX-09 全局移调（半音）——由键盘自动化轨的移调键位驱动">AX 移调 0</span>
-          </span></h3>
-        <p class="dim sm-txt">移调由自动化轨移调键位控制，此处只读。
-          JUNO：C2 降半音、C#2 升半音、D2 降八度、D#2 升八度；
-          AX-09：F2/F#2/G2/G#2 同序。</p>
+        <h3>全局移调<span class="h3-note">由自动化轨移调键位控制，此处只读</span></h3>
+        <div class="shift-grid">
+          <div class="shift-col">
+            <div class="lbl">JUNO-DS</div>
+            <div class="shift-val"><span id="kb-jshift">0</span>
+              <span class="unit">半音</span></div>
+            <div class="keymap">
+              <span class="keychip"><b>C2</b>降半音</span>
+              <span class="keychip"><b>C#2</b>升半音</span>
+              <span class="keychip"><b>D2</b>降八度</span>
+              <span class="keychip"><b>D#2</b>升八度</span>
+            </div>
+          </div>
+          <div class="shift-col">
+            <div class="lbl">AX-09 Lucina</div>
+            <div class="shift-val"><span id="kb-ashift">0</span>
+              <span class="unit">半音</span></div>
+            <div class="keymap">
+              <span class="keychip"><b>F2</b>降半音</span>
+              <span class="keychip"><b>F#2</b>升半音</span>
+              <span class="keychip"><b>G2</b>降八度</span>
+              <span class="keychip"><b>G#2</b>升八度</span>
+            </div>
+          </div>
+        </div>
       </div>
       <p class="dim sm-txt">音色映射按曲目保存，在「编排」页详情面板
         录制维护。</p>
