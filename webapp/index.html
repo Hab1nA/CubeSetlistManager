@@ -119,7 +119,7 @@
           <div class="colhead" id="dt-head"><span id="dt-title">曲目详情</span> <span class="badge" id="dt-n">未选中</span></div>
           <div id="dt-scroll">
           <div id="dt-none" class="empty-state sm">
-            在左侧选择曲目，查看并编辑它的定位点与音色映射</div>
+            选择左侧曲目，编辑定位点与音色映射</div>
           <div id="dt-body" hidden>
             <div class="card">
               <div class="md-head">定位点
@@ -133,7 +133,7 @@
                 MMC 输出口未就绪：定位不可用（检查时码口配置）</div>
               <div id="pt-list" class="list"></div>
               <div id="pt-none" class="empty-state sm" hidden>
-                在上方选择一个定位点编辑</div>
+                选择一个定位点编辑</div>
               <div id="pt-form" hidden>
                 <div class="field"><label for="pt-name">名称</label>
                   <input id="pt-name"></div>
@@ -167,8 +167,8 @@
               <div id="dt-slots" class="slot-grid"></div>
               <div class="lbl dt-inst">AX-09（C5 起 6 键）</div>
               <div id="dt-axslots" class="slot-grid"></div>
-              <p class="dim sm-txt">点卡片「录制」：到琴上选音色，捕获即写入
-                这首歌；「试」=连通测试。端口与移调状态在「键盘」页。</p>
+              <p class="dim sm-txt">点卡片=录制（再点一次保存）；「测试」
+                验证连通；✕ 清除。</p>
             </div>
           </div>
           </div>
@@ -199,15 +199,12 @@
           <button id="pd-refresh" class="btn ghost sm">刷新</button>
         </div>
         <p class="dim sm-txt" id="pd-midiport"></p>
-        <p class="dim sm-txt">「（不区分来源，仅 MIDI 踩钉）」=只听 MIDI 口；
-          未选设备时键盘踩钉不生效；离线设备可先选，上电自动接上。
-          本页所有设置即改即生效，无保存步骤。</p>
+        <p class="dim sm-txt">即改即生效；离线设备可先选，上电自动接上。</p>
       </div>
       <div class="card"><h3>功能绑定</h3>
         <div id="pd-binds" class="bind-list"></div>
-        <p class="dim sm-txt">学习：踩一下=单踩、快踩两下=双踩（8 秒内判完）；
-          绑定同键同手势会自动从原动作改绑。本页打开期间踩钉整体静音，
-          关页恢复。</p>
+        <p class="dim sm-txt">踩一下=单踩，快踩两下=双踩；本页打开期间
+          踩钉静音，关页恢复。</p>
       </div>
       <details class="card"><summary>高级</summary>
         <div class="grid2">
@@ -255,12 +252,12 @@
             <span class="shift-ro" id="kb-ashift"
               title="当前 AX-09 全局移调（半音）——由键盘自动化轨的移调键位驱动">AX 移调 0</span>
           </span></h3>
-        <p class="dim sm-txt">移调不走本页：由键盘自动化轨上的移调键位控制
-          （JUNO C2 降半音 C#2 升半音 D2 降八度 D#2 升八度；AX-09 对应
-          F2/F#2/G2/G#2），卡头右侧只读显示当前累计值，变化时脉冲提示。</p>
+        <p class="dim sm-txt">移调由自动化轨移调键位控制，此处只读。
+          JUNO：C2 降半音、C#2 升半音、D2 降八度、D#2 升八度；
+          AX-09：F2/F#2/G2/G#2 同序。</p>
       </div>
-      <p class="dim sm-txt">各首歌的音色槽映射在「编排」页选中曲目后的详情
-        面板里录制维护。</p>
+      <p class="dim sm-txt">音色映射按曲目保存，在「编排」页详情面板
+        录制维护。</p>
     </section>
 
     <section class="page" id="p-vj">
@@ -307,8 +304,8 @@
           <div class="field"><label for="st-kb">键盘端口</label>
             <select id="st-kb"></select></div>
         </div>
-        <p class="dim sm-txt">「无」=停用该联动；「（未接入）」=已存端口当前
-          不在场，保存保留原名。</p>
+        <p class="dim sm-txt">「无」=停用；「（未接入）」=设备暂不在线，
+          保存保留原名。</p>
       </div>
       <div class="card"><h3>行为</h3>
         <div class="grid2">

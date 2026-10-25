@@ -61,6 +61,7 @@ input:focus-visible, select:focus-visible {
 
 /* ---- 按钮（组件）---- */
 .btn {
+  white-space: nowrap;
   background: var(--sur-2);
   color: var(--fg);
   border: 1px solid var(--line);
@@ -114,6 +115,11 @@ input:focus-visible, select:focus-visible {
   background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
   width: 100%;
+}
+.input-row input, .input-row select {
+  background: #0d1116; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  flex: 1; min-width: 0;
 }
 .field .wide, input.wide { width: 100%; }
 .field input.num, input.num { width: 90px; }
@@ -239,6 +245,7 @@ input.invalid { border-color: var(--err) !important; }
 #barfill { height: 100%; width: 0; background: var(--ok);
   border-radius: 6px;
   transition: width 500ms linear;   /* 与 /state 500ms 轮询咬合 */ }
+#transport .btn { height: 48px; }
 #transport { display: flex; align-items: center; gap: var(--s2); }
 #next-card { display: flex; align-items: center; gap: var(--s4);
   padding: 10px var(--s4); }
@@ -415,10 +422,12 @@ input.invalid { border-color: var(--err) !important; }
 #pt-tl-max { font-variant-numeric: tabular-nums; }
 
 /* ---- 踩钉页 ---- */
-.stat-cards { display: flex; gap: var(--s3); margin-bottom: var(--s4);
+.stat-cards { display: flex; gap: 14px; margin-bottom: var(--s4);
   flex-wrap: wrap; align-items: stretch; }
 .card.stat { min-width: 200px; flex: 1; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
+.card.stat > .dim { margin-top: var(--s1); }
+.card.stat > .switch { margin-top: var(--s2); }
 .stat-big.ok { color: var(--ok); }
 .stat-big.warn { color: var(--warn); }
 .stat-big.err { color: var(--err); }
@@ -445,7 +454,8 @@ details.card summary:hover { color: var(--fg); }
 details.card .grid2 { margin-top: var(--s3); }
 
 /* ---- 键盘页 ---- */
-.cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3);
+#kb-status { margin-bottom: var(--s3); }
+.cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   margin-bottom: var(--s3); }
 .port-stat { font-weight: 400; color: var(--dim); }
 .port-stat:not(:empty)::before { content: "· "; }
@@ -459,8 +469,7 @@ details.card .grid2 { margin-top: var(--s3); }
   gap: var(--s3); }
 .card h3 .shift-ro { font-size: var(--f-xs); color: var(--dim);
   font-weight: 600; font-variant-numeric: tabular-nums; }
-.input-row { display: flex; gap: var(--s2); align-items: center; }
-.input-row input { flex: 1; }
+.input-row { display: flex; gap: var(--s2); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
 .slot-grid { display: grid;
@@ -535,7 +544,7 @@ details.card .grid2 { margin-top: var(--s3); }
 /* ---- 运行日志卡（主控台页内）：播放中同屏盯状态 ---- */
 
 #logcard .log { height: 224px; }
-.log-tools { display: flex; align-items: center; gap: var(--s2);
+.log-tools { display: flex; align-items: stretch; gap: var(--s2);
   margin-left: auto; }
 .log-tools select { background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;

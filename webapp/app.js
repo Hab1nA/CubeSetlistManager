@@ -567,7 +567,7 @@ function drawLib() {
     }
     const libEmpty = !plCache.lib.length;
     txt.textContent = libEmpty ? "素材库为空"
-        : "没有匹配「" + (slQ || "") + "」的曲目，试试清空搜索词";
+        : "没有匹配「" + (slQ || "") + "」的曲目";
     btn.style.display = libEmpty ? "" : "none";
   }
   $("#lib-n").textContent = plCache.lib.length + " 首";
@@ -961,8 +961,8 @@ async function refreshPoints() {
         el.appendChild(div);
       });
       if (!dd.points.length)
-        el.innerHTML = "<div class='empty-state sm'>还没有定位点，"
-            + "点上方「添加」以当前时码为起点新建</div>";
+        el.innerHTML = "<div class='empty-state sm'>尚无定位点，"
+            + "点「添加」以当前时码新建</div>";
     }
     // 编辑卡
     const has = ptSel !== null && dd.points.some(p => p.id === ptSel);
@@ -1299,8 +1299,8 @@ async function refreshPedal(force) {
     }
     // MIDI 踩钉口是学习 CC 时自动记录的内部端口名：只读展示，不可手填
     $("#pd-midiport").textContent = d.hint
-        ? "MIDI 踩钉口：" + d.hint + "（学习 CC 踩钉时自动记录）"
-        : "MIDI 踩钉口：未记录（学习 CC 踩钉时自动写入）";
+        ? "MIDI 踩钉口：" + d.hint + "（学习时自动记录）"
+        : "MIDI 踩钉口：未记录（学习时自动写入）";
     drawBinds(d);
     if (!$("#pd-dev").options.length) refreshPedalDevices();
   } catch { /* 瞬断 */ }
@@ -1516,7 +1516,7 @@ function cardRecord(div, inst, note) {
     if (!had) return;
     if (!cap) {
       const sub = div.querySelector(".s-sub");
-      if (sub) sub.textContent = "没收到音色信息（检查琴的输出口与录制端口）";
+      if (sub) sub.textContent = "没收到音色信息，请检查琴口";
       return;
     }
     const slots = {...ctx.slots, [note]: cap};
@@ -1545,12 +1545,12 @@ function cardRecord(div, inst, note) {
     recCtx = {key: plSel, slots: snap};
     div.classList.add("recording");
     const sub = div.querySelector(".s-sub");
-    if (sub) sub.textContent = "录制中：请在琴上选音色，再点一次停止并保存";
+    if (sub) sub.textContent = "录制中：请在琴上选音色…";
     pollRecord(inst, cap => {
       recCap = cap;
       const s2 = recCard && recCard.querySelector(".s-sub");
       if (s2) s2.textContent = "已捕获：" + (cap.desc || "PC " + cap.pc)
-          + "（再点一次停止并保存）";
+          + "（再点本卡保存）";
     });
   });
 }
@@ -1606,7 +1606,7 @@ function slotRow(note, slot, inst) {
     ops.appendChild(clr);
   }
   div.append(n, pc, sub, ops);
-  div.title = "点击录制：到琴上选音色，再点一次停止并保存";
+  div.title = "点击录制；再点一次停止并保存";
   div.tabIndex = 0;
   div.addEventListener("click", () => cardRecord(div, inst, note));
   return div;
