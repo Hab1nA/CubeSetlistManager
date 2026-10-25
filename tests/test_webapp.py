@@ -341,7 +341,7 @@ def test_plcmd_setdur_and_move():
     assert sg.App._pl_cmd_web(app, "move", "", {"from": 3, "to": 0}) is None
     assert app.pl_keys == ["d", "a", "b", "c"] and app.cur == 2
     assert sg.App._pl_cmd_web(app, "move", "", {"from": 9,
-                                                "to": 0}) is None  # 越界幂等
+                                                "to": 0}) == "移动下标越界"
     assert sg.App._pl_cmd_web(app, "redict", "X/无", {}) is not None
     assert sg.App._pl_cmd_web(app, "redict", "pt:A/歌一#1", {}) is not None
 

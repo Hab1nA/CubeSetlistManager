@@ -279,16 +279,15 @@ function switchTo(i, btn, dbl, key) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0。
-  // key 必须与 index 同拍取自 /state（songs[].key）——从 plCache 借键=
-  // 500ms×1.5s 两缓存混拍，他端重排后 key 指向错曲（结论攻击二轮实证，
-  // 与 consoleRow 曾修过的 P1 同一模式）；/state 无 key 时才退 plCache
-  const i = typeof stCur === "number" ? stCur + 1 : 0;
+  // 目标必须与卡面同拍、全部取自 /state 单一来源（stState.cur+songs）：
+  // stCur 另有 /playlist 1.5s 拍更新点，混用会产生「卡面显 D 实切 E」
+  // 的 off-by-one（三轮结论攻击复现）。不借 plCache、无 key 时走 index
+  // ——跨版本场景 index 路径反而正确（同轮实证），回退分支已砍
+  const cur = stState && typeof stState.cur === "number"
+      ? stState.cur : (typeof stCur === "number" ? stCur : -1);
+  const i = cur + 1;
   const s = stState && stState.songs ? stState.songs[i] : null;
-  const key = s && s.key ? s.key
-      : (plCache && plCache.pl && plCache.pl[i]
-         ? plCache.pl[i].key : undefined);
-  switchTo(i, $("#next-go"), false, key);
+  switchTo(i, $("#next-go"), false, s ? s.key : undefined);
 });
 
 const fmt = s => {
@@ -823,8 +822,10 @@ function plRow(i, it) {
   return div;
 }
 let movePend = false;    // move 在途门：回显未落地前放行=下一次 move 按
-                         // 旧快照解析，会移错行/反向压回（结论攻击二轮
-                         // /plcmd move 的三条漏网路径实证）
+                         // 旧快照解析，会移错行/反向压回（结论攻击二/三轮
+                         // /plcmd move 的漏放路径实证）
+let moveStuck = false;   // 门保持态：POST 已落地但回显两拉皆败（断网）——
+                         // 靠 1.5s 轮询 refreshPlaylist 落地后自动放门
 async function movePl(from, to) {
   if (movePend) return;               // 在途门（含拖拽 drop 路径）
   if (from === to || from < 0 || to < 0 || !plCache
@@ -832,14 +833,16 @@ async function movePl(from, to) {
   const item = plCache.pl[from];
   dragKey = null;                      // 拖拽收尾：恢复轮询重绘
   movePend = true;
-  try {
-    const j = await post("/plcmd", {op: "move", payload: {from, to}});
-    if (j.ok) toast("已移动《" + item.name + "》");
-    // 回显必须落地才放门：refreshPlaylist 被 seq 并发放弃或瞬断时
-    // 重拉一次（新 seq 不会被在途旧响应丢弃）
-    if (!await refreshPlaylist()) await refreshPlaylist();
-  } finally {
+  const j = await post("/plcmd", {op: "move", payload: {from, to}});
+  if (j.ok) toast("已移动《" + item.name + "》");
+  // 回显必须落地才放门：被 seq 并发丢弃或瞬断时重拉一次（新 seq 不会被
+  // 在途旧响应丢弃）；两拉皆败=断网——门保持（moveStuck），轮询代放
+  const landed = (await refreshPlaylist()) || await refreshPlaylist();
+  if (landed) {
     movePend = false;
+  } else {
+    moveStuck = true;
+    toast("网络不稳，列表未刷新；排序暂缓，恢复后自动继续", "err");
   }
 }
 // 点击时刻按键重解析再发 move：连点 ↑/拖拽落在在途刷新上时，建行下标
@@ -1561,8 +1564,9 @@ const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 // （设备上电/掉电即反映，幽灵项自动清除），选中值按「端口名+同名序」
 // 成对保留——只记端口名在同名多口（两只同型号无线盒）下会静默吸回第
 // 1 口，保存即错绑（结论攻击二轮三条路径实证）；已存配置的回填只在
-// force（首拉/刷新/保存后），回落分支带 pos 消歧与 portSelVal 同口径
-function fillPortSel(id, list, hintKey, pos) {
+// force（首拉/刷新/保存后），回落消歧用已存 dev（与 _pick_hit 同语义，
+// 不吃 portStatus 3s 快照的陈旧 pos 窗）
+function fillPortSel(id, list, hintKey, devHint) {
   const sel = $("#" + id);
   const entries = (kbData.ports || {})[list] || [];
   const names = entries.map(e => e.name);
@@ -1602,12 +1606,12 @@ function fillPortSel(id, list, hintKey, pos) {
     if (i >= 0) {
       sel.value = opts[i].value;
     } else {
-      // 手选项已掉线：回落到当前已存配置对应的选项（同名多口带 pos
-      // 消歧），再幽灵项——绝不静默落到第一项=保存时错绑别的口
+      // 手选项已掉线：回落到当前已存配置对应的选项（同名多口按已存
+      // dev 消歧），再幽灵项——绝不静默落到第一项=保存时错绑别的口
       let hi = -1;
       if (hintKey) {
         hi = entries.findIndex(e => e.name === hintKey
-                                    && (pos > 1 ? e.dev === pos - 1 : true));
+                                    && e.dev === (devHint || 0));
         if (hi < 0) hi = entries.findIndex(e => e.name === hintKey);
       }
       if (hi >= 0) sel.value = String(hi);
@@ -1645,10 +1649,10 @@ function renderKbdPorts(force) {
   setSt("kb-ain-st", ps.axIn);
   setSt("kb-aout-st", ps.axOut);
   // 选项层每轮刷新（自带签名守卫+选中身份保留）；回填已存配置仅 force
-  fillPortSel("kb-jin", "in", kbData.junoIn, (ps.junoIn || {}).pos);
-  fillPortSel("kb-jout", "out", kbData.junoOut, (ps.junoOut || {}).pos);
-  fillPortSel("kb-ain", "in", kbData.axIn, (ps.axIn || {}).pos);
-  fillPortSel("kb-aout", "out", kbData.axOut, (ps.axOut || {}).pos);
+  fillPortSel("kb-jin", "in", kbData.junoIn, kbData.junoInDev);
+  fillPortSel("kb-jout", "out", kbData.junoOut, kbData.junoOutDev);
+  fillPortSel("kb-ain", "in", kbData.axIn, kbData.axInDev);
+  fillPortSel("kb-aout", "out", kbData.axOut, kbData.axOutDev);
   if (!force && kbPortsInit) return;
   portSelVal("kb-jin", kbData.junoIn, (ps.junoIn || {}).pos);
   portSelVal("kb-jout", kbData.junoOut, (ps.junoOut || {}).pos);
@@ -2555,7 +2559,12 @@ $("#app-addr").addEventListener("click", () =>
 setInterval(poll, 500);
 poll();
 setInterval(() => {
-  if (pageOn("console", "setlist")) refreshPlaylist();
+  if (pageOn("console", "setlist")) {
+    refreshPlaylist().then(landed => {
+      // movePl 断网保门后的自动放门：回显一旦落地即恢复排序能力
+      if (landed && moveStuck) { moveStuck = false; movePend = false; }
+    });
+  }
 }, 1500);
 setInterval(() => {
   if (pageOn("setlist")) { refreshPoints(); refreshKbdDetail(); }
