@@ -74,6 +74,7 @@
       <div id="logcard" class="card">
         <div class="md-head">运行日志
           <div class="log-tools">
+            <span class="lbl">级别</span>
             <select id="lg-filter" title="过滤级别">
               <option value="all">全部</option>
               <option value="err">仅错误</option>
@@ -203,8 +204,8 @@
       </div>
       <div class="card"><h3>功能绑定</h3>
         <div id="pd-binds" class="bind-list"></div>
-        <p class="dim sm-txt">踩一下=单踩，快踩两下=双踩；本页打开期间
-          踩钉静音，关页恢复。</p>
+        <p class="dim sm-txt">踩一下=单踩，快踩两下=双踩。本页打开期间
+          踩钉静音，关闭本页恢复。</p>
       </div>
       <details class="card"><summary>高级</summary>
         <div class="grid2">
@@ -223,7 +224,7 @@
       <div class="page-head">
         <h2>键盘自动化</h2>
       </div>
-      <div id="kb-status" class="dim sm-txt"></div>
+      <div id="kb-status" class="sm-txt"></div>
       <div class="cards2">
         <div class="card"><h3>JUNO 端口
           <span id="kb-jstat" class="port-stat"></span></h3>
@@ -285,7 +286,7 @@
             </div></div>
           <div class="field"><label>播放声音</label>
             <label class="switch"><input type="checkbox" id="vj-mute"><i></i>
-              <span>静音播放</span></label></div>
+              <span>静音</span></label></div>
         </div>
         <button id="vj-save" class="btn primary">保存并应用</button>
       </div>
@@ -304,8 +305,8 @@
           <div class="field"><label for="st-kb">键盘端口</label>
             <select id="st-kb"></select></div>
         </div>
-        <p class="dim sm-txt">「无」=停用；「（未接入）」=设备暂不在线，
-          保存保留原名。</p>
+        <p class="dim sm-txt">选「无」即停用该联动；「（未接入）」表示
+          设备暂不在线，保存保留原名。</p>
       </div>
       <div class="card"><h3>行为</h3>
         <div class="grid2">

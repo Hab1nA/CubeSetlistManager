@@ -55,7 +55,11 @@ if tab:
               "document.querySelector('.b-%s').click()" % p})
         time.sleep(1.2)
         if p == "setlist":
-            # 选中首曲再补一张：详情面板与行选中态的目视证据
+            # 先截未选中态，再选首曲补选中态（顺序不可颠倒）
+            r = send("Page.captureScreenshot", {"format": "png"})
+            png = base64.b64decode(r["data"])
+            (OUTD / ("page_%s.png" % p)).write_bytes(png)
+            print("shot", p, len(png), flush=True)
             send("Runtime.evaluate", {"expression":
                   "const r=document.querySelector('#lib .row')||"
                   "document.querySelector('#pl .row');r&&r.click()"})
@@ -64,6 +68,7 @@ if tab:
             png = base64.b64decode(r["data"])
             (OUTD / "page_setlist_selected.png").write_bytes(png)
             print("shot setlist_selected", len(png), flush=True)
+            continue
         r = send("Page.captureScreenshot", {"format": "png"})
         png = base64.b64decode(r["data"])
         (OUTD / ("page_%s.png" % p)).write_bytes(png)

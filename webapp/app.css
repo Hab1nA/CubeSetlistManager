@@ -70,7 +70,9 @@ input:focus-visible, select:focus-visible {
   cursor: pointer;
 }
 .btn:hover:not(:disabled) { background: var(--sur-3); border-color: #33404d; }
-.btn:disabled { opacity: .4; cursor: default; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary:disabled { background: var(--sur-2); color: var(--dim);
+  border-color: var(--line); }
 .btn.primary { background: #1d3a26; color: var(--ok); border-color: #245030; }
 .btn.primary:hover:not(:disabled) { background: #245030; }
 .btn.ghost { background: transparent; border-color: var(--line); color: var(--dim); }
@@ -112,6 +114,7 @@ input:focus-visible, select:focus-visible {
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .field label { font-size: var(--f-xs); color: var(--dim); }
 .field input, .field select, .form input, .form select {
+  box-sizing: border-box; height: 38px;
   background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
   width: 100%;
@@ -203,15 +206,17 @@ input.invalid { border-color: var(--err) !important; }
 #main { flex: 1; min-width: 0; overflow: auto; }
 .page { display: none; padding: 22px 28px; max-width: 1400px; }
 .page.on { display: block; animation: page-in 160ms var(--ease); }
+.page > h2 { margin: 0 0 var(--s4); font-size: 20px; }
 .page h2 { margin: 0; font-size: 20px; }
 .page-head { display: flex; align-items: center; gap: var(--s4);
   margin-bottom: var(--s4); }
 /* 页面级吸底操作行（设置页保存钮管四张卡，不缩在最后一张卡里） */
-.page-foot { position: sticky; bottom: 0; z-index: 5;
+.page-foot { position: sticky; bottom: 8px; z-index: 5;
   display: flex; align-items: center; gap: var(--s3);
-  margin: var(--s3) 0 -6px; padding: 10px var(--s3);
-  background: var(--sur-1); border-top: 1px solid var(--line);
-  border-radius: 10px; }
+  margin: var(--s3) 0 10px; padding: 10px 16px;
+  background: var(--sur-2); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+.page-foot > span { flex: 1; }
 .page-head h2 { margin: 0; }
 .page-head select { background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
@@ -221,7 +226,7 @@ input.invalid { border-color: var(--err) !important; }
 /* ---- 主控台（演出驾驶舱，不受 960 收束）---- */
 #p-console { display: none; max-width: none; }
 #p-console.on { display: flex; flex-direction: column; gap: var(--s3); }
-.hero { padding: var(--s6); }
+.hero { padding: var(--s4); }
 .hero-top { display: flex; align-items: center; gap: var(--s3);
   margin-bottom: var(--s2); }
 .big { font-size: var(--f-now); font-weight: 700; line-height: 1.15;
@@ -269,7 +274,7 @@ input.invalid { border-color: var(--err) !important; }
 .chip-btn.cur { border-color: #2c5c3a; color: var(--ok); }
 
 /* ---- 列表行（三态）---- */
-.list { display: flex; flex-direction: column; gap: 4px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
 .row {
   padding: 8px 12px;
   border-radius: 8px;
@@ -328,7 +333,7 @@ input.invalid { border-color: var(--err) !important; }
   color: var(--fg); }
 .lamp:hover { background: var(--sur-2); }
 .lamp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.lamp i { font-style: normal; color: #4a525b;
+.lamp i { font-style: normal; font-size: 17px; font-weight: 700; color: #4a525b;
   transition: color 300ms var(--ease); }
 .lamp.ok i { color: var(--ok); }
 .lamp.err i { color: var(--err); animation: lamp-err-pulse .9s ease-out 2; }
@@ -360,8 +365,8 @@ input.invalid { border-color: var(--err) !important; }
 .colhead { display: flex; align-items: center; gap: var(--s2);
   font-weight: 700; margin-bottom: var(--s2); }
 .colhead .btn.icon.sm { margin-left: auto; padding: 3px 9px; }
-.col .list { flex: 1; overflow: auto; }
-.lib-add { color: var(--dim); border: 1px solid var(--line);
+.col .list { flex: 1; overflow: auto; scrollbar-gutter: stable; }
+.lib-add { color: var(--fg); border: 1px solid var(--line);
   background: transparent; border-radius: 6px; cursor: pointer;
   padding: 2px 9px; font-size: var(--f-sm); flex: none;
   opacity: .55; transition: opacity var(--t-fast) var(--ease); }
@@ -378,7 +383,8 @@ input.invalid { border-color: var(--err) !important; }
   transition: opacity var(--t-fast) var(--ease); }
 .row:hover .ops, .row:focus-within .ops { opacity: 1; }
 .row .ops button { background: #26303a; color: var(--fg); border: 0;
-  border-radius: 6px; cursor: pointer; padding: 2px 8px; font-size: var(--f-xs); }
+  border-radius: 6px; cursor: pointer; padding: 2px 8px; font-size: var(--f-xs);
+  min-width: 30px; }
 .row .ops button:hover:not(:disabled) { background: #33404d; }
 .row .ops button.danger { background: #402024; color: var(--err); }
 .row .ops button.danger:hover:not(:disabled) { background: #55292f; }
@@ -393,6 +399,7 @@ input.invalid { border-color: var(--err) !important; }
 #pl-empty, #lib-empty { flex: 1; justify-content: center; }
 
 #p-pedal .input-row { max-width: 520px; }
+#vj-save { margin-top: var(--s3); }
 
 /* ---- 曲目详情列（定位点 + 音色映射）/ 卡头 ---- */
 #col-dt { flex: 0 1 460px; min-width: 340px; }
@@ -407,6 +414,7 @@ input.invalid { border-color: var(--err) !important; }
 .md-head { display: flex; align-items: center; gap: var(--s2);
   font-weight: 700; margin-bottom: var(--s2); flex-wrap: wrap; }
 .md-head .btn { margin-left: auto; }
+.md-head .switch { min-height: 30px; }
 #pt-list { overflow: auto; }
 #pt-form { display: flex; flex-direction: column; gap: var(--s3); }
 .tl-wrap { display: flex; flex-direction: column; gap: 6px; }
@@ -422,7 +430,7 @@ input.invalid { border-color: var(--err) !important; }
 #pt-tl-max { font-variant-numeric: tabular-nums; }
 
 /* ---- 踩钉页 ---- */
-.stat-cards { display: flex; gap: 14px; margin-bottom: var(--s4);
+.stat-cards { display: flex; gap: 14px; margin-bottom: var(--s3);
   flex-wrap: wrap; align-items: stretch; }
 .card.stat { min-width: 200px; flex: 1; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
@@ -469,7 +477,7 @@ details.card .grid2 { margin-top: var(--s3); }
   gap: var(--s3); }
 .card h3 .shift-ro { font-size: var(--f-xs); color: var(--dim);
   font-weight: 600; font-variant-numeric: tabular-nums; }
-.input-row { display: flex; gap: var(--s2); align-items: stretch; }
+.input-row { display: flex; gap: var(--s3); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
 .slot-grid { display: grid;
@@ -482,8 +490,9 @@ details.card .grid2 { margin-top: var(--s3); }
               background-color var(--t-fast) var(--ease);
 }
 .slot:hover { background: var(--sur-3); border-color: #33404d; }
-.slot .s-note { font-size: var(--f-xs); color: var(--dim);
+.slot .s-note { font-size: var(--f-xs); color: var(--fg);
   font-weight: 700; }
+.slot.unconfigured .s-note { color: var(--dim); }
 .slot .s-pc { font-size: var(--f-xl); font-weight: 700;
   font-variant-numeric: tabular-nums; }
 .slot .s-sub { font-size: var(--f-xs); color: var(--dim); min-height: 14px; }
@@ -492,7 +501,7 @@ details.card .grid2 { margin-top: var(--s3); }
   font-weight: 400; }
 .slot .s-ops { position: absolute; top: 8px; right: 8px;
   display: flex; gap: 6px; }
-.slot .s-test, .slot .s-clear { opacity: .55; }
+.slot .s-test, .slot .s-clear { opacity: 1; }
 .slot:hover .s-test, .slot:hover .s-clear,
 .slot .s-test:focus-visible, .slot .s-clear:focus-visible { opacity: 1; }
 .slot .s-clear { color: var(--err); }
@@ -500,7 +509,7 @@ details.card .grid2 { margin-top: var(--s3); }
 .slot.recording .s-sub { color: var(--err); }
 
 /* ---- VJ / 设置页 ---- */
-.card + .card { margin-top: var(--s3); }
+.card + .card { margin-top: 14px; }
 .cards2 .card, .stat-cards .card { margin: 0; }
 .netstat { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center;
   margin-top: var(--s3); }
@@ -546,10 +555,12 @@ details.card .grid2 { margin-top: var(--s3); }
 #logcard .log { height: 224px; }
 .log-tools { display: flex; align-items: stretch; gap: var(--s2);
   margin-left: auto; }
+.log-tools .lbl { margin-left: 2px; }
 .log-tools select { background: #0d1116; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
   font-size: var(--f-sm); }
-.log { font: 13px/1.7 Consolas, "Microsoft YaHei", monospace;
+.log { mask-image: linear-gradient(180deg, transparent 0, #000 16px);
+  font: 13px/1.7 Consolas, "Microsoft YaHei", monospace;
   background: #0b0e12; border: 1px solid var(--line); border-radius: 10px;
   padding: 10px 14px; height: calc(100vh - 240px); overflow: auto;
   user-select: text; }

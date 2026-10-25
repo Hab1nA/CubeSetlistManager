@@ -377,7 +377,8 @@ function lamps(st) {
   set("l-pedal", !pr ? "" : pr.link === "ok" ? "ok" : "warn",
       (!pr ? "踩钉桥未就绪" : (pr.link === "ok"
       ? "转发链路健康（15s 内有信号）" : pr.link === "stale"
-      ? "转发链路超时（>15s 无信号）" : "未收到转发信号"))
+      ? "转发链路超时（>15s 无信号）" : (pr.enabled
+      ? "未收到转发信号" : "未启用转发")))
       + "；点击进入踩钉页（打开期间踩钉临时静音）");
   set("l-hot", st.webIp ? "ok" : "",
       st.webIp ? "服务地址 " + st.webIp : "移动端遥控服务未启动");
@@ -441,10 +442,12 @@ function pedalLive(st) {
   const link = $("#pedal-link");
   const sub = $("#pedal-link-sub");
   if (pr) {
-    link.textContent = pr.link === "ok" ? "健康" :
-        pr.link === "stale" ? "超时" : "无信号";
+    const off = !pr.enabled && pr.link !== "ok" && pr.link !== "stale";
+    link.textContent = pr.link === "ok" ? "健康"
+        : pr.link === "stale" ? "超时" : (off ? "未启用" : "无信号");
     link.className = "stat-big " +
-        (pr.link === "ok" ? "ok" : pr.link === "stale" ? "warn" : "err");
+        (pr.link === "ok" ? "ok" : pr.link === "stale" ? "warn"
+         : off ? "" : "err");
     sub.textContent = pr.unknown > 0
         ? "未识别键 " + pr.unknown + " 个（链路活但键路不通）"
         : (pr.enabled ? "心跳正常" : "未启用");
@@ -465,7 +468,7 @@ function pedalLive(st) {
     $("#pedal-when").textContent = age < 60
         ? Math.round(age) + " 秒前" : "久前";
   } else {
-    $("#pedal-when").textContent = "";
+    $("#pedal-when").textContent = "暂无事件";
   }
 }
 
@@ -1254,6 +1257,8 @@ function drawBinds(d) {
     const clr = document.createElement("button");
     clr.className = "btn danger sm";
     clr.textContent = "清除";
+    const bound = d.binds[a] !== undefined || d.hid[a] !== undefined;
+    if (!bound) clr.disabled = true;
     clr.addEventListener("click", () => clearBind(a));
     row.append(nm, bd, learn, clr);
     el.appendChild(row);
@@ -1725,7 +1730,7 @@ async function refreshVj() {
     $("#vj-mute").checked = !!d.obs.vjMute;
     const ms = $("#vj-media-st");
     ms.textContent = d.obs.mediaInput || "未配置";
-    ms.className = "stat-big " + (d.obs.mediaInput ? "ok" : "warn");
+    ms.className = "stat-big" + (d.obs.mediaInput ? "" : " dim");
   } catch { /* 瞬断 */ }
 }
 $("#vj-save").addEventListener("click", async () => {
