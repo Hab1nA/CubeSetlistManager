@@ -383,6 +383,7 @@ input.invalid { border-color: var(--err) !important; }
 .empty-state svg { width: 28px; height: 28px; fill: none;
   stroke: currentColor; stroke-width: 1.2; }
 .empty-state.sm { padding: 24px 12px; font-size: var(--f-sm); }
+#pl-empty, #lib-empty { flex: 1; justify-content: center; }
 
 #p-pedal .input-row { max-width: 520px; }
 
@@ -392,6 +393,7 @@ input.invalid { border-color: var(--err) !important; }
   flex-direction: column; gap: 14px; padding-right: 2px; }
 #dt-none { flex: 1; justify-content: center; }
 #dt-scroll .card { margin: 0; }
+#dt-body { display: flex; flex-direction: column; gap: 14px; }
 #dt-head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #pt-list { max-height: 28vh; overflow: auto; flex: none; }
 .dt-inst { margin: 10px 0 6px; }
@@ -459,7 +461,6 @@ details.card .grid2 { margin-top: var(--s3); }
   font-weight: 600; font-variant-numeric: tabular-nums; }
 .input-row { display: flex; gap: var(--s2); align-items: center; }
 .input-row input { flex: 1; }
-.slot-cur { font-size: var(--f-md); font-weight: 600; margin-bottom: 6px; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
 .slot-grid { display: grid;
@@ -480,8 +481,14 @@ details.card .grid2 { margin-top: var(--s3); }
 .slot.unconfigured { border-style: dashed; }
 .slot.unconfigured .s-pc { color: var(--dim); font-size: var(--f-md);
   font-weight: 400; }
-.slot .s-test { position: absolute; top: 8px; right: 8px; opacity: .35; }
-.slot:hover .s-test { opacity: 1; }
+.slot .s-ops { position: absolute; top: 8px; right: 8px;
+  display: flex; gap: 6px; }
+.slot .s-test, .slot .s-clear { opacity: .55; }
+.slot:hover .s-test, .slot:hover .s-clear,
+.slot .s-test:focus-visible, .slot .s-clear:focus-visible { opacity: 1; }
+.slot .s-clear { color: var(--err); }
+.slot.recording { border-color: var(--err); background: #241417; }
+.slot.recording .s-sub { color: var(--err); }
 
 /* ---- VJ / 设置页 ---- */
 .card + .card { margin-top: var(--s3); }

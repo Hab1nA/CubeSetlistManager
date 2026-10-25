@@ -236,35 +236,33 @@ def stage_p0(send):
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
     time.sleep(2.0)          # 等一个轮询周期：列表换桩数据后再选曲
     pick_song(send, 1.2)
-    pop = js(send, "const r=document.querySelector('#dt-slots .slot');"
-             "if(!r)return {none:1};r.click();"
-             "return {pop:!!document.querySelector('.pop'),"
-             "rec:!!document.querySelector('.pop .btns .primary'),"
-             "noNumInput:!document.querySelector('.pop input')}")
-    ok("p0.popover.open", pop.get("pop") and pop.get("rec")
-       and pop.get("noNumInput"), json.dumps(pop, ensure_ascii=False))
-    js(send, "document.querySelector('.pop .btns .primary').click()")
-    time.sleep(0.4)            # post('/kbdrecord') 异步返回后才换按钮文案
-    rec = js(send, "const p=document.querySelector('.pop');"
-             "if(!p)return {gone:1};"
-             "return {txt:p.querySelector('.btns .primary').textContent}")
-    time.sleep(0.6)            # pollRecord 300ms 一拍吃到捕获桩
-    recE = js(send, "const p=document.querySelector('.pop');"
-              "if(!p)return {gone:1};"
-              "return {err:p.querySelector('.field-err').textContent,"
-              "stillOpen:1}")
-    js(send, "const p=document.querySelector('.pop');"
-        "p&&p.querySelector('.btns .primary').click()")
-    time.sleep(0.3)
-    ok("p0.popover.record-flow", "停止并保存" in rec.get("txt", "")
-       and recE.get("stillOpen")
-       and "已捕获" in recE.get("err", ""),
-       "%s %s" % (json.dumps(rec, ensure_ascii=False),
-                  json.dumps(recE, ensure_ascii=False)))
+    js(send, "const c=document.querySelector('#dt-slots .slot');"
+        "if(c)c.click();return 1")
+    time.sleep(0.5)            # post 回调异步加录制态，须让一拍
+    rec = js(send, "const c=document.querySelector('#dt-slots .slot');"
+             "if(!c)return {none:1};"
+             "return {rec:c.classList.contains('recording'),"
+             "noPop:!document.querySelector('.pop'),"
+             "sub:c.querySelector('.s-sub').textContent,"
+             "test:c.querySelector('.s-test').textContent}")
+    ok("p0.card.record-start", rec.get("rec") and rec.get("noPop")
+       and ("录制中" in rec.get("sub", "") or "已捕获" in rec.get("sub", "")),
+       json.dumps(rec, ensure_ascii=False))
+    time.sleep(0.8)            # pollRecord 300ms 一拍吃到捕获桩
+    cap = js(send, "const c=document.querySelector('#dt-slots .slot');"
+             "return {sub:c.querySelector('.s-sub').textContent}")
+    js(send, "window.__posts=[];"
+        "document.querySelector('#dt-slots .slot').click()")
+    time.sleep(0.5)
+    ok("p0.card.capture-save", "已捕获" in cap.get("sub", "")
+       and "USER:0564" in cap.get("sub", ""),
+       json.dumps(cap, ensure_ascii=False))
     posts = js(send, "return window.__posts||[]")
-    ok("p0.popover.slotset-post",
-       any("/slotset" in u and '"pc":63' in b for u, b in posts),
-       str(posts)[:140])
+    ok("p0.card.slotset-post",
+       any("/slotset" in u and '"pc":63' in b for u, b in posts)
+       and any("/kbdrecord" in u and '"stop":true' in b
+               for u, b in posts),
+       str(posts)[:160])
     dt = js(send, "return {head:document.getElementById('dt-head')"
             ".textContent,slots:document.querySelectorAll("
             "'#dt-slots .slot').length,"
@@ -503,6 +501,20 @@ def stage_p1(send):
     ok("p1.points.master-list", pt.get("rows") == 2
        and pt.get("dt") is False,
        json.dumps(pt, ensure_ascii=False))
+    # U1：点击 pt 条目行 → 该行蓝框（且仅该行）+ 该点直接进编辑表单
+    js(send, "const r=document.querySelector("
+             "\"#pl .row[data-k='pt:A/歌一#1']\");"
+             "r&&r.click();return 1")
+    time.sleep(1.5)
+    sel1 = js(send, "const sel=[...document.querySelectorAll("
+              "'#pl .row.sel')].map(r=>r.dataset.k);"
+              "return {n:sel.length,k:sel[0]||'',"
+              "form:!document.getElementById('pt-form').hidden,"
+              "name:document.getElementById('pt-name').value}")
+    ok("p1.pt-row-sel", sel1.get("n") == 1
+       and sel1.get("k") == "pt:A/歌一#1" and sel1.get("form")
+       and sel1.get("name") == "主歌",
+       json.dumps(sel1, ensure_ascii=False))
     ok("p1.dt.kbd-panel", "歌一" in (pt.get("head") or "")
        and pt.get("slots") == 10 and pt.get("ax") == 6
        and "JUNO 1/10" in (pt.get("kbdStat") or ""),
@@ -798,12 +810,17 @@ def stage_p2(send):
        "%s %s" % (json.dumps(kt, ensure_ascii=False), str(posts)[:140]))
     js(send, RESTORE)
     time.sleep(0.4)
-    pop = js(send, "document.querySelector('#dt-slots .slot').click();"
-             "return {pop:!!document.querySelector('.pop')}")
-    ok("p2.slots.popover", pop.get("pop"))
-    js(send, "document.querySelector('.pop')"
-        "&&document.querySelector('.pop').remove()")
-    js(send, RESTORE)
+    js(send, "const c=document.querySelector('#dt-slots .slot');"
+        "c&&c.click();return 1")
+    time.sleep(0.5)
+    card = js(send, "const c=document.querySelector('#dt-slots .slot');"
+              "return {test:c.querySelector('.s-test').textContent,"
+              "clears:document.querySelectorAll('#dt-slots .s-clear')"
+              ".length+document.querySelectorAll('#dt-axslots .s-clear')"
+              ".length}")
+    ok("p2.slots.card-actions", card.get("test") == "测试"
+       and card.get("clears") == 1,   # 桩给了 60 号槽配置 → 仅 1 个 ✕
+       json.dumps(card))
     shot(send, "x_p2_slots")
 
     # ---- 目录选择按钮（不点击=不开真对话框；契约由单测覆盖）----
@@ -1464,32 +1481,27 @@ def stage_d(send):
     time.sleep(0.8)
     pick_song(send, 1.2)          # 选 A/歌一 → 详情面板音色映射
     d4 = js(send, "const s=document.querySelector('#dt-slots .slot "
-            ".s-sub');const ax=document.querySelector("
-            "'#dt-axslots .slot .s-sub');"
+            ".s-pc');const ax=document.querySelector("
+            "'#dt-axslots .slot .s-pc');"
             "return {juno:s?s.textContent:'',ax:ax?ax.textContent:''}")
     ok("bd.d4.slot-desc", d4.get("juno") == "USER:0521"
        and d4.get("ax") == "SYNTH/PAD #5",
        json.dumps(d4, ensure_ascii=False))
-    # ---- D3/D5：popover 录制直写（无手填数字输入）+ songKey 定向保存 ----
+    # ---- D3/D5：卡片直录（无二级弹层、无手填数字）+ songKey 定向保存 ----
     js(send, "document.querySelector('#dt-slots .slot').click()")
-    time.sleep(0.3)
-    js(send, "const p=document.querySelector('.pop');"
-        "[...p.querySelectorAll('button')].find(b=>b.textContent==="
-        "'● 录制').click()")
     time.sleep(0.9)          # 轮询一拍吃到捕获桩
-    d3 = js(send, "const p=document.querySelector('.pop');"
-            "return {err:p.querySelector('#sp-err').textContent,"
-            "btn:[...p.querySelectorAll('button')].map(b=>b.textContent),"
-            "noNumInput:!p.querySelector('input')}")
-    ok("bd.d3.record-capture", "已捕获" in d3.get("err", "")
-       and "PC 70" in d3.get("err", "") and d3.get("noNumInput")
-       and any("停止并保存" in t for t in d3.get("btn", [])),
+    d3 = js(send, "const c=document.querySelector('#dt-slots .slot');"
+            "return {rec:c.classList.contains('recording'),"
+            "noPop:!document.querySelector('.pop'),"
+            "sub:c.querySelector('.s-sub').textContent,"
+            "btns:[...c.querySelectorAll('button')].map(b=>b.textContent)}")
+    ok("bd.d3.record-capture", d3.get("rec") and d3.get("noPop")
+       and "已捕获" in d3.get("sub", "") and "PC 70" in d3.get("sub", "")
+       and d3.get("btns") == ["测试", "✕"],
        json.dumps(d3, ensure_ascii=False))
-    # 停止并保存 → /slotset 带捕获值 + songKey；停止口令已发
-    js(send, "const p=document.querySelector('.pop');"
-        "window.__posts=[];"
-        "[...p.querySelectorAll('button')].find(b=>b.textContent==="
-        "'■ 停止并保存').click()")
+    # 再点同卡=停止并保存 → /slotset 带捕获值 + songKey；停止口令已发
+    js(send, "window.__posts=[];"
+        "document.querySelector('#dt-slots .slot').click()")
     time.sleep(0.6)
     d3b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
              "{if(u==='/slotset')body=b});"
@@ -1755,7 +1767,7 @@ def stage_f(send):
     # ---- F popover 入场动画（计算样式 animation-name=pop-in）----
     nav(send, "setlist")
     pick_song(send, 1.0)
-    js(send, "document.querySelector('#dt-slots .slot').click()")
+    js(send, "document.getElementById('pl-more').click();return 1")
     pf = js(send, "const p=document.querySelector('.pop');"
             "const cs=p?getComputedStyle(p):null;"
             "return {name:cs?cs.animationName:null,"
@@ -1770,10 +1782,14 @@ def stage_f(send):
         "window.fetch=(u,o)=>{"
         "if(String(u)==='/state')return Promise.reject(new Error('x'));"
         "return window.__fetch0(u,o)};")
-    time.sleep(2.2)
-    fd = js(send, "const e=document.getElementById('tstate');"
-            "return {txt:e.textContent,cls:e.className}")
-    ok("bf.f.disconnected", fd.get("txt") == "连接中断…重试中"
+    fd = None
+    for _ in range(8):        # 3 连败需 1.5s+，轮询读至 4s 防段间时序抖动
+        time.sleep(0.5)
+        fd = js(send, "const e=document.getElementById('tstate');"
+                "return {txt:e.textContent,cls:e.className}")
+        if fd and fd.get("txt") == "连接中断…重试中":
+            break
+    ok("bf.f.disconnected", fd and fd.get("txt") == "连接中断…重试中"
        and "err" in fd.get("cls", ""), json.dumps(fd, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(1.2)

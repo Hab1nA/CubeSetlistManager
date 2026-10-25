@@ -57,7 +57,6 @@ function closePop() {
   if (!popEl) return;
   popEl.remove();
   popEl = null;
-  stopRecord();       // 录制随层关闭统一收口（外点/ESC/清除都经此）
   document.removeEventListener("pointerdown", _popOut, true);
   document.removeEventListener("keydown", _popEsc, true);
   if (popAnchor && popAnchor.isConnected)   // 焦点还回锚点（键盘流不丢）
@@ -94,7 +93,8 @@ function menuItem(box, text, cls, fn) {
 let curPage = "console", booted = false;
 function nav(page) {
   if (booted && page !== curPage) {
-    if (popEl) closePop();   // 换页收口弹层（录制随层停口，不悬到新页）
+    if (popEl) closePop();   // 换页收口弹层
+    if (curPage === "setlist" && recInst) stopRecord();
     // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）
     if (curPage === "pedal") pedalMute(false);
     if (page === "pedal") {
@@ -495,7 +495,8 @@ async function poll() {
 }
 
 // ================= 编排页 =================
-let plSel = null, slQ = "", dragKey = null;
+let plSel = null, selRowKey = null, ptSelPending = null;
+let slQ = "", dragKey = null;
 
 // ---- 编排时长三态（自动绿/手动黄/未知红「未知」；pt=段长按绿显示）----
 const durCls = src => src === "manual" ? "dur-manual"
@@ -525,9 +526,13 @@ function libRow(s, inPl) {
   });
   div.append(tag, nm, dur, add);
   div.addEventListener("click", () => {
-    // 行单击=选中（详情面板跟随）；＋ 为唯一加入入口（防误触）
-    selectSong(s.key.startsWith("pt:")
-               ? s.key.slice(3).split("#")[0] : s.key);
+    // 行单击=选中该行；pt 条目选中该定位点（详情面板直接进编辑）；
+    // ＋ 为唯一加入入口（防误触）
+    const k = s.key;
+    if (k.startsWith("pt:")) {
+      const base = k.slice(3).split("#")[0];
+      selectSong(k, base, Number(k.slice(3).split("#")[1]));
+    } else selectSong(k, k, null);
   });
   return div;
 }
@@ -539,7 +544,7 @@ function drawLib() {
   const inPl = new Set(plCache.pl.map(it => it.key));
   const sig = plCache.lib.map(s => s.key + (inPl.has(s.key) ? 1 : 0)
       + (s.durSrc || "") + (s.dur || "")).join("|") + "#" + slQ
-      + "#" + (plSel || "");
+      + "#" + (selRowKey || "");
   if (lib.dataset.sig === sig) return;
   lib.dataset.sig = sig;
   lib.innerHTML = "";
@@ -566,11 +571,10 @@ function drawLib() {
     btn.style.display = libEmpty ? "" : "none";
   }
   $("#lib-n").textContent = plCache.lib.length + " 首";
+  $("#lib").hidden = shown.length === 0;   // 空态充满列表区（U2）
   shown.forEach(s => {
     const row = libRow(s, inPl.has(s.key));
-    const base = s.key.startsWith("pt:")
-        ? s.key.slice(3).split("#")[0] : s.key;
-    if (base === plSel) row.classList.add("sel");
+    if (s.key === selRowKey) row.classList.add("sel");
     lib.appendChild(row);
   });
 }
@@ -685,8 +689,11 @@ function plRow(i, it) {
   });
   div.append(handle, no, nm, dur, ops);
   div.addEventListener("click", () => {
-    selectSong(it.key.startsWith("pt:")
-               ? it.key.slice(3).split("#")[0] : it.key);
+    const k = it.key;
+    if (k.startsWith("pt:")) {
+      const base = k.slice(3).split("#")[0];
+      selectSong(k, base, Number(k.slice(3).split("#")[1]));
+    } else selectSong(k, k, null);
   });
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
   // dragstart 的复位（F 批：拖拽细节）
@@ -746,7 +753,7 @@ function drawPl() {
   const el = $("#pl");
   const want = plCache.pl.map(it => it.key).join("|");
   const curIdx = typeof stCur === "number" ? stCur : -1;
-  const sel = plSel;
+  const sel = selRowKey;
   const sig = want + "#" + curIdx + "#" + sel + "#" + slQ
       + "#" + plCache.pl.map(x => x.name + x.dur + (x.durSrc || ""))
           .join("~");
@@ -760,46 +767,59 @@ function drawPl() {
     const lib = plCache.lib.find(x => x.key === base);
     return lib ? (lib.team || "").toLowerCase() : "";
   };
+  let rendered = 0;
   plCache.pl.forEach((it, i) => {
     if (!slQ || it.name.toLowerCase().includes(slQ)
         || teamOf(it).includes(slQ)) {
+      rendered++;
       const r = plRow(i, it);
       if (i === curIdx) r.classList.add("cur");
-      if (it.key === sel
-          || (it.key.startsWith("pt:")
-              && it.key.slice(3).split("#")[0] === sel))
-        r.classList.add("sel");
+      if (it.key === sel) r.classList.add("sel");
       el.appendChild(r);
     }
   });
   $("#pl-n").textContent = plCache.pl.length + " 首";
-  $("#pl-empty").hidden = plCache.pl.length > 0;
+  // 空态充满列表区（U2）；真空表引导加曲、搜索无果提示清词
+  $("#pl").hidden = rendered === 0;
+  $("#pl-empty").hidden = rendered > 0;
+  $("#pl-empty").textContent = plCache.pl.length
+      ? "没有匹配「" + slQ + "」的曲目，试试清空搜索词"
+      : "从上方素材库点 ＋ 加入曲目";
 }
 function markPlSel() {
-  $$("#pl .row").forEach(r => r.classList.toggle("sel", r.dataset.k === plSel));
-  $$("#lib .row").forEach(r => r.classList.toggle("sel", r.dataset.k === plSel));
+  $$("#pl .row").forEach(r =>
+      r.classList.toggle("sel", r.dataset.k === selRowKey));
+  $$("#lib .row").forEach(r =>
+      r.classList.toggle("sel", r.dataset.k === selRowKey));
 }
 // 选中曲（素材库/播放列表行点击，pt 条目归一到宿主工程）：
 // 详情面板（定位点+音色映射）跟随；换曲清定位点选择防串编辑
-function selectSong(key) {
-  if (plSel === key) { markPlSel(); return; }
-  plSel = key;
-  ptSel = null;
-  // 数据在途时先清面板（红队 P0-1：旧曲映射不得残留在新曲名下可编辑）。
-  // dataset.sig 必须一并清：否则 buildSlots 差量守卫见「签名同」跳过重绘，
-  // 换到映射内容相同的另一首时网格停在空态（探针 p1 实证）
-  dtKbd = null;
-  dtPtN = null;
-  updateDtBadge();
-  $("#dt-kbd-stat").textContent = "映射装载中…";
-  for (const id of ["dt-slots", "dt-axslots"]) {
-    const el = $("#" + id);
-    el.innerHTML = "";
-    delete el.dataset.sig;
+function selectSong(rowKey, base, ptId) {
+  selRowKey = rowKey;
+  ptSelPending = ptId || null;
+  if (recInst) stopRecord();     // 录制目标定格在开始时的曲，换选即弃
+  if (plSel !== base) {
+    plSel = base;
+    ptSel = null;
+    // 数据在途时先清面板（红队 P0-1：旧曲映射不得残留在新曲名下可编辑）。
+    // dataset.sig 必须一并清：否则 buildSlots 差量守卫见「签名同」跳过
+    // 重绘，换到映射内容相同的另一首时网格停在空态（探针 p1 实证）
+    dtKbd = null;
+    dtPtN = null;
+    updateDtBadge();
+    $("#dt-kbd-stat").textContent = "映射装载中…";
+    for (const id of ["dt-slots", "dt-axslots"]) {
+      const el = $("#" + id);
+      el.innerHTML = "";
+      delete el.dataset.sig;
+    }
+    markPlSel();
+    refreshPoints();
+    refreshKbdDetail();
+  } else {
+    markPlSel();
+    if (ptSelPending !== null) refreshPoints();   // 同曲换点：进编辑
   }
-  markPlSel();
-  refreshPoints();
-  refreshKbdDetail();
   // 窄窗（页签可见）选中后切到详情列，给可见反馈
   if (getComputedStyle($("#sl-tabs")).display !== "none")
     $('#sl-tabs [data-col="dt"]').click();
@@ -906,6 +926,16 @@ async function refreshPoints() {
            || (ptData[plSel] || {}).name || plSel);
     const dd = ptData[ptProj] || {enabled: false, points: []};
     if (!ptOnPending) $("#pt-on").checked = dd.enabled;
+    if (ptSelPending !== null) {   // 点行点击：选中该点并填编辑表单
+      const pp = dd.points.find(x => x.id === ptSelPending);
+      ptSelPending = null;
+      if (pp) {
+        ptSel = pp.id;
+        $("#pt-name").value = pp.name;
+        $("#pt-s").value = fmtTC(pp.start);
+        $("#pt-e").value = fmtTC(pp.end);
+      }
+    }
     dtPtN = dd.points.length;
     updateDtBadge();
     // 主列表（差量：签名不变不动 DOM）
@@ -1430,14 +1460,23 @@ function renderKbdStatus() {
       : (kbData.lastResult || "");
 }
 
-// 录制（琴上捕获）：弹层内启动，捕获结果经 onCap 实时回报；
-// closePop 统一停口（外点/ESC/关闭都经此，winmm 输入口不被无限期占用）
-let recInst = null;
+// 录制（琴上捕获）：点槽卡即开录，再点同卡=停止并保存（直写该曲）；
+// 全局同时至多一个录制会话；换曲/换页/关窗一律收口释放输入口
+let recInst = null, recNote = null, recCap = null, recCtx = null,
+    recCard = null;
 function stopRecord() {
-  if (recInst) {
-    post("/kbdrecord", {inst: recInst, stop: true});
-    recInst = null;
-    clearTimeout(recTimer);
+  if (!recInst) return;
+  post("/kbdrecord", {inst: recInst, stop: true});
+  recInst = recNote = recCap = null;
+  recCtx = null;
+  clearTimeout(recTimer);
+  if (recCard) {
+    if (recCard.isConnected) {
+      recCard.classList.remove("recording");
+      const sub = recCard.querySelector(".s-sub");
+      if (sub) sub.textContent = "";
+    }
+    recCard = null;
   }
 }
 function pollRecord(inst, onCap) {
@@ -1448,123 +1487,91 @@ function pollRecord(inst, onCap) {
       if (d.active && d.inst === inst && recInst === inst) {
         if (d.slot) onCap(d.slot);
         pollRecord(inst, onCap);
-      } else {
-        recInst = null;
+      } else if (recInst === inst) {
+        // 会话被后端收口（超时/异常）：卡片退出录制态并如实告知
+        const card = recCard;
+        recInst = recNote = recCap = null; recCtx = null; recCard = null;
+        if (card && card.isConnected) {
+          card.classList.remove("recording");
+          const sub = card.querySelector(".s-sub");
+          if (sub) sub.textContent = "录制会话已结束";
+        }
       }
-    } catch {
-      recInst = null;
-    }
+    } catch { pollRecord(inst, onCap); }   // 瞬断：下一拍继续
   }, 300);
 }
 
-// 音色槽录制弹层：映射只从「录制」写入（琴上选音色捕获），无手填数字；
-// 「试」在槽卡上，「清除」删映射。快照（key+槽位字典）定格在打开时刻：
-// 编辑目标是打开时刻选中的那首歌与那份映射，随后换选不动旧弹层
-function slotEditor(anchor, inst, note, slot) {
-  popover(anchor, (box, close) => {
-    const editKey = plSel;
-    // 快照来源三重校验（红队 P0-1）：数据须属于当前选中曲且装载完成，
-    // 否则整表替换保存会把别曲/空表写进目标曲的旁挂文件
-    const es = dtKbd && dtKbd.editSong;
-    const ready = !!(editKey && es && es.key === editKey && !es.loading);
-    const src = ready ? (inst === "ax" ? es.axSlots : es.slots) : {};
-    const editSlots = {};
-    Object.keys(src || {}).forEach(k => editSlots[Number(k)] = {...src[k]});
-    const h = document.createElement("h4");
-    h.textContent = "音 " + noteName(note) + "（MIDI " + note + "）音色";
-    box.appendChild(h);
-    const cur = document.createElement("div");
-    cur.className = "slot-cur";
-    cur.textContent = slot ? (slot.desc || "PC " + slot.pc) : "（未配置）";
-    box.appendChild(cur);
-    const err = document.createElement("div");
-    err.className = "field-err";
-    err.id = "sp-err";
-    // 未选曲/映射未就绪：保存目标不定——禁止录制，防串曲整表覆写
-    if (!editKey) err.textContent = "未选择曲目：先在左侧选择";
-    else if (!ready) err.textContent = "该曲映射装载中…稍候再试";
-    box.appendChild(err);
-    const btns = document.createElement("div");
-    btns.className = "btns";
-    box.appendChild(btns);
-    let captured = null;
-    const saveCap = () => {
-      editSlots[note] = captured;
-      post("/slotset", {inst, slots: editSlots, songKey: editKey}).then(j => {
-        if (j.ok) toast("音 " + noteName(note) + " 已录制："
-            + (captured.desc || "PC " + captured.pc));
-        refreshKbdDetail();
-      });
-      close();
-    };
-    const rec = document.createElement("button");
-    rec.className = "primary";
-    rec.textContent = "● 录制";
-    rec.title = "按下后到琴上选该槽位音色，再按一次停止并保存";
-    rec.disabled = !ready;
-    rec.addEventListener("click", async () => {
-      if (recInst === inst) {       // 再按一次=停止并保存最后捕获
-        const cap = captured;
-        stopRecord();
-        rec.textContent = "● 录制";
-        if (!cap) {
-          err.textContent = "没收到音色信息（检查琴的 MIDI 输出口与录制端口）";
-          return;
-        }
-        saveCap();
-        return;
-      }
-      const j = await post("/kbdrecord", {inst});
-      if (!j.ok) return;
-      recInst = inst;
-      captured = null;
-      rec.textContent = "■ 停止并保存";
-      err.textContent = "录制中：请在琴上选音色…";
-      pollRecord(inst, cap => {
-        captured = cap;
-        err.textContent = "已捕获：" + (cap.desc || "PC " + cap.pc)
-            + "（可继续在琴上选，再按一次停止并保存）";
-      });
-    });
-    btns.appendChild(rec);
-    if (slot && ready) {
-      const clr = document.createElement("button");
-      clr.className = "danger";
-      clr.textContent = "清除";
-      clr.disabled = !ready;
-      clr.addEventListener("click", () => {
-        const cur2 = editSlots;
-        delete cur2[note];
-        post("/slotset", {inst, slots: cur2, songKey: editKey}).then(j => {
-          if (j.ok) toast("音 " + noteName(note) + " 已清除");
-          refreshKbdDetail();
-        });
-        close();
-      });
-      btns.appendChild(clr);
+// 音色槽卡片直录：点卡=开录（捕获实时显示在卡上），再点=停止并保存；
+// 「测试」「✕清除」与录制同卡并列，无二级弹层。快照（key+槽位字典）
+// 定格在开录时刻：保存目标就是开录时选中的那首歌与那份映射
+function cardRecord(div, inst, note) {
+  const es = dtKbd && dtKbd.editSong;
+  const ready = !!(plSel && es && es.key === plSel && !es.loading);
+  if (recInst === inst && recNote === note) {   // 再点=停止并保存
+    const cap = recCap, ctx = recCtx, card = recCard, had = !!recInst;
+    recInst = recNote = recCap = null; recCtx = null; recCard = null;
+    clearTimeout(recTimer);
+    if (card) card.classList.remove("recording");
+    post("/kbdrecord", {inst, stop: true});     // 关口释放输入口
+    if (!had) return;
+    if (!cap) {
+      const sub = div.querySelector(".s-sub");
+      if (sub) sub.textContent = "没收到音色信息（检查琴的输出口与录制端口）";
+      return;
     }
-    const cancel = document.createElement("button");
-    cancel.textContent = "关闭";
-    cancel.addEventListener("click", close);   // closePop 会统一停录
-    btns.appendChild(cancel);
-    setTimeout(() => rec.focus());
+    const slots = {...ctx.slots, [note]: cap};
+    post("/slotset", {inst, slots, songKey: ctx.key}).then(j => {
+      if (j.ok) toast("音 " + noteName(note) + " 已录制："
+          + (cap.desc || "PC " + cap.pc));
+      refreshKbdDetail();
+    });
+    return;
+  }
+  if (!ready) {   // 红队 P0-1：目标不定不录（防串曲整表覆写）
+    toast(!es || es.loading ? "该曲映射装载中…稍候再试"
+          : "映射不可用（曲目不在素材库）", "err");
+    return;
+  }
+  if (recInst) stopRecord();                    // 全局单录制会话
+  post("/kbdrecord", {inst}).then(j => {
+    if (!j.ok) return;
+    recInst = inst;
+    recNote = note;
+    recCap = null;
+    recCard = div;
+    const src = inst === "ax" ? es.axSlots : es.slots;
+    const snap = {};
+    Object.keys(src || {}).forEach(k => snap[Number(k)] = {...src[k]});
+    recCtx = {key: plSel, slots: snap};
+    div.classList.add("recording");
+    const sub = div.querySelector(".s-sub");
+    if (sub) sub.textContent = "录制中：请在琴上选音色，再点一次停止并保存";
+    pollRecord(inst, cap => {
+      recCap = cap;
+      const s2 = recCard && recCard.querySelector(".s-sub");
+      if (s2) s2.textContent = "已捕获：" + (cap.desc || "PC " + cap.pc)
+          + "（再点一次停止并保存）";
+    });
   });
 }
 function slotRow(note, slot, inst) {
   const div = document.createElement("div");
   div.className = "slot" + (slot ? "" : " unconfigured");
+  div.dataset.inst = inst;
+  div.dataset.note = note;
   const n = document.createElement("span");
   n.className = "s-note";
   n.textContent = "音 " + noteName(note);
   const pc = document.createElement("span");
   pc.className = "s-pc";
-  pc.textContent = slot ? "PC " + slot.pc : "（未配置）";
+  pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "（未配置）";
   const sub = document.createElement("span");
   sub.className = "s-sub";
-  sub.textContent = slot ? (slot.desc || "") : "";
+  const ops = document.createElement("span");
+  ops.className = "s-ops";
   const test = document.createElement("button");
   test.className = "btn ghost xs s-test";
-  test.textContent = "试";
+  test.textContent = "测试";
   test.title = "向琴发送该音色（连通测试）";
   test.addEventListener("click", ev => {
     ev.stopPropagation();
@@ -1576,10 +1583,32 @@ function slotRow(note, slot, inst) {
       if (j.ok) toast("已发送测试：音 " + noteName(note));
     });
   });
-  div.append(n, pc, sub, test);
-  div.title = slot && slot.desc ? slot.desc : "点击录制音色";
-  div.tabIndex = 0;             // 可聚焦（关层焦点还回 + 键盘可达）
-  div.addEventListener("click", () => slotEditor(div, inst, note, slot));
+  ops.appendChild(test);
+  if (slot) {
+    const clr = document.createElement("button");
+    clr.className = "btn ghost xs s-clear";
+    clr.textContent = "✕";
+    clr.title = "清除该音色映射";
+    clr.addEventListener("click", ev => {
+      ev.stopPropagation();
+      const es = dtKbd && dtKbd.editSong;
+      if (!plSel || !es || es.key !== plSel || es.loading) {
+        toast("映射未就绪", "err");
+        return;
+      }
+      const slots = {...(inst === "ax" ? es.axSlots : es.slots)};
+      delete slots[note];
+      post("/slotset", {inst, slots, songKey: plSel}).then(j => {
+        if (j.ok) toast("音 " + noteName(note) + " 已清除");
+        refreshKbdDetail();
+      });
+    });
+    ops.appendChild(clr);
+  }
+  div.append(n, pc, sub, ops);
+  div.title = "点击录制：到琴上选音色，再点一次停止并保存";
+  div.tabIndex = 0;
+  div.addEventListener("click", () => cardRecord(div, inst, note));
   return div;
 }
 async function refreshKbd(force) {
