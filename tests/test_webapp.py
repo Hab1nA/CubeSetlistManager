@@ -166,6 +166,37 @@ def test_pickdir_endpoint():
         srv.shutdown()
 
 
+def test_vjmap_endpoint(tmp_path):
+    """/vjmap：音符↔视频对应表——固定规则 31 行（60-89 视频音 + 90 熄屏），
+    视频库宽松匹配（精确 basename / 「编号+空格」前缀）；简化版拒绝。"""
+    app = _FakeWebApp()
+    vroot = tmp_path / "videos"
+    vroot.mkdir()
+    (vroot / "1 开场钢琴.mp4").write_bytes(b"x")
+    app.ctl = types.SimpleNamespace(cfg={"videoRoot": str(vroot)})
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    try:
+        d = _get(port, "/vjmap")
+        assert d["videoRoot"] == str(vroot) and d["files"] == 1
+        assert len(d["rows"]) == 31
+        r60 = next(r for r in d["rows"] if r["note"] == 60)
+        assert r60["name"] == "C4" and r60["file"] == "1 开场钢琴.mp4"
+        assert r60["hit"] and r60["blackout"] is False
+        r2 = next(r for r in d["rows"] if r["note"] == 61)
+        assert r2["file"] == "2.mp4" and r2["hit"] is None   # 库里没有
+        r90 = next(r for r in d["rows"] if r["note"] == 90)
+        assert r90["blackout"] is True and r90["file"] == "熄屏"
+        app.lite = True
+        code, _b = _req("GET", port, "/vjmap")
+        assert code == 403
+    finally:
+        srv.shutdown()
+
+
 def test_checkpath_endpoint(tmp_path):
     """/checkpath：路径存在性探测（设置页即时校验）；仅 loopback、
     简化版拒绝、缺 path 400。"""

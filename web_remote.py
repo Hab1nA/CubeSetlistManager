@@ -1481,6 +1481,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._h_points()
         elif path == "/log":
             self._h_log()
+        elif path == "/vjmap":
+            self._h_vjmap()
         elif path == "/monitor":
             self._run_on_app(lambda: None, result_fn=lambda: dict(
                 self.server.app._monitor_web()))
@@ -1571,6 +1573,45 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": _err(e)})
 
     # -- 新前端（/app）数据与命令端点 --
+
+    def _h_vjmap(self):
+        """VJ 音符 ↔ 视频对应表：NOTE_MAP 固定规则（音符 N → N-59.mp4，
+        F#6=熄屏）+ 视频库实际文件宽松匹配（精确 basename 或「编号+空格」
+        前缀）。只读快照，无 App 状态，HTTP 线程直出。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无 VJ 联动"})
+            return
+        import re as _re
+        ctl = getattr(app, "ctl", None)
+        root = (ctl.cfg.get("videoRoot", "") if ctl is not None else "") or ""
+        files = (obs_ctrl.scan_videos(root)
+                 if root and os.path.isdir(root) else [])
+        by_base, by_num = {}, {}
+        for rel in files:
+            b = os.path.basename(rel)
+            by_base.setdefault(b, rel)
+            m = _re.match(r"(\d+)\s", b)
+            if m:
+                by_num.setdefault(m.group(1), rel)
+        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
+                 "A#", "B")
+        rows = []
+        for n in range(60, 91):
+            f = __import__("midi_bridge").NOTE_MAP[n]
+            nm = names[n % 12] + str(n // 12 - 1)
+            if f is None:
+                rows.append({"note": n, "name": nm, "file": "熄屏",
+                             "blackout": True, "hit": None})
+                continue
+            base = os.path.basename(f)
+            num = _re.match(r"(\d+)", base)
+            hit = by_base.get(base) or (by_num.get(num.group(1))
+                                        if num else None)
+            rows.append({"note": n, "name": nm, "file": hit or base,
+                         "blackout": False, "hit": hit})
+        self._json(200, {"videoRoot": root, "files": len(files),
+                         "rows": rows})
 
     def _h_playlist(self):
         """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+

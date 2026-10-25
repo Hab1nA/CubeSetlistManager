@@ -1753,6 +1753,42 @@ $("#kb-save").addEventListener("click", async () => {
 const fmtShift = v => (v > 0 ? "+" : "") + v;
 
 // ---- VJ 联动 ----
+let vjMapRows = null, vjMapRoot = null;
+async function refreshVjMap(root) {
+  if (root === vjMapRoot && vjMapRows) return;   // 目录没变不重扫
+  try {
+    const r = await fetch("/vjmap");
+    if (!r.ok) return;
+    const d = await r.json();
+    vjMapRoot = d.videoRoot;
+    vjMapRows = d.rows;
+    const box = $("#vjmap");
+    box.innerHTML = "";
+    if (!vjMapRoot) {
+      box.innerHTML = "<span class='dim sm-txt'>未设置视频目录，"
+          + "先在下方「视频联动」里选择</span>";
+      return;
+    }
+    d.rows.forEach(row => {
+      const chip = document.createElement("span");
+      chip.className = "keychip"
+          + (row.blackout ? " blackout" : "")
+          + (row.hit ? "" : " miss");
+      chip.dataset.file = row.file;
+      chip.title = row.blackout ? "F#6：熄灭投影画面"
+          : (row.hit ? "视频库：" + row.hit
+             : "视频库中未找到 " + row.file + "（可按「N 描述」命名放入视频目录）");
+      const b = document.createElement("b");
+      b.textContent = row.name;
+      const f = document.createElement("span");
+      f.className = "f";
+      f.textContent = row.blackout ? "熄屏" : row.file;
+      chip.append(b, f);
+      box.appendChild(chip);
+    });
+  } catch { /* 瞬断 */ }
+}
+
 async function refreshVj() {
   try {
     const d = await (await fetch("/settings")).json();
@@ -1763,6 +1799,7 @@ async function refreshVj() {
     const ms = $("#vj-media-st");
     ms.textContent = d.obs.mediaInput || "未配置";
     ms.className = "stat-big" + (d.obs.mediaInput ? "" : " dim");
+    refreshVjMap((d.obs.videoRoot || "").trim());
   } catch { /* 瞬断 */ }
 }
 $("#vj-save").addEventListener("click", async () => {
@@ -1796,6 +1833,16 @@ function renderVjState() {
   $("#vj-video").textContent =
       (vj.follow === "playing" || vj.follow === "paused") && vj.video
       ? "视频：" + vj.video : "";
+  // 映射网格：在播视频对应的音符芯片高亮（按 N.mp4 编号匹配）
+  if (vjMapRows) {
+    const num = x => (x.match(/^(\d+)/) || [])[1] || "";
+    const cur = num((vj.video || "").split("/").pop());
+    $$("#vjmap .keychip").forEach(chip => {
+      chip.classList.toggle("live",
+          !!cur && !chip.classList.contains("blackout")
+          && num(chip.dataset.file || "") === cur);
+    });
+  }
 }
 
 // ---- 设置页（分组卡 + 脏标记）----
