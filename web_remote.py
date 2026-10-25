@@ -1996,8 +1996,15 @@ class _Handler(BaseHTTPRequestHandler):
                 if key not in app.pl_keys:
                     self._json(400, {"error": "该曲目已不在播放列表"})
                     return
-                app.calls.put(lambda k=key: k in app.pl_keys and
-                              app._switch(app.pl_keys.index(k), "手动"))
+                # ValueError 兜底：后台重扫线程重建 pl_keys 的瞬间，in
+                # 判断已过而 index 抛错时静默跳过，不打穿排空循环
+                def _go(k=key):
+                    try:
+                        app._switch(app.pl_keys.index(k), "手动")
+                        return True
+                    except ValueError:
+                        return False
+                app.calls.put(_go)
                 self._ok()
                 return
             if not isinstance(i, int) or isinstance(i, bool) \

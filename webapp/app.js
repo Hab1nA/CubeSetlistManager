@@ -279,11 +279,16 @@ function switchTo(i, btn, dbl, key) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0；
-  // 有 plCache 时尽量带 key（后端按 key 反查防漂移）
+  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0。
+  // key 必须与 index 同拍取自 /state（songs[].key）——从 plCache 借键=
+  // 500ms×1.5s 两缓存混拍，他端重排后 key 指向错曲（结论攻击二轮实证，
+  // 与 consoleRow 曾修过的 P1 同一模式）；/state 无 key 时才退 plCache
   const i = typeof stCur === "number" ? stCur + 1 : 0;
-  const it = plCache && plCache.pl && plCache.pl[i];
-  switchTo(i, $("#next-go"), false, it ? it.key : undefined);
+  const s = stState && stState.songs ? stState.songs[i] : null;
+  const key = s && s.key ? s.key
+      : (plCache && plCache.pl && plCache.pl[i]
+         ? plCache.pl[i].key : undefined);
+  switchTo(i, $("#next-go"), false, key);
 });
 
 const fmt = s => {
@@ -817,9 +822,11 @@ function plRow(i, it) {
   nm.textContent = it.name;
   return div;
 }
-let movePend = false;    // move 在途：连点按新位置算（回显未回不来时
-                         // 旧快照连发两次=净效果抵消，结论攻击实证）
+let movePend = false;    // move 在途门：回显未落地前放行=下一次 move 按
+                         // 旧快照解析，会移错行/反向压回（结论攻击二轮
+                         // /plcmd move 的三条漏网路径实证）
 async function movePl(from, to) {
+  if (movePend) return;               // 在途门（含拖拽 drop 路径）
   if (from === to || from < 0 || to < 0 || !plCache
       || to >= plCache.pl.length) return;
   const item = plCache.pl[from];
@@ -828,7 +835,9 @@ async function movePl(from, to) {
   try {
     const j = await post("/plcmd", {op: "move", payload: {from, to}});
     if (j.ok) toast("已移动《" + item.name + "》");
-    await refreshPlaylist();           // 回显落地后才放行下一次移动
+    // 回显必须落地才放门：refreshPlaylist 被 seq 并发放弃或瞬断时
+    // 重拉一次（新 seq 不会被在途旧响应丢弃）
+    if (!await refreshPlaylist()) await refreshPlaylist();
   } finally {
     movePend = false;
   }
@@ -836,7 +845,7 @@ async function movePl(from, to) {
 // 点击时刻按键重解析再发 move：连点 ↑/拖拽落在在途刷新上时，建行下标
 // 已过期（时序红队 P1：移错行）
 function movePlKey(key, delta) {
-  if (movePend || !plCache || !plCache.pl) return;
+  if (!plCache || !plCache.pl) return;
   const from = plCache.pl.findIndex(x => x.key === key);
   if (from < 0) return;
   movePl(from, from + delta);
@@ -941,16 +950,17 @@ async function refreshPlaylist() {
   try {
     const seq = refreshPlaylist.seq = (refreshPlaylist.seq || 0) + 1;
     const r = await fetch("/playlist");
-    if (!r.ok) return;
+    if (!r.ok) return false;
     const d = await r.json();
-    if (seq !== refreshPlaylist.seq) return;   // 旧响应不覆盖新请求
+    if (seq !== refreshPlaylist.seq) return false;  // 旧响应不覆盖新请求
     plCache = d;
     stCur = d.cur;
     drawLib();
     drawPl();
     // 弹层锚点被差量重建拿掉（他端改列表）：菜单悬空坐标即刻收口
     if (popEl && popAnchor && !popAnchor.isConnected) closePop();
-  } catch { /* 瞬断 */ }
+    return true;
+  } catch { return false; /* 瞬断：调用方（movePl 门）据此重试 */ }
 }
 async function plcmd2(op, key, payload) {
   const j = await post("/plcmd", {op, key, payload: payload || {}});
@@ -1548,9 +1558,11 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
 const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 
 // 端口下拉：value=候选序号（保存时映射回 name+dev）。选项层随签名刷新
-// （设备上电/掉电即反映，幽灵项自动清除），选中值按端口名保留——用户
-// 未保存的手选不被回写打穿；已存配置的回填只在首拉/刷新/保存后（force）
-function fillPortSel(id, list, hintKey) {
+// （设备上电/掉电即反映，幽灵项自动清除），选中值按「端口名+同名序」
+// 成对保留——只记端口名在同名多口（两只同型号无线盒）下会静默吸回第
+// 1 口，保存即错绑（结论攻击二轮三条路径实证）；已存配置的回填只在
+// force（首拉/刷新/保存后），回落分支带 pos 消歧与 portSelVal 同口径
+function fillPortSel(id, list, hintKey, pos) {
   const sel = $("#" + id);
   const entries = (kbData.ports || {})[list] || [];
   const names = entries.map(e => e.name);
@@ -1559,15 +1571,18 @@ function fillPortSel(id, list, hintKey) {
   if (sel.dataset.sig === sig) return;
   sel.dataset.sig = sig;
   sel.dataset.list = list;
-  // 重建前记住选中项的端口名（value 是序号，重建后语义失效）
-  const keepName = sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]
-      ? (sel.options[sel.selectedIndex].title || "") : "";
+  // 重建前记住选中项身份（端口名+dev 序；value 是序号，重建后失效）
+  const keepOpt = sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]
+      ? sel.options[sel.selectedIndex] : null;
+  const keepName = keepOpt ? (keepOpt.title || "") : "";
+  const keepDev = keepOpt ? (keepOpt.dataset.dev || "") : "";
   sel.innerHTML = "";
   entries.forEach((e, i) => {
     const o = document.createElement("option");
     o.value = String(i);
     o.textContent = e.label;
     o.title = e.name;
+    o.dataset.dev = String(e.dev);
     sel.appendChild(o);
   });
   if (hintKey && !names.includes(hintKey)) {
@@ -1575,20 +1590,29 @@ function fillPortSel(id, list, hintKey) {
     o.value = "-1";
     o.textContent = hintKey + " · 未接入";
     o.title = hintKey;
+    o.dataset.dev = "ghost";
     sel.appendChild(o);
   }
   if (keepName) {
-    const i = Array.from(sel.options)
-        .findIndex(o => o.title === keepName);
+    const opts = Array.from(sel.options);
+    let i = opts.findIndex(o => o.title === keepName
+                                && o.dataset.dev === keepDev);
+    if (i < 0 && keepDev === "ghost")
+      i = opts.findIndex(o => o.dataset.dev === "ghost");
     if (i >= 0) {
-      sel.value = String(i);
+      sel.value = opts[i].value;
     } else {
-      // 手选项已掉线：回落到当前已存配置对应的选项（在线→选中；
-      // 不在线→幽灵项保名），绝不静默落到第一项=保存时错绑别的口
-      const hi = names.indexOf(hintKey);
+      // 手选项已掉线：回落到当前已存配置对应的选项（同名多口带 pos
+      // 消歧），再幽灵项——绝不静默落到第一项=保存时错绑别的口
+      let hi = -1;
+      if (hintKey) {
+        hi = entries.findIndex(e => e.name === hintKey
+                                    && (pos > 1 ? e.dev === pos - 1 : true));
+        if (hi < 0) hi = entries.findIndex(e => e.name === hintKey);
+      }
       if (hi >= 0) sel.value = String(hi);
       else {
-        const g = Array.from(sel.options).find(o => o.value === "-1");
+        const g = opts.find(o => o.dataset.dev === "ghost");
         if (g) sel.value = "-1";
       }
     }
@@ -1620,11 +1644,11 @@ function renderKbdPorts(force) {
   setSt("kb-jout-st", ps.junoOut);
   setSt("kb-ain-st", ps.axIn);
   setSt("kb-aout-st", ps.axOut);
-  // 选项层每轮刷新（自带签名守卫+选中名保留）；回填已存配置仅 force
-  fillPortSel("kb-jin", "in", kbData.junoIn);
-  fillPortSel("kb-jout", "out", kbData.junoOut);
-  fillPortSel("kb-ain", "in", kbData.axIn);
-  fillPortSel("kb-aout", "out", kbData.axOut);
+  // 选项层每轮刷新（自带签名守卫+选中身份保留）；回填已存配置仅 force
+  fillPortSel("kb-jin", "in", kbData.junoIn, (ps.junoIn || {}).pos);
+  fillPortSel("kb-jout", "out", kbData.junoOut, (ps.junoOut || {}).pos);
+  fillPortSel("kb-ain", "in", kbData.axIn, (ps.axIn || {}).pos);
+  fillPortSel("kb-aout", "out", kbData.axOut, (ps.axOut || {}).pos);
   if (!force && kbPortsInit) return;
   portSelVal("kb-jin", kbData.junoIn, (ps.junoIn || {}).pos);
   portSelVal("kb-jout", kbData.junoOut, (ps.junoOut || {}).pos);
