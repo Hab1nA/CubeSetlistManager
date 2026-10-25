@@ -982,7 +982,33 @@ def stage_a(send):
     ok("ba.a3.no-confirm-direct",
        any("switch" in b for _u, b in p3_.get("posts", [])),
        str(p3_.get("posts"))[:160])
+
+    # ---- A4：switch 带 key + 后端 400「已移除」→ 错误 toast 可见
+    #      （错切歌防线的用户可见层；后端 key 反查逻辑由 pytest 覆盖）----
+    js(send, _state_stub(False))
+    time.sleep(1.2)
+    js(send, "const inner=window.fetch;"
+        "window.__posts=[];"
+        "window.fetch=(u,o)=>{"
+        "window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/cmd')return Promise.resolve(new Response("
+        "JSON.stringify({error:'该曲目已不在播放列表'}),{status:400}));"
+        "return inner(u,o)};")
+    js(send, "const b=document.querySelector("
+        "'#console-list .row:not(.cur) .go-switch');"
+        "if(b)b.click();return b?1:0")
+    time.sleep(0.6)
+    a4 = js(send, "return {posts:(window.__posts||[])"
+            ".filter(x=>x[0]==='/cmd'),"
+            "toast:[...document.querySelectorAll('.toast')]"
+            ".map(t=>t.textContent)}")
+    ok("ba.a4.switch-key-err-toast",
+       any("switch" in b and '"key"' in b.replace(" ", "")
+           for _u, b in a4.get("posts", []))
+       and any("不在播放列表" in t for t in a4.get("toast", [])),
+       json.dumps(a4, ensure_ascii=False)[:220])
     js(send, RESTORE)
+    time.sleep(0.6)
 
     # ---- A6：素材库 pt 条目精确键匹配（部分加入场景可单独加回）----
     js(send, UNSTUB + "window.__fetch0=window.fetch;"
@@ -1122,9 +1148,9 @@ def stage_b(send):
        and "loopMIDI 1" in b2["clock"]["vals"]
        and b2["vj"]["sel"] == "VJ口在线"      # 前缀命中在线口→完整名
        and b2["clock"]["sel"] == "CK口"       # 不在场→幽灵项保名
-       and "CK口（未接入）" in b2["clock"]["txts"]
+       and "CK口 · 未接入" in b2["clock"]["txts"]
        and b2["pg"]["sel"] == "旧口"
-       and "旧口（未接入）" in b2["pg"]["txts"],
+       and "旧口 · 未接入" in b2["pg"]["txts"],
        json.dumps(b2, ensure_ascii=False))
     b4b = js(send, "return {pills:[...document.querySelectorAll("
             "'#st-netstat .pill')].map(p=>p.textContent),"
@@ -1164,7 +1190,7 @@ def stage_b(send):
             "txts:[...s.options].map(o=>o.textContent),sel:s.value}")
     ok("bb.b3.mon-none-ghost", b3["vals"][0] == ""
        and b3["txts"][0] == "无" and b3["sel"] == "缺席屏"
-       and "缺席屏（不在场）" in b3["txts"],
+       and "缺席屏 · 不在场" in b3["txts"],
        json.dumps(b3, ensure_ascii=False))
     # VJ 页保存载荷只含 obs 键（B1 前端侧：窄载荷）
     b1 = js(send, "window.__posts=[];"
@@ -1333,9 +1359,14 @@ def stage_c(send):
             "remoteInCard:!!document.querySelector("
             "'#p-pedal .stat-cards #pd-remote'),"
             "midiport:document.getElementById('pd-midiport').textContent}")
+    r2b = js(send, "return {grid:!!document.querySelector('.pedal-grid'),"
+            "winWithDev:!!(document.getElementById('pd-win')&&"
+            "document.getElementById('pd-dev').closest('.card')"
+            ".contains(document.getElementById('pd-win')))}")
     ok("bc.r2.pedal-simplified", r2.get("noHint") and r2.get("noSave")
-       and r2.get("remoteInCard") and "Pedal口" in (r2.get("midiport") or ""),
-       json.dumps(r2, ensure_ascii=False))
+       and r2.get("remoteInCard") and "Pedal口" in (r2.get("midiport") or "")
+       and r2b.get("grid") and r2b.get("winWithDev"),
+       json.dumps([r2, r2b], ensure_ascii=False))
     # 即改即生效：转发开关单键载荷（不带 binds 等其余配置）
     js(send, "window.__posts=[];document.getElementById('pd-remote')"
         ".click()")
@@ -1411,8 +1442,8 @@ KBD_STUB = ("{junoIn:'JUNO-DS',junoOut:'JUNO-DS',axIn:'AX-09',"
             "{key:'B/歌二',team:'B',name:'歌二'}],"
             "lastResult:'已发送：X',counts:{juno:1,ax:0},"
             "ports:{in:[{label:'JUNO-DS',name:'JUNO-DS',dev:0},"
-            "{label:'USB-Midi（第1个）',name:'USB-Midi',dev:0},"
-            "{label:'USB-Midi（第2个）',name:'USB-Midi',dev:1}],"
+            "{label:'USB-Midi · 第1个',name:'USB-Midi',dev:0},"
+            "{label:'USB-Midi · 第2个',name:'USB-Midi',dev:1}],"
             "out:[{label:'JUNO-DS',name:'JUNO-DS',dev:0}]},"
             "portStatus:{junoIn:{hit:true,name:'JUNO-DS',pos:1,total:1},"
             "junoOut:{hit:true,name:'JUNO-DS',pos:1,total:1},"
@@ -1460,14 +1491,17 @@ def stage_d(send):
             "return {labels:[...s.options].map(o=>o.textContent),"
             "sel:s.options[s.selectedIndex]"
             "?s.options[s.selectedIndex].textContent:''}};"
+            "const st=id=>{const e=document.getElementById(id);"
+            "return {t:e.textContent,c:e.className}};"
             "return {jin:info('kb-jin'),ain:info('kb-ain'),"
-            "jstat:document.getElementById('kb-jstat').textContent,"
-            "astat:document.getElementById('kb-astat').textContent}")
+            "jst:st('kb-jin-st'),jout:st('kb-jout-st'),ast:st('kb-ain-st')}")
     ok("bd.d2.port-select",
        any("第2个" in t for t in d2["jin"]["labels"])
        and d2["jin"]["sel"] == "JUNO-DS"
        and "未接入" in d2["ain"]["sel"]
-       and "✔" in d2["jstat"] and "❌" in d2["astat"],
+       and d2["jst"]["t"] == "已接" and "on" in d2["jst"]["c"]
+       and d2["jout"]["t"] == "已接" and "on" in d2["jout"]["c"]
+       and d2["ast"]["t"] == "未接" and "off" in d2["ast"]["c"],
        json.dumps(d2, ensure_ascii=False))
     # 保存端口：选第2只同名盒 → 载荷带 name+dev 序号；AX 幽灵保名
     js(send, "document.getElementById('kb-jin').value='2';"
@@ -1798,6 +1832,55 @@ def stage_f(send):
        and "err" in fd.get("cls", ""), json.dumps(fd, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(1.2)
+
+    # ---- F2 VJ 映射网格（全局移调同款卡片语言：键帽+目标+状态副行）----
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/settings')return Promise.resolve(new Response("
+        "JSON.stringify({obs:{projectorMonitor:'',mediaInput:'媒体',"
+        "videoRoot:'D:/vj',vjMute:false},screens:[]}),{status:200}));"
+        "if(String(u)==='/vjmap')return Promise.resolve(new Response("
+        "JSON.stringify({videoRoot:'D:/vj',rows:["
+        "{note:60,name:'C4',file:'1.mp4',blackout:false,hit:true},"
+        "{note:61,name:'C#4',file:'2.mp4',blackout:false,hit:false},"
+        "{note:90,name:'F#6',file:'',blackout:true,hit:false}]}),"
+        "{status:200}));"
+        "return window.__fetch0(u,o)};")
+    nav(send, "vj")
+    js(send, "document.getElementById('vj-save').click()")
+    time.sleep(0.8)
+    vm = js(send, "return {cells:document.querySelectorAll("
+            "'#vjmap .vj-cell').length,"
+            "miss:document.querySelectorAll('#vjmap .vj-cell.miss').length,"
+            "bo:document.querySelectorAll('#vjmap .vj-cell.blackout')"
+            ".length,"
+            "pc0:(document.querySelector('#vjmap .vj-cell .s-pc')||{}"
+            ").textContent||''}")
+    ok("bf.f2.vj-map-grid", vm.get("cells") == 3 and vm.get("miss") == 1
+       and vm.get("bo") == 1 and vm.get("pc0") == "1.mp4",
+       json.dumps(vm, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.6)
+
+    # ---- F4 括号禁令：可见 UI 文本/提示属性无全角括号
+    #      （日志、运行数据区、toast 免检——内容来自后端/工程数据）----
+    pb = js(send, "const skip=e=>e.closest('#log')||e.closest('.toast')||"
+            "e.closest('#now')||e.closest('#next')||e.closest("
+            "'#console-list')||e.closest('#lib')||e.closest('#pl')||"
+            "e.closest('#pt-list')||e.closest('#dt-slots')||e.closest("
+            "'#dt-axslots')||e.closest('#vjmap')||e.closest('#app-addr');"
+            "const bad=[];"
+            "document.querySelectorAll('body *').forEach(e=>{"
+            "if(skip(e))return;"
+            "if(!e.children.length&&e.textContent&&"
+            "e.textContent.includes('（'))"
+            "bad.push((e.id||e.className)+'|'+e.textContent.trim());"
+            "['title','placeholder','data-tip'].forEach(a=>{"
+            "const v=e.getAttribute&&e.getAttribute(a);"
+            "if(v&&v.includes('（'))bad.push('attr:'+a+'|'+v)})});"
+            "return bad.slice(0,6)")
+    ok("bf.f4.no-fullwidth-parens", not pb,
+       json.dumps(pb, ensure_ascii=False))
 
     errs = js(send, "return window.__errs")
     ok("bf.no-js-errors", not errs, str(errs)[:300])

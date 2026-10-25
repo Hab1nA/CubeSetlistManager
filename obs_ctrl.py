@@ -431,7 +431,7 @@ class ObsController:
     def _act(self, label, fn):
         with self._lock:
             if not self._ws:
-                self.last_error = "未连接 OBS（启动中或断线）"
+                self.last_error = "未连接 OBS：启动中或断线"
                 return False
             try:
                 fn(self._ws)

@@ -13,8 +13,7 @@ import websocket
 
 OUTD = pathlib.Path("out") / "ui_shots"
 OUTD.mkdir(parents=True, exist_ok=True)
-PAGES = ["console", "setlist", "points", "pedal", "kbd", "vj",
-         "settings"]
+PAGES = ["console", "setlist", "pedal", "kbd", "vj", "settings"]
 
 env = dict(os.environ)
 env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (

@@ -648,8 +648,8 @@ def test_kbd_auto():
     assert kbd_auto._name_pos(devs, "USB-Midi", 2) == (2, 2)
     assert kbd_auto._name_pos(devs, "JUNO-DS", 3) == (1, 1)
     es = kbd_auto._device_entries(["Rubix24", "USB-Midi", "USB-Midi"])
-    assert [e[0] for e in es] == ["Rubix24", "USB-Midi（第1个）",
-                                  "USB-Midi（第2个）"]
+    assert [e[0] for e in es] == ["Rubix24", "USB-Midi · 第1个",
+                                  "USB-Midi · 第2个"]
     assert [e[2] for e in es] == [0, 0, 1]
     assert kbd_auto._device_entries([]) == []
     # 默认值带 dev=0：旧 config 无此键时单设备行为不变

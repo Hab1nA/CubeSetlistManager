@@ -78,6 +78,7 @@ class WireApp:
         self._pedal_rate = {}
         self._pedal_gwin = [0.0, 0]
         self._pedal_gwin_lock = threading.Lock()
+        self._pedal_dedup_lock = threading.Lock()
         self.q = queue.Queue()
         self.actions = []            # [(动作名, 时刻)]（HTTP 线程写入，GIL 安全）
         self.pedal = pedal.PedalListener(
