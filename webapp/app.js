@@ -98,7 +98,7 @@ function nav(page) {
     setShow(false);
   if (booted && page !== curPage) {
     if (popEl) closePop();   // 换页收口弹层
-    if (curPage === "setlist" && recInst) stopRecord();
+    if (curPage === "setlist" && (recInst || recPend)) stopRecord();
     // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）
     if (curPage === "pedal") pedalMute(false);
     if (page === "pedal") {
@@ -265,9 +265,10 @@ function switchTo(i, btn, dbl, key) {
     cmd("switch", i, key);
   };
   if (dbl && Date.now() - swLastFire < 400) return;
-  // 非双击的单发也去重 400ms：busy 状态至多 500ms 后才到，快速连点
-  // 两次「切歌」会各发一次完整切换（swLastFire 原只挡 dblclick 事件）
-  if (!dbl && Date.now() - swLastFire < 400) return;
+  // 非双击的单发去重窗须盖过 busy 传播（执行+快照 400ms+/state 500ms）：
+  // 400ms 窗内 t 与 t+0.45s 两击可双发，第二发对同曲再来一次完整关开
+  // 工程（结论攻击实证）
+  if (!dbl && Date.now() - swLastFire < 900) return;
   if (st && st.confirm && st.open && typeof st.cur === "number"
       && i !== st.cur) {
     if (dbl && btn && !btn.dataset.armed)
@@ -816,19 +817,26 @@ function plRow(i, it) {
   nm.textContent = it.name;
   return div;
 }
+let movePend = false;    // move 在途：连点按新位置算（回显未回不来时
+                         // 旧快照连发两次=净效果抵消，结论攻击实证）
 async function movePl(from, to) {
   if (from === to || from < 0 || to < 0 || !plCache
       || to >= plCache.pl.length) return;
   const item = plCache.pl[from];
   dragKey = null;                      // 拖拽收尾：恢复轮询重绘
-  const j = await post("/plcmd", {op: "move", payload: {from, to}});
-  if (j.ok) toast("已移动《" + item.name + "》");
-  refreshPlaylist();
+  movePend = true;
+  try {
+    const j = await post("/plcmd", {op: "move", payload: {from, to}});
+    if (j.ok) toast("已移动《" + item.name + "》");
+    await refreshPlaylist();           // 回显落地后才放行下一次移动
+  } finally {
+    movePend = false;
+  }
 }
 // 点击时刻按键重解析再发 move：连点 ↑/拖拽落在在途刷新上时，建行下标
 // 已过期（时序红队 P1：移错行）
 function movePlKey(key, delta) {
-  if (!plCache || !plCache.pl) return;
+  if (movePend || !plCache || !plCache.pl) return;
   const from = plCache.pl.findIndex(x => x.key === key);
   if (from < 0) return;
   movePl(from, from + delta);
@@ -1572,7 +1580,18 @@ function fillPortSel(id, list, hintKey) {
   if (keepName) {
     const i = Array.from(sel.options)
         .findIndex(o => o.title === keepName);
-    if (i >= 0) sel.value = String(i);
+    if (i >= 0) {
+      sel.value = String(i);
+    } else {
+      // 手选项已掉线：回落到当前已存配置对应的选项（在线→选中；
+      // 不在线→幽灵项保名），绝不静默落到第一项=保存时错绑别的口
+      const hi = names.indexOf(hintKey);
+      if (hi >= 0) sel.value = String(hi);
+      else {
+        const g = Array.from(sel.options).find(o => o.value === "-1");
+        if (g) sel.value = "-1";
+      }
+    }
   }
 }
 function portSelVal(id, hint, pos) {   // 选中当前配置对应的候选

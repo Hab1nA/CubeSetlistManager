@@ -811,7 +811,7 @@ __DEV_PANEL__
 
 <script>
 "use strict";
-var st=null,conn=null,pend=-1,toastT=null,lastSig=null;
+var st=null,conn=null,pend=-1,pendK="",toastT=null,lastSig=null;
 
 function $(id){return document.getElementById(id)}
 function el(tag,cls,txt){var e=document.createElement(tag);
@@ -867,7 +867,8 @@ function render(){
     li.appendChild(el("span","no",String(i+1)));
     li.appendChild(el("span","nm",st.songs[i].name));
     li.appendChild(el("span","du",st.songs[i].dur||""));
-    li.addEventListener("click",onRow.bind(null,i));
+    li.addEventListener("click",onRow.bind(null,i,
+      st.songs[i].key||""));
     L.appendChild(li);
   }
   $("empty").hidden=st.songs?st.songs.length>0:true;
@@ -903,31 +904,43 @@ function renderLive(){
   $("ptime").textContent=fmtT(pos)+" | "+fmtT(d-pos);
 }
 
-function onRow(i){
+function onRow(i,k){
   if(!st||st.busy||!st.ready)return;
   if(st.confirm&&st.open&&i!==st.cur){
-    pend=i;
+    pend=i;pendK=k||"";
     // 「从」名与 PC 弹窗同源：真实工程名优先（cur 为空也拿得到）
     var a=st.projName||(st.songs[st.cur]&&st.songs[st.cur].name),
         b=st.songs[i];
     $("c-text").textContent="确定从《"+(a||"？")+"》切换到《"+
       b.name+"》？当前工程将被关闭（自动保存）。";
     $("m-confirm").classList.add("show");
-  }else cmd("switch",i);
+  }else cmd("switch",i,k);
 }
 $("c-no").addEventListener("click",function(){
   $("m-confirm").classList.remove("show")});
 $("c-yes").addEventListener("click",function(){
   $("m-confirm").classList.remove("show");
-  if(pend>=0)cmd("switch",pend);pend=-1});
+  if(pend>=0){
+    var i=pend,k=pendK;pend=-1;pendK="";
+    /* 确认窗内列表可能被它端重排：按 key 现场重解析，key 失效即中止
+       （与桌面新前端同一防线；旧后端 songs 无 key 时按原下标发） */
+    if(k&&st&&st.songs){
+      var f=-1;
+      for(var q=0;q<st.songs.length;q++)
+        if(st.songs[q].key===k){f=q;break}
+      if(f<0){toast("该曲目已不在播放列表");return}
+      i=f}
+    cmd("switch",i,k)}
+});
 
 var tbs=document.querySelectorAll(".tbtn");
 for(var ti=0;ti<tbs.length;ti++){
   tbs[ti].addEventListener("click",function(){cmd(this.dataset.cmd)});
 }
 
-function cmd(action,index){
-  post("/cmd",{action:action,index:index}).then(function(r){
+function cmd(action,index,key){
+  post("/cmd",{action:action,index:index,key:key||undefined})
+  .then(function(r){
     if(!r.j||!r.j.ok)toast((r.j&&r.j.error)||"操作失败");
     refresh();
   },function(){setConn(false);toast("发送失败")});
@@ -1973,16 +1986,20 @@ class _Handler(BaseHTTPRequestHandler):
             app.calls.put(app._prev)
         elif action == "switch":
             i = body.get("index")
-            # key 优先解析（红队 P0：确认窗/轮询间隙多端重排后，下标会
-            # 漂移到邻曲；按 key 在执行前一刻反查列表即可根治。key 不在
-            # 列表=条目已被移除：拒发并让前端提示，绝不回落旧下标）
+            # key 优先：按 key 定向（红队 P0：多端重排后下标漂移错切歌）。
+            # key→下标必须留到主线程执行时刻解析（结论攻击实证：HTTP 线程
+            # 解完再入队=TOCTOU——队列里排在前面的 remove/move 会先改表，
+            # 陈旧下标切到邻曲且服务端照样回 ok）。key 不在列表=已移除，
+            # 拒发让前端提示；执行时刻再消失=静默跳过（列表已是最新态）
             key = body.get("key")
             if isinstance(key, str) and key:
-                try:
-                    i = app.pl_keys.index(key)
-                except ValueError:
+                if key not in app.pl_keys:
                     self._json(400, {"error": "该曲目已不在播放列表"})
                     return
+                app.calls.put(lambda k=key: k in app.pl_keys and
+                              app._switch(app.pl_keys.index(k), "手动"))
+                self._ok()
+                return
             if not isinstance(i, int) or isinstance(i, bool) \
                     or not 0 <= i < len(app.pl_keys):
                 self._json(400, {"error": "index 越界"})

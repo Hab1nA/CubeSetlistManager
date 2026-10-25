@@ -186,6 +186,7 @@ ok("r8.p1.poison-tc",
    and (pv.get("b") or {}).get("save") is True
    and (pv.get("c") or {}).get("save") is True
    and (pv.get("d") or {}).get("save") is True
+   and (pv.get("e") or {}).get("save") is True     # 分秒越界 99:99
    and (pv.get("ok") or {}).get("save") is False,
    json.dumps(pv, ensure_ascii=False)[:400])
 js("if(window.__fetch0){window.fetch=window.__fetch0;"
@@ -194,7 +195,7 @@ js("if(window.__fetch0){window.fetch=window.__fetch0;"
 # ---- 4 毒输入：踩钉双踩窗（回滚而非写入）----
 nav("pedal")
 time.sleep(1.0)
-pw = js("window.__t=[];const _f=window.fetch;"
+pw = js("window.__t=[];const _f=window.fetch;window.__pedalF0=_f;"
         "window.fetch=(u,o)=>{if(String(u)==='/pedalset')"
         "window.__t.push((o&&o.body)||'');"
         "return _f(u,o)};"
@@ -210,7 +211,9 @@ pw = js("window.__t=[];const _f=window.fetch;"
 ok("r8.p2.pedal-win-poison",
    pw.get("badPosts") == 0 and pw.get("rolledBack"),
    json.dumps(pw))
-js("window.fetch=window.__t?window.fetch:window.fetch")
+# 真还原记录桩（此前是恒等 no-op——桩贯穿后续全部断言）
+js("if(window.__pedalF0){window.fetch=window.__pedalF0;"
+   "window.__pedalF0=null}")
 
 # ---- 5 焦点流：Tab 可达元素统计 + popover 焦点还回 ----
 nav("console")
@@ -268,10 +271,13 @@ rec = js("document.querySelector('.b-setlist').click();"
          "return {recording,afterSwitch:document.getElementById("
          "'dt-title').textContent,"
          "residual:document.querySelectorAll('.slot.recording').length}")
-ok("r8.rec.switch-song-stops-record",
-   rec.get("skip") or (rec.get("recording")
-                       and rec.get("residual") == 0),
-   json.dumps(rec, ensure_ascii=False))
+if rec.get("skip"):
+    ok("r8.rec.switch-song-stops-record", True, "SKIP：真实列表不足两曲，"
+       "录制流由探针 bd.d3 桩路径覆盖")
+else:
+    ok("r8.rec.switch-song-stops-record",
+       rec.get("recording") and rec.get("residual") == 0,
+       json.dumps(rec, ensure_ascii=False))
 
 errs = js("return window.__errs")
 ok("r8.no-js-errors", not errs, str(errs)[:300])

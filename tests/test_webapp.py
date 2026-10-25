@@ -123,6 +123,31 @@ def _post(port, path, body):
     return _req("POST", port, path, body)[1]
 
 
+def test_switch_key_toctou():
+    """key→下标必须在主线程执行时刻解析：HTTP 线程解完再入队=确认窗/
+    pickdir 阻塞期间排在前面的 remove 先改表，陈旧下标切到邻曲。"""
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    try:                      # 不起 _drain：手工控制主线程执行时机
+        assert _post(port, "/cmd", {"action": "switch", "index": 0,
+                                    "key": "B/歌二"})["ok"] is True
+        fn = app.calls.get(timeout=2)          # 已入队、未执行
+        app.pl_keys.remove("B/歌二")           # 队列间隙被它端移除
+        fn()                                   # 主线程此刻执行
+        assert app.switch_log == []            # 静默跳过，绝不错切邻曲
+        # 在列表内的 key 正常按 key 落位（不受传入 index 干扰）
+        assert _post(port, "/cmd", {"action": "switch", "index": 0,
+                                    "key": "A/歌一"})["ok"] is True
+        app.calls.get(timeout=2)()
+        assert app.switch_log == [(0, "手动")]
+    finally:
+        srv.shutdown()
+
+
 def test_playlist_points_log_endpoints():
     app = _FakeWebApp()
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,

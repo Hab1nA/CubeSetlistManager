@@ -873,7 +873,8 @@ def _state_stub(confirm, cur=0, busy=False):
     stCur，透真（真实 cur=null）或回 ok:true 都会把 next-go 的门洗失效。"""
     st = ("{ready:true,busy:%s,open:true,projName:'歌一',tstate:'playing',"
           "pos:3,dur:90,cur:%d,confirm:%s,"
-          "songs:[{name:'歌一',dur:'1:30'},{name:'歌二',dur:'2:00'}],"
+          "songs:[{key:'a',name:'歌一',dur:'1:30'},"
+          "{key:'b',name:'歌二',dur:'2:00'}],"
           "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767}"
           % ("true" if busy else "false", cur,
              "true" if confirm else "false"))
