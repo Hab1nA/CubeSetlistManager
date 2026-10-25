@@ -1818,6 +1818,7 @@ def test_web_api():
         assert snap["pos"] == 0 and snap["dur"] == 0
         assert snap["songs"][0]["name"] == "歌一"
         assert snap["songs"][0]["dur"] == "3:33"
+        assert snap["songs"][0]["key"] == "A队/歌一"   # 行键直取（防漂移）
         # NOW/弹窗「从」名用真实工程名（对齐 PC 横幅），不再按 cur 查《？》
         assert "st.projName" in web_remote.PAGE_COMMON
         # /cmd：入队后在"主线程"执行

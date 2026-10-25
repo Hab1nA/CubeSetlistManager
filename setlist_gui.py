@@ -1897,7 +1897,10 @@ class App:
     def _pickdir_web(self):
         """/pickdir：原生目录选择对话框（Tk 主线程执行；空串=取消）。"""
         try:
-            path = filedialog.askdirectory(parent=self.root, title="选择目录")
+            # webui 模式 Tk 主窗全程 withdraw：对话框挂它名下会跟着沉底
+            # （弹了也看不见）——无父对话框独立居中置前
+            parent = None if getattr(self, "webui_mode", False) else self.root
+            path = filedialog.askdirectory(parent=parent, title="选择目录")
         except Exception as e:
             return {"error": _err(e)}
         return {"path": path or ""}
@@ -4188,7 +4191,7 @@ class SettingsWindow(tk.Toplevel):
             # close_projector 落在新保存的 apply_projector 之后=状态回退）
             with app._obs_apply_lock:
                 ctl.cfg["vjMute"] = mute
-                if vid:
+                if vid is not None:   # 空串=显式清空（与 web 路径同口径）
                     ctl.cfg["videoRoot"] = vid
                 ctl.cfg["projectorMonitor"] = mon
                 if ctl.is_connected() and not ctl.apply_mute():
@@ -4220,7 +4223,7 @@ class SettingsWindow(tk.Toplevel):
                         "vjPortHint": vj, "kbPortHint": kb,
                         "clockPortHint": ck})
             obs = cfg.get("obs") or {}
-            if vid:
+            if vid is not None:      # 空串=显式清空（与 web 路径同口径）
                 obs["videoRoot"] = vid
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
