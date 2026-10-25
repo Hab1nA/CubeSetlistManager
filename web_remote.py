@@ -1561,6 +1561,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_record, "/kbdrecord"),
+                          (self._h_checkpath, "/checkpath"),
                           (self._h_slot_set, "/slotset")):
                 if path == p:
                     fn(body, ip)
@@ -1756,6 +1757,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._run_on_app(lambda: self.server.app._slots_save_web(
             str(body.get("inst") or "juno"), body.get("slots") or {},
             song_key=body.get("songKey") or None))
+
+    def _h_checkpath(self, body, ip):
+        """路径存在性探测（设置页即时校验）：仅限本机 loopback——目录
+        存在性属主机信息，LAN 平板不得探测。"""
+        if getattr(self.server.app, "lite", False) \
+                or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        path = body.get("path")
+        if not isinstance(path, str) or not path.strip():
+            self._json(400, {"error": "path 必填"})
+            return
+        import os as _os
+        self._json(200, {"ok": True, "exists": _os.path.exists(path),
+                         "isdir": _os.path.isdir(path)})
 
     def _h_exit(self, _body, ip):
         """退出程序（侧栏退出钮）：仅限本机 loopback——LAN 平板不得遥控

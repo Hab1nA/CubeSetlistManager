@@ -797,8 +797,12 @@ class App:
             btn.config(state=tk.NORMAL if on else tk.DISABLED)
 
     def _on_exit(self):
-        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。"""
-        if self.ctrl is not None and self.ctrl.busy:
+        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。
+        webui_mode（pywebview 壳）跳过 Tk 弹窗：前端侧栏退出钮已两段式确认，
+        Tk 对话框跨窗口会沉底/触发 stallguard 误报（红队遗留）。"""
+        if getattr(self, "webui_mode", False):
+            ok = True
+        elif self.ctrl is not None and self.ctrl.busy:
             ok = messagebox.askyesno(
                 "退出", "正在切换工程，退出会中断切换流程。确定退出？")
         else:

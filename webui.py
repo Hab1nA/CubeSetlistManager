@@ -79,6 +79,7 @@ def main():
         app.calls.put(app._on_exit)
         return
     ui_srv.shutdown()
+    app.webui_mode = True               # Tk 确认框改由前端两段式承担
     app.calls.put(app._on_exit)         # 窗口关=通知 Tk 线程退出全程序
 
 

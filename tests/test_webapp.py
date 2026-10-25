@@ -166,6 +166,30 @@ def test_pickdir_endpoint():
         srv.shutdown()
 
 
+def test_checkpath_endpoint(tmp_path):
+    """/checkpath：路径存在性探测（设置页即时校验）；仅 loopback、
+    简化版拒绝、缺 path 400。"""
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    try:
+        d = _post(port, "/checkpath", {"path": str(tmp_path)})
+        assert d == {"ok": True, "exists": True, "isdir": True}
+        d = _post(port, "/checkpath",
+                  {"path": str(tmp_path / "nope.cpr")})
+        assert d["exists"] is False and d["isdir"] is False
+        code, _b = _req("POST", port, "/checkpath", {})
+        assert code == 400
+        app.lite = True
+        code, _b = _req("POST", port, "/checkpath", {"path": "C:\\"})
+        assert code == 403
+    finally:
+        srv.shutdown()
+
+
 def test_app_asset_whitelist():
     app = _FakeWebApp()
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,

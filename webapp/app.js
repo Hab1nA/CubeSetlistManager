@@ -171,7 +171,8 @@ document.addEventListener("keydown", e => {
   if (e.key !== " " || e.repeat) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT"
-            || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+            || t.tagName === "TEXTAREA" || t.tagName === "BUTTON"
+            || t.isContentEditable)) return;
   if (popEl) return;
   if (!pageOn("console")) return;
   e.preventDefault();
@@ -225,9 +226,18 @@ $("#smart").addEventListener("click", () => {
 // dbl=双击行场景：按钮是 hover 才现的行内「切歌」，武装时补 toast 提示；
 // 双击的第二击已执行发包，随后的 dblclick 事件用 swLastFire 挡掉不重复武装。
 let swLastFire = 0;
-function switchTo(i, btn, dbl) {
+function switchTo(i, btn, dbl, key) {
   const st = stState;
-  const fire = () => { swLastFire = Date.now(); cmd("switch", i); };
+  const fire = () => {
+    // 确认窗 3s 内列表可能被重排（多端操作）：按 key 实时重解析，
+    // 不发武装时刻的旧下标（红队遗留：陈旧索引切错歌）
+    if (key && plCache && plCache.pl) {
+      const j = plCache.pl.findIndex(x => x.key === key);
+      if (j >= 0) i = j;
+    }
+    swLastFire = Date.now();
+    cmd("switch", i);
+  };
   if (dbl && Date.now() - swLastFire < 400) return;
   if (st && st.confirm && st.open && typeof st.cur === "number"
       && i !== st.cur) {
@@ -326,6 +336,8 @@ function consoleRow(s, i, cur) {
   div.className = "row" + (i === cur ? " cur" : "")
       + (i < cur ? " played" : "");
   div.dataset.i = i;
+  div.dataset.k = (plCache && plCache.pl && plCache.pl[i])
+      ? plCache.pl[i].key : "";
   div.tabIndex = 0;              // 键盘可达：Enter=切歌（F3）
   const no = document.createElement("span");
   no.className = "no";
@@ -341,17 +353,17 @@ function consoleRow(s, i, cur) {
   go.textContent = "切歌";
   go.addEventListener("click", ev => {
     ev.stopPropagation();
-    switchTo(i, go);
+    switchTo(i, go, false, div.dataset.k);
   });
   const dur = document.createElement("span");
   dur.className = "dur";
   dur.textContent = s.dur;
   div.append(no, eq, nm, go, dur);
-  div.addEventListener("dblclick", () => switchTo(i, go, true));
+  div.addEventListener("dblclick", () => switchTo(i, go, true, div.dataset.k));
   div.addEventListener("keydown", e => {
     if (e.key === "Enter") {
       e.preventDefault();
-      switchTo(i, go);
+      switchTo(i, go, false, div.dataset.k);
     }
   });
   return div;
@@ -411,7 +423,8 @@ function drawChips(st, cur) {
   plCache.pl.forEach((it, i) => {
     if (it.pt && it.key.startsWith("pt:")
         && it.key.slice(3).split("#")[0] === baseKey)
-      items.push({i, name: it.name.split(" · ").pop(), cur: i === cur});
+      items.push({i, key: it.key,
+                  name: it.name.split(" · ").pop(), cur: i === cur});
   });
   if (!items.length) {
     off();
@@ -431,7 +444,7 @@ function drawChips(st, cur) {
     b.className = "chip-btn" + (x.cur ? " cur" : "");
     b.textContent = x.name;
     b.title = "点击切到该定位点（同工程免重开）";
-    b.addEventListener("click", () => switchTo(x.i, b));
+    b.addEventListener("click", () => switchTo(x.i, b, false, x.key));
     box.appendChild(b);
   });
 }
@@ -475,7 +488,11 @@ function pedalLive(st) {
 let pollFails = 0;
 async function poll() {
   try {
-    const r = await fetch("/state");
+    // 5s 超时：进程活着但 HTTP 挂起时也走断连指示（挂起的 fetch
+    // 不再永远 pending）；旧内核无 AbortSignal.timeout 则退化为原行为
+    const opt = window.AbortSignal && AbortSignal.timeout
+        ? {signal: AbortSignal.timeout(5000)} : {};
+    const r = await fetch("/state", opt);
     if (r.ok) {
       if (pollFails >= 3) toast("连接已恢复");
       pollFails = 0;
@@ -1070,7 +1087,8 @@ $("#pt-save").addEventListener("click", () => {
 $("#pt-goto").addEventListener("click", () => {
   const i = ptGotoIndex();
   if (i !== null) {
-    switchTo(i, $("#pt-goto"));
+    switchTo(i, $("#pt-goto"), false,
+        "pt:" + ptProj + "#" + ptSel);
     if (!$("#pt-goto").dataset.armed)
       toast("定位到《" + $("#pt-name").value + "》");
   }
@@ -1957,6 +1975,30 @@ async function pickDir(inputId) {
 }
 $$(".browse").forEach(b =>
     b.addEventListener("click", () => pickDir(b.dataset.pick)));
+
+// ---- 设置路径即时校验（工程库根=目录 / Cubase 程序=文件）----
+const PATH_KIND = {"st-root": "dir", "st-exe": "file"};
+async function checkPath(id) {
+  const el = $("#" + id);
+  const v = el.value.trim();
+  if (!v || !PATH_KIND[id]) return;
+  try {
+    const r = await fetch("/checkpath", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: v})});
+    if (!r.ok) return;
+    const d = await r.json();
+    const bad = !d.exists || (PATH_KIND[id] === "dir" && !d.isdir)
+        || (PATH_KIND[id] === "file" && d.isdir);
+    el.classList.toggle("invalid", bad);
+    el.title = bad ? (!d.exists ? "路径不存在"
+        : (PATH_KIND[id] === "dir" ? "该路径不是目录" : "该路径不是文件"))
+        : "";
+  } catch { /* 瞬断 */ }
+}
+["st-root", "st-exe"].forEach(id => {
+  $("#" + id).addEventListener("change", () => checkPath(id));
+});
 
 // ---- 编排窄窗 tab（<900px 双列折叠为单列）----
 $$("#sl-tabs button").forEach(b => b.addEventListener("click", () => {
