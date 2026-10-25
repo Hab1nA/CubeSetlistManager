@@ -7,6 +7,7 @@ import pathlib
 import queue
 import sys
 import threading
+import time
 import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -78,6 +79,12 @@ class _FakeWebApp:
 
         self._points_cmd_web = pt_cmd
         self._pickdir_web = lambda: {"path": "D:/选目录"}
+        self.switch_log = []
+
+        def _switch(i, why):
+            self.switch_log.append((i, why))
+
+        self._switch = _switch
 
 
 def _drain(app):
@@ -144,6 +151,25 @@ def test_playlist_points_log_endpoints():
                                       "key": "A/歌一",
                                       "payload": {"on": False}})["ok"] is True
         assert app.pl_log[1][0] == "toggle"
+
+        # /cmd switch：key 优先解析（多端重排后下标漂移的根治）；
+        # 陈旧下标 + 正确 key → 按 key 落位；key 已被移除 → 400 拒发
+        assert _post(port, "/cmd", {"action": "switch", "index": 0,
+                                    "key": "B/歌二"})["ok"] is True
+        for _ in range(50):
+            if app.switch_log:
+                break
+            time.sleep(0.02)
+        assert app.switch_log[-1] == (2, "手动")   # 不是 index 0
+        app.pl_keys = ["A/歌一"]                    # 模拟另一端移除该曲
+        st, r = _req("POST", port, "/cmd",
+                     {"action": "switch", "index": 0, "key": "B/歌二"})
+        assert st == 400 and "不在播放列表" in r["error"]
+        n = len(app.switch_log)
+        for _ in range(10):
+            time.sleep(0.05)
+        assert len(app.switch_log) == n             # 未入队执行
+        app.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
     finally:
         srv.shutdown()
 

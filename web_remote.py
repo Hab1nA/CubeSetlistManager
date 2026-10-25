@@ -493,13 +493,14 @@ def build_snapshot(app, has_project, proj_name=None):
         if e is not None:
             dur = (_fmt_dur(e["point"]["end"] - e["point"]["start"])
                    if e["point"] else _fmt_dur(app.durations.get(key)))
-            songs.append({"name": e["display"], "dur": dur})
+            songs.append({"key": key, "name": e["display"], "dur": dur})
             continue
         s = app.by_key.get(key)
         if s is None:                       # 列表有而素材库缺：还能切回，保留显示
-            songs.append({"name": key.split("/")[-1], "dur": ""})
+            songs.append({"key": key, "name": key.split("/")[-1], "dur": ""})
             continue
-        songs.append({"name": s["name"], "dur": _fmt_dur(app.durations.get(key))})
+        songs.append({"key": key, "name": s["name"],
+                      "dur": _fmt_dur(app.durations.get(key))})
     cur = app.cur
     w = getattr(app, "watch", None)
     ctrl = getattr(app, "ctrl", None)
@@ -1904,33 +1905,41 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(sid, str) or len(sid) > 32:
             sid = ""
         key = (device, sid)
-        if key not in app._pedal_seq:
-            devs = [k for k in app._pedal_seq if k[0] == device]
-            if not devs and len({k[0] for k in app._pedal_seq}) >= 32:
-                self._json(429, {"error": "设备数超限"})
+        # 去重/限流读改写在并发线程池下串行；getattr 兜底防测试替身缺锁
+        import contextlib
+        _lk = getattr(app, "_pedal_dedup_lock", None)
+        with (_lk if _lk is not None else contextlib.nullcontext()):
+            if key not in app._pedal_seq:
+                devs = [k for k in app._pedal_seq if k[0] == device]
+                if not devs and len({k[0] for k in app._pedal_seq}) >= 32:
+                    self._json(429, {"error": "设备数超限"})
+                    return
+                if len(devs) >= 4:
+                    del app._pedal_seq[devs[0]]     # dict 保序：最旧会话先出
+            last = app._pedal_seq.get(key)
+            if last is not None and seq == last:
+                # dup 查在 per-device 限流之前（刻意）：已送达包的重试拿到
+                # 即时幂等 ack，不耗限流窗；dup 不触碰任何状态
+                self._ok(dup=True)
                 return
-            if len(devs) >= 4:
-                del app._pedal_seq[devs[0]]     # dict 保序：最旧会话先出
-        last = app._pedal_seq.get(key)
-        if last is not None and seq == last:
-            # dup 查在 per-device 限流之前（刻意）：已送达包的重试拿到即时
-            # 幂等 ack，不耗限流窗；dup 不触碰任何状态
-            self._ok(dup=True)
-            return
-        if now - app._pedal_rate.get(device, 0.0) < 0.02:
-            self._json(429, {"error": "包率超限"})
-            return
-        if device not in app._pedal_rate and len(app._pedal_rate) >= 32:
-            del app._pedal_rate[next(iter(app._pedal_rate))]   # 淘汰最旧
-        app._pedal_rate[device] = now
-        app._pedal_seq[key] = seq
+            if now - app._pedal_rate.get(device, 0.0) < 0.02:
+                self._json(429, {"error": "包率超限"})
+                return
+            if device not in app._pedal_rate                     and len(app._pedal_rate) >= 32:
+                del app._pedal_rate[next(iter(app._pedal_rate))]
+            app._pedal_rate[device] = now
+            app._pedal_seq[key] = seq
         # 注入抛异常（→ dispatcher 500）同样回滚 seq：重试不被 dup 吞
         try:
             r = app.pedal_remote_inject(
                 {"hb": True} if events is None else
                 {"device": device, "events": events, "et": body.get("et", 0)})
         except Exception:
-            app._pedal_seq.pop(key, None)
+            if _lk is not None:
+                with _lk:
+                    app._pedal_seq.pop(key, None)
+            else:
+                app._pedal_seq.pop(key, None)
             raise
         if not r.get("ok"):
             # 注入失败不烧 seq：回滚记录，客户端同 seq 重试可再次注入
@@ -1964,6 +1973,16 @@ class _Handler(BaseHTTPRequestHandler):
             app.calls.put(app._prev)
         elif action == "switch":
             i = body.get("index")
+            # key 优先解析（红队 P0：确认窗/轮询间隙多端重排后，下标会
+            # 漂移到邻曲；按 key 在执行前一刻反查列表即可根治。key 不在
+            # 列表=条目已被移除：拒发并让前端提示，绝不回落旧下标）
+            key = body.get("key")
+            if isinstance(key, str) and key:
+                try:
+                    i = app.pl_keys.index(key)
+                except ValueError:
+                    self._json(400, {"error": "该曲目已不在播放列表"})
+                    return
             if not isinstance(i, int) or isinstance(i, bool) \
                     or not 0 <= i < len(app.pl_keys):
                 self._json(400, {"error": "index 越界"})

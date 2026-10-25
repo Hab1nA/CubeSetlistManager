@@ -92,6 +92,10 @@ function menuItem(box, text, cls, fn) {
 // ---- 导航 ----
 let curPage = "console", booted = false;
 function nav(page) {
+  // 演出模式下点「去编排加入曲目」等跨页导航：先退出演出模式
+  // （侧栏/状态栏被藏的非预期状态，时序红队 P2）
+  if (page !== "console" && document.body.classList.contains("show"))
+    setShow(false);
   if (booted && page !== curPage) {
     if (popEl) closePop();   // 换页收口弹层
     if (curPage === "setlist" && recInst) stopRecord();
@@ -104,14 +108,25 @@ function nav(page) {
     }
   }
   curPage = page;
+  // 回主控台强制重测跑马灯：隐藏页期间 render 的 0 宽测量会把「溢出」
+  // 误判为不溢出（dataset.txt 已更新不再复测）；进/出演出模式字号切换
+  // 同理（时序红队 P2）
+  if (page === "console") {
+    const n = $("#now");
+    if (n) delete n.dataset.txt;
+  }
   $$(".nav").forEach(b => b.classList.toggle("on", b.dataset.page === page));
   $$(".page").forEach(p => p.classList.toggle("on", p.id === "p-" + page));
-  // 切页即时拉数据（不等轮询节拍；boot 前各页状态量尚未初始化）
+  // 切页即时拉数据（不等轮询节拍；boot 前各页状态量尚未初始化）。
+  // settings/VJ 无周期轮询：进页必拉（启动失败自愈——否则表单空白且
+  // 保存钮灰死；VJ 映射同时强制重扫视频目录，兑现「即放即扫」）
   if (booted) {
     if (page === "console" || page === "setlist") refreshPlaylist();
     if (page === "console") refreshLog();
     else if (page === "setlist") { refreshPoints(); refreshKbdDetail(); }
     else if (page === "kbd") refreshKbd();
+    else if (page === "vj") refreshVj(true);
+    else if (page === "settings") refreshSettings();
   }
 }
 // 刷新/关闭兜底：踩钉页打开时页面卸载，静音必须撤（否则踩钉永久哑火）；
@@ -122,10 +137,10 @@ addEventListener("pagehide", () => {
       body}).catch(() => {});
   if (curPage === "pedal")
     post(JSON.stringify({on: false}));
-  if (recInst)
+  if (recInst || recPend)
     fetch("/kbdrecord", {method: "POST", keepalive: true,
                          headers: {"Content-Type": "application/json"},
-                         body: JSON.stringify({inst: recInst,
+                         body: JSON.stringify({inst: recInst || recPend,
                                                stop: true})}).catch(() => {});
 });
 $$(".nav").forEach(b => b.addEventListener("click", () => nav(b.dataset.page)));
@@ -143,6 +158,8 @@ function setShow(on) {
   const body = document.body;
   if (on === body.classList.contains("show")) return;
   const btn = $("#btn-show");
+  const nowEl = $("#now");
+  if (nowEl) delete nowEl.dataset.txt;   // 字号 42↔72 切换：强制重测滚动距
   if (on) {
     nav("console");
     body.classList.add("show");
@@ -181,8 +198,11 @@ document.addEventListener("keydown", e => {
 });
 
 // ---- HTTP（失败可见，不静默）----
-async function cmd(action, index) {
-  const body = index === undefined ? {action} : {action, index};
+// switch 带 key：后端在执行前一刻按 key 反查列表（多端重排后下标会
+// 漂移到邻曲——红队 P0）；其它动作忽略 key
+async function cmd(action, index, key) {
+  const body = index === undefined ? {action}
+      : key === undefined ? {action, index} : {action, index, key};
   try {
     const r = await fetch("/cmd", {method: "POST",
                                    headers: {"Content-Type": "application/json"},
@@ -194,7 +214,7 @@ async function cmd(action, index) {
     }
     return true;
   } catch {
-    toast("命令发送失败（网络）", "err");
+    toast("命令发送失败：网络异常", "err");
     return false;
   }
 }
@@ -207,7 +227,7 @@ async function post(path, body) {
     if (!r.ok) toast(j.error || "操作失败", "err");
     return j;
   } catch {
-    toast("操作失败（网络）", "err");
+    toast("操作失败：网络异常", "err");
     return {ok: false};
   }
 }
@@ -229,16 +249,25 @@ let swLastFire = 0;
 function switchTo(i, btn, dbl, key) {
   const st = stState;
   const fire = () => {
-    // 确认窗 3s 内列表可能被重排（多端操作）：按 key 实时重解析，
-    // 不发武装时刻的旧下标（红队遗留：陈旧索引切错歌）
+    // 确认窗 3s 内列表可能被重排（多端操作）：按 key 实时重解析。
+    // key 已不在列表=条目被移除：中止并提示，绝不发武装时刻的旧下标
+    // （红队 P0：陈旧索引切错歌）
     if (key && plCache && plCache.pl) {
       const j = plCache.pl.findIndex(x => x.key === key);
-      if (j >= 0) i = j;
+      if (j < 0) {
+        toast("该曲目已不在播放列表", "err");
+        refreshPlaylist();
+        return;
+      }
+      i = j;
     }
     swLastFire = Date.now();
-    cmd("switch", i);
+    cmd("switch", i, key);
   };
   if (dbl && Date.now() - swLastFire < 400) return;
+  // 非双击的单发也去重 400ms：busy 状态至多 500ms 后才到，快速连点
+  // 两次「切歌」会各发一次完整切换（swLastFire 原只挡 dblclick 事件）
+  if (!dbl && Date.now() - swLastFire < 400) return;
   if (st && st.confirm && st.open && typeof st.cur === "number"
       && i !== st.cur) {
     if (dbl && btn && !btn.dataset.armed)
@@ -249,8 +278,11 @@ function switchTo(i, btn, dbl, key) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0
-  switchTo(typeof stCur === "number" ? stCur + 1 : 0, $("#next-go"));
+  // 无当前曲（未恢复/游离）时 NEXT 卡显示的是第一首：切换目标随之落 0；
+  // 有 plCache 时尽量带 key（后端按 key 反查防漂移）
+  const i = typeof stCur === "number" ? stCur + 1 : 0;
+  const it = plCache && plCache.pl && plCache.pl[i];
+  switchTo(i, $("#next-go"), false, it ? it.key : undefined);
 });
 
 const fmt = s => {
@@ -262,7 +294,7 @@ const fmt = s => {
 let pedalPrevAge = null;
 function render(st) {
   if (!$("#p-console")) return;
-  $("#now").textContent = st.open ? st.projName : "（无打开的工程）";
+  $("#now").textContent = st.open ? st.projName : "未打开工程";
   // 超长歌名跑马灯：文本变化才重测重挂（每 500ms remove/add 会把
   // 14s 动画永远打回 0）；测量时临时 nowrap 拿单行宽（平时 break-all
   // 折行恒不溢出）
@@ -303,20 +335,27 @@ function render(st) {
   smart.dataset.action = m[1];
   smart.disabled = !!st.busy;
   smart.classList.toggle("pulse", !!st.busy);   // busy 脉动（F 批）
-  // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用
+  // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用；
+  // 行内切歌/定位点快跳同禁——关闭确认时的双击=两次完整工程切换
+  // （时序红队 P2）
   $$("#transport [data-cmd]").forEach(b =>
       b.disabled = !!st.busy && b.dataset.cmd !== "panic");
+  $$("#console-list .go-switch, #chips .chip-btn").forEach(b =>
+      b.disabled = !!st.busy);
   // NEXT 卡
   const rows = st.songs || [];
   const cur = typeof st.cur === "number" ? st.cur : -1;
   const nx = rows[cur + 1];
-  $("#next").textContent = nx ? nx.name : (rows.length ? "（末尾）" : "—");
+  $("#next").textContent = nx ? nx.name : (rows.length ? "末尾" : "—");
   $("#next").classList.toggle("has", !!nx);
   $("#next-go").disabled = !nx || !!st.busy;
-  // 曲目列表（三态；签名不变不动 DOM，悬停态不被轮询冲掉）
+  // 曲目列表（三态；签名不变不动 DOM，悬停态不被轮询冲掉）。
+  // 签名必须含 plCache 键列：行上的 dataset.k（switch 防 P0 漂移的凭据）
+  // 取自建行时刻的 plCache——若 /playlist 后到而签名不含键，行永不重建、
+  // key 恒空，防线静默失效
   const list = $("#console-list");
-  const sig = rows.length + ":" + cur + ":" +
-      rows.map(r => r.name + r.dur).join("|");
+  const sig = rows.length + ":" + cur + ":"
+      + rows.map(r => (r.key || "") + r.name + r.dur).join("|");
   if (list.dataset.sig !== sig) {
     list.dataset.sig = sig;
     list.innerHTML = "";
@@ -336,8 +375,10 @@ function consoleRow(s, i, cur) {
   div.className = "row" + (i === cur ? " cur" : "")
       + (i < cur ? " played" : "");
   div.dataset.i = i;
-  div.dataset.k = (plCache && plCache.pl && plCache.pl[i])
-      ? plCache.pl[i].key : "";
+  // key 直取 /state 行数据（同源同拍）；旧版从 plCache[i] 借键——两缓存
+  // 节拍不同（500ms vs 1.5s），借键错位曾把切歌按钮指向错曲（红队 P1）
+  div.dataset.k = s.key || ((plCache && plCache.pl && plCache.pl[i])
+      ? plCache.pl[i].key : "");
   div.tabIndex = 0;              // 键盘可达：Enter=切歌（F3）
   const no = document.createElement("span");
   no.className = "no";
@@ -381,17 +422,17 @@ function lamps(st) {
       st.open ? "工程已打开：" + (st.projName || "") : "未打开工程");
   set("l-obs", st.obs ? "ok" : "warn",
       st.obs ? "obs-websocket 已连接"
-      : (st.vj && st.vj.obsErr ? "OBS 未连接（" + st.vj.obsErr + "）"
+      : (st.vj && st.vj.obsErr ? "OBS 未连接：" + st.vj.obsErr
          : "OBS 未连接"));
   set("l-loop", st.loop ? "ok" : "warn",
       st.loop ? "loopMIDI 运行中" : "loopMIDI 未运行");
   const pr = st.pedalRemote;
   set("l-pedal", !pr ? "" : pr.link === "ok" ? "ok" : "warn",
       (!pr ? "踩钉桥未就绪" : (pr.link === "ok"
-      ? "转发链路健康（15s 内有信号）" : pr.link === "stale"
-      ? "转发链路超时（>15s 无信号）" : (pr.enabled
+      ? "转发链路健康：15s 内有信号" : pr.link === "stale"
+      ? "转发链路超时：15s 内无信号" : (pr.enabled
       ? "未收到转发信号" : "未启用转发")))
-      + "；点击进入踩钉页（打开期间踩钉临时静音）");
+      + "；点击进入踩钉页，打开期间踩钉临时静音");
   set("l-hot", st.webIp ? "ok" : "",
       st.webIp ? "服务地址 " + st.webIp : "移动端遥控服务未启动");
   set("l-remote", st.ready ? "ok" : "err",
@@ -418,11 +459,11 @@ function drawChips(st, cur) {
     return;
   }
   const baseKey = plCache.pl[cur].key.startsWith("pt:")
-      ? plCache.pl[cur].key.slice(3).split("#")[0] : plCache.pl[cur].key;
+      ? ptBaseOf(plCache.pl[cur].key) : plCache.pl[cur].key;
   const items = [];
   plCache.pl.forEach((it, i) => {
     if (it.pt && it.key.startsWith("pt:")
-        && it.key.slice(3).split("#")[0] === baseKey)
+        && ptBaseOf(it.key) === baseKey)
       items.push({i, key: it.key,
                   name: it.name.split(" · ").pop(), cur: i === cur});
   });
@@ -443,7 +484,7 @@ function drawChips(st, cur) {
     const b = document.createElement("button");
     b.className = "chip-btn" + (x.cur ? " cur" : "");
     b.textContent = x.name;
-    b.title = "点击切到该定位点（同工程免重开）";
+    b.title = "点击切到该定位点，同工程免重开";
     b.addEventListener("click", () => switchTo(x.i, b, false, x.key));
     box.appendChild(b);
   });
@@ -531,6 +572,10 @@ let plSel = null, selRowKey = null, ptSelPending = null;
 let slQ = "", dragKey = null;
 
 // ---- 编排时长三态（自动绿/手动黄/未知红「未知」；pt=段长按绿显示）----
+// pt 键解析与后端 points.parse_pt_key 同口径（rpartition "#"）：
+// 工程路径含 # 时按首个 # 切会把 base 与 id 全解错（红队 P2）
+const ptBaseOf = k => k.slice(3, k.lastIndexOf("#"));
+const ptIdOf = k => Number(k.slice(k.lastIndexOf("#") + 1));
 const durCls = src => src === "manual" ? "dur-manual"
     : src === "unknown" ? "dur-unknown" : "dur-auto";
 const durText = it => it.durSrc === "unknown" ? "未知" : (it.dur || "未知");
@@ -562,8 +607,8 @@ function libRow(s, inPl) {
     // ＋ 为唯一加入入口（防误触）
     const k = s.key;
     if (k.startsWith("pt:")) {
-      const base = k.slice(3).split("#")[0];
-      selectSong(k, base, Number(k.slice(3).split("#")[1]));
+      const base = ptBaseOf(k);
+      selectSong(k, base, ptIdOf(k));
     } else selectSong(k, k, null);
   });
   return div;
@@ -661,7 +706,7 @@ function durPopover(anchor, it) {
     okBtn.textContent = "写入";
     okBtn.addEventListener("click", () => {
       if (parseDur(inp.value) === null) {
-        err.textContent = "格式应为 秒数 或 分:秒（如 3:33）";
+        err.textContent = "格式应为 秒数 或 分:秒，如 3:33";
         return;
       }
       plcmd2("setdur", it.key, {dur: inp.value.trim()});
@@ -688,7 +733,7 @@ function plRow(i, it) {
   dur.className = "dur " + durCls(it.durSrc);
   dur.textContent = durText(it);
   if (it.durSrc === "manual")
-    dur.title = "手动时长（⋯ 菜单可重新识别）";
+    dur.title = "手动时长，⋯ 菜单可重新识别";
   const ops = document.createElement("span");
   ops.className = "ops";
   const mk = (txt, title, cls) => {
@@ -702,12 +747,12 @@ function plRow(i, it) {
   const up = mk("↑", "上移");
   up.addEventListener("click", ev => {
     ev.stopPropagation();
-    movePl(i, i - 1);
+    movePlKey(it.key, -1);
   });
   const down = mk("↓", "下移");
   down.addEventListener("click", ev => {
     ev.stopPropagation();
-    movePl(i, i + 1);
+    movePlKey(it.key, 1);
   });
   const more = mk("⋯", "写入时长 / 重新识别");
   more.addEventListener("click", ev => {
@@ -723,8 +768,8 @@ function plRow(i, it) {
   div.addEventListener("click", () => {
     const k = it.key;
     if (k.startsWith("pt:")) {
-      const base = k.slice(3).split("#")[0];
-      selectSong(k, base, Number(k.slice(3).split("#")[1]));
+      const base = ptBaseOf(k);
+      selectSong(k, base, ptIdOf(k));
     } else selectSong(k, k, null);
   });
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
@@ -780,6 +825,14 @@ async function movePl(from, to) {
   if (j.ok) toast("已移动《" + item.name + "》");
   refreshPlaylist();
 }
+// 点击时刻按键重解析再发 move：连点 ↑/拖拽落在在途刷新上时，建行下标
+// 已过期（时序红队 P1：移错行）
+function movePlKey(key, delta) {
+  if (!plCache || !plCache.pl) return;
+  const from = plCache.pl.findIndex(x => x.key === key);
+  if (from < 0) return;
+  movePl(from, from + delta);
+}
 function drawPl() {
   if (!plCache || !plCache.pl || dragKey) return;  // 拖拽中不重绘（防行从指针下消失）
   const el = $("#pl");
@@ -795,7 +848,7 @@ function drawPl() {
   // 团队匹配与素材库同口径（pt 条目经宿主工程查团队）
   const teamOf = it => {
     const base = it.key.startsWith("pt:")
-        ? it.key.slice(3).split("#")[0] : it.key;
+        ? ptBaseOf(it.key) : it.key;
     const lib = plCache.lib.find(x => x.key === base);
     return lib ? (lib.team || "").toLowerCase() : "";
   };
@@ -833,18 +886,27 @@ function selectSong(rowKey, base, ptId) {
   if (plSel !== base) {
     plSel = base;
     ptSel = null;
-    // 数据在途时先清面板（红队 P0-1：旧曲映射不得残留在新曲名下可编辑）。
-    // dataset.sig 必须一并清：否则 buildSlots 差量守卫见「签名同」跳过
-    // 重绘，换到映射内容相同的另一首时网格停在空态（探针 p1 实证）
+    ptProj = null;              // 定位点半边同清：ptcmd 全以 ptProj 定向，
+                                // 停在旧曲上=对旧曲误写（时序红队 P1）
+    // 数据在途时先清面板；dataset.sig 必须一并清：否则差量守卫见
+    // 「签名同」跳过重绘（探针 p1 实证）
     dtKbd = null;
     dtPtN = null;
     updateDtBadge();
     $("#dt-kbd-stat").textContent = "映射装载中…";
+    $("#dt-title").textContent = "曲目详情 · 装载中…";
     for (const id of ["dt-slots", "dt-axslots"]) {
       const el = $("#" + id);
       el.innerHTML = "";
       delete el.dataset.sig;
     }
+    const pl = $("#pt-list");
+    pl.innerHTML = "";
+    delete pl.dataset.sig;
+    $("#pt-form").hidden = true;
+    $("#pt-none").hidden = true;   // 数据在途：空态/表单都不显，防误交互
+    $("#pt-mmc").hidden = true;
+    $("#pt-on").disabled = true;   // 数据未到不可拨（防回弹诱发双击）
     markPlSel();
     refreshPoints();
     refreshKbdDetail();
@@ -869,13 +931,17 @@ $("#pl-more").addEventListener("click", ev => {
 });
 async function refreshPlaylist() {
   try {
+    const seq = refreshPlaylist.seq = (refreshPlaylist.seq || 0) + 1;
     const r = await fetch("/playlist");
     if (!r.ok) return;
     const d = await r.json();
+    if (seq !== refreshPlaylist.seq) return;   // 旧响应不覆盖新请求
     plCache = d;
     stCur = d.cur;
     drawLib();
     drawPl();
+    // 弹层锚点被差量重建拿掉（他端改列表）：菜单悬空坐标即刻收口
+    if (popEl && popAnchor && !popAnchor.isConnected) closePop();
   } catch { /* 瞬断 */ }
 }
 async function plcmd2(op, key, payload) {
@@ -910,8 +976,8 @@ function validatePt() {
   if (ptSel === null) return false;
   const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
   let msg = "";
-  if (s === null) msg = "开始时码格式应为 分:秒（如 3:33）或秒数";
-  else if (e === 0) msg = "结束点未定（工程末尾未知）：请补填后保存";
+  if (s === null) msg = "开始时码格式应为 分:秒 或 秒数，如 3:33";
+  else if (e === 0) msg = "结束点未定，工程末尾未知：请补填后保存";
   else if (e <= s) msg = "结束必须晚于开始";
   $("#pt-s").classList.toggle("invalid", s === null);
   $("#pt-e").classList.toggle("invalid", e === null || (s !== null && e <= s));
@@ -934,9 +1000,11 @@ function validatePt() {
 
 async function refreshPoints() {
   try {
+    const seq = refreshPoints.seq = (refreshPoints.seq || 0) + 1;
     const r = await fetch("/points");
     if (!r.ok) return;
     const d = await r.json();
+    if (seq !== refreshPoints.seq) return;     // 旧响应不覆盖新请求
     ptData = d.projects;
     ptCap = {cubase: d.cubase !== false, mmcReady: d.mmcReady !== false};
     // 能力位：非 Cubase 底座禁用开关；MMC 未就绪常驻提示（定位不可用）
@@ -987,7 +1055,7 @@ async function refreshPoints() {
         const dur = document.createElement("span");
         dur.className = "dur";
         dur.textContent = fmtTC(p.start) + " → " + fmtTC(p.end)
-            + "（" + fmtTC(p.end - p.start) + "）";
+            + " · 段长 " + fmtTC(p.end - p.start);
         div.append(nm, dur);
         div.addEventListener("click", () => selectPt(p.id));
         el.appendChild(div);
@@ -1005,7 +1073,7 @@ async function refreshPoints() {
       const g = $("#pt-goto");
       g.disabled = gi === null;
       g.title = gi === null
-          ? "该定位点未启用或不在播放列表（启用后自动加入）" : "";
+          ? "该定位点未启用或不在播放列表，启用后自动加入" : "";
       drawTimeline(dd.points);
       validatePt();
     }
@@ -1063,27 +1131,39 @@ $("#pt-on").addEventListener("change", async e => {
   await ptcmd("toggle", {on: e.target.checked});
   ptOnPending = false;
 });
-// add 后自动选中末点（新点追加在表尾）
+// add 后自动选中末点（新点追加在表尾）；在途禁用防 504 误重试双加点
+// （超时后任务仍在主线程排队执行——连点两次=两个重复定位点，红队 P1）
 $("#pt-add").addEventListener("click", async () => {
   if (!ptProj) return;                    // 未选曲：详情为空态不可加
-  const j = await post("/ptcmd", {op: "add", key: ptProj, payload: {}});
-  if (!j.ok) return;
-  await refreshPoints();
-  const dd = ptData[ptProj];
-  const last = dd && dd.points[dd.points.length - 1];
-  if (last) {
-    selectPt(last.id);
-    if (!last.end) {    // 工程末尾未知：黄字提醒补填（同旧窗）
-      $("#pt-hint").textContent = "结束点未定（工程末尾未知）：请补填后保存";
-      $("#pt-hint").className = "field-err warn-txt";
+  const btn = $("#pt-add");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const j = await post("/ptcmd", {op: "add", key: ptProj, payload: {}});
+    if (!j.ok) return;
+    await refreshPoints();
+    const dd = ptData[ptProj];
+    const last = dd && dd.points[dd.points.length - 1];
+    if (last) {
+      selectPt(last.id);
+      if (!last.end) {    // 工程末尾未知：黄字提醒补填（同旧窗）
+        $("#pt-hint").textContent = "结束点未定，工程末尾未知：请补填后保存";
+        $("#pt-hint").className = "field-err warn-txt";
+      }
     }
+    toast("定位点已更新");
+  } finally {
+    btn.disabled = false;
   }
-  toast("定位点已更新");
 });
 $("#pt-del").addEventListener("click", ev => {
-  if (ptSel !== null)
-    armConfirm(ev.currentTarget, () => ptcmd("del", {id: ptSel}),
+  if (ptSel !== null) {
+    // 武装时刻捕获 id：3s 窗口内改选另一个点再确认，删的必须是当初
+    // 武装的那个（时序红队 P2：闭包读活动 ptSel 删错点）
+    const id = ptSel;
+    armConfirm(ev.currentTarget, () => ptcmd("del", {id}),
                "确认删除？");
+  }
 });
 $("#pt-save").addEventListener("click", () => {
   if (!$("#pt-name").value.trim()) {
@@ -1170,7 +1250,7 @@ $("#lg-clear").addEventListener("click", ev => {
                        ? lines[0].t + "|" + lines[0].msg : ""};
       } else logLast = {count: 0, first: ""};
     } catch { logLast = {count: 0, first: ""}; }
-    toast("日志已清空（仅本页视图，环形缓冲不受影响）");
+    toast("日志已清空：仅本页视图，环形缓冲不受影响");
   }, "确认清空？");
 });
 $("#lg-copy").addEventListener("click", () => {
@@ -1234,7 +1314,7 @@ async function refreshPedalDevices() {
     sel.innerHTML = "";
     const none = document.createElement("option");
     none.value = "";
-    none.textContent = "（不区分来源，仅 MIDI 踩钉）";
+    none.textContent = "不区分来源，仅 MIDI 踩钉";
     sel.appendChild(none);
     let hit = !cur;
     (d.devices || []).forEach(dev => {
@@ -1247,7 +1327,7 @@ async function refreshPedalDevices() {
     if (cur && !hit) {            // 幽灵项：已选设备当前不在场
       const o = document.createElement("option");
       o.value = cur;
-      o.textContent = cur + "（离线）";
+      o.textContent = cur + " · 离线";
       o.selected = true;
       sel.appendChild(o);
     }
@@ -1288,7 +1368,8 @@ function drawBinds(d) {
     clr.className = "btn danger sm";
     clr.textContent = "清除";
     const bound = d.binds[a] !== undefined || d.hid[a] !== undefined;
-    if (!bound) clr.disabled = true;
+    // 学习中的动作禁清除：后端学习完成会迁移改绑+落盘，清除会被静默还原
+    if (!bound || a === learnAction) clr.disabled = true;
     clr.addEventListener("click", () => clearBind(a));
     row.append(nm, bd, learn, clr);
     el.appendChild(row);
@@ -1313,7 +1394,7 @@ async function refreshPedal(force) {
     } else if (d.hint && !d.connected && !d.hidActive) {
       txt = "口未连"; cls = "warn";
     } else if (d.muted) {
-      txt = "已静音（关本页恢复）";
+      txt = "已静音 · 关本页恢复";
     } else {
       txt = "已连接"; cls = "ok";
     }
@@ -1334,18 +1415,21 @@ async function refreshPedal(force) {
     }
     // MIDI 踩钉口是学习 CC 时自动记录的内部端口名：只读展示，不可手填
     $("#pd-midiport").textContent = d.hint
-        ? "MIDI 踩钉口：" + d.hint + "（学习时自动记录）"
-        : "MIDI 踩钉口：未记录（学习时自动写入）";
+        ? "MIDI 踩钉口：" + d.hint + " · 学习时自动记录"
+        : "MIDI 踩钉口：未记录，学习时自动写入";
     drawBinds(d);
     if (!$("#pd-dev").options.length) refreshPedalDevices();
   } catch { /* 瞬断 */ }
 }
 
-// 即改即生效：每控件单发自己的键，后端在场检测不动其余配置
+// 即改即生效：每控件单发自己的键，后端在场检测不动其余配置；
+// 失败必须回读基线（表单保护会挡住轮询回写，勾选态会停在错误值）
 async function pedalApply(payload, msg) {
   const r = await post("/pedalset", payload);
   if (r.ok) {
     if (msg) toast(msg);
+    refreshPedal(true);
+  } else {
     refreshPedal(true);
   }
 }
@@ -1360,7 +1444,7 @@ $("#pd-intercept").addEventListener("change", e =>
 $("#pd-win").addEventListener("change", () => {
   const v = parseFloat($v("#pd-win"));
   if (isNaN(v)) {          // 脏输入回滚为当前生效值（后端夹取 0.12-1.0）
-    toast("双踩窗须为数字（秒）", "err");
+    toast("双踩窗须为数字，单位秒", "err");
     refreshPedal(true);
     return;
   }
@@ -1373,7 +1457,7 @@ async function startLearn(action) {
   // 未选设备时键盘踩钉抓不到（raw 归属门）——学习前提醒，别让人白等 8 秒
   if (pdData && !pdData.deviceHint
       && Object.keys(pdData.hid || {}).length)
-    toast("未选输入设备：踏板按键不会被学习抓取（只等 MIDI CC）", "err");
+    toast("未选输入设备：踏板按键不会被学习抓取，只等 MIDI CC", "err");
   learnAction = action;
   drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
   pollLearn();
@@ -1383,7 +1467,23 @@ function pollLearn() {
   learnTimer = setTimeout(async () => {
     if (learnAction === null) return;
     try {
-      const d = await (await fetch("/pedal/learn")).json();
+      const r = await fetch("/pedal/learn");
+      // 504=主线程忙：不得当「学习结束」消费（后端 Learner 还在跑，
+      // 结果会无人认领）。有界重试，放弃时还原按钮态（红队 P1）
+      if (!r.ok) {
+        pollLearn.fails = (pollLearn.fails || 0) + 1;
+        if (pollLearn.fails > 5) {
+          const act = learnAction;
+          learnAction = null;
+          const btn = act && $('.bind-row[data-action="%s"] .b-learn'
+                               .replace("%s", act));
+          if (btn) btn.textContent = "学习";
+          toast("学习状态查询连续失败，请重试学习", "err");
+        } else pollLearn();
+        return;
+      }
+      pollLearn.fails = 0;
+      const d = await r.json();
       const btn = $('.bind-row[data-action="%s"] .b-learn'
                     .replace("%s", learnAction));
       if (d.active) {
@@ -1403,7 +1503,16 @@ function pollLearn() {
         refreshPedal();
       }
     } catch {
-      if (learnAction !== null) pollLearn();
+      if (learnAction === null) return;      // 网络异常：同样有界重试
+      pollLearn.fails = (pollLearn.fails || 0) + 1;
+      if (pollLearn.fails > 5) {
+        const act = learnAction;
+        learnAction = null;
+        const btn = act && $('.bind-row[data-action="%s"] .b-learn'
+                               .replace("%s", act));
+        if (btn) btn.textContent = "学习";
+        toast("学习状态查询连续失败，请重试学习", "err");
+      } else pollLearn();
     }
   }, 300);
 }
@@ -1430,8 +1539,9 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
                     "A#", "B"];
 const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 
-// 端口下拉：value=候选序号（保存时映射回 name+dev）；仅在首拉/刷新/保存
-// 后重建（轮询不回写未保存的选择），状态行每轮更新
+// 端口下拉：value=候选序号（保存时映射回 name+dev）。选项层随签名刷新
+// （设备上电/掉电即反映，幽灵项自动清除），选中值按端口名保留——用户
+// 未保存的手选不被回写打穿；已存配置的回填只在首拉/刷新/保存后（force）
 function fillPortSel(id, list, hintKey) {
   const sel = $("#" + id);
   const entries = (kbData.ports || {})[list] || [];
@@ -1441,6 +1551,9 @@ function fillPortSel(id, list, hintKey) {
   if (sel.dataset.sig === sig) return;
   sel.dataset.sig = sig;
   sel.dataset.list = list;
+  // 重建前记住选中项的端口名（value 是序号，重建后语义失效）
+  const keepName = sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]
+      ? (sel.options[sel.selectedIndex].title || "") : "";
   sel.innerHTML = "";
   entries.forEach((e, i) => {
     const o = document.createElement("option");
@@ -1452,8 +1565,14 @@ function fillPortSel(id, list, hintKey) {
   if (hintKey && !names.includes(hintKey)) {
     const o = document.createElement("option");   // 幽灵项保名（未上电）
     o.value = "-1";
-    o.textContent = hintKey + "（未接入）";
+    o.textContent = hintKey + " · 未接入";
+    o.title = hintKey;
     sel.appendChild(o);
+  }
+  if (keepName) {
+    const i = Array.from(sel.options)
+        .findIndex(o => o.title === keepName);
+    if (i >= 0) sel.value = String(i);
   }
 }
 function portSelVal(id, hint, pos) {   // 选中当前配置对应的候选
@@ -1469,17 +1588,25 @@ function portSelVal(id, hint, pos) {   // 选中当前配置对应的候选
 }
 function renderKbdPorts(force) {
   const ps = kbData.portStatus || {};
-  const txt = s => !s || !s.hit ? "❌"
-      : "✔" + (s.total > 1 ? "第" + s.pos + "个" : "");
-  $("#kb-jstat").textContent =
-      "输入 " + txt(ps.junoIn) + " ｜ 输出 " + txt(ps.junoOut);
-  $("#kb-astat").textContent =
-      "输入 " + txt(ps.axIn) + " ｜ 输出 " + txt(ps.axOut);
-  if (!force && kbPortsInit) return;
+  // 接驳状态徽：配置的口名在候选中出现且命中第几个（同名多口消歧）
+  const setSt = (id, s) => {
+    const el = $("#" + id);
+    if (!el) return;
+    const on = !!(s && s.hit);
+    el.textContent = on
+        ? "已接" + (s.total > 1 ? " · 第" + s.pos + "口" : "") : "未接";
+    el.className = "f-st " + (on ? "on" : "off");
+  };
+  setSt("kb-jin-st", ps.junoIn);
+  setSt("kb-jout-st", ps.junoOut);
+  setSt("kb-ain-st", ps.axIn);
+  setSt("kb-aout-st", ps.axOut);
+  // 选项层每轮刷新（自带签名守卫+选中名保留）；回填已存配置仅 force
   fillPortSel("kb-jin", "in", kbData.junoIn);
   fillPortSel("kb-jout", "out", kbData.junoOut);
   fillPortSel("kb-ain", "in", kbData.axIn);
   fillPortSel("kb-aout", "out", kbData.axOut);
+  if (!force && kbPortsInit) return;
   portSelVal("kb-jin", kbData.junoIn, (ps.junoIn || {}).pos);
   portSelVal("kb-jout", kbData.junoOut, (ps.junoOut || {}).pos);
   portSelVal("kb-ain", kbData.axIn, (ps.axIn || {}).pos);
@@ -1487,23 +1614,41 @@ function renderKbdPorts(force) {
   kbPortsInit = true;
 }
 function renderKbdStatus() {
-  $("#kb-status").textContent =
-      kbData.counts
-      ? "当前曲 JUNO " + kbData.counts.juno + "/10 + AX " + kbData.counts.ax
-        + "/6" + (kbData.lastResult ? " ｜ 最近切换：" + kbData.lastResult
-                                   : "")
-      : (kbData.lastResult || "");
+  const el = $("#kb-status");
+  if (!el) return;
+  el.innerHTML = "";
+  const mk = (txt, cls, title) => {
+    const s = document.createElement("span");
+    s.className = "pill" + (cls ? " " + cls : "");
+    s.textContent = txt;
+    if (title) s.title = title;
+    el.appendChild(s);
+  };
+  // 当前曲音色配置计数（有配置才亮）；无工程时如实标注
+  if (kbData.counts) {
+    mk("JUNO " + kbData.counts.juno + "/10", kbData.counts.juno ? "ok" : "");
+    mk("AX " + kbData.counts.ax + "/6", kbData.counts.ax ? "ok" : "");
+  } else {
+    mk("未打开工程");
+  }
+  if (kbData.lastResult)
+    mk("最近切换 " + kbData.lastResult, "", kbData.lastResult);
 }
 
 // 录制（琴上捕获）：点槽卡即开录，再点同卡=停止并保存（直写该曲）；
-// 全局同时至多一个录制会话；换曲/换页/关窗一律收口释放输入口
+// 全局同时至多一个录制会话；换曲/换页/关窗一律收口释放输入口。
+// start 在途令牌 + 点击时刻 key 快照：慢网络下 start 返回时目标曲可能
+// 已被换掉——凭快照即刻撤销会话，绝不让「B 曲名下存 A 曲快照」发生
+// （时序红队 P0：跨曲整表覆写）
 let recInst = null, recNote = null, recCap = null, recCtx = null,
-    recCard = null;
+    recCard = null, recPend = null;
 function stopRecord() {
-  if (!recInst) return;
-  post("/kbdrecord", {inst: recInst, stop: true});
+  if (!recInst && !recPend) return;
+  if (recInst) post("/kbdrecord", {inst: recInst, stop: true});
+  else if (recPend) post("/kbdrecord", {inst: recPend, stop: true});
   recInst = recNote = recCap = null;
   recCtx = null;
+  recPend = null;
   clearTimeout(recTimer);
   if (recCard) {
     if (recCard.isConnected) {
@@ -1518,7 +1663,20 @@ function pollRecord(inst, onCap) {
   clearTimeout(recTimer);
   recTimer = setTimeout(async () => {
     try {
-      const d = await (await fetch("/kbd/record")).json();
+      const r = await fetch("/kbd/record");
+      // 504=主线程忙（如别处开着原生目录框）：错误体不是会话数据，
+      // 不得当 inactive 消费（否则后端会话还在、前端已弃管——输入口
+      // 泄漏）。有界重试，放弃时补发 stop 排队释放（红队 P1）
+      if (!r.ok) {
+        pollRecord.fails = (pollRecord.fails || 0) + 1;
+        if (pollRecord.fails > 5 && recInst === inst) {
+          stopRecord();
+          toast("录制状态查询连续失败，已请求停止录制", "err");
+        } else if (recInst === inst) pollRecord(inst, onCap);
+        return;
+      }
+      pollRecord.fails = 0;
+      const d = await r.json();
       if (d.active && d.inst === inst && recInst === inst) {
         if (d.slot) onCap(d.slot);
         pollRecord(inst, onCap);
@@ -1532,14 +1690,21 @@ function pollRecord(inst, onCap) {
           if (sub) sub.textContent = "录制会话已结束";
         }
       }
-    } catch { pollRecord(inst, onCap); }   // 瞬断：下一拍继续
+    } catch {                                 // 网络异常：同样有界重试
+      if (recInst !== inst) return;
+      pollRecord.fails = (pollRecord.fails || 0) + 1;
+      if (pollRecord.fails > 5) {
+        stopRecord();
+        toast("录制状态查询连续失败，已请求停止录制", "err");
+      } else pollRecord(inst, onCap);
+    }
   }, 300);
 }
 
 // 音色槽卡片直录：点卡=开录（捕获实时显示在卡上），再点=停止并保存；
 // 「测试」「✕清除」与录制同卡并列，无二级弹层。快照（key+槽位字典）
 // 定格在开录时刻：保存目标就是开录时选中的那首歌与那份映射
-function cardRecord(div, inst, note) {
+async function cardRecord(div, inst, note) {
   const es = dtKbd && dtKbd.editSong;
   const ready = !!(plSel && es && es.key === plSel && !es.loading);
   if (recInst === inst && recNote === note) {   // 再点=停止并保存
@@ -1550,8 +1715,25 @@ function cardRecord(div, inst, note) {
     post("/kbdrecord", {inst, stop: true});     // 关口释放输入口
     if (!had) return;
     if (!cap) {
-      const sub = div.querySelector(".s-sub");
-      if (sub) sub.textContent = "没收到音色信息，请检查琴口";
+      // 捕获可能在途（300ms 轮拍）：停录瞬间补拉一次再判空，避免把
+      // 后端已捕获的音色当「没收到」丢弃（红队 P2 停录竞态）
+      let lastCap = null;
+      try {
+        const r = await fetch("/kbd/record");
+        if (r.ok) lastCap = ((await r.json()).slot) || null;
+      } catch { /* 瞬断按无捕获处理 */ }
+      const got = lastCap;
+      if (!got) {
+        const sub = div.querySelector(".s-sub");
+        if (sub) sub.textContent = "没收到音色信息，请检查琴口";
+        return;
+      }
+      const slots = {...ctx.slots, [note]: got};
+      post("/slotset", {inst, slots, songKey: ctx.key}).then(j => {
+        if (j.ok) toast("音 " + noteName(note) + " 已录制："
+            + (got.desc || "PC " + got.pc));
+        refreshKbdDetail();
+      });
       return;
     }
     const slots = {...ctx.slots, [note]: cap};
@@ -1564,20 +1746,29 @@ function cardRecord(div, inst, note) {
   }
   if (!ready) {   // 红队 P0-1：目标不定不录（防串曲整表覆写）
     toast(!es || es.loading ? "该曲映射装载中…稍候再试"
-          : "映射不可用（曲目不在素材库）", "err");
+          : "映射不可用，曲目不在素材库", "err");
     return;
   }
   if (recInst) stopRecord();                    // 全局单录制会话
+  if (recPend) return;                          // start 在途：不重入
+  const key0 = plSel, es0c = es;
+  recPend = inst;
   post("/kbdrecord", {inst}).then(j => {
+    recPend = null;
     if (!j.ok) return;
+    if (plSel !== key0) {                       // 在途窗口换曲：即刻撤销
+      post("/kbdrecord", {inst, stop: true});
+      toast("录制已取消：目标曲已变化", "err");
+      return;
+    }
     recInst = inst;
     recNote = note;
     recCap = null;
     recCard = div;
-    const src = inst === "ax" ? es.axSlots : es.slots;
+    const src = inst === "ax" ? es0c.axSlots : es0c.slots;
     const snap = {};
     Object.keys(src || {}).forEach(k => snap[Number(k)] = {...src[k]});
-    recCtx = {key: plSel, slots: snap};
+    recCtx = {key: key0, slots: snap};
     div.classList.add("recording");
     const sub = div.querySelector(".s-sub");
     if (sub) sub.textContent = "录制中：请在琴上选音色…";
@@ -1585,7 +1776,7 @@ function cardRecord(div, inst, note) {
       recCap = cap;
       const s2 = recCard && recCard.querySelector(".s-sub");
       if (s2) s2.textContent = "已捕获：" + (cap.desc || "PC " + cap.pc)
-          + "（再点本卡保存）";
+          + " · 再点本卡保存";
     });
   });
 }
@@ -1599,7 +1790,7 @@ function slotRow(note, slot, inst) {
   n.textContent = "音 " + noteName(note);
   const pc = document.createElement("span");
   pc.className = "s-pc";
-  pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "（未配置）";
+  pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未配置";
   const sub = document.createElement("span");
   sub.className = "s-sub";
   const ops = document.createElement("span");
@@ -1607,7 +1798,7 @@ function slotRow(note, slot, inst) {
   const test = document.createElement("button");
   test.className = "btn ghost xs s-test";
   test.textContent = "测试";
-  test.title = "向琴发送该音色（连通测试）";
+    test.title = "向琴发送该音色做连通测试";
   test.addEventListener("click", ev => {
     ev.stopPropagation();
     if (!slot) {
@@ -1688,6 +1879,18 @@ function buildSlots(el, slots, from, to, inst) {
   el.innerHTML = "";
   for (let n = from; n <= to; n++)
     el.appendChild(slotRow(n, (slots || {})[String(n)], inst));
+  // 差量重建后录制指示重挂：他端改了同曲任一槽位会换节点，红框/副行
+  // 会话还在跑却消失（时序红队 P2）
+  if (recInst === inst && recNote !== null) {
+    const c = Array.from(el.children)
+        .find(x => Number(x.dataset.note) === recNote);
+    if (c) {
+      recCard = c;
+      c.classList.add("recording");
+      const sub = c.querySelector(".s-sub");
+      if (sub && !sub.textContent) sub.textContent = "录制中：请在琴上选音色…";
+    }
+  }
 }
 async function refreshKbdDetail() {
   if (!plSel) {
@@ -1707,7 +1910,7 @@ async function refreshKbdDetail() {
     if (!es0 || es0.key !== plSel || es0.loading) {
       dtKbd = null;
       $("#dt-kbd-stat").textContent = !es0 || es0.loading
-          ? "映射装载中…" : "映射不可用（曲目不在素材库）";
+          ? "映射装载中…" : "映射不可用，曲目不在素材库";
       return;
     }
     dtKbd = d;
@@ -1753,9 +1956,9 @@ $("#kb-save").addEventListener("click", async () => {
 const fmtShift = v => (v > 0 ? "+" : "") + v;
 
 // ---- VJ 联动 ----
-let vjMapRows = null, vjMapRoot = null;
-async function refreshVjMap(root) {
-  if (root === vjMapRoot && vjMapRows) return;   // 目录没变不重扫
+let vjMapRows = null, vjMapRoot = null, vjLoaded = false;
+async function refreshVjMap(root, force) {
+  if (!force && root === vjMapRoot && vjMapRows) return;  // 目录没变不重扫
   try {
     const r = await fetch("/vjmap");
     if (!r.ok) return;
@@ -1765,49 +1968,58 @@ async function refreshVjMap(root) {
     const box = $("#vjmap");
     box.innerHTML = "";
     if (!vjMapRoot) {
-      box.innerHTML = "<span class='dim sm-txt'>未设置视频目录，"
-          + "先在下方「视频联动」里选择</span>";
+      box.innerHTML = "<div class='empty-state sm vj-empty'>未设置视频目录，"
+          + "先在下方「视频联动」里选择</div>";
       return;
     }
+    // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列
     d.rows.forEach(row => {
-      const chip = document.createElement("span");
-      chip.className = "keychip"
+      const cell = document.createElement("div");
+      cell.className = "slot vj-cell"
           + (row.blackout ? " blackout" : "")
-          + (row.hit ? "" : " miss");
-      chip.dataset.file = row.file;
-      chip.title = row.blackout ? "F#6：熄灭投影画面"
+          + (row.hit || row.blackout ? "" : " miss");
+      cell.dataset.file = row.file || "";
+      cell.title = row.blackout ? "F#6：熄灭投影画面"
           : (row.hit ? "视频库：" + row.hit
-             : "视频库中未找到 " + row.file + "（可按「N 描述」命名放入视频目录）");
-      const b = document.createElement("b");
-      b.textContent = row.name;
+             : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录");
+      const n = document.createElement("span");
+      n.className = "s-note";
+      n.textContent = row.name;
       const f = document.createElement("span");
-      f.className = "f";
+      f.className = "s-pc";
       f.textContent = row.blackout ? "熄屏" : row.file;
-      chip.append(b, f);
-      box.appendChild(chip);
+      const sub = document.createElement("span");
+      sub.className = "s-sub";
+      sub.textContent = row.blackout ? "熄灭投影画面"
+          : (row.hit ? "已就位" : "缺视频");
+      cell.append(n, f, sub);
+      box.appendChild(cell);
     });
   } catch { /* 瞬断 */ }
 }
 
-async function refreshVj() {
+async function refreshVj(force) {
   try {
     const d = await (await fetch("/settings")).json();
-    fillSel("vj-mon", d.obs.projectorMonitor, d.screens || [], "（不在场）");
+    vjLoaded = true;
+    $("#vj-save").disabled = false;
+    $("#vj-save").title = "";
+    fillSel("vj-mon", d.obs.projectorMonitor, d.screens || [], " · 不在场");
     $("#vj-media").value = d.obs.mediaInput || "";
     $("#vj-root").value = d.obs.videoRoot || "";
     $("#vj-mute").checked = !!d.obs.vjMute;
     const ms = $("#vj-media-st");
     ms.textContent = d.obs.mediaInput || "未配置";
     ms.className = "stat-big" + (d.obs.mediaInput ? "" : " dim");
-    refreshVjMap((d.obs.videoRoot || "").trim());
-  } catch { /* 瞬断 */ }
+    refreshVjMap((d.obs.videoRoot || "").trim(), !!force);
+  } catch { /* 瞬断：进页/保存会重拉 */ }
 }
 $("#vj-save").addEventListener("click", async () => {
   const r = await post("/settings", {obs: {
     projectorMonitor: $v("#vj-mon"), mediaInput: $v("#vj-media"),
     videoRoot: $v("#vj-root"), vjMute: $("#vj-mute").checked}});
   if (r.ok) toast("VJ 配置已应用");
-  refreshVj();
+  refreshVj(true);
 });
 function renderVjState() {
   const el = $("#vj-obs");
@@ -1827,17 +2039,17 @@ function renderVjState() {
   f.className = "stat-big " +
       (vj.follow === "playing" ? "ok"
        : vj.follow === "paused" ? "warn" : "");
-  f.title = vj.vjEnabled === false ? "VJ 联动已停用（未配端口）"
+  f.title = vj.vjEnabled === false ? "VJ 联动已停用：未配端口"
       : vj.portOn === false ? "端口未启动" : "";
   // 视频名只在播放/暂停时挂出（同旧监控格；stopped/播完不带）
   $("#vj-video").textContent =
       (vj.follow === "playing" || vj.follow === "paused") && vj.video
       ? "视频：" + vj.video : "";
-  // 映射网格：在播视频对应的音符芯片高亮（按 N.mp4 编号匹配）
+  // 映射网格：在播视频对应的音符卡高亮（按 N.mp4 编号匹配）
   if (vjMapRows) {
     const num = x => (x.match(/^(\d+)/) || [])[1] || "";
     const cur = num((vj.video || "").split("/").pop());
-    $$("#vjmap .keychip").forEach(chip => {
+    $$("#vjmap .vj-cell").forEach(chip => {
       chip.classList.toggle("live",
           !!cur && !chip.classList.contains("blackout")
           && num(chip.dataset.file || "") === cur);
@@ -1943,10 +2155,10 @@ async function refreshSettings(force) {
     // 用户已弄脏时不覆盖：慢响应迟到会静默吃掉正在编辑的值
     // （保存成功后的回读走 force=true 重抓基线）
     if (!force && stBase !== null && stSnap() !== stBase) return;
-    fillSel("st-clock", d.clockHint, d.ports || [], "（未接入）");
-    fillSel("st-vj", d.vjHint, d.ports || [], "（未接入）");
-    fillSel("st-kb", d.kbHint, d.ports || [], "（未接入）");
-    fillSel("st-pg", d.web.midiIn, d.ports || [], "（未接入）");
+    fillSel("st-clock", d.clockHint, d.ports || [], " · 未接入");
+    fillSel("st-vj", d.vjHint, d.ports || [], " · 未接入");
+    fillSel("st-kb", d.kbHint, d.ports || [], " · 未接入");
+    fillSel("st-pg", d.web.midiIn, d.ports || [], " · 未接入");
     $("#st-auto").checked = d.autoAdvance;
     $("#st-cont").checked = d.autoPlay;
     $("#st-confirm").checked = d.switchConfirm;
@@ -1956,6 +2168,8 @@ async function refreshSettings(force) {
     $("#st-autosave").checked = d.autoSave;
     $("#st-web").checked = d.web.enabled;
     $("#st-mode").value = d.web.mode;
+    // config 里存了非法 mode（手改文件）：回落首个候选，保存即归一
+    if (!$("#st-mode").value) $("#st-mode").value = "hotspot";
     $("#st-srv").value = d.web.serverPort;
     $("#st-app").value = d.web.appPort;
     $("#st-tsk").value = d.web.taskerPort;
@@ -1985,7 +2199,7 @@ async function refreshSettings(force) {
       if (d.web.ip && !(d.adapters || []).some(a => a.ip === d.web.ip)) {
         const o = document.createElement("option");
         o.value = d.web.ip;
-        o.textContent = d.web.ip + "（不在场）";
+        o.textContent = d.web.ip + " · 不在场";
         o.selected = true;
         ip.appendChild(o);
       }
@@ -2031,7 +2245,7 @@ async function pickDir(inputId) {
       toast("已选择：" + j.path);
     }
   } catch {
-    toast("目录选择失败（网络）", "err");
+    toast("目录选择失败：网络异常", "err");
   }
 }
 $$(".browse").forEach(b =>

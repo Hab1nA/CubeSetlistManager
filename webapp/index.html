@@ -32,7 +32,7 @@
     <button class="nav b-settings" data-page="settings">
       <svg viewBox="0 0 16 16"><path d="M2.5 5h11M2.5 11h11"/><circle cx="6" cy="5" r="2"/><circle cx="10.5" cy="11" r="2"/></svg>
       设置</button>
-    <button id="btn-show" title="演出模式（大字全屏，ESC 退出）">
+    <button id="btn-show" title="演出模式：大字全屏，ESC 退出">
       <svg viewBox="0 0 16 16"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>
       演出</button>
     <button id="btn-exit" class="nav" title="退出程序">
@@ -87,6 +87,7 @@
         </div>
         <div id="log" class="log"></div>
       </div>
+      <p class="page-note">空格键 = 开始 / 暂停 / 继续；底部状态灯实时反映各链路。</p>
     </section>
 
     <section class="page" id="p-setlist">
@@ -131,7 +132,7 @@
                   <input type="checkbox" id="pt-on"><i></i><span>启用</span></label>
               </div>
               <div id="pt-mmc" class="field-err warn-txt" hidden>
-                MMC 输出口未就绪：定位不可用（检查时码口配置）</div>
+                MMC 输出口未就绪，定位不可用：检查时码口配置</div>
               <div id="pt-list" class="list"></div>
               <div id="pt-none" class="empty-state sm" hidden>
                 选择一个定位点编辑</div>
@@ -146,7 +147,7 @@
                 </div>
                 <div class="field-err" id="pt-hint"></div>
                 <div class="tl-wrap">
-                  <div class="lbl">时间轴分布（只读）</div>
+                  <div class="lbl">时间轴分布 · 只读</div>
                   <div id="pt-tl" class="tl"></div>
                   <div class="tl-scale"><span>0:00</span><span id="pt-tl-max">—</span></div>
                 </div>
@@ -164,17 +165,18 @@
             <div class="card">
               <div class="md-head">音色映射
                 <span id="dt-kbd-stat" class="dim sm-txt"></span></div>
-              <div class="lbl dt-inst">JUNO（C4 起 10 键）</div>
+              <div class="lbl dt-inst">JUNO · C4 起 10 键</div>
               <div id="dt-slots" class="slot-grid"></div>
-              <div class="lbl dt-inst">AX-09（C5 起 6 键）</div>
+              <div class="lbl dt-inst">AX-09 · C5 起 6 键</div>
               <div id="dt-axslots" class="slot-grid"></div>
-              <p class="dim sm-txt">点卡片=录制（再点一次保存）；「测试」
+              <p class="dim sm-txt">点卡片=录制，再点一次保存；「测试」
                 验证连通；✕ 清除。</p>
             </div>
           </div>
           </div>
         </div>
       </div>
+      <p class="page-note">定位点与音色映射按曲目保存；双击播放列表行或点「切歌」立即切换。</p>
     </section>
 
     <section class="page" id="p-pedal">
@@ -203,46 +205,49 @@
           <div class="stat-big"><span id="pedal-flash"></span>
             <span id="pedal-when">暂无事件</span></div></div>
       </div>
-      <div class="card"><h3>输入设备</h3>
-        <div class="input-row">
-          <select id="pd-dev"></select>
-          <button id="pd-refresh" class="btn ghost sm">刷新</button>
+      <div class="pedal-grid">
+        <div class="card"><h3>输入设备<span class="h3-note">离线设备可先选，上电自动接上</span></h3>
+          <div class="input-row">
+            <select id="pd-dev"></select>
+            <button id="pd-refresh" class="btn ghost sm">刷新</button>
+          </div>
+          <div class="opt-row">
+            <label class="switch" title="勾选后被绑定按键经系统热键截留，
+              不送达其它软件；即改即生效">
+              <input type="checkbox" id="pd-intercept"><i></i>
+              <span>拦截硬件原键</span></label>
+            <div class="field pd-win"><label for="pd-win">双踩判定窗 · 0.12-1.0 秒</label>
+              <input id="pd-win" class="num" inputmode="decimal"></div>
+          </div>
+          <p class="dim sm-txt" id="pd-midiport"></p>
         </div>
-        <label class="switch" title="勾选后被绑定按键经系统热键截留，
-          不送达其它软件；即改即生效">
-          <input type="checkbox" id="pd-intercept"><i></i>
-          <span>拦截硬件原键</span></label>
-        <p class="dim sm-txt" id="pd-midiport"></p>
-        <p class="dim sm-txt">即改即生效；离线设备可先选，上电自动接上。</p>
+        <div class="card"><h3>功能绑定<span class="h3-note">踩一下=单踩，快踩两下=双踩</span></h3>
+          <div id="pd-binds" class="bind-list"></div>
+        </div>
       </div>
-      <div class="card"><h3>功能绑定</h3>
-        <div id="pd-binds" class="bind-list"></div>
-        <div class="field pd-win"><label for="pd-win">双踩判定窗
-          （秒，0.12-1.0）</label>
-          <input id="pd-win" class="num" inputmode="decimal"></div>
-        <p class="dim sm-txt">踩一下=单踩，快踩两下=双踩。本页打开期间
-          踩钉静音，关闭本页恢复。</p>
-      </div>
+      <p class="page-note">本页打开期间踩钉临时静音，关闭本页恢复。</p>
     </section>
 
     <section class="page" id="p-kbd">
       <div class="page-head">
         <h2>键盘自动化</h2>
       </div>
-      <div id="kb-status" class="sm-txt"></div>
+      <div id="kb-status" class="kb-status"></div>
       <div class="cards2">
-        <div class="card"><h3>JUNO 端口
-          <span id="kb-jstat" class="port-stat"></span></h3>
-          <div class="field"><label for="kb-jin">输入</label>
+        <div class="card"><h3>JUNO 端口</h3>
+          <div class="field"><label for="kb-jin">输入<span class="f-st off"
+            id="kb-jin-st">未接</span></label>
             <select id="kb-jin"></select></div>
-          <div class="field"><label for="kb-jout">输出</label>
+          <div class="field"><label for="kb-jout">输出<span class="f-st off"
+            id="kb-jout-st">未接</span></label>
             <select id="kb-jout"></select></div>
         </div>
-        <div class="card"><h3>AX-09 端口
-          <span id="kb-astat" class="port-stat"></span></h3>
-          <div class="field"><label for="kb-ain">输入</label>
+        <div class="card"><h3>AX-09 端口</h3>
+          <div class="field"><label for="kb-ain">输入<span class="f-st off"
+            id="kb-ain-st">未接</span></label>
             <select id="kb-ain"></select></div>
-          <div class="field"><label for="kb-aout">输出</label>
+          <div class="field"><label for="kb-aout">输出<span class="f-st off"
+            id="kb-aout-st">未接</span></label>
             <select id="kb-aout"></select></div>
         </div>
       </div>
@@ -277,7 +282,7 @@
           </div>
         </div>
       </div>
-      <p class="dim sm-txt">音色映射按曲目保存，在「编排」页详情面板
+      <p class="page-note">音色映射按曲目保存，在「编排」页详情面板
         录制维护。</p>
     </section>
 
@@ -294,11 +299,11 @@
           <div class="dim sm-txt" id="vj-video"></div></div>
       </div>
       <div class="card"><h3>音符 ↔ 视频
-        <span class="h3-note" id="vjmap-note">触发规则：音符 60 起，第
-        N 个音对应 N.mp4（支持「N 描述」命名）；F#6 = 熄屏</span></h3>
-        <div id="vjmap" class="keymap vjmap"></div>
+        <span class="h3-note" id="vjmap-note">音符 60 起按顺序对应
+          1.mp4 起；支持「N 描述」命名；F#6 熄屏</span></h3>
+        <div id="vjmap" class="slot-grid vj-grid"></div>
       </div>
-      <div class="card"><h3>视频联动</h3>
+      <div class="card"><h3>视频联动<span class="h3-note">媒体输入名须与 OBS 源名一致</span></h3>
         <div class="grid2">
           <div class="field"><label for="vj-mon">VJ 显示位置</label>
             <select id="vj-mon"></select></div>
@@ -313,8 +318,13 @@
             <label class="switch"><input type="checkbox" id="vj-mute"><i></i>
               <span>静音</span></label></div>
         </div>
-        <button id="vj-save" class="btn primary">保存并应用</button>
+        <div class="save-row">
+          <span class="tspacer"></span>
+          <button id="vj-save" class="btn primary" disabled
+            title="配置未装载，暂不能保存">保存并应用</button>
+        </div>
       </div>
+      <p class="page-note">视频文件即放即扫：放入目录保存后立即可用。</p>
     </section>
 
     <section class="page" id="p-settings">
@@ -330,8 +340,8 @@
           <div class="field"><label for="st-kb">键盘端口</label>
             <select id="st-kb"></select></div>
         </div>
-        <p class="dim sm-txt">选「无」即停用该联动；「（未接入）」表示
-          设备暂不在线，保存保留原名。</p>
+        <p class="dim sm-txt">选「无」即停用该联动；未接入的设备按原名
+          保留，回连自动接上。</p>
       </div>
       <div class="card"><h3>行为</h3>
         <div class="grid2">
@@ -361,7 +371,7 @@
       <div class="card"><h3>移动端遥控</h3>
         <div class="grid2">
           <label class="switch"><input type="checkbox" id="st-web"><i></i>
-            <span>启用遥控（网页+翻谱推送）</span></label>
+            <span>启用遥控 · 网页+翻谱推送</span></label>
           <div class="field"><label for="st-mode">服务网络</label>
             <select id="st-mode"><option value="hotspot">自动开热点</option>
               <option value="lan">用现有局域网</option></select></div>
@@ -378,7 +388,7 @@
         </div>
         <div id="st-netstat" class="netstat"></div>
         <div id="app-addr-wrap" class="addr" hidden>
-          <div class="lbl">APP 连接地址（点击复制）</div>
+          <div class="lbl">APP 连接地址 · 点击复制</div>
           <button id="app-addr" class="addr-txt" title="点击复制"></button>
           <div id="qr-box" title="扫码连接 APP"></div>
         </div>
@@ -399,7 +409,7 @@
   <button class="lamp" id="l-remote" data-page-nav="settings">遥控 <i>·</i></button>
   <span id="tstate" class="dim"></span>
 </footer>
-<button id="show-exit" title="退出演出模式（ESC / F11）">⨯ 退出演出</button>
+<button id="show-exit" title="退出演出模式：ESC / F11">⨯ 退出演出</button>
 <div id="toasts"></div>
 <script type="module" src="/app/app.js"></script>
 </body>

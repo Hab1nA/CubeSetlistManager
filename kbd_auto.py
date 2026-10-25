@@ -60,7 +60,7 @@ MSG_GAP = 0.05                              # BS→PC 间隔
 SYSEX_GAP = 0.1                             # 模式 SysEx→BS 间隔
 SLOT_FILE = "keyboard_automation.json"      # 存在工程（歌）文件夹里
 WHDR_DONE = 0x1
-ABSENT_MARK = "（当前不可用）"               # 设备下拉幽灵项：已选名字不在在线清单
+ABSENT_MARK = " · 当前不可用"               # 设备下拉幽灵项：已选名字不在在线清单
                                             # （文案与设置页 _ABSENT 同款；本模块不能
                                             #   反向 import setlist_gui，就地同文）
 
@@ -342,7 +342,7 @@ def _name_pos(devs, name, idx):
 
 def _device_entries(names):
     """在线端口名清单 → 下拉项 [(显示名, 端口名, 同名序 0 基)]。唯一名字
-    显示全名；同名 N 个逐项带（第N个）。纯函数，UI 与测试共用。"""
+    显示全名；同名 N 个逐项带 · 第N个。纯函数，UI 与测试共用。"""
     total = {}
     for n in names:
         total[n] = total.get(n, 0) + 1
@@ -350,7 +350,7 @@ def _device_entries(names):
     out = []
     for n in names:
         seen[n] = seen.get(n, 0) + 1
-        out.append((n if total[n] == 1 else "%s（第%d个）" % (n, seen[n]),
+        out.append((n if total[n] == 1 else "%s · 第%d个" % (n, seen[n]),
                     n, seen[n] - 1))
     return out
 
@@ -647,7 +647,7 @@ class KeyboardAutoWindow(tk.Toplevel):
             # 口）两行各选各的口，同名盒输出行选定即跟随输入行
             # （_select_device）。下拉动态枚举当前在线端口——零写死设备名
             # （无线盒今天枚举出 USB-Midi、明天换有线枚举出 JUNO-DS，同一
-            # 套机制）；同名多口（两只同型号无线盒）以（第N个）区分，序号
+            # 套机制）；同名多口（两只同型号无线盒）以 · 第N个 区分，序号
             # 输出行存 cfg["dev"]、输入行存 cfg["inDev"]。行构成仿踩钉控制
             # 窗的设备行（宽 15 标签+下拉填充+宽 6 刷新）。
             for direction, label, hint in (
@@ -1032,7 +1032,7 @@ class KeyboardAutoWindow(tk.Toplevel):
 
     def _on_dev_selected(self, key, direction):
         """收/发设备下拉选中：按位次映射回（端口名, 同名序）交给
-        _select_device。显示值是组合态（含（第N个）/幽灵标注），不在
+        _select_device。显示值是组合态（含 · 第N个 /幽灵标注），不在
         values 里时 current()=-1——只消费用户真选中的项。"""
         i = self._dev_menus[key, direction].current()
         if 0 <= i < len(self._dev_items[key, direction]):
@@ -1042,7 +1042,7 @@ class KeyboardAutoWindow(tk.Toplevel):
     def _rebuild_device_menu(self, key):
         """重建设备下拉项（开窗/点「刷新」/改选后调用）：输出行列当前在线
         输出端口、输入行列输入端口（收发异名盒各落各的口，见
-        _select_device），唯一名显示全名、同名多口逐项「名（第N个）」；
+        _select_device），唯一名显示全名、同名多口逐项「名 · 第N个」；
         已选设备不在在线清单则追加幽灵项保住显示（设备可能只是没上电），
         改选其它项即替换。候选由 Combobox values 承载，选中语义=当前值
         （原 radiobutton 圆点改由当前显示值表达）。"""
@@ -1057,7 +1057,7 @@ class KeyboardAutoWindow(tk.Toplevel):
             labels = [label for label, _name, _k in entries]
             if hit is not None:
                 pos, total = _name_pos(devs, hit[1], hit[0])
-                shown = hit[1] if total == 1 else "%s（第%d个）" % (
+                shown = hit[1] if total == 1 else "%s · 第%d个" % (
                     hit[1], pos)
             else:                   # 幽灵项：已选设备当前不在场，可点回它
                 shown = hint + ABSENT_MARK
@@ -1158,7 +1158,7 @@ if __name__ == "__main__":
     assert _in_dev({"inHint": "A", "outHint": "A", "dev": 1,
                     "inDev": True}) == 0
     assert _device_entries(["A", "B", "B"])[1:] == [
-        ("B（第1个）", "B", 0), ("B（第2个）", "B", 1)]
+        ("B · 第1个", "B", 0), ("B · 第2个", "B", 1)]
     with tempfile.TemporaryDirectory() as td:
         cpr = os.path.join(td, "s.cpr")
         save_slots(cpr, {60: {"msb": 85, "pc": 1}}, "slots")

@@ -51,6 +51,10 @@ def main():
         time.sleep(0.2)
     else:
         sys.exit("等待业务栈超时（App 未就绪）")
+    # WebUI 模式旗标必须立即置位：会话内经 /exit 退出时 _on_exit 要跳过
+    # Tk 确认框（root 全程 withdraw，弹了也看不见——点「确认退出」会沉底
+    # 卡死）。原实现置在 webview.start() 之后=会话内退出路径失效
+    app.webui_mode = True               # Tk 确认框改由前端两段式承担
 
     # UI 专用 loopback 实例：127.0.0.1 随机口，/app /state /cmd 同一套面；
     # 与 WebRemote 主服务（按用户配置起/不起热点与对外端口）完全独立
@@ -79,7 +83,6 @@ def main():
         app.calls.put(app._on_exit)
         return
     ui_srv.shutdown()
-    app.webui_mode = True               # Tk 确认框改由前端两段式承担
     app.calls.put(app._on_exit)         # 窗口关=通知 Tk 线程退出全程序
 
 

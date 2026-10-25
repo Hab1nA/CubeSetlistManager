@@ -436,6 +436,9 @@ class App:
         # 自愈——LAN 信任域（/cmd 同级）内不构成升级，不为它上锁
         self._pedal_gwin = [0.0, 0]   # 全局限流窗：[窗起点, 窗内包数]
         self._pedal_gwin_lock = threading.Lock()   # gwin 非原子读改写
+        # seq/rate 同为线程池并发的非原子读改写（淘汰+写回交错会漏删/多删
+        # 一格）：与 gwin 各持小锁，不共用以免限流窗被去重表拖住
+        self._pedal_dedup_lock = threading.Lock()
         self._rclock_note = ("单踏板设计：bridge._rclock 为全体转发源共享，"
                              "多平板同开时 et 互跳会频繁重锚、安全退化为"
                              "到达时刻锚定（无锚定收益但不产生错误动作）")
@@ -2013,7 +2016,7 @@ class App:
             with self._obs_apply_lock:
                 if mute is not None:
                     ctl.cfg["vjMute"] = mute
-                if vid:
+                if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
                     ctl.cfg["videoRoot"] = vid
                 if media is not None:
                     ctl.cfg["mediaInput"] = media
@@ -2068,7 +2071,7 @@ class App:
             cfg.update(flags)
             if obs_in:
                 obs = cfg.get("obs") or {}
-                if vid:
+                if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
                     obs["videoRoot"] = vid
                 if mon is not None:
                     obs["projectorMonitor"] = mon
