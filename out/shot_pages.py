@@ -76,5 +76,21 @@ if tab:
     e = send("Runtime.evaluate", {"expression":
              "window.__errs ? JSON.stringify(window.__errs) : '[]'"})
     print("JS errors:", e.get("result", {}).get("value"), flush=True)
+    # 演出模式全屏帧（右上退出钮/toast 位目视证据）
+    send("Runtime.evaluate", {"expression":
+          "document.getElementById('btn-show').click()"})
+    time.sleep(1.0)
+    r = send("Page.captureScreenshot", {"format": "png"})
+    png = base64.b64decode(r["data"])
+    (OUTD / "x_show_mode.png").write_bytes(png)
+    print("shot show-mode", len(png), flush=True)
+    geom = send("Runtime.evaluate", {"expression":
+                "(async()=>{const b=document.getElementById('show-exit')"
+                ".getBoundingClientRect();"
+                "return innerWidth+'x'+innerHeight+' exitTop='"
+                "+Math.round(b.top)+' exitRight='"
+                "+Math.round(innerWidth-b.right)})()",
+                "awaitPromise": True})
+    print("show geom:", geom.get("result", {}).get("value"), flush=True)
     ws.close()
 probe.terminate()
