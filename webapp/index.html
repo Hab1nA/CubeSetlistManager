@@ -182,42 +182,47 @@
       <div class="stat-cards">
         <div class="card stat"><div class="lbl">连接状态</div>
           <div class="stat-big" id="pedal-conn">…</div>
-          <div class="dim sm-txt" id="pedal-conn-sub"></div></div>
+          <div class="kv"><span class="k">MIDI 口</span>
+            <span class="v off" id="pedal-kv-midi">未连</span></div>
+          <div class="kv"><span class="k">输入设备</span>
+            <span class="v off" id="pedal-kv-dev">离线</span></div>
+          <div class="kv"><span class="k">HID 桥</span>
+            <span class="v off" id="pedal-kv-hid">停</span></div>
+        </div>
         <div class="card stat"><div class="lbl">平板转发链路</div>
           <div class="stat-big" id="pedal-link">—</div>
-          <div class="dim sm-txt" id="pedal-link-sub"></div>
+          <div class="kv"><span class="k">心跳</span>
+            <span class="v off" id="pedal-kv-hb">未启用</span></div>
+          <div class="kv"><span class="k">未识别键</span>
+            <span class="v off" id="pedal-kv-unknown">0 个</span></div>
           <label class="switch sm" title="踏板 USB-C 连平板经 APP 转发；
             平板端 APP 设置里也要开；即改即生效">
             <input type="checkbox" id="pd-remote"><i></i>
             <span>允许平板转发踩钉</span></label></div>
         <div class="card stat"><div class="lbl">最近踩钉事件</div>
-          <div class="stat-big"><span id="pedal-flash">·</span>
-            <span class="dim" id="pedal-when"></span></div></div>
+          <div class="stat-big"><span id="pedal-flash"></span>
+            <span id="pedal-when">暂无事件</span></div></div>
       </div>
       <div class="card"><h3>输入设备</h3>
         <div class="input-row">
           <select id="pd-dev"></select>
           <button id="pd-refresh" class="btn ghost sm">刷新</button>
         </div>
+        <label class="switch" title="勾选后被绑定按键经系统热键截留，
+          不送达其它软件；即改即生效">
+          <input type="checkbox" id="pd-intercept"><i></i>
+          <span>拦截硬件原键</span></label>
         <p class="dim sm-txt" id="pd-midiport"></p>
         <p class="dim sm-txt">即改即生效；离线设备可先选，上电自动接上。</p>
       </div>
       <div class="card"><h3>功能绑定</h3>
         <div id="pd-binds" class="bind-list"></div>
+        <div class="field pd-win"><label for="pd-win">双踩判定窗
+          （秒，0.12-1.0）</label>
+          <input id="pd-win" class="num" inputmode="decimal"></div>
         <p class="dim sm-txt">踩一下=单踩，快踩两下=双踩。本页打开期间
           踩钉静音，关闭本页恢复。</p>
       </div>
-      <details class="card"><summary>高级</summary>
-        <div class="grid2">
-          <div class="field"><label for="pd-win">双踩窗（秒，0.12-1.0）</label>
-            <input id="pd-win" class="num" inputmode="decimal"></div>
-          <div class="field"><label>硬件原键</label>
-            <label class="switch" title="勾选后被绑定按键经系统热键截留，
-              不送达其它软件；即改即生效"><input type="checkbox"
-              id="pd-intercept"><i></i>
-              <span>拦截硬件原键</span></label></div>
-        </div>
-      </details>
     </section>
 
     <section class="page" id="p-kbd">

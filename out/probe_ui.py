@@ -605,9 +605,12 @@ def stage_p1(send):
            ".textContent,"
            "binds:document.querySelectorAll('.bind-row').length,"
            "devSel:document.getElementById('pd-dev').tagName,"
-           "adv:!!document.querySelector('details.card')}")
+           "win:!!document.getElementById('pd-win'),"
+           "noDetails:!document.querySelector('#p-pedal details'),"
+           "kv:document.querySelectorAll('#p-pedal .kv').length}")
     ok("p1.pedal.stat-cards", pd.get("conn") and pd.get("binds") == 6
-       and pd.get("devSel") == "SELECT" and pd.get("adv"),
+       and pd.get("devSel") == "SELECT" and pd.get("win")
+       and pd.get("noDetails") and pd.get("kv") == 5,
        json.dumps(pd, ensure_ascii=False))
 
     # ---- 键盘页：全局端口/移调只读（槽网格已移编排页详情）----
@@ -1306,7 +1309,8 @@ def stage_c(send):
             "'.bind-row[data-action=next] .b-bind').textContent,"
             "unset:document.querySelector("
             "'.bind-row[data-action=play] .b-bind').textContent,"
-            "sub:document.getElementById('pedal-conn-sub').textContent,"
+            "kvMidi:document.getElementById('pedal-kv-midi').textContent,"
+            "kvHid:document.getElementById('pedal-kv-hid').textContent,"
             "devOpts:[...document.getElementById('pd-dev').options]"
             ".map(o=>o.textContent)}")
     ok("bc.c2.bind-table", c4.get("rows") == 6
@@ -1314,10 +1318,11 @@ def stage_c(send):
        and c4.get("bindNext") == "按键 下一曲"
        and c4.get("unset") == "未设置",
        json.dumps(c4, ensure_ascii=False))
-    ok("bc.c4.conn-sub",
-       "MIDI" in (c4.get("sub") or "") and "设备" in (c4.get("sub") or "")
-       and "HID" in (c4.get("sub") or ""),
-       json.dumps(c4.get("sub"), ensure_ascii=False))
+    ok("bc.c4.conn-kv",
+       c4.get("kvMidi") in ("已连", "未连")
+       and c4.get("kvHid") in ("运行", "停"),
+       json.dumps([c4.get("kvMidi"), c4.get("kvHid")],
+                  ensure_ascii=False))
     ok("bc.c1.device-select",
        any("仅 MIDI" in t for t in c4.get("devOpts", []))
        and any("TURNER" in t for t in c4.get("devOpts", [])),

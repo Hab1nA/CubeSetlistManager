@@ -207,7 +207,7 @@ input.invalid { border-color: var(--err) !important; }
 .page { display: none; padding: 22px 28px; max-width: 1400px; }
 .page.on { display: block; animation: page-in 160ms var(--ease); }
 .page > h2 { margin: 0 0 var(--s4); font-size: 20px; }
-.page h2 { margin: 0; font-size: 20px; }
+.page h2 { font-size: 20px; }
 .page-head { display: flex; align-items: center; gap: var(--s4);
   margin-bottom: var(--s4); }
 /* 页面级吸底操作行（设置页保存钮管四张卡，不缩在最后一张卡里） */
@@ -434,7 +434,16 @@ input.invalid { border-color: var(--err) !important; }
   flex-wrap: wrap; align-items: stretch; }
 .card.stat { min-width: 200px; flex: 1; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
-.card.stat > .dim { margin-top: var(--s1); }
+.kv { display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 5px 0; font-size: var(--f-sm); }
+.kv .k { color: var(--dim); }
+.kv .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+.kv .v.on { color: var(--ok); }
+.kv .v.off { color: var(--dim); }
+.kv .v.warn { color: var(--warn); }
+.stat-big + .kv { margin-top: 8px; }
+#p-pedal .card .switch { margin-top: var(--s2); }
+.pd-win { max-width: 260px; margin-top: var(--s3); }
 .card.stat > .switch { margin-top: var(--s2); }
 .stat-big.ok { color: var(--ok); }
 .stat-big.warn { color: var(--warn); }
@@ -452,14 +461,7 @@ input.invalid { border-color: var(--err) !important; }
   border-radius: 50%; background: #3a434d; margin-right: 8px;
   transition: background-color var(--t-fast) var(--ease); }
 #pedal-flash.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-details.card summary { cursor: pointer; color: var(--dim);
-  font-weight: 700; font-size: var(--f-md); list-style: none;
-  display: flex; align-items: center; gap: 6px; }
-details.card summary::before { content: "▸"; transition:
-  transform var(--t-fast) var(--ease); }
-details.card[open] summary::before { transform: rotate(90deg); }
-details.card summary:hover { color: var(--fg); }
-details.card .grid2 { margin-top: var(--s3); }
+
 
 /* ---- 键盘页 ---- */
 #kb-status { margin-bottom: var(--s3); }

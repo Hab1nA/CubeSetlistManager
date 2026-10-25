@@ -450,10 +450,15 @@ function drawChips(st, cur) {
 }
 
 // ---- 踩钉事件闪灯（lastEventAge 回落=新事件）----
+function setKv(id, text, on) {
+  const el = $("#" + id);
+  el.textContent = text;
+  el.className = "v " + (on ? "on" : "off");
+}
+
 function pedalLive(st) {
   const pr = st.pedalRemote;
   const link = $("#pedal-link");
-  const sub = $("#pedal-link-sub");
   if (pr) {
     const off = !pr.enabled && pr.link !== "ok" && pr.link !== "stale";
     link.textContent = pr.link === "ok" ? "健康"
@@ -461,14 +466,18 @@ function pedalLive(st) {
     link.className = "stat-big " +
         (pr.link === "ok" ? "ok" : pr.link === "stale" ? "warn"
          : off ? "" : "err");
-    sub.textContent = pr.unknown > 0
-        ? "未识别键 " + pr.unknown + " 个（链路活但键路不通）"
-        : (pr.enabled ? "心跳正常" : "未启用");
-    sub.className = "dim sm-txt" + (pr.unknown > 0 ? " warn-txt" : "");
+    const hb = $("#pedal-kv-hb"), unk = $("#pedal-kv-unknown");
+    hb.textContent = pr.unknown > 0 ? "未识别 " + pr.unknown
+        : (pr.enabled ? "正常" : "未启用");
+    hb.className = "v " + (pr.unknown > 0 ? "warn"
+        : (!pr.enabled ? "off" : "on"));
+    unk.textContent = pr.unknown + " 个";
+    unk.className = "v " + (pr.unknown > 0 ? "warn" : "off");
   } else {
     link.textContent = "—";
     link.className = "stat-big";
-    sub.textContent = "";
+    setKv("pedal-kv-hb", "—", false);
+    setKv("pedal-kv-unknown", "—", false);
   }
   const age = pr && pr.lastEventAge;
   const flash = $("#pedal-flash");
@@ -478,10 +487,13 @@ function pedalLive(st) {
       setTimeout(() => flash.classList.remove("on"), 600);
     }
     pedalPrevAge = age;
-    $("#pedal-when").textContent = age < 60
-        ? Math.round(age) + " 秒前" : "久前";
+    const w = $("#pedal-when");
+    w.textContent = age < 60 ? Math.round(age) + " 秒前" : "久前";
+    w.className = "";
   } else {
-    $("#pedal-when").textContent = "暂无事件";
+    const w = $("#pedal-when");
+    w.textContent = "暂无事件";
+    w.className = "dim";
   }
 }
 
@@ -1307,10 +1319,10 @@ async function refreshPedal(force) {
     }
     c.textContent = txt;
     c.className = "stat-big " + cls;
-    $("#pedal-conn-sub").textContent =
-        "MIDI " + (d.connected ? "连接" : "未连")
-        + " · 设备 " + (d.deviceOnline ? "在线" : "离线")
-        + " · HID 桥 " + (d.hidActive ? "运行" : "停");
+    setKv("pedal-kv-midi", d.connected ? "已连" : "未连", d.connected);
+    setKv("pedal-kv-dev", d.deviceOnline ? "在线" : "离线",
+          d.deviceOnline);
+    setKv("pedal-kv-hid", d.hidActive ? "运行" : "停", d.hidActive);
     // 表单字段只在首拉/保存后回填：1.5s 轮询无条件回写会打穿正在编辑的
     // 双踩窗/开关（改一半被洗掉、开关视觉回弹）；即改即生效控件在
     // 各自 change 后置 force 刷新基线
