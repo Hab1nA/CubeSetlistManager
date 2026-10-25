@@ -789,6 +789,8 @@ function selectSong(key) {
   // dataset.sig 必须一并清：否则 buildSlots 差量守卫见「签名同」跳过重绘，
   // 换到映射内容相同的另一首时网格停在空态（探针 p1 实证）
   dtKbd = null;
+  dtPtN = null;
+  updateDtBadge();
   $("#dt-kbd-stat").textContent = "映射装载中…";
   for (const id of ["dt-slots", "dt-axslots"]) {
     const el = $("#" + id);
@@ -899,11 +901,13 @@ async function refreshPoints() {
     ptProj = plSel;
     const song = plCache && (plCache.lib.find(x => x.key === plSel)
                               || (plCache.pl || []).find(x => x.key === plSel));
-    $("#dt-head").textContent = "曲目详情 · "
+    $("#dt-title").textContent = "曲目详情 · "
         + ((song ? song.name.split(" · ")[0] : "")
            || (ptData[plSel] || {}).name || plSel);
     const dd = ptData[ptProj] || {enabled: false, points: []};
     if (!ptOnPending) $("#pt-on").checked = dd.enabled;
+    dtPtN = dd.points.length;
+    updateDtBadge();
     // 主列表（差量：签名不变不动 DOM）
     const el = $("#pt-list");
     const lsig = ptProj + ":" + dd.points.map(
@@ -932,7 +936,7 @@ async function refreshPoints() {
     }
     // 编辑卡
     const has = ptSel !== null && dd.points.some(p => p.id === ptSel);
-    $("#pt-none").hidden = has;
+    $("#pt-none").hidden = has || !dd.points.length;
     $("#pt-form").hidden = !has;
     if (has) {
       const gi = ptGotoIndex();
@@ -1603,7 +1607,13 @@ async function refreshKbd(force) {
 }
 
 // ---- 编排页详情面板的音色映射（选中曲的 /kbd?song= 视图）----
-let dtKbd = null;
+let dtKbd = null, dtPtN = null;
+function updateDtBadge() {
+  const el = $("#dt-n");
+  if (!el) return;          // 详情列未在 DOM（防御：响应迟到/宿主壳差异）
+  if (!plSel) { el.textContent = "未选中"; return; }
+  el.textContent = "定位点 " + (dtPtN === null ? "—" : dtPtN);
+}
 function buildSlots(el, slots, from, to, inst) {
   const sig = Object.keys(slots || {}).map(k =>
       k + ":" + JSON.stringify(slots[k])).join("|");
@@ -1618,6 +1628,7 @@ async function refreshKbdDetail() {
     dtKbd = null;
     return;
   }
+  updateDtBadge();
   try {
     const seq = refreshKbdDetail.seq = (refreshKbdDetail.seq || 0) + 1;
     const r = await fetch("/kbd?song=" + encodeURIComponent(plSel));
@@ -1629,8 +1640,8 @@ async function refreshKbdDetail() {
     const es0 = d.editSong;
     if (!es0 || es0.key !== plSel || es0.loading) {
       dtKbd = null;
-      if (!es0 || es0.loading)
-        $("#dt-kbd-stat").textContent = "映射装载中…";
+      $("#dt-kbd-stat").textContent = !es0 || es0.loading
+          ? "映射装载中…" : "映射不可用（曲目不在素材库）";
       return;
     }
     dtKbd = d;
@@ -1640,6 +1651,7 @@ async function refreshKbdDetail() {
           + Object.keys(es.axSlots || {}).length + "/6";
     buildSlots($("#dt-slots"), es.slots, 60, 69, "juno");
     buildSlots($("#dt-axslots"), es.axSlots, 72, 77, "ax");
+    updateDtBadge();
     // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
     if (es.loading && pageOn("setlist"))
       setTimeout(() => { if (pageOn("setlist")) refreshKbdDetail(); }, 700);

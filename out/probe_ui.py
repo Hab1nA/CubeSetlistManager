@@ -234,8 +234,8 @@ def stage_p0(send):
         "desc:'USER:0564'}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    time.sleep(0.8)
-    pick_song(send, 1.0)
+    time.sleep(2.0)          # 等一个轮询周期：列表换桩数据后再选曲
+    pick_song(send, 1.2)
     pop = js(send, "const r=document.querySelector('#dt-slots .slot');"
              "if(!r)return {none:1};r.click();"
              "return {pop:!!document.querySelector('.pop'),"
@@ -778,8 +778,8 @@ def stage_p2(send):
         "axSlots:{}}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    time.sleep(0.8)
-    pick_song(send, 1.0)
+    time.sleep(2.0)          # 等一个轮询周期：列表换桩数据后再选曲
+    pick_song(send, 1.2)
     sg = js(send, "return {grid:document.querySelectorAll("
            "'#dt-slots .slot').length,"
            "ax:document.querySelectorAll('#dt-axslots .slot').length,"

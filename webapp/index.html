@@ -116,7 +116,7 @@
           </div>
         </div>
         <div class="col" id="col-dt" data-col="dt">
-          <div class="colhead" id="dt-head">曲目详情</div>
+          <div class="colhead" id="dt-head"><span id="dt-title">曲目详情</span> <span class="badge" id="dt-n">未选中</span></div>
           <div id="dt-scroll">
           <div id="dt-none" class="empty-state sm">
             在左侧选择曲目，查看并编辑它的定位点与音色映射</div>
@@ -249,13 +249,15 @@
       </div>
       <div class="card slotcard">
         <h3>全局移调（只读）
-          <span class="shift-ro" id="kb-jshift"
-            title="当前 JUNO 全局移调（半音）——由键盘自动化轨的移调键位驱动">JUNO 移调 0</span>
-          <span class="shift-ro" id="kb-ashift"
-            title="当前 AX-09 全局移调（半音）——由键盘自动化轨的移调键位驱动">AX 移调 0</span></h3>
+          <span class="h3-tail">
+            <span class="shift-ro" id="kb-jshift"
+              title="当前 JUNO 全局移调（半音）——由键盘自动化轨的移调键位驱动">JUNO 移调 0</span>
+            <span class="shift-ro" id="kb-ashift"
+              title="当前 AX-09 全局移调（半音）——由键盘自动化轨的移调键位驱动">AX 移调 0</span>
+          </span></h3>
         <p class="dim sm-txt">移调不走本页：由键盘自动化轨上的移调键位控制
           （JUNO C2 降半音 C#2 升半音 D2 降八度 D#2 升八度；AX-09 对应
-          F2/F#2/G2/G#2），上方只读显示当前累计值，变化时脉冲提示。</p>
+          F2/F#2/G2/G#2），卡头右侧只读显示当前累计值，变化时脉冲提示。</p>
       </div>
       <p class="dim sm-txt">各首歌的音色槽映射在「编排」页选中曲目后的详情
         面板里录制维护。</p>

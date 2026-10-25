@@ -54,6 +54,16 @@ if tab:
         send("Runtime.evaluate", {"expression":
               "document.querySelector('.b-%s').click()" % p})
         time.sleep(1.2)
+        if p == "setlist":
+            # 选中首曲再补一张：详情面板与行选中态的目视证据
+            send("Runtime.evaluate", {"expression":
+                  "const r=document.querySelector('#lib .row')||"
+                  "document.querySelector('#pl .row');r&&r.click()"})
+            time.sleep(1.6)
+            r = send("Page.captureScreenshot", {"format": "png"})
+            png = base64.b64decode(r["data"])
+            (OUTD / "page_setlist_selected.png").write_bytes(png)
+            print("shot setlist_selected", len(png), flush=True)
         r = send("Page.captureScreenshot", {"format": "png"})
         png = base64.b64decode(r["data"])
         (OUTD / ("page_%s.png" % p)).write_bytes(png)
