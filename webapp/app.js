@@ -1079,6 +1079,7 @@ function validatePt() {
     hint.className = "field-err warn-txt";
   } else {
     hint.textContent = "";
+    hint.className = "field-err";   // 清空时重置类，防 warn 残留
   }
   return !msg;
 }

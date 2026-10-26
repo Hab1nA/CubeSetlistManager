@@ -415,6 +415,7 @@ input.invalid { border-color: var(--err) !important; }
 .cols .col#col-dt { grid-area: 1 / 2 / 3 / 3; }
 .col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .cols .colhead { padding-right: 10px; }
+/* 页级列头 8px=有意紧凑（非卡头 16 规范）：列头与列表为同一逻辑区 */
 .colhead { display: flex; align-items: center; gap: var(--s2);
   font-weight: 700; margin-bottom: var(--s2); }
 .colhead .btn.icon.sm { margin-left: auto; padding: 3px 9px; }
@@ -512,7 +513,9 @@ input.invalid { border-color: var(--err) !important; }
 .kv { display: flex; justify-content: space-between; align-items: center;
   gap: 12px; padding: 5px 0; font-size: var(--f-sm); }
 .kv .k { color: var(--dim); }
-.kv .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+.kv .v { color: var(--fg); font-variant-numeric: tabular-nums;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }   /* 长值省略：值当前均为有界短文案，防将来顶破卡 */
 .kv .v.on { color: var(--ok); }
 .kv .v.off { color: var(--dim); }
 .kv .v.warn { color: var(--warn); }
