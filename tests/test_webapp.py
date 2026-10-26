@@ -719,6 +719,131 @@ class _Var:
         self.v = v
 
 
+def _launch_fixture(monkeypatch, obs_running):
+    """launchApps 测试夹具：fake app + fake ctl + 进程枚举可控。"""
+    launches = []
+
+    class _Ctl:
+        def __init__(self):
+            self.cfg = {"projectorMonitor": "", "autoStart": False}
+            self.last_error = ""
+            self.ensured = 0
+            self.projected = 0
+            self.closed = 0
+
+        def is_connected(self):
+            return False
+
+        def apply_mute(self):
+            return True
+
+        def apply_projector(self):
+            self.projected += 1
+            return True
+
+        def close_projector(self):
+            self.closed += 1
+
+        def _ensure_obs_running(self):
+            # 模拟真实门：生效 autoStart=False 时拒绝拉起（ObsError 路径）
+            if not self.cfg.get("autoStart"):
+                self.ensured += 1
+                raise RuntimeError("OBS 未运行")
+            self.ensured += 1
+            launches.append(1)
+            return True          # 拉起成功（fresh）
+
+    fake = types.SimpleNamespace(
+        launch_apps=True, _obs_autostart_cfg=True,
+        _obs_apply_lock=threading.Lock(), q=_Q(), ctl=_Ctl())
+    fake._obs_autostart_effective = types.MethodType(
+        sg.App._obs_autostart_effective, fake)
+    monkeypatch.setattr(sg, "find_processes_by_prefix",
+                        lambda prefix: [(1, "obs64.exe")] if obs_running
+                        else [])
+    return fake, launches
+
+
+def test_launch_apps_vj_monitor_relaunch(monkeypatch):
+    """VJ 显示位置「无→投屏」+ 总闸开 + OBS 未运行 → 拉起；其余组合不拉。"""
+    fake, launches = _launch_fixture(monkeypatch, obs_running=False)
+    app = sg.App
+    # 1) 无→投屏：拉起
+    app._apply_obs_web(fake, None, None, "DP-1", None)
+    assert launches == [1] and fake.ctl.cfg["projectorMonitor"] == "DP-1"
+    assert fake.ctl.cfg["autoStart"] is True      # 三重门重算后放行
+    # 2) 已是投屏位置再保存：不重复拉
+    app._apply_obs_web(fake, None, None, "DP-1", None)
+    assert launches == [1] and fake.ctl.projected == 1   # 直接 apply_projector
+    # 3) 改回「无」：只关投影，不拉起（场景 2 应用同位已重关一次）
+    app._apply_obs_web(fake, None, None, "", None)
+    assert launches == [1] and fake.ctl.closed == 2
+    assert fake.ctl.cfg["autoStart"] is False
+    # 4) 总闸关：即使无→投屏也不拉
+    fake.launch_apps = False
+    app._apply_obs_web(fake, None, None, "DP-1", None)
+    assert launches == [1]
+    # 5) obs.autoStart 关（三重门不放行）：拉起被拒且进日志
+    fake3, launches3 = _launch_fixture(monkeypatch, obs_running=False)
+    fake3._obs_autostart_cfg = False
+    fake3._obs_autostart_effective = types.MethodType(
+        sg.App._obs_autostart_effective, fake3)
+    app._apply_obs_web(fake3, None, None, "DP-1", None)
+    assert launches3 == [] and fake3.ctl.ensured == 1
+    assert any("OBS 自动拉起失败" in m for m in fake3.q._l)
+
+
+def test_launch_apps_guards(monkeypatch):
+    """拉起的其余门：OBS 已运行不拉；obs.autoStart 关不拉（三重门）。"""
+    fake, launches = _launch_fixture(monkeypatch, obs_running=True)
+    app = sg.App
+    app._apply_obs_web(fake, None, None, "DP-1", None)   # OBS 已运行
+    assert launches == [] and fake.ctl.projected == 1
+    fake2, launches2 = _launch_fixture(monkeypatch, obs_running=False)
+    fake2._obs_autostart_cfg = False                     # obs.autoStart 关
+    app._apply_obs_web(fake2, None, None, "DP-1", None)
+    assert launches2 == [] and fake2.ctl.ensured == 1
+    assert any("OBS 自动拉起失败" in m for m in fake2.q._l)
+    # 三重门纯逻辑
+    assert app._obs_autostart_effective(fake2) is False
+
+
+def test_launch_apps_setting_persist(monkeypatch):
+    """launchAppsOnStart 在场检测：部分载荷只动该键，内存+磁盘跟随。"""
+    disk = {"autoAdvance": True, "autoPlay": True, "topMost": True,
+            "switchConfirm": True, "exitCloseApps": False,
+            "launchAppsOnStart": True,
+            "vjPortHint": "VJ1", "kbPortHint": "KB1", "clockPortHint": "CK1",
+            "obs": {"projectorMonitor": "DP-1", "vjMute": True,
+                    "videoRoot": "D:/v", "mediaInput": "Old"},
+            "webRemote": dict(web_remote.DEFAULT_WEB_REMOTE)}
+    monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
+        json.dumps(disk)))
+    monkeypatch.setattr(sg, "_save_config",
+                        lambda cfg: disk.clear() or disk.update(cfg))
+    fake = types.SimpleNamespace(
+        vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
+        cont_play=True, auto_var=_Var(True), top_most=True,
+        switch_confirm=True, exit_close_apps=False, launch_apps=True,
+        _obs_autostart_cfg=True, ccfg={"projectsRoot": "C:/x"},
+        web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
+        _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
+        root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
+        _toggle_auto=lambda: None,
+        _apply_ports=lambda: None,
+        _apply_web=lambda: None,
+        _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f),
+        _load_songs=lambda: None)
+    assert sg.App._settings_apply_web(
+        fake, {"launchAppsOnStart": False}) is None
+    assert fake.launch_apps is False and disk["launchAppsOnStart"] is False
+    assert disk["exitCloseApps"] is False and disk["autoPlay"] is True
+    assert disk["obs"]["projectorMonitor"] == "DP-1"   # 其余键零波及
+    # 三重门：ctl 缺席=False（构造前无 OBS 连接循环可影响）
+    assert sg.App._obs_autostart_effective(fake) is False
+
+
 def test_settings_partial_payload_no_wipe(monkeypatch):
     """B1：VJ 页只发 obs 节 → 其余内存/磁盘字段逐项不变；设置页全量
     载荷才更新对应字段（在场检测）。"""

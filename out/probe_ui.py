@@ -1141,6 +1141,7 @@ def stage_a(send):
         "&&window.__fmode!=='post')return Promise.resolve(new Response("
         "JSON.stringify({clockHint:'',vjHint:'',kbHint:'',autoAdvance:true,"
         "autoPlay:false,topMost:true,switchConfirm:true,exitCloseApps:false,"
+                 "launchAppsOnStart:true,"
         "projectsRoot:'',dawExe:'',autoSave:true,"
         "obs:{projectorMonitor:'',vjMute:true,videoRoot:'',mediaInput:''},"
         "web:{enabled:false,serverPort:8765,appPort:8767,taskerPort:8766,"
@@ -2503,6 +2504,27 @@ def stage_r(send):
     ok("br.r5.fullnames", kn5.get("hasJ") and kn5.get("hasA")
        and not kn5.get("noBare") and not kn5.get("noShiftOld"),
        json.dumps(kn5, ensure_ascii=False))
+
+    # ---- 启动打开被控软件开关（行为卡、退出关闭之前、载荷带键）----
+    nav(send, "settings")
+    l7 = js(send, "const sw=document.getElementById('st-launch');"
+             "const exit=document.getElementById('st-exit');"
+             "return {present:!!sw,checked:sw.checked,"
+             "beforeExit:!!(sw&&exit&&sw.compareDocumentPosition(exit)"
+             "&Node.DOCUMENT_POSITION_FOLLOWING)}")
+    js(send, UNSTUB + INTERCEPT +
+       "window.__posts=[];document.getElementById('st-launch').click();"
+       "document.getElementById('st-save').click();return 1")
+    time.sleep(0.5)
+    l7b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>{"
+             "if(u==='/settings'&&b)body=b});"
+             "return {key:body?JSON.parse(body).launchAppsOnStart:null}")
+    ok("br.launch-setting",
+       l7.get("present") and l7.get("beforeExit")
+       and l7.get("checked") is True
+       and l7b.get("key") is False,   # 桩回 ok:true→点击翻转后保存 False
+       "%s %s" % (json.dumps(l7), json.dumps(l7b)))
+    js(send, RESTORE)
 
     errs = js(send, "return window.__errs")
     ok("br.no-js-errors", not errs, str(errs)[:300])

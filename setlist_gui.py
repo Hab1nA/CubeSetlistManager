@@ -419,6 +419,13 @@ class App:
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
+        # 启动连带开被控软件（DAW/OBS/loopMIDI，与退出关闭对等）；默认开=
+        # 保持历史行为（此前启动序列无条件拉起）
+        self.launch_apps = bool(cfg.get("launchAppsOnStart", True))
+        # OBS 自动拉起独立配置（config obs.autoStart，默认开）：生效值=
+        # 它 ∧ 总闸 ∧ 已配投屏位置，见 _obs_autostart_effective
+        self._obs_autostart_cfg = bool(
+            (cfg.get("obs") or {}).get("autoStart", True))
         # 端口提示名：空串=停用该联动（设置页下拉「无」）；缺键=无（不再
         # 回退旧硬编码端口名）
         self.vj_hint = str(cfg.get("vjPortHint") or "")
@@ -882,6 +889,15 @@ class App:
                 and not self.ctl.apply_projector():
             self.q.put("VJ显示位置未恢复：%s" % self.ctl.last_error)
 
+    def _obs_autostart_effective(self):
+        """OBS 自动拉起的生效值，三重门：obs.autoStart 独立配置 ∧
+        「启动时自动打开被控软件」 ∧ 已配置 VJ 显示位置（「无」=不投屏，
+        此时即使总闸开也不允许连接循环自动拉起 OBS）。"""
+        if self.ctl is None:
+            return False
+        mon = self.ctl.cfg.get("projectorMonitor", "") or ""
+        return bool(self._obs_autostart_cfg and self.launch_apps and mon)
+
     def _ensure_daw(self):
         """启动自检：DAW 未运行就自动拉起（Cubase 冷启动到 Hub 约 30 秒，
         之后切歌才能单实例转交）。进程在而界面全无=正在退出的空壳（上一局
@@ -927,28 +943,42 @@ class App:
     def _startup(self):
         """后台启动：按依赖分组逐项降级——一组失败只废该组功能并记红字，
         其余服务照常起（缺什么补什么，不再一票否决）。三大后端
-        （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起。"""
+        （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起，受「启动时自动
+        打开被控软件」总闸控制（关闭=三个都不拉，对齐退出关闭的关闭面）。"""
         try:
-            self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
-            try:
-                hint = self.vj_hint or self.kb_hint or self.clock_hint
-                if hint:
-                    mb.ensure_loopmidi(hint)
-                    self.q.put("loopMIDI 端口就绪")
-                elif not find_processes_by_prefix("loopmidi"):
-                    # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的端口，
-                    # 不在则每次载入弹「未找到端口」。只拉起，不等端口。
-                    exe = mb._loopmidi_exe()
-                    if exe is None:
-                        raise SystemExit("找不到 loopMIDI.exe")
-                    if launch_detached(exe) <= 32:
-                        raise SystemExit("拉起 loopMIDI 失败")
-                    self.q.put("loopMIDI 已拉起（端口联动已停用）")
-            except SystemExit as e:      # 单项降级：缺 loopMIDI 不拖垮其余服务
-                self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用" % e)
+            if not self.launch_apps:
+                self.q.put("启动不自动打开被控软件（设置）：DAW/OBS/"
+                           "loopMIDI 均未拉起，需要时请手动打开")
+            else:
+                self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
+            if self.launch_apps:
+                try:
+                    hint = self.vj_hint or self.kb_hint or self.clock_hint
+                    if hint:
+                        mb.ensure_loopmidi(hint)
+                        self.q.put("loopMIDI 端口就绪")
+                    elif not find_processes_by_prefix("loopmidi"):
+                        # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的
+                        # 端口，不在则每次载入弹「未找到端口」。只拉起，
+                        # 不等端口。
+                        exe = mb._loopmidi_exe()
+                        if exe is None:
+                            raise SystemExit("找不到 loopMIDI.exe")
+                        if launch_detached(exe) <= 32:
+                            raise SystemExit("拉起 loopMIDI 失败")
+                        self.q.put("loopMIDI 已拉起（端口联动已停用）")
+                except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
+                    self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
+                               % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
-                if not find_processes_by_prefix("obs64"):   # 这里只补一条状态
-                    self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
+                if not find_processes_by_prefix("obs64"):   # 这里只补状态
+                    if self.launch_apps and (
+                            _load_config().get("obs") or {}).get(
+                                "projectorMonitor", ""):
+                        self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
+                    else:
+                        self.q.put("OBS 未运行（不自动拉起：启动打开被控"
+                                   "软件未开或未配置投屏位置）")
             except Exception:
                 pass
             # VJ 链：OBS 客户端 → 走带同步/自动推进 → MIDI 监听（相互依赖，
@@ -956,6 +986,9 @@ class App:
             try:
                 self.ctl = ObsController(_load_config()["obs"])
                 self.ctl.on_connected = self._on_obs_connected
+                # OBS 自动拉起生效值三重门落位（obs.autoStart ∧ 总闸 ∧
+                # 已配投屏位置）：连接循环据此决定是否拉起 OBS
+                self.ctl.cfg["autoStart"] = self._obs_autostart_effective()
                 self.sync = mb.TransportSync(self.ctl, on_event=self.q.put)
                 self.watch = advance.AdvanceWatch(
                     on_finished=lambda: self.calls.put(self._advance),
@@ -1952,6 +1985,7 @@ class App:
             "autoPlay": self.cont_play, "topMost": self.top_most,
             "switchConfirm": self.switch_confirm,
             "exitCloseApps": self.exit_close_apps,
+            "launchAppsOnStart": self.launch_apps,
             "projectsRoot": self.ccfg.get("projectsRoot", ""),
             "dawExe": self.ccfg.get("dawExe", ""),
             "autoSave": bool(self.ccfg.get("autoSave", True)),
@@ -1967,6 +2001,49 @@ class App:
             "ports": [n for _i, n in mb._in_devices()],
             "webStatus": dict(self._web_status),
         }
+
+    def _apply_obs_web(self, vid, media, mon, mute):
+        """OBS 设置热应用（后台线程执行；vid/media/mon/mute 为 None=该键
+        不在场不动）。VJ 显示位置从「无」变为投屏且「启动时自动打开被控
+        软件」开着时，OBS 未运行则拉起——连接循环连上后 on_connected 会
+        按新位置恢复投影，此处无需（也无法，ws 未连）立即 apply_projector。"""
+        ctl = self.ctl
+        if ctl is None:
+            return
+        with self._obs_apply_lock:
+            if mute is not None:
+                ctl.cfg["vjMute"] = mute
+            if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
+                ctl.cfg["videoRoot"] = vid
+            if media is not None:
+                ctl.cfg["mediaInput"] = media
+            mon_prev = None
+            if mon is not None:
+                mon_prev = ctl.cfg.get("projectorMonitor", "") or ""
+                ctl.cfg["projectorMonitor"] = mon
+                # 位置变化改变「允许自动拉起」的判定，即时重算生效值
+                ctl.cfg["autoStart"] = self._obs_autostart_effective()
+            if mute is not None and ctl.is_connected() \
+                    and not ctl.apply_mute():
+                self.q.put("VJ静音未生效：%s" % ctl.last_error)
+            if mon is None:
+                return
+            if not mon:              # 显式改「无」：停投屏（关闭投影窗）
+                ctl.close_projector()
+                return
+            fresh = False
+            if mon and not mon_prev and self.launch_apps \
+                    and not find_processes_by_prefix("obs64"):
+                try:                 # 冷启动 OBS 并等端口就绪（≤30s）
+                    fresh = ctl._ensure_obs_running()
+                except Exception as e:
+                    self.q.put("OBS 自动拉起失败：%s" % _err(e))
+            if fresh:
+                return               # 投影恢复交给 on_connected（ws 连上后）
+            if not ctl.apply_projector():
+                self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
+            else:
+                ctl.close_projector()
 
     def _settings_apply_web(self, p):
         """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
@@ -2035,31 +2112,15 @@ class App:
             self.switch_confirm = bool(p["switchConfirm"])
         if "exitCloseApps" in p:
             self.exit_close_apps = bool(p["exitCloseApps"])
+        if "launchAppsOnStart" in p:
+            self.launch_apps = bool(p["launchAppsOnStart"])
+            if self.ctl is not None:   # 总闸变化：OBS 拉起生效值即时重算
+                self.ctl.cfg["autoStart"] = self._obs_autostart_effective()
 
-        def apply_obs():
-            ctl = self.ctl
-            if ctl is None:
-                return
-            with self._obs_apply_lock:
-                if mute is not None:
-                    ctl.cfg["vjMute"] = mute
-                if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
-                    ctl.cfg["videoRoot"] = vid
-                if media is not None:
-                    ctl.cfg["mediaInput"] = media
-                if mon is not None:
-                    ctl.cfg["projectorMonitor"] = mon
-                if mute is not None and ctl.is_connected() \
-                        and not ctl.apply_mute():
-                    self.q.put("VJ静音未生效：%s" % ctl.last_error)
-                if mon is None:
-                    return
-                if mon and not ctl.apply_projector():
-                    self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-                else:
-                    ctl.close_projector()
         if obs_in and self.ctl is not None:
-            threading.Thread(target=apply_obs, daemon=True).start()
+            threading.Thread(target=self._apply_obs_web,
+                             args=(vid, media, mon, mute),
+                             daemon=True).start()
         proj = str(p.get("projectsRoot") or "") if "projectsRoot" in p else ""
         rescan = bool(proj) and proj != self.ccfg.get("projectsRoot")
         if proj:
@@ -2089,6 +2150,8 @@ class App:
                 flags["switchConfirm"] = self.switch_confirm
             if "exitCloseApps" in p:
                 flags["exitCloseApps"] = self.exit_close_apps
+            if "launchAppsOnStart" in p:
+                flags["launchAppsOnStart"] = self.launch_apps
             if vj is not None:
                 flags["vjPortHint"] = vj
             if kb is not None:
@@ -3993,6 +4056,10 @@ class SettingsWindow(tk.Toplevel):
                         % app.facts["display_name"],
                         variable=self.closeapps_var).pack(anchor="w",
                                                           pady=(pad, 1))
+        self.launchapps_var = tk.BooleanVar(value=app.launch_apps)
+        ttk.Checkbutton(body, text="启动时自动打开被控软件（开投屏位置才会"
+                        "拉 OBS）", variable=self.launchapps_var).pack(
+                            anchor="w", pady=(0, 1))
 
         # 主操作绿（与主窗「开始」同级），与「取消」等宽等高、只以颜色区分
         self.save_btn = ttk.Button(btns, text="保存并应用", width=10,
@@ -4194,6 +4261,7 @@ class SettingsWindow(tk.Toplevel):
         confirm = self.confirm_var.get()
         mute = self.mute_var.get()
         closeapps = self.closeapps_var.get()
+        launchapps = self.launchapps_var.get()
         proj = self.proj_var.get().strip()
         vid = self.vid_var.get().strip()
         # 自动播放 / 前台 / 切换确认：即时生效
@@ -4204,30 +4272,18 @@ class SettingsWindow(tk.Toplevel):
         app.root.attributes("-topmost", top)
         app.switch_confirm = confirm
         app.exit_close_apps = closeapps
+        app.launch_apps = launchapps
+        if app.ctl is not None:   # 总闸变化：OBS 拉起生效值即时重算
+            app.ctl.cfg["autoStart"] = app._obs_autostart_effective()
         # VJ静音/视频目录/VJ显示位置：OBS 热应用全放后台——apply_mute/
         # apply_projector 每请求 5s 超时且全程持 ctl._lock，此前在主线程
         # 直跑，「保存并应用」最坏卡 20s+（黑面+指令积压惯犯二号）。
         # 没连 OBS 只存配置，连上后 on_connected 自动同步，语义不变。
-        def apply_obs():
-            ctl = app.ctl
-            if ctl is None:
-                return
-            # 串行化：连续两次保存的两个 apply_obs 线程不许交错（旧保存的
-            # close_projector 落在新保存的 apply_projector 之后=状态回退）
-            with app._obs_apply_lock:
-                ctl.cfg["vjMute"] = mute
-                if vid is not None:   # 空串=显式清空（与 web 路径同口径）
-                    ctl.cfg["videoRoot"] = vid
-                ctl.cfg["projectorMonitor"] = mon
-                if ctl.is_connected() and not ctl.apply_mute():
-                    app.q.put("VJ静音未生效：%s" % ctl.last_error)
-                if mon and not ctl.apply_projector():
-                    app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-                elif not mon:
-                    ctl.close_projector()
-
+        # 走共享 _apply_obs_web（含「无→投屏拉起 OBS」判定），与 web 同链。
         if app.ctl is not None:
-            threading.Thread(target=apply_obs, daemon=True).start()
+            threading.Thread(target=app._apply_obs_web,
+                             args=(vid, None, mon, mute),
+                             daemon=True).start()
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj
@@ -4245,6 +4301,7 @@ class SettingsWindow(tk.Toplevel):
             cfg.update({"autoAdvance": auto, "autoPlay": cont,
                         "topMost": top, "switchConfirm": confirm,
                         "exitCloseApps": closeapps,
+                        "launchAppsOnStart": launchapps,
                         "vjPortHint": vj, "kbPortHint": kb,
                         "clockPortHint": ck})
             obs = cfg.get("obs") or {}

@@ -54,6 +54,7 @@
   "topMost": true,
   "switchConfirm": true,
   "exitCloseApps": false,
+  "launchAppsOnStart": true,
   "vjPortHint": "loopMIDI Port",
   "kbPortHint": "Keyboard Automation",
   "clockPortHint": "loopMIDI Port"

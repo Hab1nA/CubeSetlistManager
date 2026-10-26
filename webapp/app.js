@@ -2203,8 +2203,8 @@ function renderVjState() {
 
 // ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
 const ST_FIELDS = ["st-clock", "st-vj", "st-kb", "st-auto", "st-cont",
-                   "st-confirm", "st-exit", "st-root", "st-exe",
-                   "st-autosave", "st-mode", "st-srv", "st-app",
+                   "st-confirm", "st-exit", "st-launch", "st-root",
+                   "st-exe", "st-autosave", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
 const stSnap = () => ST_FIELDS.map(id => {
@@ -2306,6 +2306,7 @@ async function refreshSettings(force) {
     $("#st-cont").checked = d.autoPlay;
     $("#st-confirm").checked = d.switchConfirm;
     $("#st-exit").checked = d.exitCloseApps;
+    $("#st-launch").checked = d.launchAppsOnStart !== false;
     $("#st-root").value = d.projectsRoot;
     $("#st-exe").value = d.dawExe;
     $("#st-autosave").checked = d.autoSave;
@@ -2384,6 +2385,7 @@ $("#st-save").addEventListener("click", async () => {
     autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
     switchConfirm: $("#st-confirm").checked,
     exitCloseApps: $("#st-exit").checked,
+    launchAppsOnStart: $("#st-launch").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
     autoSave: $("#st-autosave").checked,
     web: {mode: $v("#st-mode"),
