@@ -2624,7 +2624,7 @@ class App:
                 return "move 参数非法"
             if not 0 <= frm < len(self.pl_keys) \
                     or not 0 <= to < len(self.pl_keys):
-                return "移动下标越界"   # 静默 200 会让前端谎报「已移动」
+                return "列表刚变化，未能移动"   # 静默 200 会让前端谎报「已移动」
             item = self.pl_keys.pop(frm)
             self.pl_keys.insert(to, item)
             if self.cur is not None:

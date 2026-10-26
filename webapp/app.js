@@ -279,12 +279,13 @@ function switchTo(i, btn, dbl, key) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  // 目标必须与卡面同拍、全部取自 /state 单一来源（stState.cur+songs）：
-  // stCur 另有 /playlist 1.5s 拍更新点，混用会产生「卡面显 D 实切 E」
-  // 的 off-by-one（三轮结论攻击复现）。不借 plCache、无 key 时走 index
-  // ——跨版本场景 index 路径反而正确（同轮实证），回退分支已砍
-  const cur = stState && typeof stState.cur === "number"
-      ? stState.cur : (typeof stCur === "number" ? stCur : -1);
+  // 目标必须与卡面同拍、全部取自 /state 单一来源：cur=null 一律归一 -1
+  // （与 render 的 NEXT=第一首口径一致）——回退 stCur 仅限 stState 未就绪
+  // 的 boot 瞬间（四轮结论攻击：null 态回退 /playlist 拍会「卡面显 A 实
+  // 切任意曲」）。无 key 时走 index，不借 plCache
+  const cur = stState
+      ? (typeof stState.cur === "number" ? stState.cur : -1)
+      : (typeof stCur === "number" ? stCur : -1);
   const i = cur + 1;
   const s = stState && stState.songs ? stState.songs[i] : null;
   switchTo(i, $("#next-go"), false, s ? s.key : undefined);
@@ -835,14 +836,15 @@ async function movePl(from, to) {
   movePend = true;
   const j = await post("/plcmd", {op: "move", payload: {from, to}});
   if (j.ok) toast("已移动《" + item.name + "》");
-  // 回显必须落地才放门：被 seq 并发丢弃或瞬断时重拉一次（新 seq 不会被
-  // 在途旧响应丢弃）；两拉皆败=断网——门保持（moveStuck），轮询代放
-  const landed = (await refreshPlaylist()) || await refreshPlaylist();
-  if (landed) {
+  // 回显必须落地才放门：null（被在途调用取代）不算失败——再等一拉；
+  // 两拉皆 false=真断网——保门+提示，任何调用方落地即自动放门
+  const r = (await refreshPlaylist()) ?? (await refreshPlaylist());
+  if (r === true) {
     movePend = false;
   } else {
     moveStuck = true;
-    toast("网络不稳，列表未刷新；排序暂缓，恢复后自动继续", "err");
+    if (r === false)
+      toast("网络不稳，列表未刷新；排序暂缓，恢复后自动继续", "err");
   }
 }
 // 点击时刻按键重解析再发 move：连点 ↑/拖拽落在在途刷新上时，建行下标
@@ -949,19 +951,25 @@ $("#pl-more").addEventListener("click", ev => {
         armConfirm(b, () => { plcmd2("clear", ""); close(); }, "确认清空？"));
   });
 });
+// 落地判定三态：true=本次落地（plCache 已更新）；false=fetch 失败/
+// 非 2xx（真断网）；null=被更高 seq 的在途调用取代（它落地时会更新
+// plCache——不是断网，调用方不得按失败处理谎报）
 async function refreshPlaylist() {
   try {
     const seq = refreshPlaylist.seq = (refreshPlaylist.seq || 0) + 1;
     const r = await fetch("/playlist");
     if (!r.ok) return false;
     const d = await r.json();
-    if (seq !== refreshPlaylist.seq) return false;  // 旧响应不覆盖新请求
+    if (seq !== refreshPlaylist.seq) return null;  // 旧响应不覆盖新请求
     plCache = d;
     stCur = d.cur;
     drawLib();
     drawPl();
     // 弹层锚点被差量重建拿掉（他端改列表）：菜单悬空坐标即刻收口
     if (popEl && popAnchor && !popAnchor.isConnected) closePop();
+    // moveStuck 放门下沉到落地处：任何调用方（轮询/nav/plcmd2）落地
+    // 即恢复排序能力，不再多等下一拍
+    if (moveStuck) { moveStuck = false; movePend = false; }
     return true;
   } catch { return false; /* 瞬断：调用方（movePl 门）据此重试 */ }
 }
@@ -2559,12 +2567,8 @@ $("#app-addr").addEventListener("click", () =>
 setInterval(poll, 500);
 poll();
 setInterval(() => {
-  if (pageOn("console", "setlist")) {
-    refreshPlaylist().then(landed => {
-      // movePl 断网保门后的自动放门：回显一旦落地即恢复排序能力
-      if (landed && moveStuck) { moveStuck = false; movePend = false; }
-    });
-  }
+  // 落地即放门已下沉到 refreshPlaylist 自身，这里只管拉取
+  if (pageOn("console", "setlist")) refreshPlaylist();
 }, 1500);
 setInterval(() => {
   if (pageOn("setlist")) { refreshPoints(); refreshKbdDetail(); }
