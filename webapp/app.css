@@ -243,6 +243,11 @@ input.invalid { border-color: var(--err) !important; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px; min-height: 0; }
 .console-cols .card { margin: 0; min-width: 0; min-height: 0; }
+/* .card + .card 相邻规则（同名特异度、写在后面）会给右卡加 margin-top
+   把双列顶推错位——必须在其后重申归零 */
+.console-cols .card + .card { margin-top: 0; }
+/* 主控台列表行：卡片内可见分隔（.row 基础 border 透明，仅 hover 显） */
+#console-list .row { border-color: var(--line); }
 .col-pl, #logcard { display: flex; flex-direction: column; }
 .col-pl .md-head, #logcard .md-head { flex: none; }
 #console-list { flex: 1; overflow: auto; min-height: 0;
