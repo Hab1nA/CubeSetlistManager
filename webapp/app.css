@@ -116,8 +116,8 @@ input:focus-visible, select:focus-visible {
   padding: var(--s4);
 }
 .card h3 { margin: 0 0 var(--s4); font-size: var(--f-md); display: flex;
-  align-items: center; gap: var(--s2); }
-.card h3 .h3-note { margin-left: auto; font-size: var(--f-xs);
+  align-items: flex-start; gap: var(--s2); }   /* 高控件顶对齐：标题文字顶=16 */
+.card h3 .h3-note { margin-left: auto; margin-top: 3px; font-size: var(--f-xs);
   font-weight: 400; color: var(--dim); }
 .card h3 .tgl { margin-left: auto; }
 .card h3 .h3-note + .tgl, .card h3 .tgl + .h3-note { margin-left: 0; }
@@ -155,10 +155,13 @@ input:focus-visible, select:focus-visible {
 .field .wide, input.wide { width: 100%; }
 .field input.num, input.num { width: 90px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3) var(--s4); }
+/* 网格行距全交 gap：清掉 .card .field 的 8px margin（否则行距 8+12=20）。
+   特异度须压过同值的 .card .field（:567 后位同级会反杀） */
+.card .grid2 .field, .card .grid3 .field { margin-bottom: 0; }
 .grid2 .field.wide, .grid2 .wide { grid-column: 1 / -1; }
 /* 网格内独立开关沉底：与同行 field 的输入框底线对齐（field 自带
    margin-bottom 8，开关补同值才能真正对齐输入框底边） */
-.grid2 .switch.end { align-self: end; margin-bottom: 8px; }
+.grid2 .switch.end { align-self: end; }
 .field-row { display: flex; gap: var(--s3); }
 .field-row .field { flex: 1; }
 input.invalid { border-color: var(--err) !important; }
@@ -235,7 +238,7 @@ input.invalid { border-color: var(--err) !important; }
 
 /* ---- 主区 / 页面 ---- */
 #main { flex: 1; min-width: 0; overflow: auto; }
-.page { display: none; padding: 22px 28px; max-width: 1400px; }
+.page { display: none; padding: var(--s6) 28px; max-width: 1400px; }
 #p-settings { padding-bottom: 84px; }
 .page.on { display: block; animation: page-in 160ms var(--ease); }
 .page > h2 { margin: 0 0 var(--s4); font-size: var(--f-xl); }
@@ -409,7 +412,7 @@ input.invalid { border-color: var(--err) !important; }
   height: 100%; min-height: 420px; }
 .cols { display: grid; grid-template-columns: 1fr 460px;
   grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 14px 18px; flex: 1; min-height: 0; }
+  gap: 14px; flex: 1; min-height: 0; }
 .cols .col[data-col="lib"] { grid-area: 1 / 1; }
 .cols .col[data-col="pl"] { grid-area: 2 / 1; }
 .cols .col#col-dt { grid-area: 1 / 2 / 3 / 3; }
@@ -431,8 +434,8 @@ input.invalid { border-color: var(--err) !important; }
 .drag { color: #4a525b; cursor: grab; flex: none; padding: 0 2px;
   font-size: var(--f-sm); letter-spacing: -1px; }
 .row.dragging { opacity: .4; }
-.row.drop-above { border-top: 2px solid var(--accent); }
-.row.drop-below { border-bottom: 2px solid var(--accent); }
+.row.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
+.row.drop-below { box-shadow: inset 0 -2px 0 var(--accent); }
 .row .ops { display: flex; gap: 4px; opacity: .55;
   transition: opacity var(--t-fast) var(--ease); }
 .row:hover .ops, .row:focus-within .ops { opacity: 1; }
@@ -554,7 +557,10 @@ input.invalid { border-color: var(--err) !important; }
 .bind-row.learning { border-color: var(--err); background: #241417; }
 .bind-row.learning .b-bind { color: var(--err); }
 .warn-txt { color: var(--warn); }
+.card p.dim { margin: var(--s3) 0 0; }   /* UA p margin 1em 会虚大树卡距 */
 
+
+#p-pedal { padding-bottom: 84px; }   /* 页脚 sticky 条预留，与 kbd/vj/settings 一致 */
 
 /* ---- 键盘页 ---- */
 /* 状态卡：当前曲音色配置一对大数字 + 最近切换，替代散乱 pill 行 */
@@ -569,7 +575,7 @@ input.invalid { border-color: var(--err) !important; }
 
 .card .field { margin-bottom: var(--s2); }
 .card .field:last-child { margin-bottom: 0; }
-.slotcard { margin-bottom: var(--s3); margin-top: 14px; }
+.slotcard { margin-top: 14px; }   /* 下距由 page-foot margin 主导 */
 /* 全局移调：两琴两列，列内音符卡与 VJ 触发槽位同款（.slot.vj-cell 复用，
    hover 动画/键帽/字号全部一致） */
 .shift-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
@@ -611,7 +617,7 @@ input.invalid { border-color: var(--err) !important; }
 /* VJ 音符↔视频映射网格：与音色槽同款卡片语言（键帽音名+目标+状态副行） */
 .vj-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 10px; }
-.vj-cell { cursor: default; padding: 9px 10px; }
+.vj-cell { cursor: default; }   /* padding 随 .slot（10px 12px），同语言同值 */
 .vj-empty { grid-column: 1 / -1; }
 .vj-cell .s-note { align-self: flex-start; font-family: Consolas, monospace;
   background: var(--sur-3); border-radius: 4px; padding: 1px 6px; }
@@ -665,6 +671,8 @@ input.invalid { border-color: var(--err) !important; }
   #pt-list { max-height: 34vh; }
   #logcard .log { min-height: 160px; }
   .addr-grid { grid-template-columns: 1fr; }
+  /* 窄屏隐藏生效范围提示：文案长会折行致 page-foot 高度跨页不齐 */
+  .page-foot > span { display: none; }
 }
 
 /* ---- 运行日志卡（主控台页内）：播放中同屏盯状态 ----
@@ -764,7 +772,8 @@ input.invalid { border-color: var(--err) !important; }
 .pop button.primary { background: var(--ok-bg); color: var(--ok); border: 0; }
 .pop button.primary:disabled { opacity: .4; cursor: default; }
 .pop button.danger { background: var(--err-bg); color: var(--err); border: 0; }
-.pop .field-err { font-size: var(--f-xs); color: var(--err); min-height: 14px; }
+.pop .field-err { font-size: var(--f-xs); color: var(--err); min-height: 16px; }
+.pop .field-err:empty { display: none; }   /* 无错误不占位（对齐 #pt-hint 策略） */
 .pop.menu { min-width: 190px; padding: 6px; gap: 2px; }
 .pop.menu .menu-item { width: 100%; text-align: left; border: 0;
   background: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }

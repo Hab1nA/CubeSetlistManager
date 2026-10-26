@@ -29,7 +29,20 @@ P = {}          # 断言结果收集
 import socket as _socket
 with _socket.socket() as _s:
     if _s.connect_ex(("127.0.0.1", CDP)) == 0:
-        sys.exit("CDP 端口 %d 被残留实例占用：先结束旧 webui/杀进程再跑" % CDP)
+        # 主动清扫：上一轮 webui 的 WebView2 子进程常不被 terminate 级联，
+        # 残留窗口=对旧代码跑断言（假阳性集中营）。按命令行特征扫杀。
+        subprocess.run(["powershell", "-c",
+            "Get-CimInstance Win32_Process | Where-Object {"
+            "$_.CommandLine -match 'remote-debugging-port=%d' "
+            "-or ($_.Name -match 'python' and "
+            "$_.CommandLine -match 'webui.py')} | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+            "-ErrorAction SilentlyContinue }" % CDP],
+            capture_output=True, timeout=30)
+        time.sleep(3)
+        with _socket.socket() as _s2:
+            if _s2.connect_ex(("127.0.0.1", CDP)) == 0:
+                sys.exit("CDP 端口 %d 清扫后仍被占用，请手工处理" % CDP)
 
 
 
