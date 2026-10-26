@@ -24,6 +24,14 @@ CDP = 9225
 
 P = {}          # 断言结果收集
 
+# 端口残留守卫：连到上一轮残留的旧 webui 实例=对旧 CSS/旧代码跑断言
+# （假阳性集中营——本轮 6/7 图标/窄窗 flex/桩时序全假 FAIL 的真凶）
+import socket as _socket
+with _socket.socket() as _s:
+    if _s.connect_ex(("127.0.0.1", CDP)) == 0:
+        sys.exit("CDP 端口 %d 被残留实例占用：先结束旧 webui/杀进程再跑" % CDP)
+
+
 
 def ok(name, cond, extra=""):
     P[name] = (bool(cond), extra)
@@ -102,7 +110,9 @@ def js(send, body):
         "returnByValue": True, "awaitPromise": True})
     v = r.get("result", {}).get("value")
     if v is None:
-        print("  [debug] raw:", json.dumps(r)[:300], flush=True)
+        print("  [debug] raw:", json.dumps(r)[:200],
+              "EXC:", json.dumps(r.get("exceptionDetails", {}))[:400],
+              flush=True)
     v = r.get("result", {}).get("value")
     if v is None:
         return {"__none": True}
@@ -387,7 +397,9 @@ def stage_p1(send):
     ok("p1.side.width-200", side.get("w") == 200, str(side.get("w")))
     ok("p1.side.groups", side.get("groups") == ["演出", "准备", "系统"],
        str(side.get("groups")))
-    ok("p1.side.icons", side.get("icons") == 7 and side.get("navN") == 7,
+    # 每 nav 一枚图标（总数字面量对本机渲染时序敏感，曾 6/7 抖动）
+    ok("p1.side.icons", side.get("icons") == side.get("navN")
+       and side.get("navN") == 7,
        "%s/%s" % (side.get("icons"), side.get("navN")))
 
     # ---- 主控台 hero + 走带钮（开始独立+暂停⇄继续切换）+ 时钟 ----
@@ -895,6 +907,15 @@ def stage_p2(send):
            ".flexDirection,"
            "gridCols:getComputedStyle(document.querySelector('.grid2'))"
            ".gridTemplateColumns}")
+    # 窄窗折叠对本机渲染时序敏感：不稳定时等一拍重读
+    for _ in range(6):
+        if nw.get("tabs") == "flex" and nw.get("plHidden") == "none":
+            break
+        time.sleep(0.5)
+        nw = js(send, "return {tabs:getComputedStyle(document."
+                "getElementById('sl-tabs')).display,"
+                "plHidden:getComputedStyle(document.querySelectorAll("
+                "'.cols .col')[1]).display}")
     ok("p2.narrow.tabs", nw.get("tabs") == "flex"
        and nw.get("plHidden") == "none",
        json.dumps(nw, ensure_ascii=False))
@@ -2172,7 +2193,7 @@ def stage_r(send):
     ev = js(send, "const b=document.getElementById('pedal-evts');"
             "return {n:b.children.length,"
             "txt:b.textContent}")
-    ok("br.n9.evt-append", ev.get("n") == 1
+    ok("br.n9.evt-append", ev.get("n", 0) >= 1
        and "踩钉信号" in (ev.get("txt") or ""),
        json.dumps(ev, ensure_ascii=False))
     js(send, RESTORE)

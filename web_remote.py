@@ -1444,11 +1444,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- 应答小工具 --
 
-    def _send(self, code, ctype, data, dispo=None):
+    def _send(self, code, ctype, data, dispo=None, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if dispo:
             self.send_header("Content-Disposition", dispo)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         try:
@@ -1478,7 +1480,10 @@ class _Handler(BaseHTTPRequestHandler):
         ctype = ("text/html; charset=utf-8" if rel.endswith(".html")
                  else "text/css; charset=utf-8" if rel.endswith(".css")
                  else "text/javascript; charset=utf-8")
-        self._send(200, ctype, data)
+        # 前端三件套迭代频繁且无版本化 URL：禁缓存，防 WebView2 磁盘缓存
+        # 供旧样式（间距返工曾因此实测纹丝不动）
+        self._send(200, ctype, data,
+                   extra={"Cache-Control": "no-cache"})
 
     # -- GET --
 

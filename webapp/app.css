@@ -121,8 +121,7 @@ input:focus-visible, select:focus-visible {
   font-weight: 400; color: var(--dim); }
 .card h3 .tgl { margin-left: auto; }
 .card h3 .h3-note + .tgl, .card h3 .tgl + .h3-note { margin-left: 0; }
-.lbl { font-size: var(--f-xs); letter-spacing: .14em; color: var(--dim);
-  font-weight: 700; }
+.lbl { font-size: var(--f-xs); letter-spacing: .14em; color: var(--dim); }
 .badge { font-size: var(--f-xs); color: var(--dim); background: var(--sur-2);
   border-radius: 99px; padding: 1px 8px; }
 .tag { font-size: var(--f-xs); color: var(--accent); border: 1px solid #2b4a66;
@@ -157,6 +156,9 @@ input:focus-visible, select:focus-visible {
 .field input.num, input.num { width: 90px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3) var(--s4); }
 .grid2 .field.wide, .grid2 .wide { grid-column: 1 / -1; }
+/* 网格内独立开关沉底：与同行 field 的输入框底线对齐（field 自带
+   margin-bottom 8，开关补同值才能真正对齐输入框底边） */
+.grid2 .switch.end { align-self: end; margin-bottom: 8px; }
 .field-row { display: flex; gap: var(--s3); }
 .field-row .field { flex: 1; }
 input.invalid { border-color: var(--err) !important; }
@@ -472,10 +474,19 @@ input.invalid { border-color: var(--err) !important; }
 /* 定位点列表与编辑表单（「名称」label）间补标准行距 */
 #pt-form { display: flex; flex-direction: column; gap: var(--s3);
   margin-top: var(--s3); }
-.md-head { display: flex; align-items: center; gap: var(--s2);
+/* flex gap 管行距：关掉旧 .card .field 的 margin（否则 12+8+12 叠成 32） */
+#pt-form .field, #pt-form .field-row .field { margin-bottom: 0; }
+#pt-mmc { margin-bottom: var(--s3); }   /* MMC 提示与定位点列表间标准行距 */
+/* 校验提示空占位不参与布局（否则开始/结束框与时间轴间距虚大：
+   min-height 与前后 flex gap 都要归零） */
+#pt-hint:empty { min-height: 0; display: none; }
+.md-head { display: flex; align-items: flex-start; gap: var(--s2);
   font-weight: 700; margin-bottom: var(--s4); flex-wrap: wrap; }
+/* 卡头文字顶=卡内边距：高控件（tgl/下拉）与标题顶对齐而非行内居中，
+   否则标题被 30px 控件居中下推、视觉顶距偏大 */
 .md-head .btn { margin-left: auto; }
 .md-head .switch { min-height: 30px; }
+.md-head .badge { margin-top: 3px; }   /* 与 15px 标题同行视觉居中 */
 .tl-wrap { display: flex; flex-direction: column; gap: 6px; }
 .tl { position: relative; height: 22px; background: var(--sur-2);
   border-radius: 6px; overflow: hidden; }
@@ -492,8 +503,10 @@ input.invalid { border-color: var(--err) !important; }
 .stat-cards { display: flex; gap: 14px; margin-bottom: 14px;
   flex-wrap: wrap; align-items: stretch; }
 .card.stat { min-width: 200px; flex: 1; }
-/* 三卡 lbl 顶线=卡内边距 16px（与其它页卡头一致）；启用钮同行顶对齐 */
-.stat-head { display: flex; align-items: flex-start; gap: var(--s2); }
+/* 三卡内容起始线统一：lbl 顶=16px（flex-start），带启用钮的卡头行高
+   30px 同样约束另两卡——stat-big/evt-log 顶距三卡一致 */
+.stat-head { display: flex; align-items: flex-start; gap: var(--s2);
+  min-height: 30px; }
 .stat-head .tgl { margin-left: auto; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
 .kv { display: flex; justify-content: space-between; align-items: center;
@@ -509,10 +522,12 @@ input.invalid { border-color: var(--err) !important; }
 .stat-big.ok { color: var(--ok); }
 .stat-big.warn { color: var(--warn); }
 .stat-big.err { color: var(--err); }
-/* 最近踩钉事件：与运行日志同款显示框（事件逐行追加） */
+/* 最近踩钉事件：与运行日志同款显示框（事件逐行追加）。
+   顶距与 stat-big 同规（卡头行下 4px）：三卡首内容块起始线统一，
+   lbl 文字底→框 ≈16px=子标题与上边框间距 */
 .evt-log { font: var(--f-sm)/1.7 Consolas, "Microsoft YaHei", monospace;
   background: #0b0e12; border: 1px solid var(--line); border-radius: 10px;
-  padding: 10px 14px; margin-top: var(--s2); height: 118px; overflow: auto;
+  padding: 10px 14px; margin-top: var(--s1); height: 118px; overflow: auto;
   user-select: text; }
 .evt-log:empty::after { content: "暂无事件"; color: var(--dim);
   font-family: "Microsoft YaHei", system-ui, sans-serif;
@@ -565,7 +580,7 @@ input.invalid { border-color: var(--err) !important; }
 .slot {
   background: var(--sur-2); border: 1px solid var(--line);
   border-radius: 10px; padding: 10px var(--s3); cursor: pointer;
-  display: flex; flex-direction: column; gap: 2px; position: relative;
+  display: flex; flex-direction: column; gap: 10px; position: relative;
   transition: border-color var(--t-fast) var(--ease),
               background-color var(--t-fast) var(--ease);
 }
@@ -579,8 +594,11 @@ input.invalid { border-color: var(--err) !important; }
 .slot.unconfigured { border-style: dashed; }
 .slot.unconfigured .s-pc { color: var(--dim); font-size: var(--f-md);
   font-weight: 400; }
-.slot .s-ops { position: absolute; top: 10px; right: 12px;
+.slot .s-ops { position: absolute; top: 6px; right: 10px;
   display: flex; gap: 6px; }
+/* 长音色名/描述省略（对齐 vj-cell 同款），不顶出卡边框 */
+.slot .s-note, .slot .s-pc, .slot .s-sub { max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 清除 ✕（音色映射卡与功能绑定行共用）：红字示危险，hover 不变色 */
 .btn.ghost.s-clear, .btn.ghost.s-clear:hover:not(:disabled) {
   color: var(--err); }
