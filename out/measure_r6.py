@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ import urllib.request
 import websocket
 
 CDP = 9241
-OUTD = "out/ui_shots"
+OUTD = pathlib.Path(__file__).resolve().parent / "ui_shots"
 
 # 端口残留守卫：连到上一轮残留的旧 webui 实例=对旧 CSS/旧代码跑断言
 # （假阳性集中营——本轮 6/7 图标/窄窗 flex/桩时序全假 FAIL 的真凶）
@@ -64,7 +65,11 @@ def js(expr):
 
 def shot(name):
     r = send("Page.captureScreenshot", {"format": "png"})
-    open("%s/%s.png" % (OUTD, name), "wb").write(base64.b64decode(r["data"]))
+    # name 全为文件内字面量；resolve 后校验仍在 OUTD 下，杜绝穿越面
+    path = (OUTD / (name + ".png")).resolve()
+    if not str(path).startswith(str(OUTD.resolve())):
+        raise ValueError("非法截图名: %r" % name)
+    path.write_bytes(base64.b64decode(r["data"]))
     print("shot", name, flush=True)
 
 
