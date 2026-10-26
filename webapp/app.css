@@ -230,9 +230,10 @@ input.invalid { border-color: var(--err) !important; }
 .page-head .switch { margin-left: auto; }
 @keyframes page-in { from { opacity: 0; transform: translateY(8px); } }
 
-/* 页脚注：跨卡/跨页一句话提示，全页统一槽位（演出模式下不显） */
-.page-note { color: var(--dim); font-size: var(--f-sm);
-  margin: var(--s3) 2px 0; }
+/* 页脚注：跨卡/跨页一句话提示——正文区不占位，统一显示在底栏右侧 */
+.page-note { display: none; }
+#sb-note { margin-left: auto; font-size: var(--f-sm); }
+#sb-note.err { color: var(--err); font-weight: 700; }
 
 /* ---- 主控台（演出驾驶舱，不受 960 收束）----
    整页钉满视口不滚动：播放列表与运行日志双列并排吃满剩余空间 */
@@ -430,6 +431,9 @@ input.invalid { border-color: var(--err) !important; }
 #pl-empty, #lib-empty { flex: 1; justify-content: center; }
 
 .save-row { display: flex; align-items: center; margin-top: var(--s3); }
+#p-kbd, #p-vj { padding-bottom: 84px; }
+/* 端口标签旁的服务地址前缀（对照原前端 IP:端口 显示习惯） */
+.field label .host { font-weight: 400; font-variant-numeric: tabular-nums; }
 
 /* ---- 曲目详情列（定位点 + 音色映射）/ 卡头 ---- */
 #col-dt { flex: 0 1 460px; min-width: 340px; }
@@ -480,9 +484,6 @@ input.invalid { border-color: var(--err) !important; }
 /* 踩钉页双列：左设备/右绑定表（<900px 折单列） */
 .pedal-grid { display: grid; grid-template-columns: minmax(300px, 2fr) 3fr;
   gap: 14px; }
-.opt-row { display: flex; align-items: flex-end; gap: var(--s6);
-  flex-wrap: wrap; margin-top: var(--s2); }
-.opt-row .field.pd-win, .card .opt-row .field { margin-bottom: 0; }
 .pd-win { max-width: 220px; }
 /* 六项绑定表（踩钉页）*/
 .bind-list { display: flex; flex-direction: column; gap: 4px; }
@@ -500,9 +501,14 @@ input.invalid { border-color: var(--err) !important; }
 
 
 /* ---- 键盘页 ---- */
-/* 页首状态行：统一 pill 语言（同设置页 netstat） */
-#kb-status { display: flex; flex-wrap: wrap; align-items: center;
-  gap: var(--s2); margin-bottom: var(--s3); min-height: 26px; }
+/* 状态卡：当前曲音色配置一对大数字 + 最近切换，替代散乱 pill 行 */
+.stat-pair { display: flex; gap: var(--s6); margin-top: var(--s1); }
+.stat-pair span { display: flex; align-items: baseline; gap: 4px;
+  font-size: var(--f-lg); font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.stat-pair span.has b { color: var(--ok); }
+.stat-pair i { font-style: normal; font-size: var(--f-xs);
+  color: var(--dim); font-weight: 400; }
 .cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .kb-actions { display: flex; gap: var(--s2); margin: 14px 0 var(--s3); }
 
@@ -776,5 +782,5 @@ body.show #next-card { background: var(--sur-1); border: 1px solid var(--line); 
 .shift-val > span.pulse { animation: val-pulse 400ms var(--ease); }
 @keyframes val-pulse { 30% { color: var(--accent); } }
 #side-ver { padding: 10px 12px 0; }
-#btn-exit { color: var(--err); opacity: .75; }
+#btn-exit { color: var(--err); opacity: .75; margin-top: 10px; }
 #btn-exit:hover { color: var(--err); opacity: 1; background: var(--sur-2); }

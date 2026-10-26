@@ -108,6 +108,8 @@ function nav(page) {
     }
   }
   curPage = page;
+  // 底栏右侧提示词=当前页的页脚注（原正文区页脚注已移入底栏）
+  sbNote();
   // 回主控台强制重测跑马灯：隐藏页期间 render 的 0 宽测量会把「溢出」
   // 误判为不溢出（dataset.txt 已更新不再复测）；进/出演出模式字号切换
   // 同理（时序红队 P2）
@@ -150,6 +152,13 @@ document.addEventListener("click", ev => {
 });
 nav("console");
 const pageOn = (...ids) => ids.some(id => curPage === id);
+// 底栏右侧提示词：当前页 .page-note 的内容（正文区不占位）
+function sbNote() {
+  const el = $("#sb-note");
+  if (!el) return;
+  const note = document.querySelector("#p-" + curPage + " .page-note");
+  el.textContent = note ? note.textContent.replace(/\s+/g, "") : "";
+}
 
 // ---- 演出模式：进出动效 + ESC/F11 + 屏角热区退出 ----
 const reduceMotion = () =>
@@ -374,7 +383,6 @@ function render(st) {
   const cln = $("#cl-n");
   if (cln && cln.textContent !== rows.length + " 首")
     cln.textContent = rows.length + " 首";
-  $("#tstate").textContent = chip.textContent;
   lamps(st);
   drawChips(st, cur);
   pedalLive(st);
@@ -563,17 +571,17 @@ async function poll() {
     if (r.ok) {
       if (pollFails >= 3) toast("连接已恢复");
       pollFails = 0;
-      $("#tstate").classList.remove("err");
       stState = await r.json();
       render(stState);
       stCur = stState.cur;
+      sbNote();
     } else {
       throw new Error(r.status);
     }
   } catch {
     pollFails++;
-    if (pollFails >= 3) {          // 连续失败：常驻断连标识（恢复即灭）
-      const el = $("#tstate");
+    if (pollFails >= 3) {          // 连续失败：底栏右侧常驻断连标识
+      const el = $("#sb-note");
       el.textContent = "连接中断…重试中";
       el.classList.add("err");
     }
@@ -1680,25 +1688,20 @@ function renderKbdPorts(force) {
   kbPortsInit = true;
 }
 function renderKbdStatus() {
-  const el = $("#kb-status");
-  if (!el) return;
-  el.innerHTML = "";
-  const mk = (txt, cls, title) => {
-    const s = document.createElement("span");
-    s.className = "pill" + (cls ? " " + cls : "");
-    s.textContent = txt;
-    if (title) s.title = title;
-    el.appendChild(s);
-  };
-  // 当前曲音色配置计数（有配置才亮）；无工程时如实标注
+  // 状态卡：音色配置计数（有配置才亮）+ 最近切换（无则占位）
+  const jn = $("#kb-juno-n"), ax = $("#kb-ax-n"), last = $("#kb-last");
+  if (!jn) return;
   if (kbData.counts) {
-    mk("JUNO " + kbData.counts.juno + "/10", kbData.counts.juno ? "ok" : "");
-    mk("AX " + kbData.counts.ax + "/6", kbData.counts.ax ? "ok" : "");
+    jn.textContent = kbData.counts.juno;
+    ax.textContent = kbData.counts.ax;
+    jn.parentNode.classList.toggle("has", !!kbData.counts.juno);
+    ax.parentNode.classList.toggle("has", !!kbData.counts.ax);
   } else {
-    mk("未打开工程");
+    jn.textContent = "—";
+    ax.textContent = "—";
   }
-  if (kbData.lastResult)
-    mk("最近切换 " + kbData.lastResult, "", kbData.lastResult);
+  last.textContent = kbData.lastResult || "—";
+  last.classList.toggle("dim", !kbData.lastResult);
 }
 
 // 录制（琴上捕获）：点槽卡即开录，再点同卡=停止并保存（直写该曲）；
@@ -2239,6 +2242,18 @@ async function refreshSettings(force) {
     $("#st-srv").value = d.web.serverPort;
     $("#st-app").value = d.web.appPort;
     $("#st-tsk").value = d.web.taskerPort;
+    // 端口标签旁的服务地址前缀（对照原前端 IP:端口 显示习惯）；webIp
+    // 未就绪/遥控未启用时回落所选网卡或首个候选 IP——三个端口归属哪个
+    // 地址一眼可辨
+    const chosen = (d.adapters || []).find(a => a.ip === d.web.ip);
+    const hostIp = (stState && stState.webIp) || (chosen && chosen.ip)
+        || ((d.adapters || []).find(a => a.ip) || {}).ip || "";
+    for (const [h, p] of [["st-srv-host", d.web.serverPort],
+                          ["st-app-host", d.web.appPort],
+                          ["st-tsk-host", d.web.taskerPort]]) {
+      const el = $("#" + h);
+      if (el) el.textContent = hostIp ? hostIp + ":" + p : "";
+    }
     const ip = $("#st-ip");
     // 候选 {name, ip}：显示网卡名、value=IP（后端 lan_ip 存 IP，提交网卡
     // 名永远配不上）；「自动」（值空串）= 不指定

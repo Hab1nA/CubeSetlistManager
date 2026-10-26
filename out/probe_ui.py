@@ -1492,9 +1492,12 @@ def stage_d(send):
     js(send, "document.getElementById('kb-refresh').click()")
     time.sleep(0.8)
     d1 = js(send, "return {noSongSel:!document.getElementById('kb-song'),"
-            "last:document.getElementById('kb-status').textContent}")
+            "juno:document.getElementById('kb-juno-n').textContent,"
+            "ax:document.getElementById('kb-ax-n').textContent,"
+            "last:document.getElementById('kb-last').textContent}")
     ok("bd.d1.no-song-select",
-       d1.get("noSongSel") and "最近切换" in d1.get("last", ""),
+       d1.get("noSongSel") and d1.get("juno") == "1"
+       and d1.get("ax") == "0" and "已发送" in d1.get("last", ""),
        json.dumps(d1, ensure_ascii=False))
     d2 = js(send, "const info=id=>{const s=document.getElementById(id);"
             "return {labels:[...s.options].map(o=>o.textContent),"
@@ -1683,9 +1686,14 @@ def stage_e(send):
         "{status:200}));"
         "return window.__fetch0(u,o)};")
     nav(send, "kbd")
-    e3 = js(send, "return document.getElementById('kb-status').textContent")
+    e3 = js(send, "return {juno:document.getElementById('kb-juno-n')"
+            ".textContent,ax:document.getElementById('kb-ax-n')"
+            ".textContent,last:document.getElementById('kb-last')"
+            ".textContent}")
     ok("be.e3.kbd-summary",
-       "JUNO 3/10" in e3 and "AX 2/6" in e3 and "USER:0521" in e3, e3)
+       e3.get("juno") == "3" and e3.get("ax") == "2"
+       and "USER:0521" in (e3.get("last") or ""),
+       json.dumps(e3, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(0.6)
 
@@ -1835,7 +1843,7 @@ def stage_f(send):
     fd = None
     for _ in range(8):        # 3 连败需 1.5s+，轮询读至 4s 防段间时序抖动
         time.sleep(0.5)
-        fd = js(send, "const e=document.getElementById('tstate');"
+        fd = js(send, "const e=document.getElementById('sb-note');"
                 "return {txt:e.textContent,cls:e.className}")
         if fd and fd.get("txt") == "连接中断…重试中":
             break

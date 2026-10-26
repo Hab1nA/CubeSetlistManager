@@ -36,7 +36,8 @@ def main():
         except Exception as e:          # 启动失败要能传给主线程报告
             holder["err"] = e
 
-    threading.Thread(target=tk_main, daemon=True, name="tk-biz").start()
+    biz = threading.Thread(target=tk_main, daemon=True, name="tk-biz")
+    biz.start()
     # 等 App 建好 + WebRemote 栈就绪（registry 等共享件在构造期创建，
     # 不依赖遥控总开关——用户关着遥控时桌面壳照常可用且不碰热点语义）
     app = None
@@ -69,8 +70,22 @@ def main():
     print("ui:", url, flush=True)
 
     webview.create_window("Cube Setlist Manager", url, width=w, height=h)
+    # 侧栏「退出」只经 /exit 销毁 Tk 根——pywebview 窗口不会跟着关（用户
+    # 实证「无法退出」）。看门狗：Tk mainloop 结束即主动关 Web 窗
+    def _web_watchdog():
+        while True:
+            time.sleep(0.4)
+            if not biz.is_alive():
+                try:
+                    webview.windows[0].destroy()
+                except Exception:
+                    pass
+                return
+    threading.Thread(target=_web_watchdog, daemon=True,
+                     name="web-watchdog").start()
     try:
         webview.start(gui="edgechromium")   # 主线程阻塞至窗口关闭
+        biz.join(timeout=5)                 # 窗先关：等 Tk 收尾
     except Exception as e:
         # WebView2 Runtime 缺失/损坏的可读出口（pywebview 起窗失败在此抛）
         import ctypes
