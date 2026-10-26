@@ -1694,13 +1694,16 @@ class _Handler(BaseHTTPRequestHandler):
                          is not None})
 
     def _h_log(self):
-        """日志环形缓冲（App 主线程 q 消费处追加）。"""
+        """日志环形缓冲（App 主线程 q 消费处追加，含产生端定级 lv；
+        lenient 兼容无级别的旧元组）。"""
         app = self.server.app
         ring = getattr(app, "log_ring", None)
         if ring is None:
             self._json(403, {"error": "简化版无日志"})
             return
-        self._json(200, {"lines": [{"t": t, "msg": m} for t, m in ring]})
+        self._json(200, {"lines": [
+            {"t": it[0], "msg": it[1],
+             "lv": it[2] if len(it) > 2 else ""} for it in ring]})
 
     def _run_on_app(self, fn, result_fn=None, timeout=8.0):
         """经 calls 投递主线程执行并同步取回结果：result_fn=None 时 fn 的
@@ -1758,17 +1761,24 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._run_on_app(lambda: self.server.app._settings_apply_web(body))
 
-    def _h_pickdir(self, _body, _ip):
-        """目录选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，
-        长超时窗；简化版与旧宿主无此能力时明确拒绝）。"""
+    def _h_pickdir(self, body, _ip):
+        """目录/文件选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，
+        长超时窗；简化版与旧宿主无此能力时明确拒绝）。body.kind="file"
+        走文件选择（如 Cubase 程序）。"""
         app = self.server.app
         if getattr(app, "lite", False):
             self._json(403, {"error": "简化版无目录选择"})
             return
-        fn = getattr(app, "_pickdir_web", None)
-        if fn is None:
-            self._json(403, {"error": "当前宿主不支持目录选择"})
-            return
+        if str(body.get("kind") or "") == "file":
+            fn = getattr(app, "_pickfile_web", None)
+            if fn is None:
+                self._json(403, {"error": "当前宿主不支持文件选择"})
+                return
+        else:
+            fn = getattr(app, "_pickdir_web", None)
+            if fn is None:
+                self._json(403, {"error": "当前宿主不支持目录选择"})
+                return
         self._run_on_app(lambda: None, result_fn=fn, timeout=180.0)
 
     def _h_pedal_set(self, body, _ip):
@@ -1780,6 +1790,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _h_pedal_learn(self, body, _ip):
         if getattr(self.server.app, "lite", False):
             self._json(403, {"error": "简化版无踩钉"})
+            return
+        if body.get("cancel"):   # 再点学习中的行/离页收口（前端取消通道）
+            self._run_on_app(
+                lambda: self.server.app._pedal_learn_cancel_web())
             return
         self._run_on_app(lambda: self.server.app._pedal_learn_start_web(
             str(body.get("action") or "")))

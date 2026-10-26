@@ -13,6 +13,12 @@ addEventListener("unhandledrejection",
 
 let stState = null, plCache = null, stCur = null;
 
+// ---- 启用类绿钮（.tgl）：点文字即启停，启用=绿 ----
+function setTgl(btn, on) {
+  btn.classList.toggle("on", !!on);
+  btn.setAttribute("aria-pressed", String(!!on));
+}
+
 // ---- toast（替代全部 alert；err 档 5 秒+可手动点关）----
 function toast(msg, kind) {
   const box = $("#toasts");
@@ -99,8 +105,9 @@ function nav(page) {
   if (booted && page !== curPage) {
     if (popEl) closePop();   // 换页收口弹层
     if (curPage === "setlist" && (recInst || recPend)) stopRecord();
-    // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）
-    if (curPage === "pedal") pedalMute(false);
+    // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）；
+    // 学习会话同录制会话：离页收口（音色映射卡片行为统一）
+    if (curPage === "pedal") { pedalMute(false); learnCancel(); }
     if (page === "pedal") {
       pedalMute(true);
       refreshPedal(true);       // 重建表单基线（别处改过配置时不再显旧态）
@@ -131,14 +138,18 @@ function nav(page) {
     else if (page === "settings") refreshSettings();
   }
 }
-// 刷新/关闭兜底：踩钉页打开时页面卸载，静音必须撤（否则踩钉永久哑火）；
-// 录制会话同理停口（否则 winmm 输入口被无限期占用）
+// 刷新/关闭兜底：踩钉页打开时页面卸载，静音与学习会话必须撤（否则踩钉
+// 永久哑火 / 学习器占口）；录制会话同理停口（否则 winmm 输入口被无限期占用）
 addEventListener("pagehide", () => {
   const post = (body) => fetch("/pedal/mute", {method: "POST",
       keepalive: true, headers: {"Content-Type": "application/json"},
       body}).catch(() => {});
-  if (curPage === "pedal")
+  if (curPage === "pedal") {
     post(JSON.stringify({on: false}));
+    fetch("/pedal/learn", {method: "POST", keepalive: true,
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cancel: true})}).catch(() => {});
+  }
   if (recInst || recPend)
     fetch("/kbdrecord", {method: "POST", keepalive: true,
                          headers: {"Content-Type": "application/json"},
@@ -152,42 +163,52 @@ document.addEventListener("click", ev => {
 });
 nav("console");
 const pageOn = (...ids) => ids.some(id => curPage === id);
-// 底栏右侧提示词：当前页 .page-note 的内容（正文区不占位）
+// 底栏右侧提示词：当前页 .page-note 的内容（正文区不占位）；
+// 折叠源码换行成单空格（保留中西文间空格，不做整体去空格）
 function sbNote() {
   const el = $("#sb-note");
   if (!el) return;
   const note = document.querySelector("#p-" + curPage + " .page-note");
-  el.textContent = note ? note.textContent.replace(/\s+/g, "") : "";
+  el.textContent = note ? note.textContent.replace(/\s+/g, " ").trim() : "";
 }
 
-// ---- 演出模式：进出动效 + ESC/F11 + 屏角热区退出 ----
+// ---- 演出模式：进出动效 + ESC/F11 + 走带行「退出演出」钮 ----
 const reduceMotion = () =>
     matchMedia("(prefers-reduced-motion: reduce)").matches;
+// 意图态：退出动画窗（200ms 摘类）内 body.show 仍是旧值，键序按意图
+// 判定——动画窗内 F11 = 取消退出（时序红队：按键被早退吞掉）
+let showOn = false;
+let showTimer = null;
 function setShow(on) {
+  on = !!on;
+  if (on === showOn) return;
+  showOn = on;
+  clearTimeout(showTimer);       // 动画窗内反向请求：撤销挂起的摘类定时器
   const body = document.body;
-  if (on === body.classList.contains("show")) return;
-  const btn = $("#btn-show");
   const nowEl = $("#now");
   if (nowEl) delete nowEl.dataset.txt;   // 字号 42↔72 切换：强制重测滚动距
   if (on) {
+    $("#main").classList.remove("leaving");
     nav("console");
     body.classList.add("show");
   } else if (reduceMotion()) {
     body.classList.remove("show");
   } else {
     $("#main").classList.add("leaving");
-    setTimeout(() => {
+    showTimer = setTimeout(() => {
       $("#main").classList.remove("leaving");
       body.classList.remove("show");
     }, 200);
   }
 }
-$("#btn-show").addEventListener("click",
-    () => setShow(!document.body.classList.contains("show")));
+$("#btn-show").addEventListener("click", () => setShow(!showOn));
 $("#show-exit").addEventListener("click", () => setShow(false));
+// F11=进出切换；ESC 仅退出（popover 的 ESC 收口在各自监听里）
 document.addEventListener("keydown", e => {
-  if ((e.key === "Escape" || e.key === "F11")
-      && document.body.classList.contains("show")) {
+  if (e.key === "F11") {
+    e.preventDefault();
+    setShow(!showOn);
+  } else if (e.key === "Escape" && showOn) {
     e.preventDefault();
     setShow(false);
   }
@@ -448,11 +469,10 @@ function lamps(st) {
       st.loop ? "loopMIDI 运行中" : "loopMIDI 未运行");
   const pr = st.pedalRemote;
   set("l-pedal", !pr ? "" : pr.link === "ok" ? "ok" : "warn",
-      (!pr ? "踩钉桥未就绪" : (pr.link === "ok"
+      !pr ? "踩钉桥未就绪" : (pr.link === "ok"
       ? "转发链路健康：15s 内有信号" : pr.link === "stale"
       ? "转发链路超时：15s 内无信号" : (pr.enabled
-      ? "未收到转发信号" : "未启用转发")))
-      + "；点击进入踩钉页，打开期间踩钉临时静音");
+      ? "未收到转发信号" : "未启用转发")));
   set("l-hot", st.webIp ? "ok" : "",
       st.webIp ? "服务地址 " + st.webIp : "移动端遥控服务未启动");
   set("l-remote", st.ready ? "ok" : "err",
@@ -503,9 +523,6 @@ function drawChips(st, cur) {
   items.forEach(x => {
     const b = document.createElement("button");
     b.className = "chip-btn" + (x.cur ? " cur" : "");
-    b.textContent = x.name;
-    b.title = "点击切到该定位点，同工程免重开";
-    b.title = "切换到该曲";
     b.textContent = "切歌";
     b.addEventListener("click", () => switchTo(x.i, b, false, x.key));
     box.appendChild(b);
@@ -517,6 +534,22 @@ function setKv(id, text, on) {
   const el = $("#" + id);
   el.textContent = text;
   el.className = "v " + (on ? "on" : "off");
+}
+// 最近踩钉事件框：lastEventAge 回落（/state 500ms 轮询沿）= 新事件，逐行追加
+function pedalEvtLog() {
+  const box = $("#pedal-evts");
+  if (!box) return;
+  const div = document.createElement("div");
+  div.className = "ln";
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = new Date().toTimeString().slice(0, 8);
+  const m = document.createElement("span");
+  m.textContent = "踩钉信号";
+  div.append(t, m);
+  box.appendChild(div);
+  while (box.children.length > 50) box.firstChild.remove();
+  box.scrollTop = box.scrollHeight;
 }
 
 function pedalLive(st) {
@@ -543,20 +576,9 @@ function pedalLive(st) {
     setKv("pedal-kv-unknown", "—", false);
   }
   const age = pr && pr.lastEventAge;
-  const flash = $("#pedal-flash");
   if (typeof age === "number") {
-    if (pedalPrevAge !== null && age < pedalPrevAge) {
-      flash.classList.add("on");
-      setTimeout(() => flash.classList.remove("on"), 600);
-    }
+    if (pedalPrevAge !== null && age < pedalPrevAge) pedalEvtLog();
     pedalPrevAge = age;
-    const w = $("#pedal-when");
-    w.textContent = age < 60 ? Math.round(age) + " 秒前" : "久前";
-    w.className = "";
-  } else {
-    const w = $("#pedal-when");
-    w.textContent = "暂无事件";
-    w.className = "dim";
   }
 }
 
@@ -615,15 +637,30 @@ function libRow(s, inPl) {
   const dur = document.createElement("span");
   dur.className = "dur " + durCls(s.durSrc);
   dur.textContent = durText(s);
-  const add = document.createElement("button");
-  add.className = "lib-add";
-  add.textContent = inPl ? "已加入" : "＋";
-  if (inPl) add.classList.add("in-pl");
-  else add.addEventListener("click", ev => {
-    ev.stopPropagation();
-    plcmd2("add", s.key);
-  });
-  div.append(tag, nm, dur, add);
+  // 已加入=与播放列表行同款 ✕（确认后移出）；未加入=＋ 加入
+  let tail;
+  if (inPl) {
+    tail = document.createElement("span");
+    tail.className = "ops";
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "✕";
+    del.title = "移出播放列表";
+    del.addEventListener("click", ev => {
+      ev.stopPropagation();
+      armConfirm(del, () => plcmd2("remove", s.key), "确认移除？");
+    });
+    tail.appendChild(del);
+  } else {
+    tail = document.createElement("button");
+    tail.className = "lib-add";
+    tail.textContent = "＋";
+    tail.addEventListener("click", ev => {
+      ev.stopPropagation();
+      plcmd2("add", s.key);
+    });
+  }
+  div.append(tag, nm, dur, tail);
   div.addEventListener("click", () => {
     // 行单击=选中该行；pt 条目选中该定位点（详情面板直接进编辑）；
     // ＋ 为唯一加入入口（防误触）
@@ -766,7 +803,7 @@ function plRow(i, it) {
     ops.appendChild(b);
     return b;
   };
-  const go = mk("切歌", "切换到该曲");
+  const go = mk("切歌", "");
   go.addEventListener("click", ev => {
     ev.stopPropagation();
     switchTo(i, go, false, it.key);
@@ -1060,7 +1097,7 @@ async function refreshPoints() {
     // 能力位：非 Cubase 底座禁用开关；MMC 未就绪常驻提示（定位不可用）
     const on = $("#pt-on");
     on.disabled = !ptCap.cubase;
-    on.closest(".switch").title = ptCap.cubase
+    on.title = ptCap.cubase
         ? "启用后该工程条目展开为定位点播放" : "定位点仅 Cubase 支持";
     $("#pt-mmc").hidden = ptCap.mmcReady || !ptCap.cubase;
     // 详情面板跟随选中曲（未选=引导空态）；定位点数据缺席按空表渲染
@@ -1075,7 +1112,7 @@ async function refreshPoints() {
         + ((song ? song.name.split(" · ")[0] : "")
            || (ptData[plSel] || {}).name || plSel);
     const dd = ptData[ptProj] || {enabled: false, points: []};
-    if (!ptOnPending) $("#pt-on").checked = dd.enabled;
+    if (!ptOnPending) setTgl($("#pt-on"), dd.enabled);
     if (ptSelPending !== null) {   // 点行点击：选中该点并填编辑表单
       const pp = dd.points.find(x => x.id === ptSelPending);
       ptSelPending = null;
@@ -1175,10 +1212,14 @@ async function ptcmd(op, payload) {
   await refreshPlaylist();   // 先列表后定位点：跳到这点按钮即时就位
   refreshPoints();
 }
-let ptOnPending = false;    // toggle 在途：轮询回写跳过（防视觉回弹诱发双击）
-$("#pt-on").addEventListener("change", async e => {
+let ptOnPending = false;    // 启用钮在途：轮询回写跳过（防视觉回弹诱发双击）
+$("#pt-on").addEventListener("click", async () => {
+  const btn = $("#pt-on");
+  if (btn.disabled || ptOnPending) return;
+  const on = btn.classList.contains("on");
+  setTgl(btn, !on);
   ptOnPending = true;
-  await ptcmd("toggle", {on: e.target.checked});
+  await ptcmd("toggle", {on: !on});
   ptOnPending = false;
 });
 // add 后自动选中末点（新点追加在表尾）；在途禁用防 504 误重试双加点
@@ -1242,25 +1283,21 @@ $("#pt-down").addEventListener("click", () =>
 
 // ============ 运行日志卡（主控台页内，增量 append + 工具条） ============
 let logLast = null;
-function logLevel(msg) {
-  // err 档=真实故障（自检失败/启动失败/未恢复/不可用/不存在…）；
-  // 「已停用/未启动(监听类)」是有意的功能性停运=warn 不算错
-  if (/失败|异常|错误|未恢复|不可用|不存在|无法|损坏/.test(msg)) return "err";
-  if (/未生效|超时|降级|未就绪|忽略|未启动|未选|已停用|停用/.test(msg))
-    return "warn";
-  return "";
-}
 function logLine(l) {
   const div = document.createElement("div");
-  const lv = logLevel(l.msg);
+  // 级别来自后端产生端定级（/log lv 字段，setlist_gui._log_lv 唯一来源）
+  const lv = l.lv || "";
   div.className = "ln" + (lv ? " " + lv : "");
   const t = document.createElement("span");
   t.className = "t";
   t.textContent = new Date(l.t * 1000).toTimeString().slice(0, 8);
+  const g = document.createElement("span");
+  g.className = "lv";
+  g.textContent = lv === "err" ? "错误" : lv === "warn" ? "警告" : "信息";
   const m = document.createElement("span");
   m.className = "m";
   m.textContent = l.msg;
-  div.append(t, m);
+  div.append(t, g, m);
   return div;
 }
 async function refreshLog() {
@@ -1271,7 +1308,7 @@ async function refreshLog() {
     const d = await r.json();
     const lines = d.lines || [];
     const el = $("#log");
-    const auto = $("#lg-auto").checked;
+    const auto = $("#lg-auto").classList.contains("on");
     const stick = auto && (logLast === null
         || el.scrollTop + el.clientHeight >= el.scrollHeight - 40);
     const first = lines.length ? lines[0].t + "|" + lines[0].msg : "";
@@ -1287,8 +1324,15 @@ async function refreshLog() {
     if (stick) el.scrollTop = el.scrollHeight;
   } catch { /* 瞬断 */ }
 }
-$("#lg-filter").addEventListener("change", e =>
-    $("#log").classList.toggle("hide-ok", e.target.value === "err"));
+$("#lg-filter").addEventListener("change", e => {
+  const el = $("#log");
+  el.classList.toggle("hide-ok", e.target.value === "err");
+  el.classList.toggle("hide-info", e.target.value === "warn");
+});
+$("#lg-auto").addEventListener("click", () => {
+  const btn = $("#lg-auto");
+  setTgl(btn, !btn.classList.contains("on"));
+});
 $("#lg-clear").addEventListener("click", ev => {
   armConfirm(ev.currentTarget, async () => {
     $("#log").innerHTML = "";
@@ -1388,7 +1432,7 @@ async function refreshPedalDevices() {
 }
 
 function bindText(d, action) {
-  const g = {single: "", double: "·双踩"}[d.gestures[action] || "single"];
+  const g = {single: "", double: " · 双踩"}[d.gestures[action] || "single"];
   const parts = [];
   if (d.binds[action] !== undefined)
     parts.push("CC " + d.binds[action] + g);
@@ -1405,26 +1449,34 @@ function drawBinds(d) {
   el.innerHTML = "";
   PD_ACTIONS.forEach(([a, name]) => {
     const row = document.createElement("div");
-    row.className = "bind-row";
+    row.className = "bind-row" + (a === learnAction ? " learning" : "");
     row.dataset.action = a;
+    row.tabIndex = 0;              // 键盘可达（音色映射卡片同款）
     const nm = document.createElement("span");
     nm.className = "b-name";
     nm.textContent = name;
     const bd = document.createElement("span");
     bd.className = "b-bind" + (bindText(d, a) !== "未设置" ? " has" : "");
-    bd.textContent = bindText(d, a);
-    const learn = document.createElement("button");
-    learn.className = "btn ghost sm b-learn";
-    learn.textContent = a === learnAction ? "学习中…" : "学习";
-    learn.addEventListener("click", () => startLearn(a));
+    bd.textContent = a === learnAction ? "学习中" : bindText(d, a);
     const clr = document.createElement("button");
     clr.className = "btn danger sm";
     clr.textContent = "清除";
     const bound = d.binds[a] !== undefined || d.hid[a] !== undefined;
     // 学习中的动作禁清除：后端学习完成会迁移改绑+落盘，清除会被静默还原
     if (!bound || a === learnAction) clr.disabled = true;
-    clr.addEventListener("click", () => clearBind(a));
-    row.append(nm, bd, learn, clr);
+    clr.addEventListener("click", ev => {
+      ev.stopPropagation();
+      clearBind(a);
+    });
+    row.append(nm, bd, clr);
+    // 点行=开始学习，再点=取消（音色映射卡片「点卡开录、再点保存」同构）
+    row.addEventListener("click", () => {
+      if (a === learnAction) learnCancel();
+      else startLearn(a);
+    });
+    row.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); row.click(); }
+    });
     el.appendChild(row);
   });
 }
@@ -1456,14 +1508,14 @@ async function refreshPedal(force) {
     setKv("pedal-kv-midi", d.connected ? "已连" : "未连", d.connected);
     setKv("pedal-kv-dev", d.deviceOnline ? "在线" : "离线",
           d.deviceOnline);
-    setKv("pedal-kv-hid", d.hidActive ? "运行" : "停", d.hidActive);
+    setKv("pedal-kv-hid", d.hidActive ? "运行" : "停止", d.hidActive);
     // 表单字段只在首拉/保存后回填：1.5s 轮询无条件回写会打穿正在编辑的
     // 双踩窗/开关（改一半被洗掉、开关视觉回弹）；即改即生效控件在
-    // 各自 change 后置 force 刷新基线
+    // 各自点击后置 force 刷新基线
     if (force || !pdFormInit) {
       $("#pd-win").value = d.doubleWindow || 0.35;
       $("#pd-intercept").checked = !!d.intercept;
-      $("#pd-remote").checked = !!d.remoteEnabled;
+      setTgl($("#pd-remote"), !!d.remoteEnabled);
       pdFormInit = true;
     }
     // MIDI 踩钉口是学习 CC 时自动记录的内部端口名：只读展示，不可手填
@@ -1488,10 +1540,17 @@ async function pedalApply(payload, msg) {
 }
 $("#pd-dev").addEventListener("change", () =>
     pedalApply({deviceHint: $v("#pd-dev")}, "输入设备已应用"));
-$("#pd-remote").addEventListener("change", e =>
-    pedalApply({remoteEnabled: e.target.checked},
-               e.target.checked ? "已允许平板转发踩钉"
-                                : "已停用平板转发踩钉"));
+let pdRemotePending = false;   // 在途门：连点只发一包（对齐 pt-on 防线）
+$("#pd-remote").addEventListener("click", async () => {
+  if (pdRemotePending) return;
+  const btn = $("#pd-remote");
+  const on = btn.classList.contains("on");
+  setTgl(btn, !on);            // 乐观置位，失败由 refreshPedal(true) 回读回弹
+  pdRemotePending = true;
+  await pedalApply({remoteEnabled: !on},
+                   on ? "已停用平板转发踩钉" : "已允许平板转发踩钉");
+  pdRemotePending = false;
+});
 $("#pd-intercept").addEventListener("change", e =>
     pedalApply({intercept: e.target.checked}, "拦截硬件原键已应用"));
 $("#pd-win").addEventListener("change", () => {
@@ -1515,32 +1574,40 @@ async function startLearn(action) {
   drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
   pollLearn();
 }
+// 取消学习：再点学习中的行 / 离开踩钉页时收口（后端关学习器并回灌桥配置）
+function learnCancel() {
+  if (learnAction === null) return;
+  learnAction = null;
+  clearTimeout(learnTimer);
+  fetch("/pedal/learn", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({cancel: true})}).catch(() => {});
+  drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
+}
 function pollLearn() {
   clearTimeout(learnTimer);
   learnTimer = setTimeout(async () => {
     if (learnAction === null) return;
+    const bindEl = () => $('.bind-row[data-action="%s"] .b-bind'
+                           .replace("%s", learnAction));
     try {
       const r = await fetch("/pedal/learn");
       // 504=主线程忙：不得当「学习结束」消费（后端 Learner 还在跑，
-      // 结果会无人认领）。有界重试，放弃时还原按钮态（红队 P1）
+      // 结果会无人认领）。有界重试，放弃时还原行态（红队 P1）
       if (!r.ok) {
         pollLearn.fails = (pollLearn.fails || 0) + 1;
         if (pollLearn.fails > 5) {
-          const act = learnAction;
           learnAction = null;
-          const btn = act && $('.bind-row[data-action="%s"] .b-learn'
-                               .replace("%s", act));
-          if (btn) btn.textContent = "学习";
+          refreshPedal();
           toast("学习状态查询连续失败，请重试学习", "err");
         } else pollLearn();
         return;
       }
       pollLearn.fails = 0;
       const d = await r.json();
-      const btn = $('.bind-row[data-action="%s"] .b-learn'
-                    .replace("%s", learnAction));
       if (d.active) {
-        if (btn) btn.textContent = "学习中 剩" + Math.ceil(d.remain) + "秒";
+        const bd = bindEl();
+        if (bd) bd.textContent = "学习中 · 剩 " + Math.ceil(d.remain) + " 秒";
         pollLearn();
       } else if (d.done && d.result) {
         const act = learnAction;
@@ -1549,8 +1616,8 @@ function pollLearn() {
         refreshPedal();       // 服务端已迁移+落盘，拉新态重绘
       } else if (d.done && d.error) {
         learnAction = null;
-        if (btn) btn.textContent = "学习";
         toast(d.error, "err");
+        refreshPedal();
       } else {
         learnAction = null;
         refreshPedal();
@@ -1559,11 +1626,8 @@ function pollLearn() {
       if (learnAction === null) return;      // 网络异常：同样有界重试
       pollLearn.fails = (pollLearn.fails || 0) + 1;
       if (pollLearn.fails > 5) {
-        const act = learnAction;
         learnAction = null;
-        const btn = act && $('.bind-row[data-action="%s"] .b-learn'
-                               .replace("%s", act));
-        if (btn) btn.textContent = "学习";
+        refreshPedal();
         toast("学习状态查询连续失败，请重试学习", "err");
       } else pollLearn();
     }
@@ -1583,7 +1647,10 @@ async function clearBind(action) {
   if (r.ok) toast("已清除「" + pdActionName(action) + "」");
   refreshPedal();
 }
-$("#pd-refresh").addEventListener("click", refreshPedalDevices);
+$("#pd-reload").addEventListener("click", () => {
+  refreshPedal(true);
+  refreshPedalDevices();
+});
 
 // ---- 键盘自动化（键盘页=全局端口/移调只读；曲目映射在编排页详情面板）----
 let kbData = null, kbPortsInit = false;
@@ -1693,9 +1760,15 @@ function renderKbdPorts(force) {
   kbPortsInit = true;
 }
 function renderKbdStatus() {
-  // 状态卡：音色配置计数（有配置才亮）+ 最近切换（无则占位）
+  // 状态卡：当前曲名 + 音色配置计数（有配置才亮）+ 最近切换（无则占位）
   const jn = $("#kb-juno-n"), ax = $("#kb-ax-n"), last = $("#kb-last");
   if (!jn) return;
+  const song = $("#kb-song");
+  if (song) {
+    const nm = kbData && kbData.editSong && kbData.editSong.name;
+    song.textContent = nm || "—";
+    song.classList.toggle("dim", !nm);
+  }
   if (kbData.counts) {
     jn.textContent = kbData.counts.juno;
     ax.textContent = kbData.counts.ax;
@@ -1872,7 +1945,6 @@ function slotRow(note, slot, inst) {
   const test = document.createElement("button");
   test.className = "btn ghost xs s-test";
   test.textContent = "测试";
-    test.title = "向琴发送该音色做连通测试";
   test.addEventListener("click", ev => {
     ev.stopPropagation();
     if (!slot) {
@@ -1919,19 +1991,6 @@ async function refreshKbd(force) {
     const d = await r.json();
     if (seq !== refreshKbd.seq) return;   // 旧响应不覆盖新请求
     kbData = d;
-    $("#kb-jshift").textContent = fmtShift(kbData.junoShift || 0);
-    $("#kb-ashift").textContent = fmtShift(kbData.axShift || 0);
-    for (const id of ["kb-jshift", "kb-ashift"]) {   // 移调数值变化脉冲
-      const el = $("#" + id);
-      if (el.dataset.v !== undefined && el.dataset.v !== el.textContent) {
-        el.classList.remove("pulse");
-        void el.offsetWidth;                 // 重启动画
-        el.classList.add("pulse");
-      }
-      el.closest(".shift-val")
-          .classList.toggle("hot", el.textContent !== "0");
-      el.dataset.v = el.textContent;
-    }
     renderKbdPorts(force);
     renderKbdStatus();
   } catch { /* 瞬断 */ }
@@ -2026,8 +2085,6 @@ $("#kb-save").addEventListener("click", async () => {
     refreshKbd(true);
   }
 });
-// 移调无手调入口：轨上键位驱动，页面只读显示（变化脉冲提示）
-const fmtShift = v => (v > 0 ? "+" : "") + v;
 
 // ---- VJ 联动 ----
 let vjMapRows = null, vjMapRoot = null, vjLoaded = false;
@@ -2131,10 +2188,10 @@ function renderVjState() {
   }
 }
 
-// ---- 设置页（分组卡 + 脏标记）----
+// ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
 const ST_FIELDS = ["st-clock", "st-vj", "st-kb", "st-auto", "st-cont",
                    "st-confirm", "st-exit", "st-root", "st-exe",
-                   "st-autosave", "st-web", "st-mode", "st-srv", "st-app",
+                   "st-autosave", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
 const stSnap = () => ST_FIELDS.map(id => {
@@ -2188,11 +2245,11 @@ function fillSel(id, cur, list, absentTxt) {
   }
 }
 
-// ---- 遥控网络状态行（B4）：热点/局域网五态 + 双端口监听指示 +
-//      浏览器遥控完整地址（webStatus 来自后端缓存线程，/state 的 webIp）----
+// ---- 遥控网络状态（kv 行）：热点/局域网五态 + 双端口监听指示
+//      （webStatus 来自后端缓存线程，/state 的 webIp）----
 const NET_TXT = {
-  "hot-on": ["热点已开", "ok"], "hot-off": ["热点未开", ""],
-  "hot-bad": ["热点不可用", "err"], "lan-ready": ["局域网就绪", "ok"],
+  "hot-on": ["热点已开", "on"], "hot-off": ["热点未开", "off"],
+  "hot-bad": ["热点不可用", "err"], "lan-ready": ["局域网就绪", "on"],
   "lan-none": ["无可用局域网地址", "err"], "lan-multi": ["多网卡待指定",
                                                             "warn"]
 };
@@ -2201,25 +2258,24 @@ function renderNetStat(d) {
   const ws = d.webStatus || {};
   const ls = ws.listen || {};
   el.innerHTML = "";
-  const mk = (txt, cls) => {
-    const s = document.createElement("span");
-    s.className = "pill" + (cls ? " " + cls : "");
-    s.textContent = txt;
-    el.appendChild(s);
+  const mk = (k, txt, cls) => {
+    const row = document.createElement("div");
+    row.className = "kv";
+    const ks = document.createElement("span");
+    ks.className = "k";
+    ks.textContent = k;
+    const vs = document.createElement("span");
+    vs.className = "v " + (cls || "off");
+    vs.textContent = txt;
+    row.append(ks, vs);
+    el.appendChild(row);
   };
-  const net = NET_TXT[ws.net] || ["状态未知", ""];
-  mk(net[0], net[1]);
-  mk("网页端口 " + (ls.serverPort ? "监听中" : "未监听"),
-     ls.serverPort ? "ok" : "err");
-  mk("APP 端口 " + (ls.appPort ? "监听中" : "未监听"),
-     ls.appPort ? "ok" : "err");
-  if (stState && stState.webIp) {
-    const a = document.createElement("span");
-    a.className = "dim sm-txt";
-    a.textContent = "浏览器遥控 http://" + stState.webIp + ":"
-        + $v("#st-srv") + "/";
-    el.appendChild(a);
-  }
+  const net = NET_TXT[ws.net] || ["状态未知", "off"];
+  mk("网络", net[0], net[1]);
+  mk("网页端口", ls.serverPort ? "监听中" : "未监听",
+     ls.serverPort ? "on" : "err");
+  mk("APP 端口", ls.appPort ? "监听中" : "未监听",
+     ls.appPort ? "on" : "err");
 }
 
 async function refreshSettings(force) {
@@ -2240,15 +2296,15 @@ async function refreshSettings(force) {
     $("#st-root").value = d.projectsRoot;
     $("#st-exe").value = d.dawExe;
     $("#st-autosave").checked = d.autoSave;
-    $("#st-web").checked = d.web.enabled;
+    setTgl($("#st-web"), !!d.web.enabled);
     $("#st-mode").value = d.web.mode;
     // config 里存了非法 mode（手改文件）：回落首个候选，保存即归一
     if (!$("#st-mode").value) $("#st-mode").value = "hotspot";
     $("#st-srv").value = d.web.serverPort;
     $("#st-app").value = d.web.appPort;
     $("#st-tsk").value = d.web.taskerPort;
-    // 端口输入框前拼接服务地址（对照原 UI：IP 写在输入框前成一段地址）；
-    // webIp 未就绪/遥控未启用时回落所选网卡或首个候选 IP
+    // 端口地址前缀（普通文本）：webIp 未就绪/遥控未启用时回落所选网卡
+    // 或首个候选 IP
     const chosen = (d.adapters || []).find(a => a.ip === d.web.ip);
     const hostIp = (stState && stState.webIp) || (chosen && chosen.ip)
         || ((d.adapters || []).find(a => a.ip) || {}).ip || "";
@@ -2287,13 +2343,28 @@ async function refreshSettings(force) {
         ip.appendChild(o);
       }
     }
-    renderNetStat(d);
     stBase = stSnap();
     stDirty();
   } catch { /* 瞬断 */ }
 }
 $("#p-settings").addEventListener("input", stDirty);
 $("#p-settings").addEventListener("change", stDirty);
+// 启用遥控：即点即发（在场检测只动 web.enabled，不碰表单其余未保存编辑）
+let stWebPending = false;      // 在途门：连点只发一包
+$("#st-web").addEventListener("click", async () => {
+  if (stWebPending) return;
+  const btn = $("#st-web");
+  const on = btn.classList.contains("on");
+  setTgl(btn, !on);            // 乐观置位
+  stWebPending = true;
+  const r = await post("/settings", {web: {enabled: !on}});
+  stWebPending = false;
+  if (r.ok) {
+    toast(on ? "移动端遥控已停用" : "移动端遥控已启用");
+  } else {
+    setTgl(btn, on);           // 失败回弹（设置页不回读，护住未保存编辑）
+  }
+});
 $("#st-save").addEventListener("click", async () => {
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
@@ -2302,7 +2373,7 @@ $("#st-save").addEventListener("click", async () => {
     exitCloseApps: $("#st-exit").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
     autoSave: $("#st-autosave").checked,
-    web: {enabled: $("#st-web").checked, mode: $v("#st-mode"),
+    web: {mode: $v("#st-mode"),
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
           ip: $v("#st-ip")}});
@@ -2312,14 +2383,16 @@ $("#st-save").addEventListener("click", async () => {
   }
 });
 // ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
-async function pickDir(inputId) {
-  toast("请在弹出的窗口中选择目录…");
+async function pickDir(inputId, kind) {
+  const file = kind === "file";
+  toast(file ? "请在弹出的窗口中选择文件…" : "请在弹出的窗口中选择目录…");
   try {
     const r = await fetch("/pickdir", {method: "POST",
-      headers: {"Content-Type": "application/json"}, body: "{}"});
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(file ? {kind: "file"} : {})});
     const j = await r.json();
     if (!r.ok) {
-      toast(j.error || "目录选择失败", "err");
+      toast(j.error || "选择失败", "err");
       return;
     }
     if (j.path) {
@@ -2328,11 +2401,11 @@ async function pickDir(inputId) {
       toast("已选择：" + j.path);
     }
   } catch {
-    toast("目录选择失败：网络异常", "err");
+    toast(file ? "文件选择失败：网络异常" : "目录选择失败：网络异常", "err");
   }
 }
 $$(".browse").forEach(b =>
-    b.addEventListener("click", () => pickDir(b.dataset.pick)));
+    b.addEventListener("click", () => pickDir(b.dataset.pick, b.dataset.kind)));
 
 // ---- 设置路径即时校验（工程库根=目录 / Cubase 程序=文件）----
 const PATH_KIND = {"st-root": "dir", "st-exe": "file"};
@@ -2574,20 +2647,31 @@ function qrSvg(text) {
 }
 window.__qr = {build: qrBuild, svg: qrSvg};   // 测试钩子（探针/控制台校验用）
 
+// 连接地址展示区：网页端/APP端两列（地址随表单端口即时反映，无效端口不显）
 function renderAppAddr() {
-  const wrap = $("#app-addr-wrap");
-  const a = stState && stState.webIp && stState.appPort
-      ? "http://" + stState.webIp + ":" + stState.appPort + "/" : "";
-  wrap.hidden = !a;
-  if (a) {
-    $("#app-addr").textContent = a;
-    const qr = $("#qr-box");
-    if (qr.dataset.addr !== a) {
-      qr.dataset.addr = a;
-      qr.innerHTML = qrSvg(a);
+  const wrap = $("#addr-wrap");
+  if (!wrap) return;
+  const ip = stState && stState.webIp;
+  const webA = ip && portOk("st-srv")
+      ? "http://" + ip + ":" + $v("#st-srv") + "/" : "";
+  const appA = ip && portOk("st-app")
+      ? "http://" + ip + ":" + $v("#st-app") + "/" : "";
+  wrap.hidden = !(webA || appA);
+  const setCell = (cellId, btnId, qrId, addr) => {
+    $("#" + cellId).hidden = !addr;
+    const btn = $("#" + btnId);
+    btn.textContent = addr;
+    const qr = $("#" + qrId);
+    if (addr && qr.dataset.addr !== addr) {
+      qr.dataset.addr = addr;
+      qr.innerHTML = qrSvg(addr);
     }
-  }
+  };
+  setCell("web-cell", "web-addr", "web-qr", webA);
+  setCell("app-cell", "app-addr", "qr-box", appA);
 }
+$("#web-addr").addEventListener("click", () =>
+    copyText($("#web-addr").textContent, "已复制：" + $("#web-addr").textContent));
 $("#app-addr").addEventListener("click", () =>
     copyText($("#app-addr").textContent, "已复制：" + $("#app-addr").textContent));
 

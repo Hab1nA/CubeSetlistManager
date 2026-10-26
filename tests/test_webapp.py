@@ -45,7 +45,10 @@ class _FakeWebApp:
         self.points = {"A/歌一": {
             "enabled": True, "counter": 1, "points": [
                 {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}}
-        self.log_ring = [(100.0, "启动"), (105.0, "界面异常：X")]
+        # 2 元组=旧形状（lenient 兼容），3 元组=产生端定级
+        self.log_ring = [(100.0, "启动", ""),
+                         (105.0, "界面异常：X", "err"),
+                         (106.0, "热点已停用")]
         self.cur = 0
         self._lib_view = lambda: [self.by_key["A/歌一"], self.by_key["B/歌二"]]
 
@@ -79,6 +82,10 @@ class _FakeWebApp:
 
         self._points_cmd_web = pt_cmd
         self._pickdir_web = lambda: {"path": "D:/选目录"}
+        self._pickfile_web = lambda: {"path": "C:/Cubase/Cubase13.exe"}
+        self.learn_cancels = []
+        self._pedal_learn_cancel_web = \
+            lambda: self.learn_cancels.append(1)
         self.switch_log = []
 
         def _switch(i, why):
@@ -168,6 +175,8 @@ def test_playlist_points_log_endpoints():
 
         lg = _get(port, "/log")
         assert lg["lines"][1]["msg"] == "界面异常：X"
+        assert lg["lines"][1]["lv"] == "err"      # 产生端定级透传
+        assert lg["lines"][2]["lv"] == ""          # 旧 2 元组 lenient 兜底
 
         assert _post(port, "/plcmd",
                      {"op": "add", "key": "B/歌二"})["ok"] is True
@@ -200,7 +209,7 @@ def test_playlist_points_log_endpoints():
 
 
 def test_pickdir_endpoint():
-    """/pickdir：主线程对话框结果回传；简化版拒绝。"""
+    """/pickdir：主线程对话框结果回传；kind=file 走文件选择；简化版拒绝。"""
     app = _FakeWebApp()
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
                                lambda: 0, page="")
@@ -210,9 +219,42 @@ def test_pickdir_endpoint():
     threading.Thread(target=_drain, args=(app,), daemon=True).start()
     try:
         assert _post(port, "/pickdir", {}) == {"path": "D:/选目录"}
+        assert _post(port, "/pickdir", {"kind": "file"}) == \
+            {"path": "C:/Cubase/Cubase13.exe"}
+        # 宿主无文件选择能力：明确 403 而非静默回落目录选择
+        del app._pickfile_web
+        code, body = _req("POST", port, "/pickdir", {"kind": "file"})
+        assert code == 403 and "文件" in body["error"]
         app.lite = True
         code, body = _req("POST", port, "/pickdir", {})
         assert code == 403
+    finally:
+        srv.shutdown()
+
+
+def test_log_level_classifier():
+    """产生端日志定级：err 先于 warn 判定，普通信息为空串。"""
+    import setlist_gui
+    assert setlist_gui._log_lv("VJ 显示位置未恢复") == "err"
+    assert setlist_gui._log_lv("控制未启动：端口不可用") == "err"
+    assert setlist_gui._log_lv("热点已停用") == "warn"
+    assert setlist_gui._log_lv("翻谱推送未生效") == "warn"
+    assert setlist_gui._log_lv("切换到《歌一》") == ""
+
+
+def test_pedal_learn_cancel_endpoint():
+    """/pedal/learn cancel:true → 主线程取消学习器（再点行/离页收口）。"""
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    threading.Thread(target=_drain, args=(app,), daemon=True).start()
+    try:
+        assert _post(port, "/pedal/learn",
+                     {"cancel": True})["ok"] is True
+        assert app.learn_cancels == [1]
     finally:
         srv.shutdown()
 

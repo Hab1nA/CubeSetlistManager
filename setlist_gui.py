@@ -66,6 +66,20 @@ def transport_blocked(action, tstate):
     return False
 LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
 
+# 日志级别（新前端级别体系的唯一来源，产生端定级）：err=真实故障
+# （自检失败/启动失败/未恢复/不可用…）；「已停用/未启动」类有意停运
+# =warn 不算错。UI 的行内级别标签/着色/三档筛选全部消费此定级。
+_LOG_ERR = re.compile("失败|异常|错误|未恢复|不可用|不存在|无法|损坏")
+_LOG_WARN = re.compile("未生效|超时|降级|未就绪|忽略|未启动|未选|已停用|停用")
+
+
+def _log_lv(msg):
+    if _LOG_ERR.search(msg):
+        return "err"
+    if _LOG_WARN.search(msg):
+        return "warn"
+    return ""
+
 
 def _find_cubase_exe():
     r"""扫 Program Files\Steinberg 各版本目录，取版本号最高的 Cubase<N>.exe
@@ -1905,6 +1919,16 @@ class App:
             return {"error": _err(e)}
         return {"path": path or ""}
 
+    def _pickfile_web(self):
+        """/pickdir kind=file：原生文件选择对话框（如 Cubase 程序）。"""
+        try:
+            parent = None if getattr(self, "webui_mode", False) else self.root
+            path = filedialog.askopenfilename(parent=parent,
+                                              title="选择程序")
+        except Exception as e:
+            return {"error": _err(e)}
+        return {"path": path or ""}
+
     def _monitor_web(self):
         """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
         return {"/".join(k): list(v.cget("text") and
@@ -3288,7 +3312,8 @@ class App:
             except queue.Empty:
                 break
             self.log.insert("end", time.strftime("[%H:%M:%S] ") + msg)
-            self.log_ring.append((time.time(), msg))   # 新前端日志页数据源
+            self.log_ring.append((time.time(), msg, _log_lv(msg)))
+            # 新前端日志级别体系唯一来源（产生端定级，UI 只消费不重判）
             if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
                 self.log.itemconfigure(self.log.size() - 1,
                                        foreground=dpi.C_ERR)

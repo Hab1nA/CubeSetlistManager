@@ -127,9 +127,15 @@ INTERCEPT = ("window.__posts=[];"
 # 失败应答变体（测错误 toast 用）
 INTERCEPT_FAIL = INTERCEPT.replace("window.__fmode='ok';",
                                    "window.__fmode='fail';")
-# 先行拆桩（自定义 stub 安装前用，防嵌套把拦截壳当真 fetch 存走）
-UNSTUB = ("if(window.__fetch0){window.fetch=window.__fetch0;"
-          "window.__fetch0=null;window.__fmode='';}")
+# 先行拆桩（自定义 stub 安装前用，防嵌套把拦截壳当真 fetch 存走）。
+# __realfetch 根锚：首个 UNSTUB 时 fetch 必为真 fetch（各阶段首个桩前
+# 都有 UNSTUB），此后无论桩叠多少层，拆桩恒落回真 fetch——单层弹回
+# （fetch=__fetch0）在连续装桩后会把外层桩的动态回落指向 null 断链
+# （stage_e 连续 /state 桩曾实锤）。
+UNSTUB = ("if(!window.__realfetch){window.__realfetch="
+          "window.__fetch0||window.fetch;}"
+          "window.fetch=window.__realfetch;window.__fetch0=null;"
+          "window.__fmode='';")
 RESTORE = UNSTUB
 
 
@@ -182,12 +188,31 @@ def stage_p0(send):
     time.sleep(0.4)
     st2 = js(send, "return {show:document.body.classList.contains('show')}")
     ok("p0.show.exit-esc", not st2.get("show"))
-    js(send, "document.body.classList.add('show')")
+    # F11 进（意图态）→ F11 退；再验退出动画窗内 F11 = 取消退出
+    js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'F11',bubbles:true,cancelable:true}))")
+    time.sleep(0.4)
+    st2b = js(send, "return {show:document.body.classList.contains('show')}")
+    ok("p0.show.enter-f11", st2b.get("show"))
     js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
         "{key:'F11',bubbles:true,cancelable:true}))")
     time.sleep(0.4)
     st3 = js(send, "return {show:document.body.classList.contains('show')}")
     ok("p0.show.exit-f11", not st3.get("show"))
+    # ESC 起 200ms 动画窗内按 F11：意图态判定=取消退出，终态仍在演出
+    js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'F11',bubbles:true,cancelable:true}))")
+    time.sleep(0.4)
+    js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'Escape',bubbles:true}))")
+    js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'F11',bubbles:true,cancelable:true}))")
+    time.sleep(0.5)
+    st4 = js(send, "return {show:document.body.classList.contains('show')}")
+    ok("p0.show.f11-cancels-exit", st4.get("show"))
+    js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+        "{key:'Escape',bubbles:true}))")
+    time.sleep(0.5)
 
     # 4. toast：拦截为失败应答后点保存 → 错误 toast 可见
     #    （P1 起保存钮洁净态禁用：先改一个端口值弄脏再点；事后还原）
@@ -621,18 +646,21 @@ def stage_p1(send):
        and pd.get("noDetails") and pd.get("kv") == 5,
        json.dumps(pd, ensure_ascii=False))
 
-    # ---- 键盘页：全局端口/移调只读（槽网格已移编排页详情）----
+    # ---- 键盘页：全局端口/移调键位卡（槽网格已移编排页详情）----
     nav(send, "kbd")
     kb = js(send, "return {cards:document.querySelectorAll("
            "'#p-kbd .cards2 .card').length,"
            "noSlots:!document.getElementById('kb-slots')"
            "&&!document.getElementById('kb-axslots'),"
-           "noSongSel:!document.getElementById('kb-song'),"
-           "ro:!!document.getElementById('kb-jshift'),"
+           "song:document.getElementById('kb-song')"
+           "?document.getElementById('kb-song').textContent:null,"
+           "noShiftVal:!document.getElementById('kb-jshift')"
+           "&&!document.getElementById('kb-ashift'),"
            "noStepper:!document.getElementById('kb-jreset')}")
     ok("p1.kbd.port-cards", kb.get("cards") == 2 and kb.get("noSlots")
-       and kb.get("noSongSel") and kb.get("ro") and kb.get("noStepper"),
-       json.dumps(kb))
+       and kb.get("song") and kb.get("noShiftVal")
+       and kb.get("noStepper"),
+       json.dumps(kb, ensure_ascii=False))
     js(send, RESTORE)
 
     # ---- VJ 页：真实 OBS 状态 ----
@@ -666,9 +694,10 @@ def stage_p1(send):
        and d2.get("saveDis") is True, json.dumps(d2))
     ad = js(send, "const r=await fetch('/state');"
            "const j=await r.json();"
-           "const a=j.webIp&&j.appPort?"
-           "'http://'+j.webIp+':'+j.appPort+'/':'';"
-           "const w=document.getElementById('app-addr-wrap');"
+           "const appEl=document.getElementById('st-app');"
+           "const a=j.webIp&&appEl.value?"
+           "'http://'+j.webIp+':'+appEl.value+'/':'';"
+           "const w=document.getElementById('addr-wrap');"
            "return {addr:a,wrapHidden:w.hidden,"
            "txt:a?document.getElementById('app-addr').textContent:''}")
     ok("p1.settings.app-addr", ad.get("wrapHidden") == (not ad.get("addr"))
@@ -678,8 +707,8 @@ def stage_p1(send):
 
     # ---- 运行日志卡（主控台页内）：工具条 + 增量 append + 独立页已删 ----
     nav(send, "console")
-    js(send, UNSTUB + "window.__logstub=[{t:100,msg:'启动'},{t:105,"
-           "msg:'界面异常：X'}];"
+    js(send, UNSTUB + "window.__logstub=[{t:100,msg:'启动',lv:''},"
+           "{t:105,msg:'界面异常：X',lv:'err'}];"
            "window.__fetch0=window.fetch;"
            "window.fetch=(u,o)=>{"
            "if(String(u)==='/log')return Promise.resolve(new Response("
@@ -747,15 +776,19 @@ def stage_p2(send):
         "tstate:'stopped',dur:0,pos:0,pedalRemote:null}),{status:200}));"
         "return window.__fetch0(u,o)};")
     time.sleep(1.2)
-    qr = js(send, "const w=document.getElementById('app-addr-wrap');"
+    qr = js(send, "const w=document.getElementById('addr-wrap');"
             "const svg=document.querySelector('#qr-box svg');"
-            "return {addr:document.getElementById('app-addr').textContent,"
+            "const appEl=document.getElementById('st-app');"
+            "return {addr:'http://192.168.137.1:'+(appEl.value||'8767')+'/',"
+            "app:document.getElementById('app-addr').textContent,"
+            "web:document.getElementById('web-addr').textContent,"
             "wrapHidden:w.hidden,"
             "viewBox:svg?svg.getAttribute('viewBox'):null,"
             "path:svg?svg.querySelector('path').getAttribute('d'):null}")
     ok("p2.qr.rendered", qr.get("wrapHidden") is False
-       and qr.get("addr") == "http://192.168.137.1:8767/"
-       and qr.get("path"), (qr.get("addr") or "")[:60])
+       and qr.get("app") == qr.get("addr")
+       and "192.168.137.1" in qr.get("web", "")
+       and qr.get("path"), (qr.get("app") or "")[:60])
     shot(send, "x_p2_qr")
     js(send, RESTORE)
     time.sleep(0.6)
@@ -834,11 +867,11 @@ def stage_p2(send):
        json.dumps(card))
     shot(send, "x_p2_slots")
 
-    # ---- 目录选择按钮（不点击=不开真对话框；契约由单测覆盖）----
+    # ---- 目录/文件选择按钮（不点击=不开真对话框；契约由单测覆盖）----
     br = js(send, "return [...document.querySelectorAll('.browse')].map("
-           "b=>b.dataset.pick)")
-    ok("p2.browse.buttons", br == ["st-root"] or set(br) == {"st-root",
-       "vj-root"}, str(br))
+           "b=>b.dataset.pick+(b.dataset.kind==='file'?':file':''))")
+    ok("p2.browse.buttons", set(br) == {"st-root", "st-exe:file",
+                                        "vj-root"}, str(br))
 
     # ---- 窄窗响应式（<900px）：tabs 出现、双列折叠、grid2 单列 ----
     send("Emulation.setDeviceMetricsOverride",
@@ -1032,13 +1065,14 @@ def stage_a(send):
     nav(send, "setlist")
     a6 = js(send, "return [...document.querySelectorAll('#lib .row')].map("
             "r=>({k:r.dataset.k,"
-            "txt:r.querySelector('.lib-add').textContent,"
-            "inpl:r.querySelector('.lib-add').classList"
-            ".contains('in-pl')}))")
-    ok("ba.a6.lib-pt-exact", len(a6) == 3
-       and a6[0]["txt"] == "＋" and not a6[0]["inpl"]
-       and a6[1]["inpl"] and a6[1]["txt"] == "已加入"
-       and a6[2]["txt"] == "＋" and not a6[2]["inpl"],
+            "plus:!!r.querySelector('.lib-add'),"
+            "x:!!r.querySelector('.ops button.danger'),"
+            "xTxt:r.querySelector('.ops button.danger')"
+            "?r.querySelector('.ops button.danger').textContent:''}))")
+    ok("ba.a6.lib-pt-exact", len(a6) == 3 and a6[0]["plus"]
+       and not a6[0]["x"]
+       and a6[1]["x"] and a6[1]["xTxt"] == "✕" and not a6[1]["plus"]
+       and a6[2]["plus"] and not a6[2]["x"],
        json.dumps(a6, ensure_ascii=False))
     # 已移除的点条目点 ＋ 应发精确 pt: 键的 add（先拆上段自定义桩再装
     # INTERCEPT——嵌套时它只切 fmode 不换桩，/plcmd 会漏到真 fetch）
@@ -1161,13 +1195,14 @@ def stage_b(send):
        and b2["pg"]["sel"] == "旧口"
        and "旧口 · 未接入" in b2["pg"]["txts"],
        json.dumps(b2, ensure_ascii=False))
-    b4b = js(send, "return {pills:[...document.querySelectorAll("
-            "'#st-netstat .pill')].map(p=>p.textContent),"
-            "addr:document.querySelector('#st-netstat .sm-txt')"
-            "?document.querySelector('#st-netstat .sm-txt').textContent:''}")
-    ok("bb.b4.netstat-render", any("热点" in p for p in b4b["pills"])
-       and any("网页端口 监听中" == p for p in b4b["pills"])
-       and any("APP 端口 未监听" == p for p in b4b["pills"]),
+    b4b = js(send, "return {kvs:[...document.querySelectorAll("
+            "'#st-netstat .kv')].map(k=>k.querySelector('.k').textContent"
+            "+'='+k.querySelector('.v').textContent),"
+            "noPill:!document.querySelector('#st-netstat .pill')}")
+    ok("bb.b4.netstat-render", b4b["noPill"]
+       and any("网络=热点已开" == s for s in b4b["kvs"])
+       and any("网页端口=监听中" == s for s in b4b["kvs"])
+       and any("APP 端口=未监听" == s for s in b4b["kvs"]),
        json.dumps(b4b, ensure_ascii=False))
     # 选「无」保存 → 提交空串（停用）
     js(send, "const s=document.getElementById('st-clock');"
@@ -1192,6 +1227,11 @@ def stage_b(send):
         + SETTINGS_STUB + "),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    # 首拉（vjLoaded 门）可能因端口枚举偏慢：等保存钮可用再点，防点击落空
+    for _ in range(12):
+        if js(send, "return !document.getElementById('vj-save').disabled"):
+            break
+        time.sleep(0.3)
     js(send, "document.getElementById('vj-save').click()")
     time.sleep(0.8)
     b3 = js(send, "const s=document.getElementById('vj-mon');"
@@ -1349,13 +1389,13 @@ def stage_c(send):
             "devOpts:[...document.getElementById('pd-dev').options]"
             ".map(o=>o.textContent)}")
     ok("bc.c2.bind-table", c4.get("rows") == 6
-       and c4.get("bind0") == "CC 74·双踩"
+       and c4.get("bind0") == "CC 74 · 双踩"
        and c4.get("bindNext") == "按键 下一曲"
        and c4.get("unset") == "未设置",
        json.dumps(c4, ensure_ascii=False))
     ok("bc.c4.conn-kv",
        c4.get("kvMidi") in ("已连", "未连")
-       and c4.get("kvHid") in ("运行", "停"),
+       and c4.get("kvHid") in ("运行", "停止"),
        json.dumps([c4.get("kvMidi"), c4.get("kvHid")],
                   ensure_ascii=False))
     ok("bc.c1.device-select",
@@ -1386,18 +1426,31 @@ def stage_c(send):
     ok("bc.r2.remote-instant", im.get("body")
        and im["body"].get("remoteEnabled") is True
        and "binds" not in im["body"], json.dumps(im, ensure_ascii=False))
-    # 学习 → POST + 轮询 + 行内倒计时
+    # 学习：点行开始（音色映射卡片同款）→ POST + 轮询 + 行内倒计时
     js(send, "window.__posts=[];"
-        "document.querySelector('.bind-row[data-action=play] .b-learn')"
-        ".click()")
+        "document.querySelector('.bind-row[data-action=play]').click()")
     time.sleep(0.9)
     lc = js(send, "return {posts:(window.__posts||[]).map(x=>x[0]),"
+            "row:document.querySelector('.bind-row[data-action=play]')"
+            ".className,"
             "txt:document.querySelector("
-            "'.bind-row[data-action=play] .b-learn').textContent}")
+            "'.bind-row[data-action=play] .b-bind').textContent}")
     ok("bc.c2.learn-flow",
        (lc.get("posts") or []).count("/pedal/learn") >= 2
+       and "learning" in (lc.get("row") or "")
        and "学习中" in (lc.get("txt") or ""),
        json.dumps(lc, ensure_ascii=False))
+    # 再点同一行 = 取消学习（POST cancel:true，行退出学习态）
+    js(send, "window.__posts=[];"
+        "document.querySelector('.bind-row[data-action=play]').click()")
+    time.sleep(0.5)
+    lcx = js(send, "return {row:document.querySelector("
+             "'.bind-row[data-action=play]').className,"
+             "cancel:(window.__posts||[]).some(([u,b])=>u==='/pedal/learn'"
+             "&&b&&b.includes('\"cancel\":true'))}")
+    ok("bc.c2.learn-cancel",
+       "learning" not in (lcx.get("row") or "") and lcx.get("cancel"),
+       json.dumps(lcx, ensure_ascii=False))
     # 清除（有绑定的行）→ /pedalset 载荷去掉该动作、保留其余
     js(send, "window.__posts=[];"
         "document.querySelector('.bind-row[data-action=next] .btn.danger')"
@@ -1491,12 +1544,13 @@ def stage_d(send):
     # 「刷新端口」走产品同款强制重建路径
     js(send, "document.getElementById('kb-refresh').click()")
     time.sleep(0.8)
-    d1 = js(send, "return {noSongSel:!document.getElementById('kb-song'),"
+    d1 = js(send, "return {song:document.getElementById('kb-song')"
+            ".textContent,"
             "juno:document.getElementById('kb-juno-n').textContent,"
             "ax:document.getElementById('kb-ax-n').textContent,"
             "last:document.getElementById('kb-last').textContent}")
-    ok("bd.d1.no-song-select",
-       d1.get("noSongSel") and d1.get("juno") == "1"
+    ok("bd.d1.song-name",
+       d1.get("song") == "歌一" and d1.get("juno") == "1"
        and d1.get("ax") == "0" and "已发送" in d1.get("last", ""),
        json.dumps(d1, ensure_ascii=False))
     d2 = js(send, "const info=id=>{const s=document.getElementById(id);"
@@ -1564,10 +1618,16 @@ def stage_d(send):
        and d3b["body"]["slots"]["60"]["pc"] == 70
        and (d3b["stops"] or 0) >= 1,
        json.dumps(d3b, ensure_ascii=False))
-    # D5 脚注键位表
-    fn = js(send, "return document.querySelector('#p-kbd').textContent"
-            ".includes('移调键位')")
-    ok("bd.d5.keymap-footnote", fn)
+    # D5 全局移调=音符卡片（VJ 网格同款），无当前数值展示
+    fn = js(send, "return {cells:document.querySelectorAll("
+            "'#p-kbd .shift-cell').length,"
+            "first:document.querySelector('#p-kbd .shift-cell')"
+            "?document.querySelector('#p-kbd .shift-cell').textContent:'',"
+            "noVal:!document.getElementById('kb-jshift')}")
+    ok("bd.d5.shift-cards", fn.get("cells") == 8
+       and "C2" in fn.get("first", "") and "降半音" in fn.get("first", "")
+       and fn.get("noVal"),
+       json.dumps(fn, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(0.5)
 
@@ -1646,7 +1706,7 @@ def stage_e(send):
        and "warn" in (ep.get("cls") or "") and ep.get("color") ==
        "rgb(232, 194, 104)" and "暂停片.mp4" in ep.get("video", ""),
        json.dumps(ep, ensure_ascii=False))
-    js(send, "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
+    js(send, UNSTUB + "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
         "if(String(u)==='/state')return Promise.resolve(new Response("
         "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
         "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
@@ -1661,7 +1721,7 @@ def stage_e(send):
     ok("be.e1.follow-stopped", es.get("t") == "未在播放"
        and es.get("video") == "", json.dumps(es, ensure_ascii=False))
     # vj=null（lite/双无源）：VJ 卡不炸、显「—」
-    js(send, "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
+    js(send, UNSTUB + "window.__fetch0=window.fetch;window.fetch=(u,o)=>{"
         "if(String(u)==='/state')return Promise.resolve(new Response("
         "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
         "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
@@ -1707,8 +1767,9 @@ def stage_f(send):
     js(send, UNSTUB + "window.__fetch0=window.fetch;"
         "window.fetch=(u,o)=>{"
         "if(String(u)==='/log')return Promise.resolve(new Response("
-        "JSON.stringify({lines:[{t:1,msg:'启动'},{t:Date.now()/1000-2,"
-        "msg:'回零：「继续」忽略（状态互锁）'}]}),{status:200}));"
+        "JSON.stringify({lines:[{t:1,msg:'启动',lv:''},"
+        "{t:Date.now()/1000-2,msg:'回零：「继续」忽略（状态互锁）',"
+        "lv:'warn'}]}),{status:200}));"
         "return window.__fetch0(u,o)};")
     time.sleep(2.0)
     f1 = js(send, "const box=document.getElementById('logcard');"
@@ -1887,7 +1948,11 @@ def stage_f(send):
             "e.closest('#now')||e.closest('#next')||e.closest("
             "'#console-list')||e.closest('#lib')||e.closest('#pl')||"
             "e.closest('#pt-list')||e.closest('#dt-slots')||e.closest("
-            "'#dt-axslots')||e.closest('#vjmap')||e.closest('#app-addr');"
+            "'#dt-axslots')||e.closest('#vjmap')||e.closest('#app-addr')"
+            "||e.closest('#web-addr')||e.tagName==='OPTION'||"
+            "e.closest('select');"
+            # select 选项=后端枚举数据（如 「xxx（BLE）」设备名），括号禁令
+            # 只管 UI 静态文案
             "const bad=[];"
             "document.querySelectorAll('body *').forEach(e=>{"
             "if(skip(e))return;"
@@ -1950,6 +2015,321 @@ def stage_f(send):
     ok("bf.no-js-errors", not errs, str(errs)[:300])
 
 
+def stage_r(send):
+    """第四轮：UI 统一与规范化（N1-N24 + C4）逐项验收。"""
+    # ---- N1/N2：卡头距=卡内边距（16px）；日志无渐隐 mask ----
+    nav(send, "console")
+    g = js(send, "const card=document.querySelector('.col-pl');"
+           "const head=card.querySelector('.md-head');"
+           "const lst=document.getElementById('console-list');"
+           "const lcard=document.getElementById('logcard');"
+           "const lhead=lcard.querySelector('.md-head');"
+           "const log=document.getElementById('log');"
+           "const r=e=>e.getBoundingClientRect();"
+           "return {pad:r(card).top>0?r(head).top-r(card).top:16,"
+           "gap:r(lst).top-r(head).bottom,"
+           "padL:r(lhead).top-r(lcard).top,gapL:r(log).top-r(lhead).bottom,"
+           "mask:getComputedStyle(log).maskImage,"
+           "wmask:getComputedStyle(log).webkitMaskImage}")
+    ok("br.n1.head-gap=padding",
+       abs(g.get("pad", -1) - g.get("gap", -2)) <= 1
+       and abs(g.get("pad", -1) - 16) <= 1,
+       json.dumps(g))
+    ok("br.n2.log-no-mask-top-gap",
+       (g.get("mask") in (None, "none"))
+       and abs(g.get("padL", -1) - g.get("gapL", -2)) <= 1,
+       json.dumps(g))
+
+    # ---- N3：级别体系（单一分类器驱动标签+着色+三档筛选）----
+    lv = js(send, INTERCEPT +
+            "const log=document.getElementById('log');"
+            "log.innerHTML="
+            "'<div class=\"ln\"><span class=\"t\">12:00:00</span>"
+            "<span class=\"lv\">信息</span><span>a</span></div>'"
+            "+'<div class=\"ln warn\"><span class=\"t\">12:00:01</span>"
+            "<span class=\"lv\">警告</span><span>b</span></div>'"
+            "+'<div class=\"ln err\"><span class=\"t\">12:00:02</span>"
+            "<span class=\"lv\">错误</span><span>c</span></div>';"
+            "const vis=()=>[...log.children].filter(x=>getComputedStyle(x)"
+            ".display!=='none').length;"
+            "const s=document.getElementById('lg-filter');"
+            "const opts=[...s.options].map(o=>o.value);"
+            "s.value='warn';s.dispatchEvent(new Event('change'));"
+            "const visWarn=vis();"
+            "s.value='err';s.dispatchEvent(new Event('change'));"
+            "const visErr=vis();"
+            "s.value='all';s.dispatchEvent(new Event('change'));"
+            "return {opts,visWarn,visErr,"
+            "lvTxt:log.querySelector('.ln .lv').textContent}")
+    ok("br.n3.level-filter", lv.get("opts") == ["all", "warn", "err"]
+       and lv.get("visWarn") == 2 and lv.get("visErr") == 1
+       and lv.get("lvTxt") == "信息",
+       json.dumps(lv, ensure_ascii=False))
+    js(send, RESTORE)
+
+    # ---- N4：自动滚动=绿钮（点击切换 on）----
+    t4 = js(send, "const b=document.getElementById('lg-auto');"
+            "const before=b.classList.contains('on');b.click();"
+            "const after=b.classList.contains('on');b.click();"
+            "return {tag:b.tagName,cls:b.className,before,after}")
+    ok("br.n4.auto-scroll-tgl",
+       t4.get("tag") == "BUTTON" and "tgl" in (t4.get("cls") or "")
+       and t4.get("before") is True and t4.get("after") is False
+       and t4.get("before") is not t4.get("after"),
+       json.dumps(t4))
+
+    # ---- N5：定位点启用=绿钮（点击发 toggle；桩带状态：toggle 后
+    #      /points 回读 enabled=true，验证乐观置位不被回读洗回）----
+    nav(send, "setlist")
+    js(send, UNSTUB + "window.__posts=[];window.__pton=false;"
+        "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/points')return Promise.resolve(new Response("
+        "JSON.stringify({cubase:true,mmcReady:true,projects:{"
+        "'A/歌一':{name:'歌一',enabled:window.__pton,points:[]}}}),"
+        "{status:200}));"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'A/歌一',team:'A',name:'歌一',"
+        "dur:'1:00',durSrc:'auto'}],pl:[{key:'A/歌一',name:'歌一',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
+        "if(String(u)==='/ptcmd'){try{window.__pton="
+        "JSON.parse(o.body).payload.on}catch(e){}}"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    # 等桩列表渲染出目标行、且 pt-on 已被桩态（false）刷新过后再点选
+    # （防点到残留真实行 / 沿用上一阶段 stub 的 enabled=true 残留）
+    for _ in range(12):
+        got = js(send, "return !!document.querySelector("
+                 "\"#pl .row[data-k='A/歌一']\")"
+                 "&&!document.getElementById('pt-on')"
+                 ".classList.contains('on')")
+        if got:
+            break
+        time.sleep(0.5)
+    js(send, "document.querySelector(\"#pl .row[data-k='A/歌一']\")"
+        ".click();return 1")
+    time.sleep(1.2)
+    t5 = js(send, "const b=document.getElementById('pt-on');"
+            "const before=b.classList.contains('on');b.click();"
+            "return {tag:b.tagName,cls:b.className,before}")
+    time.sleep(0.6)
+    t5b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/ptcmd')body=b});"
+             "return {body:body?JSON.parse(body):null,"
+             "after:document.getElementById('pt-on').classList"
+             ".contains('on')}")
+    ok("br.n5.pt-enable-tgl",
+       t5.get("tag") == "BUTTON" and "tgl" in (t5.get("cls") or "")
+       and t5.get("before") is False
+       and t5b.get("body") and t5b["body"].get("op") == "toggle"
+       and t5b["body"].get("payload", {}).get("on") is True
+       and t5b.get("after") is True,
+       "%s %s" % (json.dumps(t5), json.dumps(t5b)))
+    js(send, RESTORE)
+
+    # ---- N7/N9/N11：踩钉页转发启用钮/事件框/页脚 ----
+    nav(send, "pedal")
+    p7 = js(send, "const b=document.getElementById('pd-remote');"
+            "return {tag:b.tagName,cls:b.className,"
+            "inHead:!!b.closest('.stat-head'),"
+            "foot:!!document.querySelector('#p-pedal .page-foot'),"
+            "reload:!!document.getElementById('pd-reload'),"
+            "evt:!!document.getElementById('pedal-evts'),"
+            "evtCls:document.getElementById('pedal-evts').className}")
+    ok("br.n7.remote-tgl", p7.get("tag") == "BUTTON"
+       and "tgl" in (p7.get("cls") or "") and p7.get("inHead"),
+       json.dumps(p7))
+    ok("br.n11.pedal-foot", p7.get("foot") and p7.get("reload"),
+       json.dumps(p7))
+    ok("br.n9.evt-log-box",
+       p7.get("evt") and "evt-log" in (p7.get("evtCls") or ""),
+       json.dumps(p7))
+    # N9 行为：lastEventAge 回落 → 事件行追加
+    js(send, UNSTUB + "window.__age=30;window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:false,projName:null,"
+        "tstate:'stopped',pos:0,dur:0,cur:null,confirm:false,songs:[],"
+        "obs:false,loop:false,webIp:'',appPort:8767,"
+        "pedalRemote:{enabled:true,link:'ok',unknown:0,"
+        "lastEventAge:window.__age}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)          # 建基线（pedalPrevAge）
+    js(send, "window.__age=1;return 1")
+    time.sleep(1.2)          # 下一拍 age 回落 → 追加事件行
+    ev = js(send, "const b=document.getElementById('pedal-evts');"
+            "return {n:b.children.length,"
+            "txt:b.textContent}")
+    ok("br.n9.evt-append", ev.get("n") == 1
+       and "踩钉信号" in (ev.get("txt") or ""),
+       json.dumps(ev, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.8)
+
+    # ---- N12/N13/C4：键盘页边距/移调卡/标题一致 ----
+    nav(send, "kbd")
+    k12 = js(send, "const gap=document.querySelector('.slotcard')"
+             ".getBoundingClientRect().top"
+             "-document.querySelector('.cards2').getBoundingClientRect()"
+             ".bottom;"
+             "return {gap:Math.round(gap),"
+             "noVal:!document.querySelector('.shift-val'),"
+             "h2:document.querySelector('#p-kbd h2').textContent,"
+             "nav:document.querySelector('.b-kbd').textContent.trim()}")
+    ok("br.n12.shiftcard-gap", 10 <= k12.get("gap", -1) <= 18,
+       json.dumps(k12))
+    ok("br.n13.c4.titles", k12.get("noVal")
+       and k12.get("h2") == k12.get("nav")
+       and document_vj_h2(send),
+       json.dumps(k12, ensure_ascii=False))
+
+    # ---- N14-N22：设置页 ----
+    nav(send, "settings")
+    s1 = js(send, "const ports=document.getElementById('st-clock')"
+            ".closest('.grid3');"
+            "const web=document.getElementById('st-mode')"
+            ".closest('.grid3');"
+            "const fields=[...web.children].map(f=>f.querySelector("
+            "'select,input').id);"
+            "const lbl=id=>document.querySelector('label[for='+id+']')"
+            ".textContent;"
+            "const ip=document.getElementById('st-srv-host');"
+            "const inp=document.getElementById('st-srv');"
+            "return {portCols:getComputedStyle(ports).gridTemplateColumns"
+            ".split(' ').length,"
+            "portN:ports.children.length,"
+            "webCols:getComputedStyle(web).gridTemplateColumns"
+            ".split(' ').length,fields,"
+            "lSrv:lbl('st-srv'),lApp:lbl('st-app'),lTsk:lbl('st-tsk'),"
+            "lPg:lbl('st-pg'),"
+            "ipTag:ip.tagName,"
+            "ipFs:getComputedStyle(ip).fontSize,"
+            "inFs:getComputedStyle(inp).fontSize,"
+            "noPill:!document.querySelector('#st-netstat .pill'),"
+            "kvN:document.querySelectorAll('#st-netstat .kv').length}")
+    ok("br.n14.ports-card-3col",
+       s1.get("portCols") == 3 and s1.get("portN") == 3,
+       json.dumps(s1, ensure_ascii=False))
+    ok("br.n20.remote-3x2",
+       s1.get("webCols") == 3 and s1.get("fields") ==
+       ["st-mode", "st-ip", "st-pg", "st-srv", "st-app", "st-tsk"],
+       json.dumps(s1, ensure_ascii=False))
+    ok("br.n18.n19.n21.labels-ipstat",
+       s1.get("lSrv") == "网页端地址" and s1.get("lApp") == "APP 端地址"
+       and s1.get("lTsk") == "翻谱地址" and s1.get("lPg") == "翻谱端口"
+       and s1.get("ipTag") == "SPAN"
+       and s1.get("ipFs") == s1.get("inFs")
+       and s1.get("noPill") and s1.get("kvN") == 3,
+       json.dumps(s1, ensure_ascii=False))
+    s2 = js(send, "const c=document.getElementById('st-autosave')"
+            ".closest('.card');"
+            "return {h3:c.querySelector('h3').textContent,"
+            "sw:!!document.getElementById('st-web'),"
+            "swTag:document.getElementById('st-web').tagName,"
+            "swInH3:!!document.getElementById('st-web').closest('h3')}")
+    ok("br.n15.autosave-in-behavior", s2.get("h3") == "行为",
+       json.dumps(s2, ensure_ascii=False))
+    ok("br.n17.web-tgl-in-h3",
+       s2.get("sw") and s2.get("swTag") == "BUTTON" and s2.get("swInH3"),
+       json.dumps(s2))
+    # N17 行为：点击即发窄载荷（只动 web.enabled），不触发脏标记
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "if(String(u)==='/settings'&&(!o||o.method!=='POST'))"
+        "return Promise.resolve(new Response(JSON.stringify("
+        + SETTINGS_STUB + "),{status:200}));"
+        "return Promise.resolve(new Response('{\"ok\":true}',"
+        "{status:200,headers:{'Content-Type':'application/json'}}))};")
+    time.sleep(0.8)
+    s3 = js(send, "const before=document.getElementById('st-web')"
+            ".classList.contains('on');"
+            "document.getElementById('st-web').click();"
+            "return {before}")
+    time.sleep(0.6)
+    s3b = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
+             "{if(u==='/settings'&&b)body=b});"
+             "return {keys:body?Object.keys(JSON.parse(body)):null,"
+             "webKeys:body?Object.keys(JSON.parse(body).web||{}):null,"
+             "enabled:body?JSON.parse(body).web.enabled:null,"
+             "after:document.getElementById('st-web').classList"
+             ".contains('on'),"
+             "dirty:document.getElementById('st-dirty').hidden}")
+    ok("br.n17.instant-narrow-payload",
+       s3.get("before") is False
+       and s3b.get("keys") == ["web"] and s3b.get("webKeys") == ["enabled"]
+       and s3b.get("enabled") is True and s3b.get("after") is True
+       and s3b.get("dirty") is True,
+       "%s %s" % (json.dumps(s3), json.dumps(s3b)))
+    # N16：Cubase 程序浏览钮（kind=file 已在 p2.browse 断言）
+    # N22：双地址格 + 双二维码（拆上桩再装，防把 N17 桩存成 __fetch0）
+    js(send, RESTORE)
+    time.sleep(0.3)
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({webIp:'192.168.137.1',appPort:8767,obs:false,"
+        "loop:false,ready:true,busy:false,open:false,songs:[],cur:null,"
+        "tstate:'stopped',dur:0,pos:0,pedalRemote:null}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.4)
+    s4 = js(send, "const exp=s=>'http://192.168.137.1:'"
+            "+document.getElementById(s).value+'/';"
+            "return {wrapHidden:document.getElementById('addr-wrap')"
+            ".hidden,"
+            "cells:document.querySelectorAll('#addr-wrap .addr-cell')"
+            ".length,"
+            "svgs:document.querySelectorAll('#addr-wrap svg').length,"
+            "web:document.getElementById('web-addr').textContent,"
+            "app:document.getElementById('app-addr').textContent,"
+            "webExp:exp('st-srv'),appExp:exp('st-app'),"
+            "noCopyHint:![...document.querySelectorAll('#addr-wrap')]"
+            ".some(e=>e.textContent.includes('点击复制'))}")
+    ok("br.n22.dual-addr-qr",
+       s4.get("wrapHidden") is False and s4.get("cells") == 2
+       and s4.get("svgs") == 2
+       and s4.get("web") == s4.get("webExp")
+       and s4.get("app") == s4.get("appExp")
+       and "192.168.137.1" in (s4.get("web") or "")
+       and s4.get("noCopyHint"),
+       json.dumps(s4, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.8)
+
+    # ---- N23：F11 进入演出模式 ----
+    f11 = js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+            "{key:'F11',bubbles:true,cancelable:true}));return 1")
+    time.sleep(0.6)
+    f11b = js(send, "return {show:document.body.classList.contains('show'),"
+             "page:document.querySelector('.page.on').id}")
+    ok("br.n23.f11-enters", f11b.get("show") is True
+       and f11b.get("page") == "p-console", json.dumps(f11b))
+    # ---- N24：退出演出钮在走带行内、全停右侧、非 fixed ----
+    f24 = js(send, "const b=document.getElementById('show-exit');"
+            "const panic=document.querySelector('[data-cmd=panic]');"
+            "return {inTransport:!!b.closest('#transport'),"
+            "pos:getComputedStyle(b).position,"
+            "display:getComputedStyle(b).display,"
+            "rightOfPanic:b.getBoundingClientRect().left"
+            ">=panic.getBoundingClientRect().right}")
+    ok("br.n24.exit-in-transport",
+       f24.get("inTransport") and f24.get("pos") != "fixed"
+       and f24.get("display") != "none" and f24.get("rightOfPanic"),
+       json.dumps(f24))
+    shot(send, "r4_show_transport")
+    js(send, "document.getElementById('show-exit').click()")
+    time.sleep(0.5)
+
+    errs = js(send, "return window.__errs")
+    ok("br.no-js-errors", not errs, str(errs)[:300])
+
+
+def document_vj_h2(send):
+    v = js(send, "return {h2:document.querySelector('#p-vj h2')"
+           ".textContent,nav:document.querySelector('.b-vj')"
+           ".textContent.trim()}")
+    return v.get("h2") == v.get("nav")
+
+
 def main():
     stages = set(sys.argv[1:]) or {"all"}
     probe, send = boot()
@@ -1972,6 +2352,8 @@ def main():
             stage_e(send)
         if stages & {"f", "all"}:
             stage_f(send)
+        if stages & {"r", "all"}:
+            stage_r(send)
     finally:
         probe.terminate()
     fails = [k for k, (v, _e) in P.items() if not v]
