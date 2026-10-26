@@ -52,7 +52,10 @@
         <div id="bar"><div id="barfill"></div></div>
       </div>
       <div id="transport">
-        <button id="smart" class="btn primary lg">▶ 开始</button>
+        <button id="btn-start" class="btn primary lg" data-cmd="play"
+          title="从零开始播放当前曲；无打开工程时自动加载播放列表当前项">▶ 开始</button>
+        <button id="smart" class="btn lg" disabled
+          title="播放中暂停，已暂停后继续">⏸ 暂停</button>
         <button data-cmd="rewind" class="btn icon" title="回零">⟲</button>
         <button data-cmd="prev" class="btn icon" title="上一首">⏮</button>
         <button data-cmd="next" class="btn icon" title="下一首">⏭</button>
@@ -65,27 +68,32 @@
         <div class="next-row"><div id="next" class="mid">—</div>
           <button id="next-go" class="btn ghost sm" disabled>切到这首</button></div>
       </div>
-      <div id="console-list" class="list"></div>
-      <div id="console-empty" class="empty-state" hidden>
-        <svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
-        <div>播放列表为空</div>
-        <button class="btn ghost sm" data-nav="setlist">去编排加入曲目</button>
-      </div>
-      <div id="logcard" class="card">
-        <div class="md-head">运行日志
-          <div class="log-tools">
-            <span class="lbl">级别</span>
-            <select id="lg-filter" title="过滤级别">
-              <option value="all">全部</option>
-              <option value="err">仅错误</option>
-            </select>
-            <label class="switch sm"><input type="checkbox" id="lg-auto" checked><i></i>
-              <span>自动滚动</span></label>
-            <button id="lg-copy" class="btn ghost sm">复制</button>
-            <button id="lg-clear" class="btn danger sm">清空</button>
+      <div class="console-cols">
+        <div class="card col-pl">
+          <div class="md-head">播放列表 <span class="badge" id="cl-n"></span></div>
+          <div id="console-list" class="list"></div>
+          <div id="console-empty" class="empty-state" hidden>
+            <svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+            <div>播放列表为空</div>
+            <button class="btn ghost sm" data-nav="setlist">去编排加入曲目</button>
           </div>
         </div>
-        <div id="log" class="log"></div>
+        <div id="logcard" class="card">
+          <div class="md-head">运行日志
+            <div class="log-tools">
+              <span class="lbl">级别</span>
+              <select id="lg-filter" title="过滤级别">
+                <option value="all">全部</option>
+                <option value="err">仅错误</option>
+              </select>
+              <label class="switch sm"><input type="checkbox" id="lg-auto" checked><i></i>
+                <span>自动滚动</span></label>
+              <button id="lg-copy" class="btn ghost sm">复制</button>
+              <button id="lg-clear" class="btn danger sm">清空</button>
+            </div>
+          </div>
+          <div id="log" class="log"></div>
+        </div>
       </div>
       <p class="page-note">空格键 = 开始 / 暂停 / 继续；底部状态灯实时反映各链路。</p>
     </section>

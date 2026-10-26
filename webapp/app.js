@@ -183,7 +183,8 @@ document.addEventListener("keydown", e => {
     setShow(false);
   }
 });
-// 空格=智能三态钮（主控台/演出模式；输入框与弹层内不劫持）
+// 空格=智能播放（主控台/演出模式；输入框与弹层内不劫持）：停止→开始，
+// 播放中→暂停，已暂停→继续（按钮分离后空格仍保留三态语义）
 document.addEventListener("keydown", e => {
   if (e.key !== " " || e.repeat) return;
   const t = e.target;
@@ -193,7 +194,8 @@ document.addEventListener("keydown", e => {
   if (popEl) return;
   if (!pageOn("console")) return;
   e.preventDefault();
-  const a = $("#smart").dataset.action;
+  const a = (!stState || !stState.tstate || stState.tstate === "stopped")
+      ? "play" : $("#smart").dataset.action;
   if (a) cmd(a);
 });
 
@@ -234,9 +236,10 @@ async function post(path, body) {
 
 // ---- 走带 ----
 $$("#transport [data-cmd]").forEach(b =>
-    b.addEventListener("click", () => cmd(b.dataset.cmd)));
-const SMART = {stopped: ["▶ 开始", "play"], playing: ["⏸ 暂停", "pause"],
-               paused: ["▷ 继续", "resume"]};
+  b.addEventListener("click", () => cmd(b.dataset.cmd)));
+// 暂停/继续一键切换（对齐原 UI 的分开按钮：开始=独立钮从零起播，
+// 暂停⇄继续按走带态切换；停止态无意义=禁用，起播只走「开始」）
+const SMART = {playing: ["⏸ 暂停", "pause"], paused: ["▷ 继续", "resume"]};
 $("#smart").addEventListener("click", () => {
   const a = $("#smart").dataset.action;
   if (a) cmd(a);
@@ -334,12 +337,12 @@ function render(st) {
   $("#clock").classList.toggle("playing", live);
   $("#barfill").style.width =
       st.dur > 0 ? Math.min(100, st.pos / st.dur * 100) + "%" : "0";
-  // 智能三态播放钮
-  const m = st.busy ? ["切换中…", ""] : (SMART[st.tstate] || SMART.stopped);
+  // 暂停⇄继续切换钮（busy 或停止态禁用；开始钮由 data-cmd 循环管 busy）
+  const m = SMART[st.tstate] || ["⏸ 暂停", ""];
   const smart = $("#smart");
   smart.textContent = m[0];
-  smart.dataset.action = m[1];
-  smart.disabled = !!st.busy;
+  smart.dataset.action = st.busy ? "" : m[1];
+  smart.disabled = !!st.busy || !m[1];
   smart.classList.toggle("pulse", !!st.busy);   // busy 脉动（F 批）
   // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用；
   // 行内切歌/定位点快跳同禁——关闭确认时的双击=两次完整工程切换
@@ -368,6 +371,9 @@ function render(st) {
     rows.forEach((s, i) => list.appendChild(consoleRow(s, i, cur)));
   }
   $("#console-empty").hidden = rows.length > 0;
+  const cln = $("#cl-n");
+  if (cln && cln.textContent !== rows.length + " 首")
+    cln.textContent = rows.length + " 首";
   $("#tstate").textContent = chip.textContent;
   lamps(st);
   drawChips(st, cur);

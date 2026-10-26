@@ -360,7 +360,7 @@ def stage_p1(send):
     ok("p1.side.icons", side.get("icons") == 7 and side.get("navN") == 7,
        "%s/%s" % (side.get("icons"), side.get("navN")))
 
-    # ---- 主控台 hero + 智能钮 + 时钟 ----
+    # ---- 主控台 hero + 走带钮（开始独立+暂停⇄继续切换）+ 时钟 ----
     hero = js(send, "const chip=document.getElementById('tchip');"
              "const smart=document.getElementById('smart');"
              "return {chip:chip.textContent,chipCls:chip.className,"
@@ -368,6 +368,10 @@ def stage_p1(send):
              "clockDim:document.getElementById('clock').classList"
              ".contains('dim'),"
              "smart:smart.textContent,smartAct:smart.dataset.action,"
+             "smartDis:smart.disabled,"
+             "startBtn:!!document.getElementById('btn-start'),"
+             "cols:getComputedStyle(document.querySelector('.console-cols'))"
+             ".gridTemplateColumns.split(' ').length,"
              "panic:[...document.querySelectorAll('#transport [data-cmd]')]"
              ".map(b=>b.dataset.cmd).join(','),"
              "panicIso:document.querySelector('[data-cmd=panic]')."
@@ -375,18 +379,22 @@ def stage_p1(send):
              "document.querySelector('[data-cmd=next]')."
              "getBoundingClientRect().left,"
              "heroCard:!!document.querySelector('.hero.card')}")
-    ok("p1.console.hero", hero.get("heroCard") and hero.get("chip"),
+    ok("p1.console.hero", hero.get("heroCard") and hero.get("chip")
+       and hero.get("cols") == 2,
        json.dumps(hero, ensure_ascii=False))
     ok("p1.console.clock-format",
        ("已播" in hero.get("clock", "") and "剩余" in hero.get("clock", ""))
        or hero.get("clock", "") == "时长未知",
        hero.get("clock", ""))
-    ok("p1.console.smart-btn", hero.get("smart") in
-       ("▶ 开始", "⏸ 暂停", "▷ 继续", "切换中…")
-       and hero.get("smartAct") in ("play", "pause", "resume", ""),
-       "%s/%s" % (hero.get("smart"), hero.get("smartAct")))
+    ok("p1.console.smart-btn", hero.get("startBtn")
+       and hero.get("smart") in ("⏸ 暂停", "▷ 继续")
+       and hero.get("smartAct") in ("pause", "resume", "")
+       and (hero.get("smartAct") == "" or hero.get("smartDis") is False),
+       "%s/%s dis=%s" % (hero.get("smart"), hero.get("smartAct"),
+                         hero.get("smartDis")))
     ok("p1.console.panic-isolated",
-       hero.get("panic") == "rewind,prev,next,panic" and hero.get("panicIso"),
+       hero.get("panic") == "play,rewind,prev,next,panic"
+       and hero.get("panicIso"),
        "%s iso=%s" % (hero.get("panic"), hero.get("panicIso")))
     shot(send, "x_p1_console")
 
@@ -1709,12 +1717,14 @@ def stage_f(send):
     js(send, RESTORE)
     time.sleep(0.5)
 
-    # ---- F3：空格=智能钮（console 页、BODY 焦点；断言实际发帖）----
+    # ---- F3：空格=智能播放（停止→开始钮动作；播放/暂停→切换钮）----
     nav(send, "console")
     f3a = js(send, UNSTUB + INTERCEPT +
              "window.__posts=[];"
              "document.body.focus();"
-             "const a=document.getElementById('smart').dataset.action;"
+             "const smart=document.getElementById('smart');"
+             "const a=(smart.disabled||!smart.dataset.action)?'play'"
+             ":smart.dataset.action;"
              "if(a){document.body.dispatchEvent(new KeyboardEvent('keydown',"
              "{key:' ',bubbles:true}));}"
              "return {act:a||''}")
@@ -1882,6 +1892,47 @@ def stage_f(send):
             "return bad.slice(0,6)")
     ok("bf.f4.no-fullwidth-parens", not pb,
        json.dumps(pb, ensure_ascii=False))
+
+    # ---- F6：超长歌名跑马灯在双列布局下照常启用（用户点名验收项）----
+    nav(send, "console")
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/state')return Promise.resolve(new Response("
+        "JSON.stringify({ready:true,busy:false,open:true,"
+        "projName:'超长歌名测试曲目标题——第一百零一首之夜曲终章加演版"
+        "安可返场特别篇',tstate:'playing',pos:3,dur:90,cur:0,"
+        "confirm:false,"
+        "songs:[{key:'a',name:'超长歌名测试曲目标题——第一百零一首之夜"
+        "曲终章加演版安可返场特别篇',dur:'1:30'}],"
+        "pedalRemote:null,obs:false,loop:false,webIp:'',appPort:8767}),"
+        "{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.2)
+    f6 = js(send, "const n=document.getElementById('now');"
+            "return {marq:n.classList.contains('marq'),"
+            "dist:getComputedStyle(n).getPropertyValue('--marq'),"
+            "w:Math.round(n.getBoundingClientRect().width)}")
+    ok("bf.f6.marquee-two-col", f6.get("marq") is True
+       and (f6.get("dist") or "").startswith("-"),
+       json.dumps(f6, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.6)
+
+    # ---- F7：演出模式下双列仍可见可滚（用户点名：两界面均要双列）----
+    js(send, "document.getElementById('btn-show').click();"
+        "await new Promise(r=>setTimeout(r,600));"
+        "return 1")
+    f7 = js(send, "const p=document.getElementById('p-console');"
+            "const cols=document.querySelector('.console-cols');"
+            "return {cols:getComputedStyle(cols)"
+            ".gridTemplateColumns.split(' ').length,"
+            "h:Math.round(cols.getBoundingClientRect().height),"
+            "scrollable:p.scrollHeight>=p.clientHeight-2}")
+    ok("bf.f7.show-mode-cols", f7.get("cols") == 2
+       and (f7.get("h") or 0) >= 300 and f7.get("scrollable"),
+       json.dumps(f7))
+    js(send, "document.getElementById('show-exit').click()")
+    time.sleep(0.5)
 
     errs = js(send, "return window.__errs")
     ok("bf.no-js-errors", not errs, str(errs)[:300])

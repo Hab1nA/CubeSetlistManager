@@ -235,15 +235,19 @@ input.invalid { border-color: var(--err) !important; }
   margin: var(--s3) 2px 0; }
 
 /* ---- 主控台（演出驾驶舱，不受 960 收束）----
-   整页钉满视口不滚动：曲目列表限高内滚、日志吃剩余空间、页脚注恒在底 */
+   整页钉满视口不滚动：播放列表与运行日志双列并排吃满剩余空间 */
 #p-console { display: none; max-width: none; }
 #p-console.on { display: flex; flex-direction: column; gap: 14px;
   height: 100%; }
-#console-list { overflow: auto; min-height: 0; max-height: 24vh;
+.console-cols { flex: 1 1 auto; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px; min-height: 0; }
+.console-cols .card { margin: 0; min-width: 0; min-height: 0; }
+.col-pl { display: flex; flex-direction: column; }
+#console-list { flex: 1; overflow: auto; min-height: 0;
   scrollbar-gutter: stable; }
 #console-empty { flex: 1; }
-#logcard { display: flex; flex-direction: column;
-  flex: 1 1 auto; min-height: 0; }
+#logcard { display: flex; flex-direction: column; }
 .hero { padding: var(--s4); }
 .hero-top { display: flex; align-items: center; gap: var(--s3);
   margin-bottom: var(--s2); }
@@ -605,6 +609,7 @@ input.invalid { border-color: var(--err) !important; }
   .grid2 { grid-template-columns: 1fr; }
   .cards2, .shift-grid { grid-template-columns: 1fr; }
   .pedal-grid { grid-template-columns: 1fr; }
+  .console-cols { grid-template-columns: 1fr; }
   .md { flex-direction: column; }
   #pt-list { max-height: 34vh; }
   #logcard .log { min-height: 160px; }
@@ -748,7 +753,11 @@ body.show #main { animation: show-in 200ms var(--ease); }
 body.show #show-exit { display: block; }
 #show-exit:hover { opacity: 1; color: var(--fg);
   background: rgba(35, 43, 52, .85); }
-/* 演出模式构图：大字水平居中；toast 让出右上退出钮位；页脚注不显 */
+/* 演出模式构图：大字水平居中；toast 让出右上退出钮位；页脚注不显。
+   大字放大后总高会超首屏——页面改可滚动，双列保持可见（用户点名：
+   演出模式同样要双列），内容不足时 hero 仍垂直居中 */
+body.show #p-console.on { height: auto; min-height: 100%; }
+body.show .console-cols { min-height: 44vh; }
 body.show .hero { text-align: center; }
 body.show .hero-top { justify-content: center; }
 body.show #toasts { top: 72px; }
