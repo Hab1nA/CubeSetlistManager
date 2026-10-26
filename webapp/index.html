@@ -221,8 +221,10 @@
                 <select id="pd-dev"></select>
                 <button id="pd-refresh" class="btn ghost sm">刷新</button>
               </div></div>
-            <div class="field"><label for="pd-win">双踩判定窗 · 秒</label>
-              <input id="pd-win" class="num" inputmode="decimal"></div>
+            <div class="field"><label for="pd-win">双踩判定窗</label>
+              <div class="input-row suf">
+                <input id="pd-win" class="num" inputmode="decimal">
+                <span class="suf-txt dim">秒</span></div></div>
             <label class="switch" title="勾选后被绑定按键经系统热键截留，
               不送达其它软件；即改即生效">
               <input type="checkbox" id="pd-intercept"><i></i>
@@ -268,11 +270,6 @@
             <select id="kb-aout"></select></div>
         </div>
       </div>
-      <div class="page-foot">
-        <span class="dim sm-txt">刷新枚举端口；修改后需应用才生效</span>
-        <button id="kb-refresh" class="btn ghost">刷新端口</button>
-        <button id="kb-save" class="btn primary">应用端口</button>
-      </div>
       <div class="card slotcard">
         <h3>全局移调<span class="h3-note">由自动化轨移调键位控制，此处只读</span></h3>
         <div class="shift-grid">
@@ -299,6 +296,11 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="page-foot">
+        <span class="dim sm-txt">应用后生效：JUNO / AX-09 输入输出端口</span>
+        <button id="kb-refresh" class="btn ghost">刷新端口</button>
+        <button id="kb-save" class="btn primary">应用端口</button>
       </div>
       <p class="page-note">音色映射按曲目保存，在「编排」页详情面板
         录制维护。</p>
@@ -338,7 +340,7 @@
         </div>
       </div>
       <div class="page-foot">
-        <span class="dim sm-txt">应用后立即生效：显示器/媒体源/视频目录/静音</span>
+        <span class="dim sm-txt">应用后生效：显示器 / 媒体源 / 视频目录 / 静音</span>
         <button id="vj-save" class="btn primary" disabled
           title="配置未装载，暂不能保存">保存并应用</button>
       </div>
@@ -395,15 +397,18 @@
               <option value="lan">用现有局域网</option></select></div>
           <div class="field"><label for="st-ip">服务网卡</label>
             <select id="st-ip"></select></div>
-          <div class="field"><label for="st-srv">网页端口<span
-            class="host dim" id="st-srv-host"></span></label>
-            <input id="st-srv" class="num" inputmode="numeric"></div>
-          <div class="field"><label for="st-app">APP 端口<span
-            class="host dim" id="st-app-host"></span></label>
-            <input id="st-app" class="num" inputmode="numeric"></div>
-          <div class="field"><label for="st-tsk">翻谱端口<span
-            class="host dim" id="st-tsk-host"></span></label>
-            <input id="st-tsk" class="num" inputmode="numeric"></div>
+          <div class="field"><label for="st-srv">网页端口</label>
+            <div class="ip-port"><span class="ip-pre dim"
+              id="st-srv-host"></span><input id="st-srv"
+              inputmode="numeric"></div></div>
+          <div class="field"><label for="st-app">APP 端口</label>
+            <div class="ip-port"><span class="ip-pre dim"
+              id="st-app-host"></span><input id="st-app"
+              inputmode="numeric"></div></div>
+          <div class="field"><label for="st-tsk">翻谱端口</label>
+            <div class="ip-port"><span class="ip-pre dim"
+              id="st-tsk-host"></span><input id="st-tsk"
+              inputmode="numeric"></div></div>
           <div class="field"><label for="st-pg">翻谱 MIDI 口</label>
             <select id="st-pg"></select></div>
         </div>
@@ -415,7 +420,7 @@
         </div>
       </div>
       <div class="page-foot">
-        <span class="dim sm-txt">保存并应用上方全部设置</span>
+        <span class="dim sm-txt">应用后生效：上方全部设置</span>
         <button id="st-save" class="btn primary" disabled>保存并应用</button>
       </div>
     </section>

@@ -766,6 +766,11 @@ function plRow(i, it) {
     ops.appendChild(b);
     return b;
   };
+  const go = mk("切歌", "切换到该曲");
+  go.addEventListener("click", ev => {
+    ev.stopPropagation();
+    switchTo(i, go, false, it.key);
+  });
   const up = mk("↑", "上移");
   up.addEventListener("click", ev => {
     ev.stopPropagation();
@@ -2242,17 +2247,14 @@ async function refreshSettings(force) {
     $("#st-srv").value = d.web.serverPort;
     $("#st-app").value = d.web.appPort;
     $("#st-tsk").value = d.web.taskerPort;
-    // 端口标签旁的服务地址前缀（对照原前端 IP:端口 显示习惯）；webIp
-    // 未就绪/遥控未启用时回落所选网卡或首个候选 IP——三个端口归属哪个
-    // 地址一眼可辨
+    // 端口输入框前拼接服务地址（对照原 UI：IP 写在输入框前成一段地址）；
+    // webIp 未就绪/遥控未启用时回落所选网卡或首个候选 IP
     const chosen = (d.adapters || []).find(a => a.ip === d.web.ip);
     const hostIp = (stState && stState.webIp) || (chosen && chosen.ip)
         || ((d.adapters || []).find(a => a.ip) || {}).ip || "";
-    for (const [h, p] of [["st-srv-host", d.web.serverPort],
-                          ["st-app-host", d.web.appPort],
-                          ["st-tsk-host", d.web.taskerPort]]) {
+    for (const h of ["st-srv-host", "st-app-host", "st-tsk-host"]) {
       const el = $("#" + h);
-      if (el) el.textContent = hostIp ? hostIp + ":" + p : "";
+      if (el) el.textContent = hostIp ? hostIp + ":" : "";
     }
     const ip = $("#st-ip");
     // 候选 {name, ip}：显示网卡名、value=IP（后端 lan_ip 存 IP，提交网卡

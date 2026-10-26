@@ -432,8 +432,22 @@ input.invalid { border-color: var(--err) !important; }
 
 .save-row { display: flex; align-items: center; margin-top: var(--s3); }
 #p-kbd, #p-vj { padding-bottom: 84px; }
-/* 端口标签旁的服务地址前缀（对照原前端 IP:端口 显示习惯） */
-.field label .host { font-weight: 400; font-variant-numeric: tabular-nums; }
+/* 端口输入框前拼接服务地址（对照原 UI：IP 写在输入框前成一段地址） */
+.ip-port { display: flex; align-items: stretch; }
+.ip-port .ip-pre { display: flex; align-items: center;
+  background: #0d1116; color: var(--dim); border: 1px solid var(--line);
+  border-right: 0; border-radius: 6px 0 0 6px; padding: 8px 2px 8px 10px;
+  font-size: var(--f-sm); font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.ip-port input { background: #0d1116; color: var(--fg);
+  border: 1px solid var(--line); border-left: 0; border-radius: 0 6px 6px 0;
+  padding: 8px 10px; width: 5.2em; font-variant-numeric: tabular-nums; }
+.ip-port .ip-pre:empty { display: none; }
+.ip-port .ip-pre:empty + input { border-left: 1px solid var(--line);
+  border-radius: 6px; }
+/* 输入框后置单位后缀（如 双踩判定窗「秒」） */
+.input-row.suf { align-items: center; gap: 6px; }
+.input-row.suf .suf-txt { flex: none; font-size: var(--f-sm); }
 
 /* ---- 曲目详情列（定位点 + 音色映射）/ 卡头 ---- */
 #col-dt { flex: 0 1 460px; min-width: 340px; }
