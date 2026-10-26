@@ -497,6 +497,8 @@ function drawChips(st, cur) {
     b.className = "chip-btn" + (x.cur ? " cur" : "");
     b.textContent = x.name;
     b.title = "点击切到该定位点，同工程免重开";
+    b.title = "切换到该曲";
+    b.textContent = "切歌";
     b.addEventListener("click", () => switchTo(x.i, b, false, x.key));
     box.appendChild(b);
   });
@@ -1228,8 +1230,11 @@ $("#pt-down").addEventListener("click", () =>
 // ============ 运行日志卡（主控台页内，增量 append + 工具条） ============
 let logLast = null;
 function logLevel(msg) {
-  if (/界面异常|失败|异常|错误/.test(msg)) return "err";
-  if (/未生效|超时|降级|未就绪|忽略/.test(msg)) return "warn";
+  // err 档=真实故障（自检失败/启动失败/未恢复/不可用/不存在…）；
+  // 「已停用/未启动(监听类)」是有意的功能性停运=warn 不算错
+  if (/失败|异常|错误|未恢复|不可用|不存在|无法|损坏/.test(msg)) return "err";
+  if (/未生效|超时|降级|未就绪|忽略|未启动|未选|已停用|停用/.test(msg))
+    return "warn";
   return "";
 }
 function logLine(l) {

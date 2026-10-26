@@ -1927,9 +1927,13 @@ def stage_f(send):
             "return {cols:getComputedStyle(cols)"
             ".gridTemplateColumns.split(' ').length,"
             "h:Math.round(cols.getBoundingClientRect().height),"
-            "scrollable:p.scrollHeight>=p.clientHeight-2}")
+            "vh:p.clientHeight,sh:p.scrollHeight,"
+            "bodyH:document.body.scrollHeight,"
+            "inner:innerHeight}")
     ok("bf.f7.show-mode-cols", f7.get("cols") == 2
-       and (f7.get("h") or 0) >= 300 and f7.get("scrollable"),
+       and (f7.get("h") or 0) >= 300
+       and f7.get("sh") <= f7.get("vh")      # 页面精确钉满视口无滚动
+       and f7.get("bodyH") <= f7.get("inner"),
        json.dumps(f7))
     js(send, "document.getElementById('show-exit').click()")
     time.sleep(0.5)
