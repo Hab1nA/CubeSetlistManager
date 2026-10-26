@@ -719,6 +719,77 @@ class _Var:
         self.v = v
 
 
+def test_panic_quiet_msgs_covers_all_channels():
+    """全停静音序列：JUNO 覆盖 patchCh/perfCh 双通道、AX 走 ch；每通道
+    CC123→CC64=0→CC120；通道字节 0 基。"""
+    juno = {"patchCh": 1, "perfCh": 16, "ch": 1}
+    ax = {"ch": 5}
+    out = sg.panic_quiet_msgs(juno, ax)
+    short = [m for k, m, _g in out if k == "short"]
+    # JUNO 双通道 + AX 单通道，各 3 条
+    assert len(out) == 9 and len(short) == 9
+    chans = sorted({m & 0x0F for m in short})
+    assert chans == [0, 4, 15]
+    for ch in (0, 4, 15):
+        base = 0xB0 | ch
+        assert (base | 123 << 8) in short    # All Notes Off
+        assert (base | 64 << 8) in short     # Sustain Off
+        assert (base | 120 << 8) in short    # All Sound Off
+
+
+def test_config_backup_and_corrupt_isolation(monkeypatch, tmp_path):
+    """写前滚动 .bak×3；损坏 json 改名 .corrupt 留证并降级默认。"""
+    cfgp = tmp_path / "config.json"
+    monkeypatch.setattr(sg, "CONFIG_PATH", cfgp)
+    monkeypatch.setattr(sg, "_CONFIG_BAKS",
+                        (tmp_path / "config.json.bak",
+                         tmp_path / "config.json.bak2",
+                         tmp_path / "config.json.bak3"))
+    monkeypatch.setattr(sg, "_CONFIG_CORRUPT",
+                        tmp_path / "config.json.corrupt")
+    monkeypatch.setattr(sg, "_HERE", tmp_path)
+    # 连续三次保存 → bak/bak2/bak3 各留前序版本
+    for i in range(3):
+        sg._save_config({"n": i})
+    assert (tmp_path / "config.json.bak").getjson if False else True
+    import json as _json
+    assert _json.loads((tmp_path / "config.json.bak").read_text())["n"] == 1
+    assert _json.loads((tmp_path / "config.json.bak2").read_text())["n"] == 0
+    assert _json.loads(cfgp.read_text())["n"] == 2
+    # 损坏 → .corrupt 留证 + 降级 {}
+    cfgp.write_text("{broken", encoding="utf-8")
+    assert sg._load_config() == {}
+    assert (tmp_path / "config.json.corrupt").read_text() == "{broken"
+    assert not cfgp.exists()
+    # playlist 同款
+    plp = tmp_path / "playlist.json"
+    monkeypatch.setattr(sg, "PLAYLIST_PATH", plp)
+    monkeypatch.setattr(sg, "_PLAYLIST_CORRUPT",
+                        tmp_path / "playlist.json.corrupt")
+    plp.write_text("{bad", encoding="utf-8")
+    pl = sg._load_playlist()
+    assert pl["playlist"] == []
+    assert (tmp_path / "playlist.json.corrupt").read_text() == "{bad"
+
+
+def test_thread_excepthook_logs(fake_app=None):
+    """threading.excepthook 钩子把一次性后台线程异常送进日志队列。"""
+    app = types.SimpleNamespace(q=_Q(), )
+    app._thread_exc = types.MethodType(sg.App._thread_exc, app)
+    args = types.SimpleNamespace(
+        exc_type=ValueError, exc_value=ValueError("探针线程炸了"),
+        exc_traceback=None, thread=types.SimpleNamespace(name="probe"))
+    app._thread_exc(args)
+    assert any("后台线程异常（probe）" in m and "探针线程炸了" in m
+               for m in app.q._l)
+    # 异常消息为空时退回类名（_err 口径）
+    args2 = types.SimpleNamespace(
+        exc_type=KeyError, exc_value=KeyError(), exc_traceback=None,
+        thread=types.SimpleNamespace(name="w"))
+    app._thread_exc(args2)
+    assert any("KeyError" in m for m in app.q._l)
+
+
 def _launch_fixture(monkeypatch, obs_running):
     """launchApps 测试夹具：fake app + fake ctl + 进程枚举可控。"""
     launches = []

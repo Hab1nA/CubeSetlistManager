@@ -16,6 +16,7 @@ import ctypes
 import faulthandler
 import json
 import os
+import shutil
 import pathlib
 import socket
 import queue
@@ -49,6 +50,22 @@ from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
 FOLLOW = ui_text.FOLLOW
 TX_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
             "stop": "停止", "rewind": "回零"}
+
+
+def panic_quiet_msgs(*cfgs):
+    """全停对琴的静音序列：CC123 All Notes Off → CC64=0 抬延音踏板 →
+    CC120 All Sound Off 兜底。每个配置发其全部 MIDI 通道（JUNO 走
+    patchCh/perfCh 两通道，AX 走 ch）。幂等无害，重复发不产生副作用。"""
+    out = []
+    for cfg in cfgs:
+        chs = ([cfg.get("patchCh", 1), cfg.get("perfCh", 16)]
+               if "perfCh" in cfg else [cfg.get("ch", 1)])
+        for ch in chs:
+            b = (ch - 1) & 0x0F
+            out.append(("short", 0xB0 | b | 123 << 8, 0))
+            out.append(("short", 0xB0 | b | 64 << 8, 0))
+            out.append(("short", 0xB0 | b | 120 << 8, 0))
+    return out
 
 
 def transport_blocked(action, tstate):
@@ -164,6 +181,13 @@ else:
     _HERE = pathlib.Path(__file__).resolve().parent
 CONFIG_PATH = _HERE / "config.json"
 PLAYLIST_PATH = _HERE / "playlist.json"
+# 滚动备份/损坏隔离文件：全部字面量常量（扫描器可静态判定无穿越面）
+_CONFIG_BAKS = (_HERE / "config.json.bak", _HERE / "config.json.bak2",
+                _HERE / "config.json.bak3")
+_CONFIG_CORRUPT = _HERE / "config.json.corrupt"
+_PLAYLIST_BAKS = (_HERE / "playlist.json.bak", _HERE / "playlist.json.bak2",
+                  _HERE / "playlist.json.bak3")
+_PLAYLIST_CORRUPT = _HERE / "playlist.json.corrupt"
 _CRASH_LOG = None                  # faulthandler 落盘句柄，防 GC
 
 
@@ -175,13 +199,30 @@ def _check_in_here(p):
     return p
 
 
+def _rotate(baks, path):
+    """写前滚动备份：bak2→bak3、bak→bak2、当前→bak（误存坏数据可回退
+    最近三次；路径全部来自模块级字面量常量）。"""
+    for i in range(len(baks) - 1, 0, -1):
+        if baks[i - 1].exists():
+            os.replace(str(baks[i - 1]), str(baks[i]))
+    if path.exists():
+        shutil.copy(str(path), str(baks[0]))
+
+
 def _load_config():
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except ValueError:
-            return {}        # 文件损坏：降级为默认并让界面能起来
+            # 配置损坏：改名 .corrupt 留证隔离（防下一次保存把坏文件连同
+            # 全部设置覆盖掉），降级为默认让界面能起来；启动后 App 检查
+            # .corrupt 并向用户红字提示
+            try:
+                os.replace(str(CONFIG_PATH), str(_CONFIG_CORRUPT))
+            except OSError:
+                pass
+            return {}
     return {}
 
 
@@ -194,6 +235,7 @@ def _atomic_write(path, text):
 
 
 def _save_config(cfg):
+    _rotate(_CONFIG_BAKS, CONFIG_PATH)
     _atomic_write(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
@@ -217,7 +259,13 @@ def _load_playlist():
             with open(PLAYLIST_PATH, encoding="utf-8") as f:
                 data = json.load(f)
         except ValueError:
-            data = {}        # 损坏降级：空播放列表（durations 启动探测会重建）
+            # 损坏降级：空播放列表（durations 启动探测会重建）；坏文件
+            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示
+            data = {}
+            try:
+                os.replace(str(PLAYLIST_PATH), str(_PLAYLIST_CORRUPT))
+            except OSError:
+                pass
         keys = data.get("playlist") or data.get("order") or []
         durations = {}
         for k, v in data.get("durations", {}).items():
@@ -236,6 +284,7 @@ def save_playlist(keys, durations, dur_src):
     data = json.dumps({"playlist": keys, "durations": durations,
                        "durSrc": dur_src},
                       ensure_ascii=False, indent=2)
+    _rotate(_PLAYLIST_BAKS, PLAYLIST_PATH)
     _atomic_write(PLAYLIST_PATH, data)
 
 
@@ -441,6 +490,14 @@ class App:
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件
+        # 数据文件损坏隔离提示（_load_config/_load_playlist 改名 .corrupt）
+        for c in (_CONFIG_CORRUPT, _PLAYLIST_CORRUPT):
+            if c.exists():
+                self.q.put("界面异常：检测到损坏的数据文件 %s，已隔离；"
+                           "本次按默认值启动，可从同名 .bak 恢复" % c.name)
+        # 一次性后台线程（探针/装载/热应用…）的异常统一进日志：此前
+        # daemon 线程死亡静默，只有 Tk 回调与排水链有兜底
+        threading.excepthook = self._thread_exc
         self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
         self.calls_urgent = collections.deque()  # 紧急调用（全停插队）
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
@@ -2943,6 +3000,16 @@ class App:
             self.pedal_win = pedal.PedalWindow(self)
         self.pedal_win.lift()
 
+    def _thread_exc(self, a):
+        """threading.excepthook：一次性后台线程的未捕获异常统一进日志
+        （此前探针/装载/热应用线程死亡静默，演出中无从察觉）。"""
+        try:
+            self.q.put("后台线程异常（%s）：%s"
+                       % (getattr(a.thread, "name", "?"),
+                          _err(a.exc_value)))
+        except Exception:
+            pass
+
     def _panic(self):
         if self.ctrl is None:
             self.q.put("服务未就绪（启动未完成）")
@@ -2959,6 +3026,12 @@ class App:
                         and self.watch.is_transport_live():
                     self.q.put("全停核验：走带仍在播放（停止键未生效），"
                                "请手动停止 DAW")
+            # 对两琴发静音序列（All Notes Off/踏板抬/全发声关）：DAW 自动化
+            # 轨的 CC64 延音或挂留音不随走带停止消失（QLab Panic 同款安全网）
+            for sw, cfg in ((self.switcher, self.jcfg),
+                            (self.ax_switcher, self.axcfg)):
+                if sw is not None:
+                    sw.submit_msgs(panic_quiet_msgs(cfg), "全停静音")
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
