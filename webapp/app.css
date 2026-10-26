@@ -1,7 +1,5 @@
 /* 新前端设计系统：token 见 :root，组件类名=组件边界（平板/APP 复用前提）。 */
 :root {
-  --bg: #101418;
-  --panel: #171c22;
   --line: #262d36;
   --fg: #e8eaed;
   --dim: #8a929c;
@@ -10,19 +8,19 @@
   --err: #ef8080;
   --accent: #4aa3ff;
   /* 间距阶（4 的倍数） */
-  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s6:24px; --s8:32px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s6:24px;
   /* 字阶（演出大字单列一档） */
   --f-xs:12px; --f-sm:13px; --f-md:15px; --f-lg:18px;
-  --f-xl:22px; --f-2xl:28px; --f-now:42px; --f-show:72px;
+  --f-xl:22px; --f-now:42px; --f-show:72px;
   /* 语义色配套面：绿/警/危三族底·线·悬停 + 控件底，收敛重复硬编码 */
-  --ok-bg:var(--ok-bg); --ok-bg-hi:var(--ok-bg-hi); --ok-line:var(--ok-line);
-  --ok-bg-dim:var(--ok-bg-dim); --warn-line:var(--warn-line);
-  --err-bg:var(--err-bg); --err-bg-hi:var(--err-bg-hi); --err-line:var(--err-line);
-  --line-hi:var(--line-hi); --input-bg:var(--input-bg); --ops-bg:var(--ops-bg);
+  --ok-bg:#1d3a26; --ok-bg-hi:#245030; --ok-line:#2c5c3a;
+  --ok-bg-dim:#16281e; --warn-line:#5c512c;
+  --err-bg:#402024; --err-bg-hi:#55292f; --err-line:#6b3439;
+  --line-hi:#33404d; --input-bg:#0d1116; --ops-bg:#26303a;
   /* surface 层级：0=页面底 1=卡片 2=悬停 3=选中/浮起 */
   --sur-0:#101418; --sur-1:#171c22; --sur-2:#1f262e; --sur-3:#232b34;
   /* 动效 token（时长避开 500ms 轮询谐波） */
-  --t-fast:120ms; --t-mid:200ms; --ease:cubic-bezier(.2,.7,.3,1);
+  --t-fast:120ms; --ease:cubic-bezier(.2,.7,.3,1);
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition:none!important; animation:none!important; }
@@ -141,7 +139,7 @@ input:focus-visible, select:focus-visible {
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .field label { font-size: var(--f-xs); color: var(--dim); display: flex;
   align-items: baseline; gap: var(--s2); }
-.f-st { margin-left: auto; font-weight: 600; }
+.f-st { margin-left: auto; }   /* 状态徽不加重：与 kv 值/其它状态元素同权重 */
 .f-st.on { color: var(--ok); }
 .f-st.off { color: var(--dim); }
 .field input, .field select {
@@ -471,13 +469,13 @@ input.invalid { border-color: var(--err) !important; }
 #dt-body { display: flex; flex-direction: column; gap: 14px; }
 #dt-head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #pt-list { max-height: 28vh; overflow: auto; flex: none; }
-.dt-inst { margin: var(--s4) 0 6px; }   /* 首组标签=卡头距规则 16px */
+/* 定位点列表与编辑表单（「名称」label）间补标准行距 */
+#pt-form { display: flex; flex-direction: column; gap: var(--s3);
+  margin-top: var(--s3); }
 .md-head { display: flex; align-items: center; gap: var(--s2);
   font-weight: 700; margin-bottom: var(--s4); flex-wrap: wrap; }
 .md-head .btn { margin-left: auto; }
 .md-head .switch { min-height: 30px; }
-#pt-list { overflow: auto; }
-#pt-form { display: flex; flex-direction: column; gap: var(--s3); }
 .tl-wrap { display: flex; flex-direction: column; gap: 6px; }
 .tl { position: relative; height: 22px; background: var(--sur-2);
   border-radius: 6px; overflow: hidden; }
@@ -494,8 +492,8 @@ input.invalid { border-color: var(--err) !important; }
 .stat-cards { display: flex; gap: 14px; margin-bottom: 14px;
   flex-wrap: wrap; align-items: stretch; }
 .card.stat { min-width: 200px; flex: 1; }
-.stat-head { display: flex; align-items: center; gap: var(--s2);
-  min-height: 30px; }   /* 三卡 lbl 同顶线：与带启用钮的卡头等高居中 */
+/* 三卡 lbl 顶线=卡内边距 16px（与其它页卡头一致）；启用钮同行顶对齐 */
+.stat-head { display: flex; align-items: flex-start; gap: var(--s2); }
 .stat-head .tgl { margin-left: auto; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
 .kv { display: flex; justify-content: space-between; align-items: center;
@@ -506,7 +504,7 @@ input.invalid { border-color: var(--err) !important; }
 .kv .v.off { color: var(--dim); }
 .kv .v.warn { color: var(--warn); }
 .stat-big + .kv { margin-top: 8px; }
-.stat-song { font-size: var(--f-sm); margin-top: var(--s1);
+.stat-song { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat-big.ok { color: var(--ok); }
 .stat-big.warn { color: var(--warn); }
@@ -554,17 +552,11 @@ input.invalid { border-color: var(--err) !important; }
 .card .field { margin-bottom: var(--s2); }
 .card .field:last-child { margin-bottom: 0; }
 .slotcard { margin-bottom: var(--s3); margin-top: 14px; }
-/* 全局移调键位卡（VJ 音符卡同款语言：键帽+作用，无状态值展示） */
-.shift-cards { display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
-.shift-cell { background: var(--sur-2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 9px 10px; display: flex;
-  flex-direction: column; gap: 4px; }
-.shift-cell .s-note { align-self: flex-start;
-  font-family: Consolas, monospace; background: var(--sur-3);
-  border-radius: 4px; padding: 1px 6px; font-size: var(--f-xs);
-  font-weight: 600; }
-.shift-cell .s-pc { font-size: var(--f-md); }
+/* 全局移调：两琴两列，列内音符卡与 VJ 触发槽位同款（.slot.vj-cell 复用，
+   hover 动画/键帽/字号全部一致） */
+.shift-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
+.shift-col { min-width: 0; }
+.shift-col > .lbl { display: block; margin-bottom: var(--s2); }
 .input-row { display: flex; gap: var(--s3); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
@@ -589,7 +581,9 @@ input.invalid { border-color: var(--err) !important; }
   font-weight: 400; }
 .slot .s-ops { position: absolute; top: 10px; right: 12px;
   display: flex; gap: 6px; }
-.slot .s-clear { color: var(--err); }
+/* 清除 ✕（音色映射卡与功能绑定行共用）：红字示危险，hover 不变色 */
+.btn.ghost.s-clear, .btn.ghost.s-clear:hover:not(:disabled) {
+  color: var(--err); }
 .slot.recording { border-color: var(--err); background: #241417; }
 .slot.recording .s-sub { color: var(--err); }
 
@@ -644,6 +638,7 @@ input.invalid { border-color: var(--err) !important; }
   .col .list { max-height: 44vh; }
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .cards2 { grid-template-columns: 1fr; }
+  .shift-cols { grid-template-columns: 1fr; }
   .pedal-grid { grid-template-columns: 1fr; }
   .console-cols { grid-template-columns: 1fr; }
   #pt-list { max-height: 34vh; }

@@ -1458,17 +1458,22 @@ function drawBinds(d) {
     const bd = document.createElement("span");
     bd.className = "b-bind" + (bindText(d, a) !== "未设置" ? " has" : "");
     bd.textContent = a === learnAction ? "学习中" : bindText(d, a);
-    const clr = document.createElement("button");
-    clr.className = "btn danger sm";
-    clr.textContent = "清除";
+    // 清除钮与音色映射卡 ✕ 同时机同形态：有绑定才出现，学习中被学习
+    // 会话接管不显（后端学习完成会迁移改绑+落盘，清除会被静默还原）
     const bound = d.binds[a] !== undefined || d.hid[a] !== undefined;
-    // 学习中的动作禁清除：后端学习完成会迁移改绑+落盘，清除会被静默还原
-    if (!bound || a === learnAction) clr.disabled = true;
-    clr.addEventListener("click", ev => {
-      ev.stopPropagation();
-      clearBind(a);
-    });
-    row.append(nm, bd, clr);
+    if (bound && a !== learnAction) {
+      const clr = document.createElement("button");
+      clr.className = "btn ghost xs s-clear";
+      clr.textContent = "✕";
+      clr.title = "清除该绑定";
+      clr.addEventListener("click", ev => {
+        ev.stopPropagation();
+        clearBind(a);
+      });
+      row.append(nm, bd, clr);
+    } else {
+      row.append(nm, bd);
+    }
     // 点行=开始学习，再点=取消（音色映射卡片「点卡开录、再点保存」同构）
     row.addEventListener("click", () => {
       if (a === learnAction) learnCancel();
@@ -1564,14 +1569,25 @@ $("#pd-win").addEventListener("change", () => {
 });
 
 async function startLearn(action) {
+  // 乐观进入学习态：后端 Learner 构造（开原生口/枚举设备）在主线程要
+  // 秒级时间——先红框+「学习中」给即时反馈，启动失败回弹（时序红队：
+  // 点击后无任何动效=用户以为没点上）
+  if (learnAction === null) {
+    learnAction = action;
+    drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
+  }
   const j = await post("/pedal/learn", {action});
-  if (!j.ok) return;
+  if (!j.ok) {
+    if (learnAction === action) {
+      learnAction = null;
+      drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
+    }
+    return;
+  }
   // 未选设备时键盘踩钉抓不到（raw 归属门）——学习前提醒，别让人白等 8 秒
   if (pdData && !pdData.deviceHint
       && Object.keys(pdData.hid || {}).length)
     toast("未选输入设备：踏板按键不会被学习抓取，只等 MIDI CC", "err");
-  learnAction = action;
-  drawBinds(pdData || {binds: {}, hid: {}, gestures: {}});
   pollLearn();
 }
 // 取消学习：再点学习中的行 / 离开踩钉页时收口（后端关学习器并回灌桥配置）
@@ -1937,26 +1953,23 @@ function slotRow(note, slot, inst) {
   n.textContent = "音 " + noteName(note);
   const pc = document.createElement("span");
   pc.className = "s-pc";
-  pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未配置";
+  pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未设置";
   const sub = document.createElement("span");
   sub.className = "s-sub";
   const ops = document.createElement("span");
   ops.className = "s-ops";
-  const test = document.createElement("button");
-  test.className = "btn ghost xs s-test";
-  test.textContent = "测试";
-  test.addEventListener("click", ev => {
-    ev.stopPropagation();
-    if (!slot) {
-      toast("该音符未配置音色映射", "err");
-      return;
-    }
-    post("/kbdtest", {inst, note, songKey: plSel}).then(j => {
-      if (j.ok) toast("已发送测试：音 " + noteName(note));
-    });
-  });
-  ops.appendChild(test);
+  // 测试/✕ 与功能绑定清除钮同时机：有配置才出现（未配置卡=纯展示）
   if (slot) {
+    const test = document.createElement("button");
+    test.className = "btn ghost xs s-test";
+    test.textContent = "测试";
+    test.addEventListener("click", ev => {
+      ev.stopPropagation();
+      post("/kbdtest", {inst, note, songKey: plSel}).then(j => {
+        if (j.ok) toast("已发送测试：音 " + noteName(note));
+      });
+    });
+    ops.appendChild(test);
     const clr = document.createElement("button");
     clr.className = "btn ghost xs s-clear";
     clr.textContent = "✕";
@@ -2048,9 +2061,8 @@ async function refreshKbdDetail() {
     }
     dtKbd = d;
     const es = es0;
-    $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…"
-        : "JUNO " + Object.keys(es.slots || {}).length + "/10 · AX "
-          + Object.keys(es.axSlots || {}).length + "/6";
+    // 仅异常态提示（装载中/不可用）；正常态不显计数（画蛇添足已删）
+    $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…" : "";
     buildSlots($("#dt-slots"), es.slots, 60, 69, "juno");
     buildSlots($("#dt-axslots"), es.axSlots, 72, 77, "ax");
     updateDtBadge();

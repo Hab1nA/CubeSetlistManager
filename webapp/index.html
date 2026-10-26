@@ -171,9 +171,7 @@
             <div class="card">
               <div class="md-head">音色映射
                 <span id="dt-kbd-stat" class="dim sm-txt"></span></div>
-              <div class="lbl dt-inst">JUNO · C4 起 10 键</div>
               <div id="dt-slots" class="slot-grid"></div>
-              <div class="lbl dt-inst">AX-09 · C5 起 6 键</div>
               <div id="dt-axslots" class="slot-grid"></div>
             </div>
           </div>
@@ -241,14 +239,14 @@
         <div class="card stat"><div class="lbl">当前曲音色配置</div>
           <div id="kb-song" class="stat-song">—</div>
           <div class="stat-pair">
-            <span><b id="kb-juno-n">0</b>/10<i>JUNO</i></span>
-            <span><b id="kb-ax-n">0</b>/6<i>AX-09</i></span>
+            <span><b id="kb-juno-n">0</b>/10<i>JUNO DS-88</i></span>
+            <span><b id="kb-ax-n">0</b>/6<i>AX-09 Lucina</i></span>
           </div></div>
         <div class="card stat"><div class="lbl">最近切换</div>
           <div class="stat-big" id="kb-last">—</div></div>
       </div>
       <div class="cards2">
-        <div class="card"><h3>JUNO 端口</h3>
+        <div class="card"><h3>JUNO DS-88 端口</h3>
           <div class="field"><label for="kb-jin">输入<span class="f-st off"
             id="kb-jin-st">未接</span></label>
             <select id="kb-jin"></select></div>
@@ -256,7 +254,7 @@
             id="kb-jout-st">未接</span></label>
             <select id="kb-jout"></select></div>
         </div>
-        <div class="card"><h3>AX-09 端口</h3>
+        <div class="card"><h3>AX-09 Lucina 端口</h3>
           <div class="field"><label for="kb-ain">输入<span class="f-st off"
             id="kb-ain-st">未接</span></label>
             <select id="kb-ain"></select></div>
@@ -267,23 +265,29 @@
       </div>
       <div class="card slotcard">
         <h3>全局移调<span class="h3-note">由自动化轨键位控制</span></h3>
-        <div class="lbl dt-inst">JUNO-DS</div>
-        <div class="shift-cards">
-          <div class="shift-cell"><span class="s-note">C2</span><span class="s-pc">降半音</span></div>
-          <div class="shift-cell"><span class="s-note">C#2</span><span class="s-pc">升半音</span></div>
-          <div class="shift-cell"><span class="s-note">D2</span><span class="s-pc">降八度</span></div>
-          <div class="shift-cell"><span class="s-note">D#2</span><span class="s-pc">升八度</span></div>
-        </div>
-        <div class="lbl dt-inst">AX-09 Lucina</div>
-        <div class="shift-cards">
-          <div class="shift-cell"><span class="s-note">F2</span><span class="s-pc">降半音</span></div>
-          <div class="shift-cell"><span class="s-note">F#2</span><span class="s-pc">升半音</span></div>
-          <div class="shift-cell"><span class="s-note">G2</span><span class="s-pc">降八度</span></div>
-          <div class="shift-cell"><span class="s-note">G#2</span><span class="s-pc">升八度</span></div>
+        <div class="shift-cols">
+          <div class="shift-col">
+            <span class="lbl">JUNO DS-88</span>
+            <div class="slot-grid vj-grid">
+              <div class="slot vj-cell"><span class="s-note">C2</span><span class="s-pc">降半音</span></div>
+              <div class="slot vj-cell"><span class="s-note">C#2</span><span class="s-pc">升半音</span></div>
+              <div class="slot vj-cell"><span class="s-note">D2</span><span class="s-pc">降八度</span></div>
+              <div class="slot vj-cell"><span class="s-note">D#2</span><span class="s-pc">升八度</span></div>
+            </div>
+          </div>
+          <div class="shift-col">
+            <span class="lbl">AX-09 Lucina</span>
+            <div class="slot-grid vj-grid">
+              <div class="slot vj-cell"><span class="s-note">F2</span><span class="s-pc">降半音</span></div>
+              <div class="slot vj-cell"><span class="s-note">F#2</span><span class="s-pc">升半音</span></div>
+              <div class="slot vj-cell"><span class="s-note">G2</span><span class="s-pc">降八度</span></div>
+              <div class="slot vj-cell"><span class="s-note">G#2</span><span class="s-pc">升八度</span></div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="page-foot">
-        <span class="dim sm-txt">应用后生效：JUNO / AX-09 输入输出端口</span>
+        <span class="dim sm-txt">应用后生效：JUNO DS-88 / AX-09 Lucina 输入输出端口</span>
         <button id="kb-refresh" class="btn ghost">刷新端口</button>
         <button id="kb-save" class="btn primary">应用端口</button>
       </div>
@@ -302,9 +306,8 @@
           <div class="stat-big" id="vj-follow">…</div>
           <div class="dim sm-txt" id="vj-video"></div></div>
       </div>
-      <div class="card"><h3>音符 ↔ 视频
-        <span class="h3-note" id="vjmap-note">音符 60 起按顺序对应
-          1.mp4 起；支持「N 描述」命名；F#6 熄屏</span></h3>
+      <div class="card"><h3>触发槽位
+        <span class="h3-note" id="vjmap-note">支持「N 描述」命名</span></h3>
         <div id="vjmap" class="slot-grid vj-grid"></div>
       </div>
       <div class="card"><h3>视频联动<span class="h3-note">媒体输入名须与 OBS 源名一致</span></h3>

@@ -252,20 +252,24 @@ def stage_p0(send):
         "junoInDev:0,junoOutDev:0,axInDev:0,axOutDev:0,junoShift:2,axShift:0,"
         "songKey:'X/桩曲',songs:[{key:'X/桩曲',team:'X',name:'桩曲'}],"
         "lastResult:'',ports:{in:[],out:[]},portStatus:{},"
-        "editSong:{key:'X/桩曲',name:'桩曲',loading:false,slots:{},"
+        "editSong:{key:'X/桩曲',name:'桩曲',loading:false,"
+        "slots:{'60':{pc:63,msb:1,lsb:2,desc:'USER:0564'}},"
         "axSlots:{}}}),{status:200}));"
         "if(String(u)==='/kbd/record')return Promise.resolve(new Response("
         "JSON.stringify({active:true,inst:'juno',slot:{pc:63,msb:1,lsb:2,"
         "desc:'USER:0564'}}),{status:200}));"
         "return Promise.resolve(new Response('{\"ok\":true}',"
         "{status:200,headers:{'Content-Type':'application/json'}}))};")
-    time.sleep(2.0)          # 等一个轮询周期：列表换桩数据后再选曲
+    for _ in range(10):      # 等桩列表落地再选曲（真数据轮询抖动防护）
+        if js(send, "return !!document.querySelector(\"#pl .row[data-k='X/桩曲']\")"):
+            break
+        time.sleep(0.5)
     pick_song(send, 1.2)
     js(send, "const c=document.querySelector('#dt-slots .slot');"
         "if(c)c.click();return 1")
     time.sleep(0.5)            # post 回调异步加录制态，须让一拍
     rec = js(send, "const c=document.querySelector('#dt-slots .slot');"
-             "if(!c)return {none:1};"
+             "if(!c||!c.querySelector('.s-sub'))return {none:1};"
              "return {rec:c.classList.contains('recording'),"
              "noPop:!document.querySelector('.pop'),"
              "sub:c.querySelector('.s-sub').textContent,"
@@ -275,6 +279,7 @@ def stage_p0(send):
        json.dumps(rec, ensure_ascii=False))
     time.sleep(0.8)            # pollRecord 300ms 一拍吃到捕获桩
     cap = js(send, "const c=document.querySelector('#dt-slots .slot');"
+             "if(!c||!c.querySelector('.s-sub'))return {none:1};"
              "return {sub:c.querySelector('.s-sub').textContent}")
     js(send, "window.__posts=[];"
         "document.querySelector('#dt-slots .slot').click()")
@@ -550,7 +555,7 @@ def stage_p1(send):
        json.dumps(sel1, ensure_ascii=False))
     ok("p1.dt.kbd-panel", "歌一" in (pt.get("head") or "")
        and pt.get("slots") == 10 and pt.get("ax") == 6
-       and "JUNO 1/10" in (pt.get("kbdStat") or ""),
+       and pt.get("kbdStat") == "",   # 正常态不显计数（已删）
        json.dumps(pt, ensure_ascii=False))
     sel = js(send, "document.querySelector('#pt-list .row').click();"
              "return 1")
@@ -842,8 +847,9 @@ def stage_p2(send):
            "unconf:document.querySelectorAll('.slot.unconfigured').length,"
            "test:document.querySelectorAll('#dt-slots .s-test').length"
            "+document.querySelectorAll('#dt-axslots .s-test').length}")
+    # 测试/✕ 与功能绑定清除钮同时机：仅配置过的槽出现（桩 60 号 1 个配置）
     ok("p2.slots.grid", sg.get("grid") == 10 and sg.get("ax") == 6
-       and sg.get("test") == 16, json.dumps(sg))
+       and sg.get("test") == 1, json.dumps(sg))
     # 点「试」应 POST /kbdtest（桩已给 60 号槽配置）
     kt = js(send, "const t=document.querySelector("
             "'.slot:not(.unconfigured) .s-test');"
@@ -1451,9 +1457,9 @@ def stage_c(send):
     ok("bc.c2.learn-cancel",
        "learning" not in (lcx.get("row") or "") and lcx.get("cancel"),
        json.dumps(lcx, ensure_ascii=False))
-    # 清除（有绑定的行）→ /pedalset 载荷去掉该动作、保留其余
+    # 清除（有绑定的行）→ ✕ 与音色映射卡同款时机形态；载荷去该动作留其余
     js(send, "window.__posts=[];"
-        "document.querySelector('.bind-row[data-action=next] .btn.danger')"
+        "document.querySelector('.bind-row[data-action=next] .s-clear')"
         ".click()")
     time.sleep(0.6)
     cl = js(send, "let body=null;(window.__posts||[]).forEach(([u,b])=>"
@@ -1618,15 +1624,21 @@ def stage_d(send):
        and d3b["body"]["slots"]["60"]["pc"] == 70
        and (d3b["stops"] or 0) >= 1,
        json.dumps(d3b, ensure_ascii=False))
-    # D5 全局移调=音符卡片（VJ 网格同款），无当前数值展示
-    fn = js(send, "return {cells:document.querySelectorAll("
-            "'#p-kbd .shift-cell').length,"
-            "first:document.querySelector('#p-kbd .shift-cell')"
-            "?document.querySelector('#p-kbd .shift-cell').textContent:'',"
+    # D5 全局移调=VJ 触发槽位同款卡（.slot.vj-cell 复用，两琴两列）
+    fn = js(send, "const cols=document.querySelector('.shift-cols');"
+            "return {cells:document.querySelectorAll("
+            "'#p-kbd .shift-col .slot.vj-cell').length,"
+            "colN:getComputedStyle(cols).gridTemplateColumns.split(' ').length,"
+            "first:document.querySelector('#p-kbd .shift-col .slot')"
+            "?document.querySelector('#p-kbd .shift-col .slot').textContent:'',"
+            "hover:(()=>{const s=document.createElement('style');"
+            "const cell=document.querySelector('#p-kbd .shift-col .slot');"
+            "const cs=getComputedStyle(cell);"
+            "return {tr:cs.transitionProperty.includes('background')}})(),"
             "noVal:!document.getElementById('kb-jshift')}")
-    ok("bd.d5.shift-cards", fn.get("cells") == 8
+    ok("bd.d5.shift-cards", fn.get("cells") == 8 and fn.get("colN") == 2
        and "C2" in fn.get("first", "") and "降半音" in fn.get("first", "")
-       and fn.get("noVal"),
+       and fn.get("hover", {}).get("tr") and fn.get("noVal"),
        json.dumps(fn, ensure_ascii=False))
     js(send, RESTORE)
     time.sleep(0.5)
@@ -2318,6 +2330,145 @@ def stage_r(send):
     shot(send, "r4_show_transport")
     js(send, "document.getElementById('show-exit').click()")
     time.sleep(0.5)
+
+    # ---- R5 返工：控件底色/状态粗体/曲名字号/踩钉卡头距/pt 间距/琴名 ----
+    # 控件样式健康（令牌自引用事故的回归断言）：下拉/主钮/输入框底色
+    cs5 = js(send, "const sel=document.querySelector('#st-clock');"
+             "const sv=getComputedStyle(sel);"
+             "const bp=getComputedStyle(document.querySelector('.btn.primary'));"
+             "const inp=getComputedStyle(document.getElementById('st-root'));"
+             "return {selBg:sv.backgroundColor,selCol:sv.color,"
+             "bpBg:bp.backgroundColor,inBg:inp.backgroundColor}")
+    ok("br.r5.control-colors",
+       cs5.get("selBg") == "rgb(13, 17, 22)"
+       and cs5.get("selCol") == "rgb(232, 234, 237)"
+       and cs5.get("bpBg") == "rgb(29, 58, 38)"
+       and cs5.get("inBg") == "rgb(13, 17, 22)",
+       json.dumps(cs5))
+    # f-st 状态徽不加粗
+    fs = js(send, "const el=document.getElementById('kb-jin-st');"
+            "return {w:el?getComputedStyle(el).fontWeight:null}")
+    ok("br.r5.fst-regular", fs.get("w") in ("400", "normal"),
+       json.dumps(fs))
+    # 键盘页曲名字号 = stat-big 字号
+    ss = js(send, "return {song:getComputedStyle(document.getElementById"
+            "('kb-song')).fontSize,"
+            "big:getComputedStyle(document.getElementById('kb-last'))"
+            ".fontSize}")
+    ok("br.r5.song-fontsize", ss.get("song") == ss.get("big"),
+       json.dumps(ss))
+    # 踩钉三卡 lbl 顶距 = 卡内边距 16px
+    nav(send, "pedal")
+    pd5 = js(send, "return [...document.querySelectorAll("
+             "'#p-pedal .stat-cards .card')].map(c=>{"
+             "const l=c.querySelector('.stat-head .lbl');"
+             "return Math.round(l.getBoundingClientRect().top"
+             "-c.getBoundingClientRect().top)})")
+    ok("br.r5.pedal-cardhead", len(pd5) == 3
+       and all(abs(v - 16) <= 1 for v in pd5), str(pd5))
+    # 编排：pt-list 与「名称」label 间距恢复
+    # 桩键用全新键名：与历史阶段可能残留的 plSel 不同键，确保 selectSong
+    # 走 if 分支全套刷新（同键 else 分支不重拉=面板停在真实数据上）
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/points')return Promise.resolve(new Response("
+        "JSON.stringify({cubase:true,mmcReady:true,projects:{"
+        "'R5/曲一':{name:'曲一',enabled:true,points:["
+        "{id:1,name:'主歌',start:30,end:90}]}}}),{status:200}));"
+        "if(String(u)==='/playlist')return Promise.resolve(new Response("
+        "JSON.stringify({lib:[{key:'R5/曲一',team:'R5',name:'曲一',"
+        "dur:'1:00',durSrc:'auto'}],pl:[{key:'R5/曲一',name:'曲一',"
+        "dur:'1:00',durSrc:'auto',pt:false}],cur:0}),{status:200}));"
+        "if(String(u)==='/kbd'||String(u).startsWith('/kbd?'))"
+        "return Promise.resolve(new Response(JSON.stringify({"
+        "editSong:{key:'R5/曲一',name:'曲一',loading:false,"
+        "slots:{'60':{pc:63,msb:1,lsb:2,desc:'USER:0521'}},"
+        "axSlots:{}}}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    nav(send, "setlist")     # 桩先装、后进页：nav 内拉取全走桩
+    pick_song(send, 1.6)
+    js(send, "document.querySelector('#pt-list .row').click()")
+    time.sleep(0.8)
+    pt5 = js(send, "const l=document.querySelector('#pt-list');"
+             "const lb=document.querySelector('label[for=pt-name]');"
+             "const f=document.getElementById('pt-form');"
+             "return {gap:Math.round(lb.getBoundingClientRect().top"
+             "-l.getBoundingClientRect().bottom),form:!f.hidden}")
+    ok("br.r5.pt-list-form-gap", pt5.get("form")
+       and 8 <= pt5.get("gap", -99) <= 18, json.dumps(pt5))
+    # 音色映射：无分组标签、正常态无计数
+    kb5 = js(send, "return {noInst:!document.querySelector("
+             "'#dt-body .dt-inst'),"
+             "stat:document.getElementById('dt-kbd-stat').textContent}")
+    ok("br.r5.no-slot-count", kb5.get("noInst") and kb5.get("stat") == "",
+       json.dumps(kb5))
+    # 音色映射 × 功能绑定：按钮时机/形态统一（未配置卡无钮；绑定行 ✕ 同款）
+    un5 = js(send, "const un=document.querySelector('.slot.unconfigured');"
+             "return {unOps:un?un.querySelectorAll('button').length:-1,"
+             "confOps:document.querySelector('.slot:not(.unconfigured)')"
+             "?document.querySelector('.slot:not(.unconfigured)')"
+             ".querySelectorAll('button').length:-1,"
+             "unset:un?un.querySelector('.s-pc').textContent:''}")
+    ok("br.r5.slot-button-timing", un5.get("unOps") == 0
+       and un5.get("confOps") == 2
+       and un5.get("unset") == "未设置",
+       json.dumps(un5, ensure_ascii=False))
+    js(send, RESTORE)
+    # 绑定行：无绑定行无按钮、有绑定行为 ✕ ghost xs
+    nav(send, "pedal")
+    js(send, UNSTUB + "window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/pedal')return Promise.resolve(new Response("
+        "JSON.stringify({deviceHint:'',hint:'',binds:{pause:74},hid:{},"
+        "gestures:{pause:'single'},intercept:true,doubleWindow:0.35,"
+        "remoteEnabled:false,connected:true,hidActive:false,"
+        "deviceOnline:false,muted:true}),{status:200}));"
+        "return window.__fetch0(u,o)};")
+    time.sleep(1.6)
+    bd5 = js(send, "const row=a=>document.querySelector("
+             "'.bind-row[data-action='+a+']');"
+             "return {pauseBtns:row('pause').querySelectorAll('button')"
+             ".length,pauseX:row('pause').querySelector('.s-clear')"
+             "?row('pause').querySelector('.s-clear').textContent:'',"
+             "playBtns:row('play').querySelectorAll('button').length}")
+    ok("br.r5.bind-x-timing", bd5.get("pauseBtns") == 1
+       and bd5.get("pauseX") == "✕" and bd5.get("playBtns") == 0,
+       json.dumps(bd5, ensure_ascii=False))
+    # 学习乐观态：点击行当拍即红框（不等 POST 往返）
+    js(send, RESTORE)
+    time.sleep(0.5)
+    nav(send, "pedal")
+    js(send, UNSTUB + "window.__posts=[];window.__fetch0=window.fetch;"
+        "window.fetch=(u,o)=>{window.__posts.push([String(u),(o&&o.body)||'']);"
+        "return new Promise(r=>setTimeout(()=>r(new Response("
+        "'{\"ok\":true}',{status:200,"
+        "headers:{'Content-Type':'application/json'}})),900))};")
+    op5 = js(send, "document.querySelector('.bind-row[data-action=play]')"
+             ".click();"
+             "return {cls:document.querySelector("
+             "'.bind-row[data-action=play]').className}")
+    ok("br.r5.learn-optimistic", "learning" in (op5.get("cls") or ""),
+       json.dumps(op5, ensure_ascii=False))
+    js(send, RESTORE)
+    time.sleep(0.8)
+    # 触发槽位标题 + 琴名全名（旧缩写无残留）
+    nav(send, "vj")
+    nm5 = js(send, "return {h3:document.querySelector('#p-vj h3')"
+             ".textContent.replace(/\\s+/g,' ').trim(),"
+             "note:document.getElementById('vjmap-note').textContent}")
+    ok("br.r5.vj-title", (nm5.get("h3") or "").startswith("触发槽位")
+       and nm5.get("note") == "支持「N 描述」命名",
+       json.dumps(nm5, ensure_ascii=False))
+    nav(send, "kbd")
+    kn5 = js(send, "const t=document.querySelector('#p-kbd').textContent;"
+             "return {hasJ:document.querySelector('#p-kbd').textContent"
+             ".includes('JUNO DS-88'),"
+             "hasA:t.includes('AX-09 Lucina'),"
+             "noBare:t.includes('JUNO 端口')||t.includes('AX-09 端口'),"
+             "noShiftOld:!!document.querySelector('.shift-cell')}")
+    ok("br.r5.fullnames", kn5.get("hasJ") and kn5.get("hasA")
+       and not kn5.get("noBare") and not kn5.get("noShiftOld"),
+       json.dumps(kn5, ensure_ascii=False))
 
     errs = js(send, "return window.__errs")
     ok("br.no-js-errors", not errs, str(errs)[:300])
