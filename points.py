@@ -68,9 +68,9 @@ def load_points(song_dir):
     except FileNotFoundError:
         return empty_data(), None
     except NotADirectoryError as e:
-        return empty_data(), "定位点目录异常（%s）：按未启用处理" % e
+        return empty_data(), "定位点目录异常：%s，按未启用处理" % e
     except (OSError, ValueError) as e:
-        return empty_data(), "定位点文件读取失败（%s）：按未启用处理" % e
+        return empty_data(), "定位点文件读取失败：%s，按未启用处理" % e
     if not isinstance(data, dict):
         return empty_data(), "定位点文件格式异常：按未启用处理"
     out = empty_data()

@@ -694,7 +694,7 @@ class DeviceBridge:
             else:
                 # 多为媒体键被其它程序（播放器等）抢占：拦截缺席但触发
                 # 不受影响（触发走 raw）
-                self._report("热键注册失败（VK %s 被其它程序占用），"
+                self._report("热键注册失败，VK %s 被其它程序占用，"
                              "该键无法拦截" % hid_name(vk))
 
     def start(self):
@@ -828,7 +828,7 @@ class DeviceBridge:
         （如固件换了键位/映射表缺键），防健康显示被心跳买活。"""
         with self._io_lock:
             self.remote_unknown += 1
-        self._report("远程按键未识别（scanCode=%r keyCode=%r），已丢弃"
+        self._report("远程按键未识别：scanCode=%r keyCode=%r，已丢弃"
                      % (sc, kc))
 
     def remote_anchor(self, et_ms, now):
@@ -851,7 +851,7 @@ class DeviceBridge:
         with self._io_lock:
             lvk, lt = self._last_hid_down
             if down and vk == lvk and 0.0 <= t - lt < 0.15:
-                self._report("远程按键与本地蓝牙重复（%s），已去重"
+                self._report("远程按键与本地蓝牙重复：%s，已去重"
                              % hid_name(vk))
                 return False
             self.remote_event_t = rcv

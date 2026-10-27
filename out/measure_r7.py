@@ -13,6 +13,11 @@ import websocket
 CDP = 9224
 fails = []
 
+import socket as _socket
+with _socket.socket() as _s:   # 残留 webui=对旧代码跑断言：fail-fast
+    if _s.connect_ex(("127.0.0.1", CDP)) == 0:
+        sys.exit("CDP 端口 %d 被占用：请先结束残留 webui 进程" % CDP)
+
 
 def ok(name, cond, extra=""):
     print("%-46s %s %s" % (name, "PASS" if cond else "FAIL", extra))
@@ -97,7 +102,11 @@ def main():
 
         # ---------- F1 音名裸格式（编排详情 + 键盘 + VJ 同口径） ----------
         ev("document.querySelector('#lib .row').click()")
-        time.sleep(2.5)
+        for _ in range(16):   # 映射装载（后台线程+700ms 自拉）：等就位
+            if (ev("document.querySelectorAll('#dt-slots .s-note').length")
+                    or 0) >= 3:
+                break
+            time.sleep(0.5)
         f1 = jv(r"""JSON.stringify({
           dt: Array.from(document.querySelectorAll('#dt-slots .s-note'))
               .slice(0, 3).map(e => e.textContent),
@@ -112,24 +121,24 @@ def main():
         ok("F1 键盘全局移调=裸音名", bare(f1["kbd"]), f1["kbd"])
         ok("F1 VJ 触发槽位=裸音名", bare(f1["vj"]), f1["vj"])
 
-        # ---------- G1 跑马灯：溢出才启用（__marq 钩子直测，
-        # 轮询 1.5s 回写同名元素会与 resize 通路竞争） ----------
-        ev(r"""(function(){ const el = document.querySelector('#dt-title');
-          el.textContent = '曲目详情 · ' + '超长歌名测试数据'.repeat(12);
-          window.__marq(el); })()""")
-        time.sleep(0.2)
-        mq = jv(r"""JSON.stringify((() => { const el =
-          document.querySelector('#dt-title');
-          return { marq: el.classList.contains('marq'),
-                   dist: el.style.getPropertyValue('--marq') }; })())""")
+        # ---------- G1 跑马灯：合成节点直测（确定性；真实元素会被
+        # 1.5s 轮询回写同名文本，与断言存在竞态） ----------
+        mq = jv(r"""JSON.stringify((() => {
+          const el = document.createElement('div');
+          el.className = 'mq'; el.style.width = '200px';
+          document.body.appendChild(el);
+          el.textContent = '超长歌名测试数据'.repeat(12);
+          window.__marq(el);
+          const r = { marq: el.classList.contains('marq'),
+                      dist: el.style.getPropertyValue('--marq') };
+          el.textContent = '短名';
+          window.__marq(el);
+          r.off = !el.classList.contains('marq');
+          el.remove();
+          return r; })())""")
         ok("G1 溢出文本挂 marq 动画", mq["marq"] and mq["dist"].startswith("-"),
            mq["dist"])
-        ev(r"""(function(){ const el = document.querySelector('#dt-title');
-          el.textContent = '曲目详情 · 短名';
-          window.__marq(el); })()""")
-        time.sleep(0.2)
-        mq2 = ev("document.querySelector('#dt-title').classList.contains('marq')")
-        ok("G1 短文本不挂动画", mq2 is False)
+        ok("G1 短文本不挂动画", mq["off"] is True)
 
         # ---------- F3 VJ 播放声音（静音）开关同构 ----------
         ev("document.querySelector('.b-vj').click()")

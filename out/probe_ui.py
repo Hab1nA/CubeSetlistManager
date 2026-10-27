@@ -34,7 +34,7 @@ with _socket.socket() as _s:
         subprocess.run(["powershell", "-c",
             "Get-CimInstance Win32_Process | Where-Object {"
             "$_.CommandLine -match 'remote-debugging-port=%d' "
-            "-or ($_.Name -match 'python' and "
+            "-or ($_.Name -match 'python' -and "
             "$_.CommandLine -match 'webui.py')} | "
             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
             "-ErrorAction SilentlyContinue }" % CDP],

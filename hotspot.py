@@ -170,7 +170,7 @@ def _run(mode, timeout, script=None):
                 env=dict(os.environ, CUBE_HS_MODE=mode))
             break
         except subprocess.TimeoutExpired:
-            return {"ok": False, "err": "PowerShell 调用超时（%ds）" % timeout}
+            return {"ok": False, "err": "PowerShell 调用超时 %d 秒" % timeout}
         except OSError as e:
             if attempt:
                 return {"ok": False, "err": "无法启动 PowerShell：%s" % _err(e)}
@@ -179,7 +179,7 @@ def _run(mode, timeout, script=None):
     if r is None:
         tail = (p.stderr.decode("utf-8", "replace").strip()
                 .splitlines() or [""])[-1]
-        return {"ok": False, "err": "热点脚本无输出（exit %s）%s"
+        return {"ok": False, "err": "热点脚本无输出，exit %s%s"
                 % (p.returncode, "：" + tail if tail else "")}
     return r
 

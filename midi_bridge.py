@@ -205,14 +205,14 @@ def open_in(idx, proc, timeout=None):
     def job():
         r = _winmm.midiInOpen(ctypes.byref(h), idx, proc, 0, _CALLBACK_FUNC)
         if r:
-            result["err"] = "midiInOpen 失败（code %d，端口被占用？）" % r
+            result["err"] = "midiInOpen 失败，code %d，端口被占用？" % r
             return
         _winmm.midiInStart(h)
         if state["dead"]:       # 等待方已放弃：即开即回收
             _winmm.midiInStop(h)
             _winmm.midiInReset(h)
             _winmm.midiInClose(h)
-            result["err"] = "打开超时（%.0f 秒，弃单已回收）" % timeout
+            result["err"] = "打开超时 %.0f 秒，弃单已回收" % timeout
             return
         result["ok"] = True
 
@@ -282,11 +282,11 @@ def open_out(idx, timeout=None):
     def job():
         r = _winmm.midiOutOpen(ctypes.byref(h), idx, _Proc(), 0, 0)
         if r:
-            result["err"] = "midiOutOpen 失败（code %d）" % r
+            result["err"] = "midiOutOpen 失败，code %d" % r
             return
         if state["dead"]:           # 等待方已弃单：即开即回收
             _winmm.midiOutClose(h)
-            result["err"] = "打开超时（%.0f 秒，弃单已回收）" % timeout
+            result["err"] = "打开超时 %.0f 秒，弃单已回收" % timeout
             return
         result["ok"] = True
 
@@ -331,13 +331,13 @@ def send_sysex_h(h, data, timeout=1.0):
         r = _winmm.midiOutLongMsg(h, ctypes.byref(hdr), size)
         if r:
             _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), size)
-            result["err"] = "midiOutLongMsg 失败（code %d）" % r
+            result["err"] = "midiOutLongMsg 失败，code %d" % r
             return
         deadline = time.time() + _SYSEX_DONE_TIMEOUT
         while not hdr.dwFlags & MHDR_DONE:
             if time.time() >= deadline:
                 _SYSEX_STUCK.append((h, hdr, buf))
-                result["err"] = "SysEx 完成超时（缓冲由驱动持有，进程退出回收）"
+                result["err"] = "SysEx 完成超时，缓冲由驱动持有，进程退出回收"
                 return
             time.sleep(0.002)
         _winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), size)
@@ -345,7 +345,7 @@ def send_sysex_h(h, data, timeout=1.0):
     done, _ = run_io(job, timeout)
     if not done:
         state["dead"] = True
-        return "SysEx 发送超时（%.1f 秒）" % timeout
+        return "SysEx 发送超时 %.1f 秒" % timeout
     return result.get("err")
 
 
@@ -680,7 +680,7 @@ def send_note(idx, note, vel=127):
     h = wintypes.HANDLE()
     r = _winmm.midiOutOpen(ctypes.byref(h), idx, _Proc(), 0, 0)
     if r:
-        sys.exit("midiOutOpen 失败（code %d）" % r)
+        sys.exit("midiOutOpen 失败，code %d" % r)
     _winmm.midiOutShortMsg(h, 0x90 | (note << 8) | (vel << 16))
     _winmm.midiOutClose(h)
 

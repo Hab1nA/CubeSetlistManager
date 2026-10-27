@@ -543,7 +543,7 @@ class ToneSwitcher:
                 slot = item
                 err = send_slot(slot, self.cfg)
                 self._log("音色切换%s → %s%s" % (
-                    "（%s）" % why if why else "", describe_slot(slot),
+                    "：%s" % why if why else "", describe_slot(slot),
                     "失败：%s" % err if err else ""))
                 if self.on_result:
                     self.on_result(describe_slot(slot), err)

@@ -75,11 +75,11 @@ def combo_evaluate(notes):
     cmd = s & {CMD_PREV, CMD_NEXT}
     devs = sorted(s & set(DEV_NOTES))
     if len(cmd) > 1:
-        raise ValueError("上一页与下一页命令音符（C2/C#2）同时出现")
+        raise ValueError("上一页与下一页命令音符 C2/C#2 同时出现")
     if not cmd:
-        raise ValueError("只有设备音符、没有命令音符（C2/C#2）")
+        raise ValueError("只有设备音符、没有命令音符 C2/C#2")
     if not devs:
-        raise ValueError("命令音符没有配对设备音符（C4–A4）")
+        raise ValueError("命令音符没有配对设备音符 C4–A4")
     return cmd.pop(), devs
 
 
@@ -165,13 +165,13 @@ def push_turn(dev, dir_, tasker_port, test=False):
     name = dev.get("name") or "设备%d" % dev.get("slot")
     ip = dev.get("ip")
     if not valid_push_ip(ip):
-        return False, "翻谱推送失败（%s）：目标 IP 非法（仅限热点私网地址）" % name
+        return False, "翻谱推送失败：%s，目标 IP 非法，仅限热点私网地址" % name
     body = json.dumps({"dir": dir_, **({"test": 1} if test else {})})
     t0 = time.monotonic()
     err = _push_post(ip, tasker_port, body)
     if err:
-        return False, "翻谱推送失败（%s %s → %s）：%s" % (name, dir_, ip, err)
-    return True, "翻谱已推送（%s %s %dms）" % (
+        return False, "翻谱推送失败 %s %s → %s：%s" % (name, dir_, ip, err)
+    return True, "翻谱已推送：%s %s %dms" % (
         name, dir_, int((time.monotonic() - t0) * 1000))
 
 
@@ -335,7 +335,7 @@ class DeviceRegistry:
                 d = next((x for x in self._devices
                           if x.get("slot") == slot), None)
                 if d is None:
-                    skips.append("槽位 %d 未配对（音符 %d），跳过" % (slot, n))
+                    skips.append("槽位 %d 未配对，音符 %d，跳过" % (slot, n))
                 elif not d.get("enabled", True):
                     skips.append("设备「%s」已停用，跳过" % d.get("name"))
                 elif not d.get("ip"):

@@ -1125,10 +1125,10 @@ class App:
                                         % dn)
                         return
                     self._launch_daw("%s 已退净，已自动启动"
-                                     "（冷启动约 30 秒）" % dn)
+                                     "，冷启动约 30 秒" % dn)
                 threading.Thread(target=launch, daemon=True).start()
                 return
-            self._launch_daw("%s 未运行，已自动启动（冷启动约 30 秒）" % dn)
+            self._launch_daw("%s 未运行，已自动启动，冷启动约 30 秒" % dn)
         except Exception as e:
             self.q.put("%s 自检失败：%s" % (dn, _err(e)))
 
@@ -1410,7 +1410,7 @@ class App:
         dev = mb._pick(mb._out_devices(), self.clock_hint)
         if dev is None:
             self.q.put("MMC 输出口未启动：找不到含「%s」的输出端口"
-                       "（定位点定位不可用）" % self.clock_hint)
+                       "，定位点定位不可用" % self.clock_hint)
             return
         h, err = mb.open_out(dev[0])
         if h is None:
@@ -2041,7 +2041,7 @@ class App:
         self._persist()
         self._refresh()
         self.q.put("《%s》定位点已%s"
-                   % (song["name"], "启用" if on else "停用（条目已还原整曲）"))
+                   % (song["name"], "启用" if on else "停用，条目已还原整曲"))
 
     def _check_goto_ack(self):
         """GOTO 无回执告警：发送 1.2 秒后时码位置无变化 → MMC 链路存疑。

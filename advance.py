@@ -131,24 +131,24 @@ class AdvanceWatch:
                         and now - self._last_stop >= 3.0:
                     self._stop_tries += 1
                     self._last_stop = now
-                    self.on_event("工程播到结尾（已播 %.0f 秒 / 时长 %.0f 秒）"
+                    self.on_event("工程播到结尾，已播 %.0f 秒 / 时长 %.0f 秒"
                                   "→ 自动停止走带%s" % (
                                       played, self.duration,
                                       "" if self._stop_tries == 1
-                                      else "（重试 %d/2）" % (self._stop_tries - 1)))
+                                      else "，重试 %d/2" % (self._stop_tries - 1)))
                     self.on_stop_transport()
                 return
             if played >= self.duration * FINISH_RATIO and self._reached:
                 # 位置在曲尾且「唱到过」曲尾——暂停态拖光标到曲尾不满足
                 # 后者（_reached 只由 QF 播放点亮），不切
                 self._fired = True
-                self.on_event("走带已停（已播 %.0f 秒 / 时长 %.0f 秒）"
+                self.on_event("走带已停，已播 %.0f 秒 / 时长 %.0f 秒"
                               "→ 自动切换下一首" % (played, self.duration))
                 finished = True
             else:
                 if not self._dead_reported:
                     self._dead_reported = True
-                    self.on_event("走带停止（已播 %.0f 秒，未满时长 %.0f 秒，"
-                                  "不切换）" % (played, self.duration))
+                    self.on_event("走带停止，已播 %.0f 秒，未满时长 %.0f 秒，"
+                                  "不切换" % (played, self.duration))
                 return
         self.on_finished()              # 锁外触发，避免回调死锁

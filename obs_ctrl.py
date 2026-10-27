@@ -555,7 +555,7 @@ class ObsController:
             raise ObsError("OBS 未运行")
         r = launch_detached(exe, "--disable-shutdown-check --minimize")
         if r <= 32:
-            raise ObsError("启动 OBS 失败（代码 %s）" % r)
+            raise ObsError("启动 OBS 失败，代码 %s" % r)
         # 等端口就绪（OBS 起来要几秒）
         deadline = time.time() + 30
         while time.time() < deadline:
@@ -566,5 +566,5 @@ class ObsController:
                     return True
             except OSError:
                 time.sleep(1)
-        raise ObsError("OBS 已启动但 30 秒内 4455 端口没就绪"
-                       "（检查 OBS 的 WebSocket 服务器设置是否启用）")
+        raise ObsError("OBS 已启动但 30 秒内 4455 端口没就绪，"
+                       "请检查 OBS 的 WebSocket 服务器设置是否启用")

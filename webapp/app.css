@@ -320,7 +320,7 @@ input.invalid { border-color: var(--err) !important; }
 .mq { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mq.marq { text-overflow: clip; animation: marq 14s var(--ease) infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .mq.marq { animation: none; }
+  .mq.marq { animation: none; text-overflow: ellipsis; }
 }
 .mid { font-size: var(--f-xl); }
 #clock { font-variant-numeric: tabular-nums; margin-top: var(--s2); }

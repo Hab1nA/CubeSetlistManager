@@ -112,6 +112,7 @@ function marquee(el) {
   el.dataset.txt = txt;
   el.dataset.mw = String(w);
   el.classList.remove("marq");
+  el.style.removeProperty("--marq");
   const full = el.scrollWidth;
   if (full > w + 2) {
     el.style.setProperty("--marq", (w - full) + "px");
@@ -898,7 +899,7 @@ function plRow(i, it) {
   const no = document.createElement("span");
   no.className = "no";
   const nm = document.createElement("span");
-  nm.className = "nm";
+  nm.className = "nm mq";
   const dur = document.createElement("span");
   dur.className = "dur " + durCls(it.durSrc);
   dur.textContent = durText(it);
@@ -2273,7 +2274,8 @@ async function refreshVj(force) {
     $("#vj-mute").checked = !!d.obs.vjMute;
     const ms = $("#vj-media-st");
     ms.textContent = d.obs.mediaInput || "未配置";
-    ms.className = "stat-big" + (d.obs.mediaInput ? "" : " dim");
+    ms.className = "stat-big mq" + (d.obs.mediaInput ? "" : " dim");
+    marquee(ms);
     refreshVjMap((d.obs.videoRoot || "").trim(), !!force);
   } catch { /* 瞬断：进页/保存会重拉 */ }
 }

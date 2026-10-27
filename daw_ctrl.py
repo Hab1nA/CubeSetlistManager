@@ -449,9 +449,9 @@ class DawController:
                     break                   # S1：直接换歌（同窗替换，不弹框）
                 self._close(cur[0])
             else:
-                raise SwitchError("工程窗口关不完（异常状态）")
+                raise SwitchError("工程窗口关不完：异常状态")
             opened = self._open(path)
-            self._log("切换完成：《%s》已打开（按「开始」播放）"
+            self._log("切换完成：《%s》已打开"
                       % project_name_from_title(opened))
         except SwitchError as e:
             self._log("切换失败：%s" % e)
@@ -469,7 +469,7 @@ class DawController:
     def _close(self, hwnd):
         """PostMessage WM_CLOSE 直达窗口（Cubase E2E 实测 0.5s 生效）。
         有未保存修改时弹确认框：自动保存策略=对弹窗仿人回车（默认键=保存）。"""
-        self._log("关闭工程（WM_CLOSE）…")
+        self._log("关闭工程…")
         _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
         deadline = time.time() + CLOSE_TIMEOUT
         kicked = False
@@ -485,7 +485,7 @@ class DawController:
                 _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
             answered = self._drain_dialogs("关闭") or answered
             time.sleep(0.4)
-        raise SwitchError("关闭超时（有无未处理的确认框？）")
+        raise SwitchError("关闭超时：有无未处理的确认框？")
 
     def _open(self, path):
         """统一走 CLI：未运行=冷启动；已运行=单实例转交打开。
@@ -520,14 +520,14 @@ class DawController:
                     time.sleep(0.5)
                 # 转交未响应：该工程的个体状态所致（非开始页普遍行为），
                 # 退出整个应用再带路径冷启动（开始页无未保存内容，无损）
-                self._log("转交未响应（该工程的个体状态），退出后重新启动"
-                          "（约 10 秒）…")
+                self._log("转交未响应：该工程的个体状态，退出后重新启动"
+                          "，约 10 秒…")
                 _user32.PostMessageW(frame, WM_CLOSE, 0, 0)
                 wait_exit(45)
-        self._log("启动打开工程（单实例转交/冷启动）…")
+        self._log("启动打开工程…")
         r = launch_detached(self.exe, '"%s"' % path)   # 参数必须带引号
         if r <= 32:
-            raise SwitchError("启动失败（ShellExecute 代码 %s）" % r)
+            raise SwitchError("启动失败，ShellExecute 代码 %s" % r)
         title = self._wait_open(name, path)
         self._log("工程窗口已出现：《%s》" % name)
         return title
@@ -550,7 +550,7 @@ class DawController:
                 launch_detached(self.exe, '"%s"' % path)
                 kick_at = None              # 只补一次，弹窗再次放行才再补
             time.sleep(0.5)
-        raise SwitchError("等待《%s》窗口超时（%d 秒）" % (name, OPEN_TIMEOUT))
+        raise SwitchError("等待《%s》窗口超时 %d 秒" % (name, OPEN_TIMEOUT))
 
     def _drain_dialogs(self, stage):
         """处理自绘弹窗一轮（详见 _drain），返回是否放了确认框。"""
@@ -584,9 +584,9 @@ def _drain(f, stage, seen, log):
                 continue
         elif not any(m in t for m in f["dialog_enter_marks"]):
             if any(m in t for m in f["dialog_log_marks"]):
-                log("[%s] 弹窗「%s」（仅记录，不按键）" % (stage, t))
+                log("[%s] 弹窗「%s」，仅记录不按键" % (stage, t))
             else:
-                log("[%s] 未知弹窗「%s」（不按键）" % (stage, t))
+                log("[%s] 未知弹窗「%s」，不按键" % (stage, t))
             seen.add((h, t))
             continue
         log("[%s] 弹窗「%s」→ %s" % (stage, t,
