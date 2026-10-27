@@ -236,6 +236,7 @@ const pageOn = (...ids) => ids.some(id => curPage === id);
 function sbNote() {
   const el = $("#sb-note");
   if (!el) return;
+  el.classList.remove("err");   // 断连标识只在 poll 失败路径挂：正常轮询即摘
   const note = document.querySelector("#p-" + curPage + " .page-note");
   el.textContent = note ? note.textContent.replace(/\s+/g, " ").trim() : "";
 }
@@ -310,12 +311,15 @@ document.addEventListener("keydown", e => {
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT"
             || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-    if (typeof stCur !== "number" || !stState) return;
+    if (!stState) return;
     e.preventDefault();
-    const i = Math.min(stState.songs ? stState.songs.length - 1 : 0,
-                       Math.max(0, stCur + (e.key === "ArrowRight" ? 1 : -1)));
-    const s = stState.songs ? stState.songs[i] : null;
-    if (s && i !== stCur) switchTo(i, null, false, s.key);
+    // cur 未定（未切过歌=null）归一 -1：→=第一首，与 NEXT 卡同口径
+    const cur = typeof stCur === "number" ? stCur : -1;
+    const rows = stState.songs || [];
+    const i = Math.min(rows.length - 1,
+                       Math.max(0, cur + (e.key === "ArrowRight" ? 1 : -1)));
+    const s = rows[i];
+    if (s && i !== cur) switchTo(i, null, false, s.key);
   } else if (e.key === "r" || e.key === "R") {
     if (!pageOn("console")) return;
     e.preventDefault();
@@ -404,7 +408,7 @@ function switchTo(i, btn, dbl, key) {
   // 400ms 窗内 t 与 t+0.45s 两击可双发，第二发对同曲再来一次完整关开
   // 工程（结论攻击实证）
   if (!dbl && Date.now() - swLastFire < 900) return;
-  if (st && st.confirm && st.open && typeof st.cur === "number"
+  if (btn && st && st.confirm && st.open && typeof st.cur === "number"
       && i !== st.cur) {
     if (dbl && btn && !btn.dataset.armed)
       toast("再操作一次确认切换");

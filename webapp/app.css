@@ -431,6 +431,8 @@ input.invalid { border-color: var(--err) !important; }
 #sl-search { background: var(--input-bg); color: var(--fg);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
   width: 240px; }
+#p-setlist { padding-bottom: 8px; }   /* 内容区下缘距底栏=page-foot 的
+                                           sticky bottom 8px：各页同值 */
 #p-setlist.on { display: flex; flex-direction: column;
   height: 100%; min-height: 420px; }
 .cols { display: grid; grid-template-columns: 1fr 460px;
@@ -536,6 +538,9 @@ input.invalid { border-color: var(--err) !important; }
    30px 同样约束另两卡——stat-big/evt-log 顶距三卡一致 */
 .stat-head { display: flex; align-items: flex-start; gap: var(--s2);
   min-height: 30px; }
+/* 键盘/VJ 状态卡无 stat-head 包裹：直接子 lbl 同用 30px 行高，
+   子标题→首行元素垂直间距与踩钉三卡一致（用户口径以踩钉为准） */
+.stat-cards .card.stat > .lbl { min-height: 30px; }
 .stat-head .tgl { margin-left: auto; }
 .stat-big { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1); }
 .kv { display: flex; justify-content: space-between; align-items: center;
@@ -645,8 +650,8 @@ input.invalid { border-color: var(--err) !important; }
   gap: 10px; }
 .vj-cell { cursor: default; }   /* padding 随 .slot（10px 12px），同语言同值 */
 .vj-empty { grid-column: 1 / -1; }
-.vj-cell .s-note { align-self: flex-start; font-family: Consolas, monospace;
-  background: var(--sur-3); border-radius: 4px; padding: 1px 6px; }
+.vj-cell .s-note { align-self: flex-start; }   /* 无底无内距：与音色
+                                                    映射卡音名同构左对齐 */
 .vj-cell .s-pc { font-size: var(--f-md); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .vj-cell.live { border-color: var(--accent);
