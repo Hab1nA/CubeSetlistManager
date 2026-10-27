@@ -32,5 +32,9 @@ android {
 
 dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    // 扫码连接：zxing 内嵌扫描页（含相机权限申请）；appcompat 为其
+    // ScanActivity 运行时依赖（宿主主题保持非 appcompat 不受影响）
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
     testImplementation("junit:junit:4.13.2")
 }

@@ -25,6 +25,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.zxing.integration.android.IntentIntegrator
 import org.json.JSONObject
 
 /** WebView 壳：加载电脑端 APP 版控制页（http://<ip>:8767/），页面代码零改动。
@@ -192,6 +193,12 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(16) })
+            addView(bigButton("扫码连接").apply {
+                setOnClickListener { startScan() }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) })
         }
         val root = FrameLayout(this).apply {
             // edge-to-edge：按系统栏+刘海实际尺寸让出边界（targetSdk 35 强制）
@@ -290,6 +297,35 @@ class MainActivity : Activity() {
         }
         mainHandler.postDelayed(timeoutTask!!, 15000)
         webView.loadUrl(url)
+    }
+
+    /** 扫设置页二维码直连：zxing 内嵌扫描页（自带相机权限申请），
+     *  取消返回空结果不动作。 */
+    private fun startScan() {
+        IntentIntegrator(this).apply {
+            setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            setPrompt("对准电脑端设置页的二维码")
+            setBeepEnabled(false)
+            setOrientationLocked(true)
+        }.initiateScan()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int,
+                                  data: Intent?) {
+        val res = IntentIntegrator.parseActivityResult(requestCode, resultCode,
+                                                       data) ?: return
+        val contents = res.contents ?: return          // 取消扫码
+        val raw = if ("://" in contents) contents else "http://$contents"
+        val host = android.net.Uri.parse(raw).host
+        if (host == null || !PRIVATE_HOST.matches(host)) {
+            showStatus("二维码不是本软件的连接地址", true)
+            return
+        }
+        val url = raw.trimEnd('/')   // 与 addrOkUrl 同基准，否则自动直连失配
+        addrInput.setText(url.removePrefix("http://"))
+        prefs().edit().putString("addr", url).apply()
+        connect(url)
     }
 
     private fun doConnect() {
