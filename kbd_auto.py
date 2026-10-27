@@ -551,7 +551,7 @@ class ToneSwitcher:
                 # 发送线程绝不允许静默死亡：死一次=音色切换/移调全场
                 # 失效且零日志（load_slots 类型洞曾可经 describe_slot 炸死）
                 try:
-                    self._log("音色发送异常（已恢复）：%s: %s"
+                    self._log("音色发送异常，已恢复：%s: %s"
                               % (type(e).__name__, e))
                 except Exception:
                     pass

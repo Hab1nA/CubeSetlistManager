@@ -251,7 +251,7 @@ class ScoreTurnHub:
             except Exception as e:
                 # worker 绝不允许静默死亡（死=翻谱推送全场失效且零日志）
                 try:
-                    self._report("翻谱处理异常（已恢复）：%s: %s"
+                    self._report("翻谱处理异常，已恢复：%s: %s"
                                  % (type(e).__name__, e))
                 except Exception:
                     pass
@@ -260,7 +260,7 @@ class ScoreTurnHub:
         try:
             cmd, devs = combo_evaluate(batch)
         except ValueError as e:
-            self._report("翻谱组合非法：%s（已忽略）" % e)
+            self._report("翻谱组合非法，已忽略：%s" % e)
             return
         dir_ = "prev" if cmd == CMD_PREV else "next"
         for dev in self.registry.targets(devs):
@@ -379,10 +379,10 @@ class DeviceRegistry:
             dev["ip"] = ip
             out = dict(dev)
         if moved:
-            self._report("槽位 %d 被「%s」接管（原「%s」）"
+            self._report("槽位 %d 被「%s」接管，原「%s」"
                          % (out["slot"], out["name"], moved))
         self._changed()
-        self._report("设备认领：槽位 %d「%s」（%s）"
+        self._report("设备认领：槽位 %d「%s」，IP %s"
                      % (out["slot"], out["name"], ip))
         return out, None
 
@@ -2166,7 +2166,7 @@ class WebRemote:
         self._stop_midi()
         if not self.enabled:
             self._hotspot_off()
-            self._report("移动端遥控已停用（设置页可开启）")
+            self._report("移动端遥控已停用")
             return
         if self.mode == "lan":
             self._rebuild_lan()
@@ -2178,7 +2178,7 @@ class WebRemote:
             return
         self.hotspot_owner = not st.get("was_on", False)
         ip = st.get("ip")
-        self._report("热点已开（%s）%s" % (
+        self._report("热点已开：%s%s" % (
             st.get("ssid") or "无 SSID",
             "，本机 IP %s" % ip if ip else "，未取到本机热点 IP"))
         if not ip:
@@ -2204,9 +2204,9 @@ class WebRemote:
             if len(cands) == 1:
                 ip = cands[0]
             elif cands:
-                self._report("网页服务未启动：本机有多个局域网网卡（%s），"
+                self._report("网页服务未启动：本机有多个局域网网卡 %s，"
                              "在设置页「服务网卡」指定一个"
-                             % "、".join("%s（%s）" % (name, i)
+                             % "、".join("%s %s" % (name, i)
                                          for i, name in infos))
                 return
             else:
@@ -2235,29 +2235,27 @@ class WebRemote:
                                     self.server_port, page_web,
                                     self._report)
         except OSError as e:
-            self._report("网页服务启动失败（%s:%d）：%s"
+            self._report("网页服务在 %s:%d 启动失败：%s"
                          % (ip, self.server_port, _err(e)))
             return
         threading.Thread(target=self.server.serve_forever,
                          kwargs={"poll_interval": 0.5},
                          daemon=True).start()
-        self._report("网页遥控已就绪：http://%s:%d/（平板连%s后访问）"
-                     % (ip, self.server_port,
-                        "热点" if self.mode == "hotspot" else "同一网络"))
+        self._report("网页遥控已就绪：http://%s:%d/"
+                     % (ip, self.server_port))
         # APP 版页面（appPort）：承载翻谱设置；浏览器版（serverPort）无翻谱功能
         try:
             self.app_server = _bind_web(self.app, self.registry,
                                         lambda: self.tasker_port, ip,
                                         self.app_port, page_app, self._report)
         except OSError as e:
-            self._report("APP 页面服务启动失败（%s:%d）：%s"
+            self._report("APP 页面服务在 %s:%d 启动失败：%s"
                          % (ip, self.app_port, _err(e)))
             return
         threading.Thread(target=self.app_server.serve_forever,
                          kwargs={"poll_interval": 0.5},
                          daemon=True).start()
-        self._report("APP 页面已就绪：http://%s:%d/（在翻谱 APP 内访问）"
-                     % (ip, self.app_port))
+        self._report("APP 页面已就绪：http://%s:%d/" % (ip, self.app_port))
 
     def _stop_server(self):
         for attr in ("server", "app_server"):
@@ -2276,7 +2274,7 @@ class WebRemote:
 
     def _start_midi(self):
         if not self.midi_hint:
-            self._report("翻谱信号监听未配置端口（设置页「翻谱端口名称」）")
+            self._report("翻谱信号监听未配置端口")
             return
         if self.hub is None:
             self.hub = ScoreTurnHub(self.registry, lambda: self.tasker_port,
@@ -2287,7 +2285,7 @@ class WebRemote:
             self.midi_port = None
             self._report("翻谱信号监听未启动：%s" % e)
         else:
-            self._report("翻谱信号监听已启动（%s）" % self.midi_port.name)
+            self._report("翻谱信号监听已启动：%s" % self.midi_port.name)
 
     def _stop_midi(self):
         if self.midi_port is not None:

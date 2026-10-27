@@ -656,7 +656,7 @@ def note_handler(ctl, sync, report=print):
             except Exception as e:
                 # 工作线程绝不允许静默死亡（死=VJ 触发全场失效且零日志）
                 try:
-                    report("音符处理异常（已恢复）：%s: %s"
+                    report("音符处理异常，已恢复：%s: %s"
                            % (type(e).__name__, e))
                 except Exception:
                     pass

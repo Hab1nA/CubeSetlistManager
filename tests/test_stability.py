@@ -626,10 +626,10 @@ def test_winmm_poison_fastfail(monkeypatch):
 def test_mainloop_daemon_wiring():
     """后台线程静默死亡家族的兜底锚：OBS 重连/音符/翻谱/音色发送四循环
     异常均就地吞掉并上报，不带走线程。"""
-    assert "连接循环异常（已恢复）" in _src("obs_ctrl.py")
-    assert "音符处理异常（已恢复）" in _src("midi_bridge.py")
-    assert "翻谱处理异常（已恢复）" in _src("web_remote.py")
-    assert "音色发送异常（已恢复）" in _src("kbd_auto.py")
+    assert "连接循环异常，已恢复" in _src("obs_ctrl.py")
+    assert "音符处理异常，已恢复" in _src("midi_bridge.py")
+    assert "翻谱处理异常，已恢复" in _src("web_remote.py")
+    assert "音色发送异常，已恢复" in _src("kbd_auto.py")
 
 
 def test_title_load_off_main_thread():

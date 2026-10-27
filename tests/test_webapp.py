@@ -829,7 +829,7 @@ def test_thread_excepthook_logs(fake_app=None):
         exc_type=ValueError, exc_value=ValueError("探针线程炸了"),
         exc_traceback=None, thread=types.SimpleNamespace(name="probe"))
     app._thread_exc(args)
-    assert any("后台线程异常（probe）" in m and "探针线程炸了" in m
+    assert any("后台线程 probe 异常" in m and "探针线程炸了" in m
                for m in app.q._l)
     # 异常消息为空时退回类名（_err 口径）
     args2 = types.SimpleNamespace(

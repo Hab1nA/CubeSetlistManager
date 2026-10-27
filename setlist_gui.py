@@ -1114,7 +1114,7 @@ class App:
                 if daw_ctrl.ui_alive():
                     self.q.put("%s 已在运行" % dn)
                     return
-                self.q.put("%s 正在退出（界面已无），退净后自动启动…" % dn)
+                self.q.put("%s 正在退出，退净后自动启动…" % dn)
 
                 def launch():
                     if not daw_ctrl.wait_exit():
@@ -1142,7 +1142,7 @@ class App:
         if r > 32:
             self.q.put(ok_msg)
         else:
-            self.q.put("%s 自动启动失败（ShellExecute 代码 %s）"
+            self.q.put("%s 自动启动失败，ShellExecute 代码 %s"
                        % (self.facts["display_name"], r))
 
     def _startup(self):
@@ -1152,7 +1152,7 @@ class App:
         打开被控软件」总闸控制（关闭=三个都不拉，对齐退出关闭的关闭面）。"""
         try:
             if not self.launch_apps:
-                self.q.put("启动不自动打开被控软件（设置）：DAW/OBS/"
+                self.q.put("启动时不打开被控软件：DAW/OBS/"
                            "loopMIDI 均未拉起，需要时请手动打开")
             else:
                 self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
@@ -1171,7 +1171,7 @@ class App:
                             raise SystemExit("找不到 loopMIDI.exe")
                         if launch_detached(exe) <= 32:
                             raise SystemExit("拉起 loopMIDI 失败")
-                        self.q.put("loopMIDI 已拉起（端口联动已停用）")
+                        self.q.put("loopMIDI 已拉起，端口联动已停用")
                 except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
                     self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
                                % e)
@@ -1181,11 +1181,11 @@ class App:
                     if self.launch_apps and self._obs_autostart_cfg and (
                             _load_config().get("obs") or {}).get(
                                 "projectorMonitor", ""):
-                        self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
+                        self.q.put("OBS 未运行，将自动拉起")
                     else:
-                        self.q.put("OBS 未运行（不自动拉起：启动打开被控"
+                        self.q.put("OBS 未运行，不自动拉起：启动打开被控"
                                    "软件或 OBS 自动启动未开，或未配置投屏"
-                                   "位置）")
+                                   "位置")
             except Exception:
                 pass
             # VJ 链：OBS 客户端 → 走带同步/自动推进 → MIDI 监听（相互依赖，
@@ -1232,7 +1232,7 @@ class App:
                             self.clock_hint, lambda n, v: None,
                             on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
                             on_sysex=self.mtc.full_frame)
-                        self.q.put("时码监听已启动（%s）" % self.clock_port.name)
+                        self.q.put("时码监听已启动：%s" % self.clock_port.name)
                     else:
                         self.mtc = None
                         self.q.put("时码监听已停用：未设时码端口，走带三态/"
@@ -1245,7 +1245,7 @@ class App:
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
                 if self.port is not None:
-                    self.q.put("MIDI 监听已启动（%s）" % self.port.name)
+                    self.q.put("MIDI 监听已启动：%s" % self.port.name)
             except Exception as e:
                 self.start_err = "VJ 链未启动：%s" % _err(e)
                 self.q.put(self.start_err)
@@ -1271,7 +1271,7 @@ class App:
                     if self.kb_hint:
                         self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
                                                           self._on_kb_msg)
-                        self.q.put("键盘自动化监听已启动（%s）"
+                        self.q.put("键盘自动化监听已启动：%s"
                                    % self.kb_port.name)
                     else:
                         self.q.put("键盘自动化监听已停用")
@@ -1286,14 +1286,14 @@ class App:
             # 踩钉（监听器已在构造期创建并启动设备桥，这里补试 MIDI 口）
             try:
                 if self.pedal.try_open():
-                    self.q.put("CC 踩钉监听已启动（%s）" % self.pedal.name)
+                    self.q.put("CC 踩钉监听已启动：%s" % self.pedal.name)
                 elif self.pedal_hint:
                     self.q.put("未找到踩钉口「%s」，每 10 秒自动重试"
                                % self.pedal_hint)
                 if self.pedal.hid_active:
                     disp = (pedal.device_display(self.pedal_device_hint)
                             if self.pedal_device_hint else "未选择设备")
-                    self.q.put("键盘踩钉监听已启动（设备：%s）" % disp)
+                    self.q.put("键盘踩钉监听已启动：%s" % disp)
             except Exception as e:
                 self.q.put("踩钉监听未启动：%s" % _err(e))
             # 移动端遥控 + 翻谱推送（整组独立降级：总开关关=只报停用）
@@ -1417,13 +1417,13 @@ class App:
             self.q.put("MMC 输出口未启动：%s" % err)
             return
         self.mmc_out = h
-        self.q.put("MMC 输出已启动（%s）" % dev[1])
+        self.q.put("MMC 输出已启动：%s" % dev[1])
 
     def _load_songs(self):
         root = self.ccfg["projectsRoot"]
         if not os.path.isdir(root):
-            self.q.put("工程库不存在：%s（改 config.json 的"
-                       " dawSettings.projectsRoot）" % root)
+            self.q.put("工程库不存在：%s，请改 config.json 的"
+                       " dawSettings.projectsRoot" % root)
             return
         songs = scan_library(root, self.facts["song_ext"])
         self.by_key = {s["key"]: s for s in songs}
@@ -1462,7 +1462,7 @@ class App:
                 break
         self._probe_durations(songs)
         self.calls.put(self._refresh)
-        self.q.put("素材库 %d 首，播放列表 %d 首（%s）"
+        self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
 
     def _probe_durations(self, songs):
@@ -1477,7 +1477,7 @@ class App:
             return
         self.durations.update(fresh)
         self._persist()
-        self.q.put("已重探工程时长：%d 首有更新（%d 首未知，需手填）"
+        self.q.put("已重探工程时长：%d 首有更新，%d 首未知，需手填"
                    % (len(fresh),
                       sum(1 for s in songs
                           if not self.durations.get(s["key"]))))
@@ -1642,14 +1642,14 @@ class App:
                         f8_mark = time.monotonic()
                     elif time.monotonic() - f8_mark > 5.0:
                         f8_hinted = True
-                        self.q.put("检测到 MIDI 时钟（F8）但未收到时码："
+                        self.q.put("检测到 MIDI 时钟 F8 但未收到时码："
                                    "请在工程同步设置勾选 MTC 时码输出到"
                                    "该端口，否则走带三态/进度/自动推进"
                                    "不可用")
             except Exception as e:
                 # 看门狗线程绝不允许静默死亡
                 try:
-                    self.q.put("后台监控异常（已自动恢复）：%s" % _err(e))
+                    self.q.put("后台监控异常，已自动恢复：%s" % _err(e))
                 except Exception:
                     pass
             time.sleep(mb.POLL_SEC)
@@ -1716,7 +1716,7 @@ class App:
         if not slot:
             if d1 not in self._kb_warned:   # 循环播放时同一告警只记一次
                 self._kb_warned.add(d1)
-                self.q.put("音符 %s 未配置音色映射（用「键盘自动化」窗口录制）"
+                self.q.put("音符 %s 未配置音色映射，在「编排」页录制"
                            % kbd_auto.note_name(d1))
             return
         switcher.submit(slot, why=kbd_auto.note_name(d1))
@@ -1796,7 +1796,7 @@ class App:
                 self.cur = (min(self.cur, len(self.pl_keys) - 1)
                             if self.pl_keys else None)
                 if self.cur is not None:
-                    self.q.put("已移除当前歌曲，自动指向下一首（工程保持打开）")
+                    self.q.put("已移除当前歌曲，自动指向下一首，工程保持打开")
         self._persist()
         self._refresh()
         e = self._resolve_entry(key)
@@ -1813,7 +1813,7 @@ class App:
         self.cur = None
         self._persist()
         self._refresh()
-        self.q.put("播放列表已清空（素材库不受影响）")
+        self.q.put("播放列表已清空，素材库不受影响")
 
     def _move(self, delta):
         sel = self.pl.curselection()
@@ -1859,7 +1859,7 @@ class App:
                 and not self.ctrl.busy \
                 and self.cur_song_path == entry["path"] \
                 and self.mmc_out is not None:
-            self.q.put("切换到《%s》（同工程定位，无需重开）" % entry["display"])
+            self.q.put("切换到《%s》：同工程定位，无需重开" % entry["display"])
             threading.Thread(target=self._goto_worker,
                              args=(i, entry, play_after),
                              daemon=True).start()
@@ -1889,7 +1889,7 @@ class App:
             self._load_gen = getattr(self, "_load_gen", 0) + 1
         self._kb_warned = set()
         self._refresh()
-        self.q.put("切换到《%s》…（%s）"
+        self.q.put("切换到《%s》…：%s"
                    % (entry["display"], "已排队" if via == "排队" else via))
         return True
 
@@ -1953,7 +1953,7 @@ class App:
         # 打开后再测一次时长；手动设定不被自动识别覆盖（需要时点「重新识别」）
         d, left = _read_span(entry["path"])
         if self.dur_src.get(key) == "manual":
-            self.q.put("《%s》保留手动时长 %s（工程内为 %s，可点「重新识别」改用）"
+            self.q.put("《%s》保留手动时长 %s：工程内为 %s，可点「重新识别」改用"
                        % (entry["song_name"], cpr_meta.fmt_mmss(self.durations.get(key)),
                           cpr_meta.fmt_mmss(d)))
         elif d and d != self.durations.get(key):
@@ -1962,7 +1962,7 @@ class App:
             self.q.put("《%s》时长更新为 %s" % (entry["song_name"],
                                                 cpr_meta.fmt_mmss(d)))
         elif not d and not self.durations.get(key):
-            self.q.put("《%s》时长未知（工程未设循环定位条）：可用「写入时长」手填"
+            self.q.put("《%s》时长未知：工程未设循环定位条，可用「写入时长」手填"
                        % entry["song_name"])
         d = self.durations.get(key) or d   # 手动时长优先：watch 与横幅/推进
         if self.watch is not None:  # 同 _switch：watch 缺席降级态不炸后台线程
@@ -2058,8 +2058,8 @@ class App:
             # watch 刚 reset、ever_live 恒 False，用它会把告警永远哑掉
             return
         if self.mtc.position() == pre:
-            self.q.put("工程未响应定位：《%s》时码未变化（检查 DAW 已勾 "
-                       "MMC Slave 且输入口与 MMC 输出口为同一虚拟口）" % label)
+            self.q.put("工程未响应定位：《%s》时码未变化，请检查 DAW 已勾 "
+                       "MMC Slave 且输入口与 MMC 输出口为同一虚拟口" % label)
 
     # ---- 新前端（webui/平板 /app 页）命令面：主线程执行，经 calls 投递 ----
 
@@ -2780,7 +2780,7 @@ class App:
             try:
                 self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
                                                   self._on_kb_msg)
-                self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
+                self.q.put("键盘自动化监听已切换：%s" % self.kb_port.name)
             except kbd_auto.PortNotFound as e:
                 self.kb_err = str(e)
                 self.q.put("键盘自动化停用：%s" % e)
@@ -2908,7 +2908,7 @@ class App:
             def run():
                 d, left = _read_span(path)
                 if not d:
-                    self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
+                    self.q.put("《%s》工程内未设循环定位条，无法识别，保留现有值"
                                % name)
                     return
                 self.durations[key] = d
@@ -3012,11 +3012,11 @@ class App:
             return
         raw = self.dur_var.get().strip()
         if raw in ("自动时长", "未知"):
-            self.q.put("请输入时长：秒数或 分:秒（如 213 或 3:33）")
+            self.q.put("请输入时长：秒数或 分:秒，如 213 或 3:33")
             return
         sec = cpr_meta.parse_mmss(raw)
         if not sec:
-            self.q.put("请输入时长：秒数或 分:秒（如 213 或 3:33）")
+            self.q.put("请输入时长：秒数或 分:秒，如 213 或 3:33")
             return
         self.durations[key] = sec
         self.dur_src[key] = "manual"
@@ -3052,7 +3052,7 @@ class App:
         def run():
             d, left = _read_span(path)
             if not d:
-                self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
+                self.q.put("《%s》工程内未设循环定位条，无法识别，保留现有值"
                            % name)
                 return
             self.durations[key] = d
@@ -3093,11 +3093,11 @@ class App:
 
     def _transport(self, action):
         if self.ctrl is None:
-            self.q.put("服务未就绪（启动未完成）")
+            self.q.put("服务未就绪：启动未完成")
             return
         ts = self._transport_state()
         if transport_blocked(action, ts):
-            self.q.put("%s：「%s」忽略（状态互锁）" % (FOLLOW[ts], TX_NAMES.get(
+            self.q.put("%s：「%s」忽略，状态互锁" % (FOLLOW[ts], TX_NAMES.get(
                 action, action)))
             return
         if action == "play" and not daw_ctrl.current_project():
@@ -3164,7 +3164,7 @@ class App:
         """threading.excepthook：一次性后台线程的未捕获异常统一进日志
         （此前探针/装载/热应用线程死亡静默，演出中无从察觉）。"""
         try:
-            self.q.put("后台线程异常（%s）：%s"
+            self.q.put("后台线程 %s 异常：%s"
                        % (getattr(a.thread, "name", "?"),
                           _err(a.exc_value)))
         except Exception:
@@ -3172,7 +3172,7 @@ class App:
 
     def _panic(self):
         if self.ctrl is None:
-            self.q.put("服务未就绪（启动未完成）")
+            self.q.put("服务未就绪：启动未完成")
             return
         skip_keys = self._transport_state() != "playing"
         ctl = self.ctl
@@ -3184,7 +3184,7 @@ class App:
                 # （保存框/后台忙时 Cubase 停得慢，1 秒窗会误报未生效）
                 if self.watch is not None \
                         and self.watch.is_transport_live():
-                    self.q.put("全停核验：走带仍在播放（停止键未生效），"
+                    self.q.put("全停核验：走带仍在播放，停止键未生效，"
                                "请手动停止 DAW")
             # 对两琴发静音序列（All Notes Off/踏板抬/全发声关）：DAW 自动化
             # 轨的 CC64 延音或挂留音不随走带停止消失（QLab Panic 同款安全网）
@@ -3204,8 +3204,8 @@ class App:
             self.watch.suppress_advance()   #   独立成功）——裸调用会炸队列
         if skip_keys:
             known = bool(self.clock_hint) and self.clock_port is not None
-            self.q.put("全停：%s，走带键跳过（S1 空格会反向起播），"
-                       "自动推进已抑制、视频已熄灭；如 DAW 仍在播放请手动"
+            self.q.put("全停：%s，走带键跳过，S1 空格会反向起播；"
+                       "自动推进已抑制、视频已熄灭，如 DAW 仍在播放请手动"
                        "停止"
                        % ("本就未在播放" if known
                           else "时码未监听，走带状态未知"))
@@ -3242,7 +3242,7 @@ class App:
                         self.vj_hint,
                         mb.note_handler(self.ctl, self.sync,
                                         report=self.q.put))
-                    self.q.put("VJ 监听已切换（%s）" % self.port.name)
+                    self.q.put("VJ 监听已切换：%s" % self.port.name)
                 except SystemExit as e:
                     self.q.put("VJ 监听未启动：%s" % e)
         else:
@@ -3282,7 +3282,7 @@ class App:
                         self.clock_hint, lambda n, v: None,
                         on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
                         on_sysex=self.mtc.full_frame)
-                    self.q.put("时码监听已切换（%s）" % self.clock_port.name)
+                    self.q.put("时码监听已切换：%s" % self.clock_port.name)
                 except SystemExit as e:
                     self.mtc = None
                     self.q.put("时码监听未启动：%s" % e)
@@ -3306,7 +3306,7 @@ class App:
         else:
             try:
                 self.kb_port = kbd_auto.RawMidiIn(self.kb_hint, self._on_kb_msg)
-                self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
+                self.q.put("键盘自动化监听已切换：%s" % self.kb_port.name)
             except kbd_auto.PortNotFound as e:
                 self.kb_err = str(e)
                 self.q.put("键盘自动化停用：%s" % e)
@@ -3335,7 +3335,7 @@ class App:
         self.auto_advance = self.auto_var.get()
         if self.watch is not None:
             self.watch.set_armed(self.auto_var.get())
-            self.q.put("自动切换工程%s" % ("已开启（播完自动切下一首）"
+            self.q.put("自动切换工程%s" % ("已开启，播完自动切下一首"
                                         if self.auto_var.get() else "已关闭"))
         self._persist_config(autoAdvance=bool(self.auto_var.get()))
 
@@ -3598,7 +3598,7 @@ class App:
                 and time.time() > self._pedal_retry):  # 此前只盯 MIDI 口
             self._pedal_retry = time.time() + 10
             if ped.try_open():
-                self.q.put("CC 踩钉已连接（%s）" % ped.name)
+                self.q.put("CC 踩钉已连接：%s" % ped.name)
         self._update_transport_buttons()
         self._tick_banner()
         follow = self.log.yview()[1] > 0.99    # 上翻看历史时不强行滚回底部
@@ -3665,7 +3665,7 @@ class App:
             self.watch.reset()
             self.watch.set_duration(0, 0.0)   # 游离歌坐标未知：左偏移一并清
         self._refresh()
-        self.q.put("《%s》不在播放列表：不自动推进（NEXT 置空）" % name)
+        self.q.put("《%s》不在播放列表：不自动推进，NEXT 置空" % name)
 
     def _adopted_load(self, key, gen):
         """_adopt 的装载半程（后台线程）：读时长+音色映射（整文件 IO）。

@@ -535,7 +535,7 @@ class ObsController:
                 # 零日志）：捕获面以外的逃逸者（obs_ws json.loads 的
                 # ValueError 族、_ensure_media_input 的 KeyError 等响应
                 # 形状异常）同样按断线处理进重连
-                self.last_error = "连接循环异常（已恢复）：%s: %s" % (
+                self.last_error = "连接循环异常，已恢复：%s: %s" % (
                     type(e).__name__, e)
                 with self._lock:
                     self._ws = None
