@@ -203,9 +203,9 @@ check("9.first-content-uniform", len(set(d7["firstTops"])) == 1, g7)
 check("7.evt-lbl-gap-16", abs(d7["evtToLbl"] - 16) <= 3, g7)
 check("9b.lbl-top-16", abs(d7["lblTop"] - 16) <= 2, g7)
 
-# 8) 拦截开关与双踩输入框底对齐
+# 8) 拦截开关与双踩输入框底对齐（量拨杆 i 元素底，非带 padding 的盒底）
 g8 = js("(()=>{const s=document.getElementById('pd-intercept')"
-        ".closest('.switch');"
+        ".closest('.switch').querySelector('i');"
         "const i=document.getElementById('pd-win');"
         "return {dBottom:Math.round(s.getBoundingClientRect().bottom"
         "-i.getBoundingClientRect().bottom)}})()")

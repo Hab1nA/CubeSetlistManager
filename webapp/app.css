@@ -159,9 +159,9 @@ input:focus-visible, select:focus-visible {
    特异度须压过同值的 .card .field（:567 后位同级会反杀） */
 .card .grid2 .field, .card .grid3 .field { margin-bottom: 0; }
 .grid2 .field.wide, .grid2 .wide { grid-column: 1 / -1; }
-/* 网格内独立开关沉底：与同行 field 的输入框底线对齐（field 自带
-   margin-bottom 8，开关补同值才能真正对齐输入框底边） */
-.grid2 .switch.end { align-self: end; }
+/* 网格内独立开关沉底且去底部内边距：拨杆底边（而非带 4px padding 的
+   盒底）与同行 field 的输入框底边精确对齐 */
+.grid2 .switch.end { align-self: end; padding-bottom: 0; }
 .field-row { display: flex; gap: var(--s3); }
 .field-row .field { flex: 1; }
 input.invalid { border-color: var(--err) !important; }
