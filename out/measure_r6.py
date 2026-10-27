@@ -203,15 +203,17 @@ check("9.first-content-uniform", len(set(d7["firstTops"])) == 1, g7)
 check("7.evt-lbl-gap-16", abs(d7["evtToLbl"] - 16) <= 3, g7)
 check("9b.lbl-top-16", abs(d7["lblTop"] - 16) <= 2, g7)
 
-# 8) 拦截开关与双踩输入框底对齐（量拨杆 i 元素底，非带 padding 的盒底）
+# 8) 拦截开关与双踩输入框**垂直居中**（拨杆中心-输入框中心=0，用户口径）
 g8 = js("(()=>{const s=document.getElementById('pd-intercept')"
         ".closest('.switch').querySelector('i');"
         "const i=document.getElementById('pd-win');"
-        "return {dBottom:Math.round(s.getBoundingClientRect().bottom"
-        "-i.getBoundingClientRect().bottom)}})()")
+        "const kc=(s.getBoundingClientRect().top+s.getBoundingClientRect()"
+        ".bottom)/2,ic=(i.getBoundingClientRect().top+i.getBoundingClientRect()"
+        ".bottom)/2;"
+        "return {dCenter:Math.round(kc-ic)}})()")
 print("8 switch-align:", g8)
-check("8.switch-bottom-align",
-      isinstance(g8, dict) and abs(g8.get("dBottom", 999)) <= 3, str(g8))
+check("8.switch-center-align",
+      isinstance(g8, dict) and abs(g8.get("dCenter", 999)) <= 2, str(g8))
 js(UNSTUB)
 
 # ---- G1 长文本扫描：全页动态文本容器溢出检查 ----
