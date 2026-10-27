@@ -263,11 +263,17 @@ _FILE_LOG = None    # App.__init__ 里惰性创建（避免 import 期副作用�
 
 def _rotate(baks, path):
     """写前滚动备份：bak2→bak3、bak→bak2、当前→bak（误存坏数据可回退
-    最近三次；路径全部来自模块级字面量常量）。"""
+    最近三次；路径全部来自模块级字面量常量）。当前文件不可解析（损坏且
+    .corrupt 改名失败的残余）时不入备份链——不顶掉最近的好备份。"""
     for i in range(len(baks) - 1, 0, -1):
         if baks[i - 1].exists():
             os.replace(str(baks[i - 1]), str(baks[i]))
     if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                json.load(f)
+        except (ValueError, OSError):
+            return
         shutil.copy(str(path), str(baks[0]))
 
 
@@ -359,10 +365,18 @@ def _load_config():
 
 
 def _atomic_write(path, text):
-    """先写临时文件再原子替换，避免断电/崩溃截断数据文件。"""
+    """先写临时文件再原子替换，避免断电/崩溃截断数据文件；写后 fsync
+    确保 os.replace 前内容已落盘（断电后替换的是完整数据而非空/半件）。
+    fsync 需另开句柄：write_text 已闭柄，FlushFileBuffers（os.fsync 的
+    Windows 底层）要求写权句柄，故 O_RDWR 重开仅作刷盘用。"""
     p = _check_in_here(path)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
+    fd = os.open(os.fspath(tmp), os.O_RDWR)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(str(tmp), str(p))
 
 
@@ -1163,13 +1177,15 @@ class App:
                                % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
                 if not find_processes_by_prefix("obs64"):   # 这里只补状态
-                    if self.launch_apps and (
+                    # 与三重门口径一致（此处 ctl 未建，按同源配置组合判）
+                    if self.launch_apps and self._obs_autostart_cfg and (
                             _load_config().get("obs") or {}).get(
                                 "projectorMonitor", ""):
                         self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
                     else:
                         self.q.put("OBS 未运行（不自动拉起：启动打开被控"
-                                   "软件未开或未配置投屏位置）")
+                                   "软件或 OBS 自动启动未开，或未配置投屏"
+                                   "位置）")
             except Exception:
                 pass
             # VJ 链：OBS 客户端 → 走带同步/自动推进 → MIDI 监听（相互依赖，
@@ -2237,8 +2253,8 @@ class App:
                 return               # 投影恢复交给 on_connected（ws 连上后）
             if not ctl.apply_projector():
                 self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-            else:
-                ctl.close_projector()
+            # 配置了显示器=保持投影（仅显式改「无」才关，上方分支已覆盖）；
+            # 此处不得 close——否则保存任意 VJ 配置都会打灭投影
 
     def _settings_apply_web(self, p):
         """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
@@ -2835,10 +2851,12 @@ class App:
         kbd_auto.save_slots(path, clean, key=key)
         if hasattr(self, "_kbd_song_cache"):
             self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
-            self._kbd_cache_gen[song_key] = \
-                self._kbd_cache_gen.get(song_key, 0) + 1
-            self._kbd_song_cache.pop(song_key or self._kbd_song_key(),
-                                     None)                  # 脏缓存重装载
+            # 代际失效键与 pop 键统一：song_key=None（存当前装载曲）时按
+            # 解析后的装载键作废，否则在途后台装载不被作废（陈旧映射回写）
+            gen_key = song_key or self._kbd_song_key()
+            self._kbd_cache_gen[gen_key] = \
+                self._kbd_cache_gen.get(gen_key, 0) + 1
+            self._kbd_song_cache.pop(gen_key, None)      # 脏缓存重装载
         if path == self.cur_song_path:
             with self._load_lock:
                 if path == self.cur_song_path:   # 锁内复核：IO 期间切歌不串写

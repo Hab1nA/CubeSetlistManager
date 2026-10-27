@@ -1476,7 +1476,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _h_app_asset(self, path):
         """webapp/ 静态文件（新前端壳）。白名单后缀、目录恒定——无穿越面；
-        文件缺失回 404 JSON（与既有 API 风格一致）。"""
+        文件缺失回 404 JSON（与既有 API 风格一致）。简化版端点面不全，
+        不托管完整前端（避免半坏界面）。"""
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无新前端"})
+            return
         rel = path[len("/app"):].lstrip("/") or "index.html"
         if rel not in ("index.html", "app.css", "app.js"):
             self._json(404, {"error": "未知资源"})

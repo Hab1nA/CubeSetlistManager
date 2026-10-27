@@ -892,12 +892,13 @@ def test_launch_apps_vj_monitor_relaunch(monkeypatch):
     app._apply_obs_web(fake, None, None, "DP-1", None)
     assert launches == [1] and fake.ctl.cfg["projectorMonitor"] == "DP-1"
     assert fake.ctl.cfg["autoStart"] is True      # 三重门重算后放行
-    # 2) 已是投屏位置再保存：不重复拉
+    # 2) 已是投屏位置再保存：不重复拉，且不打灭投影
     app._apply_obs_web(fake, None, None, "DP-1", None)
     assert launches == [1] and fake.ctl.projected == 1   # 直接 apply_projector
-    # 3) 改回「无」：只关投影，不拉起（场景 2 应用同位已重关一次）
+    assert fake.ctl.closed == 0
+    # 3) 改回「无」：只关投影，不拉起
     app._apply_obs_web(fake, None, None, "", None)
-    assert launches == [1] and fake.ctl.closed == 2
+    assert launches == [1] and fake.ctl.closed == 1
     assert fake.ctl.cfg["autoStart"] is False
     # 4) 总闸关：即使无→投屏也不拉
     fake.launch_apps = False
