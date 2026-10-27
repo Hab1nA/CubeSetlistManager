@@ -8,6 +8,7 @@
 web 服务：WebRemote 主服务仍按用户配置绑定（热点/LAN）；桌面壳另起一个
 127.0.0.1 随机口的服务实例承载 /app（UI 专用，遥控语义零改动）。
 用法：python webui.py [主窗宽] [主窗高]"""
+import os
 import sys
 import threading
 import time
@@ -16,6 +17,35 @@ import webview
 
 import setlist_gui as sg
 import web_remote
+
+
+class _Shell:
+    """桌面壳专属 js_api 桥：仅窗口控制（演出模式置顶），业务动作仍全走
+    既有 HTTP 命令面不动摇。方法在 pywebview 的 js 线程执行。
+    置顶走 Win32 SetWindowPos：pywebview 的 Window.on_top 在 winforms 上
+    经 Form.TopMost 会 RecreateHandle，js 线程跨线程调用实测挂起。"""
+
+    def set_topmost(self, on):
+        import ctypes
+        u32 = ctypes.windll.user32
+        target = ctypes.c_void_p(-1 if on else -2)   # TOPMOST/NOTOPMOST
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def cb(h, _):
+            pid = ctypes.c_ulong()
+            u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+            if pid.value == os.getpid() and u32.IsWindowVisible(h):
+                found.append(h)
+            return True
+        u32.EnumWindows(cb, 0)
+        if not found:
+            return False
+        ok = True
+        for h in found:   # 只此一个可见顶层窗；保险遍历
+            ok &= bool(u32.SetWindowPos(
+                h, target, 0, 0, 0, 0, 0x1 | 0x2 | 0x10))  # NOSIZE|NOMOVE|NOACTIVATE
+        return ok
 
 
 def main():
@@ -69,7 +99,8 @@ def main():
     url = "http://127.0.0.1:%d/app" % port
     print("ui:", url, flush=True)
 
-    webview.create_window("Cube Setlist Manager", url, width=w, height=h)
+    webview.create_window("Cube Setlist Manager", url, width=w, height=h,
+                           js_api=_Shell())
     # 侧栏「退出」只经 /exit 销毁 Tk 根——pywebview 窗口不会跟着关（用户
     # 实证「无法退出」）。看门狗：Tk mainloop 结束即主动关 Web 窗
     def _web_watchdog():
