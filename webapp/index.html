@@ -9,7 +9,11 @@
 <body>
 <div id="shell">
   <nav id="side">
-    <div id="brand">Cube</div>
+    <div id="nav-ctl" aria-label="页面导航">
+      <button id="nav-back" title="后退"><svg viewBox="0 0 16 16"><path d="M10 3L5 8l5 5"/></svg></button>
+      <button id="nav-fwd" title="前进"><svg viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></svg></button>
+      <button id="nav-ref" title="刷新"><svg viewBox="0 0 16 16"><path d="M2.4 10a5.9 5.9 0 1 0 1.3-6.1L1 6.6"/><path d="M1 2.6v4h4"/></svg></button>
+    </div>
     <div class="side-group">演出</div>
     <button class="nav b-console" data-page="console">
       <svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
@@ -28,7 +32,6 @@
       <svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9.5" rx="1.5"/><path d="M5.5 14.5h5M8 12v2.5M6.5 5.5l3.5 2-3.5 2z"/></svg>
       VJ</button>
     <div class="side-gap"></div>
-    <div class="side-group">系统</div>
     <button class="nav b-settings" data-page="settings">
       <svg viewBox="0 0 16 16"><path d="M2.5 5h11M2.5 11h11"/><circle cx="6" cy="5" r="2"/><circle cx="10.5" cy="11" r="2"/></svg>
       设置</button>
@@ -65,7 +68,7 @@
       <div id="chips" class="chips" hidden></div>
       <div id="next-card" class="card">
         <div class="lbl">NEXT</div>
-        <div class="next-row"><div id="next" class="mid">—</div>
+        <div class="next-row"><div id="next" class="mid mq">—</div>
           <button id="next-go" class="btn ghost sm" disabled>切歌</button></div>
       </div>
       <div class="console-cols">
@@ -126,7 +129,7 @@
           </div>
         </div>
         <div class="col" id="col-dt" data-col="dt">
-          <div class="colhead" id="dt-head"><span id="dt-title">曲目详情</span><span class="badge" id="dt-n">未选中</span></div>
+          <div class="colhead" id="dt-head"><span id="dt-title" class="mq">曲目详情</span><span class="badge" id="dt-n">未选中</span></div>
           <div id="dt-scroll">
           <div id="dt-none" class="empty-state sm">
             选择左侧曲目，编辑定位点与音色映射</div>
@@ -239,13 +242,13 @@
       </div>
       <div class="stat-cards">
         <div class="card stat"><div class="lbl">当前曲音色配置</div>
-          <div id="kb-song" class="stat-song">—</div>
+          <div id="kb-song" class="stat-song mq">—</div>
           <div class="stat-pair">
             <span><b id="kb-juno-n">0</b>/10<i>JUNO DS-88</i></span>
             <span><b id="kb-ax-n">0</b>/6<i>AX-09 Lucina</i></span>
           </div></div>
         <div class="card stat"><div class="lbl">最近切换</div>
-          <div class="stat-big" id="kb-last">—</div></div>
+          <div class="stat-big mq" id="kb-last">—</div></div>
       </div>
       <div class="cards2">
         <div class="card"><h3>JUNO DS-88 端口</h3>
@@ -306,7 +309,7 @@
           <div class="stat-big" id="vj-media-st">…</div></div>
         <div class="card stat"><div class="lbl">走带跟随</div>
           <div class="stat-big" id="vj-follow">…</div>
-          <div class="dim sm-txt" id="vj-video"></div></div>
+          <div class="dim sm-txt mq" id="vj-video"></div></div>
       </div>
       <div class="card"><h3>触发槽位
         <span class="h3-note" id="vjmap-note">支持「N 描述」命名</span></h3>
@@ -323,9 +326,8 @@
               <input id="vj-root" class="wide">
               <button class="btn ghost sm browse" data-pick="vj-root">浏览…</button>
             </div></div>
-          <div class="field"><label>播放声音</label>
-            <label class="switch"><input type="checkbox" id="vj-mute"><i></i>
-              <span>静音</span></label></div>
+          <label class="switch wide"><input type="checkbox" id="vj-mute"><i></i>
+            <span>静音</span></label>
         </div>
       </div>
       <div class="page-foot">
@@ -358,11 +360,11 @@
           <label class="switch"><input type="checkbox" id="st-cont"><i></i>
             <span>切完自动播放</span></label>
           <label class="switch"><input type="checkbox" id="st-confirm"><i></i>
-            <span>切歌确认</span></label>
+            <span>手动切歌确认</span></label>
           <label class="switch"><input type="checkbox" id="st-autosave"><i></i>
             <span>切歌自动保存</span></label>
           <label class="switch"><input type="checkbox" id="st-launch"><i></i>
-            <span>启动时自动打开被控软件</span></label>
+            <span>启动时打开被控软件</span></label>
           <label class="switch"><input type="checkbox" id="st-exit"><i></i>
             <span>退出时关闭被控软件</span></label>
         </div>

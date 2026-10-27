@@ -95,8 +95,72 @@ function menuItem(box, text, cls, fn) {
   return b;
 }
 
+// ---- 长文本跑马灯（歌名/音色名/视频名）：溢出才启用，与 #now 同源 ----
+// 测量守卫：隐藏页宽 0 不缓存（进页补测，防「溢出」误判为不溢出）；
+// resize 后缓存失效统一重测。#now 保留专属探针（基态 break-all 折行）。
+function marquee(el) {
+  if (!el) return;
+  const txt = el.textContent;
+  const w = el.clientWidth;
+  if (!w) {
+    el.classList.remove("marq");
+    el.dataset.txt = txt;
+    delete el.dataset.mw;
+    return;
+  }
+  if (el.dataset.txt === txt && el.dataset.mw === String(w)) return;
+  el.dataset.txt = txt;
+  el.dataset.mw = String(w);
+  el.classList.remove("marq");
+  const full = el.scrollWidth;
+  if (full > w + 2) {
+    el.style.setProperty("--marq", (w - full) + "px");
+    el.classList.add("marq");
+  }
+}
+function marqueePage(root) {
+  $$(".mq", root || document).forEach(marquee);
+}
+window.__marq = marquee;   // 测试钩子（探针/控制台校验用，同 __qr 先例）
+let mqResizeT = null;
+addEventListener("resize", () => {
+  clearTimeout(mqResizeT);
+  mqResizeT = setTimeout(() => {
+    $$(".mq").forEach(el => delete el.dataset.mw);
+    marqueePage();
+  }, 150);
+});
+
 // ---- 导航 ----
 let curPage = "console", booted = false;
+// 页面注册（可扩展性）：页面集与「进页/刷新」拉取面均由下表派生；新增页
+// 三步清单见 docs/前端设计评审与改进方案.md 第五轮 X1
+const PAGES = $$(".nav").filter(b => b.dataset.page).map(b => b.dataset.page);
+const PAGE_REFRESH = {
+  console: () => { refreshPlaylist(); refreshLog(); },
+  setlist: () => { refreshPlaylist(); refreshPoints(); refreshKbdDetail(); },
+  pedal: () => { refreshPedal(true); refreshPedalDevices(); },
+  kbd: () => refreshKbd(),
+  vj: () => refreshVj(true),
+  settings: () => refreshSettings(),
+};
+function pageRefresh(page) {
+  const fn = PAGE_REFRESH[page];
+  if (fn && booted) fn();
+}
+// 页面历史（侧栏顶部 后退/前进）：nav 入栈去重分叉截断；栈内跳转不回填
+let navHist = ["console"], navIdx = 0, navFromHist = false;
+function navCtlSync() {
+  $("#nav-back").disabled = navIdx === 0;
+  $("#nav-fwd").disabled = navIdx >= navHist.length - 1;
+}
+function navHistGo(delta) {
+  const i = navIdx + delta;
+  if (i < 0 || i >= navHist.length) return;
+  navIdx = i;
+  navFromHist = true;
+  nav(navHist[i]);
+}
 function nav(page) {
   // 演出模式下点「去编排加入曲目」等跨页导航：先退出演出模式
   // （侧栏/状态栏被藏的非预期状态，时序红队 P2）
@@ -108,13 +172,16 @@ function nav(page) {
     // 踩钉页进出 = 页面级静音开关（调绑/学习不误触发演出动作）；
     // 学习会话同录制会话：离页收口（音色映射卡片行为统一）
     if (curPage === "pedal") { pedalMute(false); learnCancel(); }
-    if (page === "pedal") {
-      pedalMute(true);
-      refreshPedal(true);       // 重建表单基线（别处改过配置时不再显旧态）
-      refreshPedalDevices();
-    }
+    if (page === "pedal") pedalMute(true);   // 数据拉取统一走 pageRefresh
   }
   curPage = page;
+  if (navFromHist) navFromHist = false;
+  else if (navHist[navIdx] !== page) {
+    navHist = navHist.slice(0, navIdx + 1);
+    navHist.push(page);
+    navIdx = navHist.length - 1;
+  }
+  navCtlSync();
   // 底栏右侧提示词=当前页的页脚注（原正文区页脚注已移入底栏）
   sbNote();
   // 回主控台强制重测跑马灯：隐藏页期间 render 的 0 宽测量会把「溢出」
@@ -126,18 +193,18 @@ function nav(page) {
   }
   $$(".nav").forEach(b => b.classList.toggle("on", b.dataset.page === page));
   $$(".page").forEach(p => p.classList.toggle("on", p.id === "p-" + page));
+  // 隐藏页建行时宽 0 的跑马灯：进页补测（含差量守卫跳过重绘的行）
+  requestAnimationFrame(() => marqueePage($("#p-" + page)));
   // 切页即时拉数据（不等轮询节拍；boot 前各页状态量尚未初始化）。
   // settings/VJ 无周期轮询：进页必拉（启动失败自愈——否则表单空白且
   // 保存钮灰死；VJ 映射同时强制重扫视频目录，兑现「即放即扫」）
-  if (booted) {
-    if (page === "console" || page === "setlist") refreshPlaylist();
-    if (page === "console") refreshLog();
-    else if (page === "setlist") { refreshPoints(); refreshKbdDetail(); }
-    else if (page === "kbd") refreshKbd();
-    else if (page === "vj") refreshVj(true);
-    else if (page === "settings") refreshSettings();
-  }
+  if (booted) pageRefresh(page);
 }
+// 侧栏顶部导航控件：后退/前进走历史栈；刷新=当前页同一拉取面
+$("#nav-back").addEventListener("click", () => navHistGo(-1));
+$("#nav-fwd").addEventListener("click", () => navHistGo(1));
+$("#nav-ref").addEventListener("click", () => pageRefresh(curPage));
+navCtlSync();
 // 刷新/关闭兜底：踩钉页打开时页面卸载，静音与学习会话必须撤（否则踩钉
 // 永久哑火 / 学习器占口）；录制会话同理停口（否则 winmm 输入口被无限期占用）
 addEventListener("pagehide", () => {
@@ -179,10 +246,18 @@ const reduceMotion = () =>
 // 判定——动画窗内 F11 = 取消退出（时序红队：按键被早退吞掉）
 let showOn = false;
 let showTimer = null;
+// 演出模式窗口置顶（旧前端 topMost 迁移）：pywebview 壳 js_api 桥，
+// 网页/平板端无此桥自动跳过；桥注入晚于首次切换时 ready 事件补投
+function shellTopmost(on) {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.set_topmost) api.set_topmost(!!on);
+}
+addEventListener("pywebviewready", () => shellTopmost(showOn));
 function setShow(on) {
   on = !!on;
   if (on === showOn) return;
   showOn = on;
+  shellTopmost(on);
   clearTimeout(showTimer);       // 动画窗内反向请求：撤销挂起的摘类定时器
   const body = document.body;
   const nowEl = $("#now");
@@ -248,10 +323,10 @@ document.addEventListener("keydown", e => {
     if (!pageOn("console")) return;
     e.preventDefault();
     cmd("panic");
-  } else if (e.ctrlKey && e.key >= "1" && e.key <= "6") {
-    const pages = ["console", "setlist", "pedal", "kbd", "vj", "settings"];
+  } else if (e.ctrlKey && e.key >= "1" && e.key <= "9"
+             && Number(e.key) <= PAGES.length) {
     e.preventDefault();
-    nav(pages[Number(e.key) - 1]);
+    nav(PAGES[Number(e.key) - 1]);
   }
 });
 
@@ -415,6 +490,7 @@ function render(st) {
   const nx = rows[cur + 1];
   $("#next").textContent = nx ? nx.name : (rows.length ? "末尾" : "—");
   $("#next").classList.toggle("has", !!nx);
+  marquee($("#next"));
   $("#next-go").disabled = !nx || !!st.busy;
   // 曲目列表（三态；签名不变不动 DOM，悬停态不被轮询冲掉）。
   // 签名必须含 plCache 键列：行上的 dataset.k（switch 防 P0 漂移的凭据）
@@ -456,9 +532,10 @@ function consoleRow(s, i, cur) {
   eq.className = "eq";
   eq.innerHTML = "<i></i><i></i><i></i>";
   const nm = document.createElement("span");
-  nm.className = "nm";
+  nm.className = "nm mq";
   nm.textContent = s.name;
   nm.title = s.name;              // 截断时悬停可见全名
+  marquee(nm);
   const go = document.createElement("button");
   go.className = "btn ghost xs go-switch";
   go.textContent = "切歌";
@@ -664,9 +741,10 @@ function libRow(s, inPl) {
   tag.className = "tag";
   tag.textContent = s.team;
   const nm = document.createElement("span");
-  nm.className = "nm";
+  nm.className = "nm mq";
   nm.textContent = s.name;
   nm.title = s.name;              // 截断时悬停可见全名
+  marquee(nm);
   const dur = document.createElement("span");
   dur.className = "dur " + durCls(s.durSrc);
   dur.textContent = durText(s);
@@ -912,6 +990,7 @@ function plRow(i, it) {
   no.textContent = (i + 1) + ".";
   nm.textContent = it.name;
   nm.title = it.name;             // 截断时悬停可见全名
+  marquee(nm);
   return div;
 }
 let movePend = false;    // move 在途门：回显未落地前放行=下一次 move 按
@@ -1146,6 +1225,7 @@ async function refreshPoints() {
     $("#dt-title").textContent = "曲目详情 · "
         + ((song ? song.name.split(" · ")[0] : "")
            || (ptData[plSel] || {}).name || plSel);
+    marquee($("#dt-title"));
     const dd = ptData[ptProj] || {enabled: false, points: []};
     if (!ptOnPending) setTgl($("#pt-on"), dd.enabled);
     if (ptSelPending !== null) {   // 点行点击：选中该点并填编辑表单
@@ -1819,6 +1899,7 @@ function renderKbdStatus() {
     const nm = kbData && kbData.editSong && kbData.editSong.name;
     song.textContent = nm || "—";
     song.classList.toggle("dim", !nm);
+    marquee(song);
   }
   if (kbData.counts) {
     jn.textContent = kbData.counts.juno;
@@ -1831,6 +1912,7 @@ function renderKbdStatus() {
   }
   last.textContent = kbData.lastResult || "—";
   last.classList.toggle("dim", !kbData.lastResult);
+  marquee(last);
 }
 
 // 录制（琴上捕获）：点槽卡即开录，再点同卡=停止并保存（直写该曲）；
@@ -1928,7 +2010,7 @@ async function cardRecord(div, inst, note) {
       }
       const slots = {...ctx.slots, [note]: got};
       post("/slotset", {inst, slots, songKey: ctx.key}).then(j => {
-        if (j.ok) toast("音 " + noteName(note) + " 已录制："
+        if (j.ok) toast(noteName(note) + " 已录制："
             + (got.desc || "PC " + got.pc));
         refreshKbdDetail();
       });
@@ -1936,7 +2018,7 @@ async function cardRecord(div, inst, note) {
     }
     const slots = {...ctx.slots, [note]: cap};
     post("/slotset", {inst, slots, songKey: ctx.key}).then(j => {
-      if (j.ok) toast("音 " + noteName(note) + " 已录制："
+      if (j.ok) toast(noteName(note) + " 已录制："
           + (cap.desc || "PC " + cap.pc));
       refreshKbdDetail();
     });
@@ -1985,11 +2067,12 @@ function slotRow(note, slot, inst) {
   div.dataset.note = note;
   const n = document.createElement("span");
   n.className = "s-note";
-  n.textContent = "音 " + noteName(note);
+  n.textContent = noteName(note);   // 裸音名：与全局移调/VJ 触发槽位统一
   const pc = document.createElement("span");
-  pc.className = "s-pc";
+  pc.className = "s-pc mq";
   pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未设置";
   if (slot) pc.title = pc.textContent;   // 长名省略时悬停可见全名
+  marquee(pc);
   const sub = document.createElement("span");
   sub.className = "s-sub";
   const ops = document.createElement("span");
@@ -2002,7 +2085,7 @@ function slotRow(note, slot, inst) {
     test.addEventListener("click", ev => {
       ev.stopPropagation();
       post("/kbdtest", {inst, note, songKey: plSel}).then(j => {
-        if (j.ok) toast("已发送测试：音 " + noteName(note));
+        if (j.ok) toast("已发送测试：" + noteName(note));
       });
     });
     ops.appendChild(test);
@@ -2020,7 +2103,7 @@ function slotRow(note, slot, inst) {
       const slots = {...(inst === "ax" ? es.axSlots : es.slots)};
       delete slots[note];
       post("/slotset", {inst, slots, songKey: plSel}).then(j => {
-        if (j.ok) toast("音 " + noteName(note) + " 已清除");
+        if (j.ok) toast(noteName(note) + " 已清除");
         refreshKbdDetail();
       });
     });
@@ -2165,8 +2248,9 @@ async function refreshVjMap(root, force) {
       n.className = "s-note";
       n.textContent = row.name;
       const f = document.createElement("span");
-      f.className = "s-pc";
+      f.className = "s-pc mq";
       f.textContent = row.blackout ? "熄屏" : row.file;
+      marquee(f);
       const sub = document.createElement("span");
       sub.className = "s-sub";
       sub.textContent = row.blackout ? "熄灭投影画面"
@@ -2224,6 +2308,7 @@ function renderVjState() {
   $("#vj-video").textContent =
       (vj.follow === "playing" || vj.follow === "paused") && vj.video
       ? "视频：" + vj.video : "";
+  marquee($("#vj-video"));
   // 映射网格：在播视频对应的音符卡高亮（按 N.mp4 编号匹配）
   if (vjMapRows) {
     const num = x => (x.match(/^(\d+)/) || [])[1] || "";

@@ -199,8 +199,18 @@ input.invalid { border-color: var(--err) !important; }
   padding: 14px 12px 12px;
   gap: 3px;
 }
-#brand { font-weight: 700; color: var(--accent); padding: 2px 10px 16px;
-  font-size: var(--f-lg); }
+#nav-ctl { display: flex; gap: 4px; padding-bottom: 5px; }   /* +side gap 3 = 8px 总距 */
+#nav-ctl button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 28px; padding: 4px 0;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--dim); cursor: pointer;
+}
+#nav-ctl svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#nav-ctl button:hover:not(:disabled) { color: var(--fg);
+  background: var(--sur-2); border-color: var(--line); }
+#nav-ctl button:disabled { opacity: .38; cursor: default; }
 .side-group { font-size: var(--f-xs); color: var(--dim); letter-spacing: .18em;
   padding: 16px 10px 6px; }
 .side-group:first-of-type { padding-top: 0; }
@@ -228,7 +238,7 @@ input.invalid { border-color: var(--err) !important; }
   bottom: 9px; width: 3px; background: var(--accent); border-radius: 2px; }
 #btn-show {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  margin-top: 14px;
+  margin-top: 10px;   /* 与 #btn-exit 同值：底簇三控件垂直等距 */
   background: var(--accent);
   color: #0c141d;
   font-weight: 700;
@@ -303,6 +313,14 @@ input.invalid { border-color: var(--err) !important; }
 @keyframes marq {
   0%, 12% { transform: translateX(0); }
   88%, 100% { transform: translateX(var(--marq, -100px)); }
+}
+/* 通用长文本跑马灯（歌名/音色名/视频名）：.mq 基类单行省略，溢出时 JS
+   加 .marq 启用与 #now 同源的往返滚动；动画期 clip 掉省略号防滑动的「…」
+   残影；reduced-motion 下不滚但省略号保底 */
+.mq { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mq.marq { text-overflow: clip; animation: marq 14s var(--ease) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mq.marq { animation: none; }
 }
 .mid { font-size: var(--f-xl); }
 #clock { font-variant-numeric: tabular-nums; margin-top: var(--s2); }
@@ -472,7 +490,9 @@ input.invalid { border-color: var(--err) !important; }
 .input-row.suf .suf-txt { flex: none; font-size: var(--f-sm); }
 
 /* ---- 曲目详情列（定位点 + 音色映射）/ 卡头 ---- */
-#col-dt { flex: 0 1 460px; min-width: 340px; }
+#col-dt { min-width: 340px; }   /* 宽=网格轨 460px 定；flex 已删（宽窗网格
+                                   上下文本就无效，窄窗 flex 上下文曾把本列
+                                   钳在 460px 造成底部空隙） */
 #dt-scroll { flex: 1; overflow: auto; display: flex;
   flex-direction: column; gap: 14px; padding-right: 2px; }
 #dt-none { flex: 1; justify-content: center; }
@@ -667,14 +687,14 @@ input.invalid { border-color: var(--err) !important; }
   #sl-tabs { display: flex; }
   .cols { display: flex; flex-direction: column; }
   .cols .col { display: none; }
-  .cols .col.show { display: flex; }
-  .col .list { max-height: 44vh; }
+  .cols .col.show { display: flex; flex: 1 1 auto; min-height: 0; }
+  /* 可见列吃满 .cols 高度（与宽窗同语义：列表内部滚动），不再 44vh 封顶
+     留出底部无法显示元素的空白 */
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .cards2 { grid-template-columns: 1fr; }
   .shift-cols { grid-template-columns: 1fr; }
   .pedal-grid { grid-template-columns: 1fr; }
   .console-cols { grid-template-columns: 1fr; }
-  #pt-list { max-height: 34vh; }
   #logcard .log { min-height: 160px; }
   .addr-grid { grid-template-columns: 1fr; }
   /* 窄屏隐藏生效范围提示：文案长会折行致 page-foot 高度跨页不齐 */
