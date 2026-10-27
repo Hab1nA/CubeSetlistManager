@@ -589,6 +589,7 @@ input.invalid { border-color: var(--err) !important; }
 .input-row { display: flex; gap: var(--s3); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */
+.dt-inst { margin: var(--s4) 0 6px; }   /* 组标签：首组顶距=卡头距 16px */
 .slot-grid { display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .slot {

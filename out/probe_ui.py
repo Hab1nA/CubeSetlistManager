@@ -2431,12 +2431,14 @@ def stage_r(send):
              "-l.getBoundingClientRect().bottom),form:!f.hidden}")
     ok("br.r5.pt-list-form-gap", pt5.get("form")
        and 8 <= pt5.get("gap", -99) <= 18, json.dumps(pt5))
-    # 音色映射：无分组标签、正常态无计数
-    kb5 = js(send, "return {noInst:!document.querySelector("
-             "'#dt-body .dt-inst'),"
+    # 音色映射：组标签=乐器名全称（计数/范围注记不得回流）、正常态无计数
+    kb5 = js(send, "const t=document.querySelector('#dt-body').textContent;"
+             "return {inst:[...document.querySelectorAll("
+             "'#dt-body .dt-inst')].length,"
+             "noAnno:!(t.includes('起 10 键')||t.includes('起 6 键')),"
              "stat:document.getElementById('dt-kbd-stat').textContent}")
-    ok("br.r5.no-slot-count", kb5.get("noInst") and kb5.get("stat") == "",
-       json.dumps(kb5))
+    ok("br.r5.no-slot-count", kb5.get("inst") == 2 and kb5.get("noAnno")
+       and kb5.get("stat") == "", json.dumps(kb5))
     # 音色映射 × 功能绑定：按钮时机/形态统一（未配置卡无钮；绑定行 ✕ 同款）
     un5 = js(send, "const un=document.querySelector('.slot.unconfigured');"
              "return {unOps:un?un.querySelectorAll('button').length:-1,"
@@ -2504,6 +2506,17 @@ def stage_r(send):
     ok("br.r5.fullnames", kn5.get("hasJ") and kn5.get("hasA")
        and not kn5.get("noBare") and not kn5.get("noShiftOld"),
        json.dumps(kn5, ensure_ascii=False))
+    # 音色映射卡组标签（返工曾随计数标签整行误删=乐器名消失+边距缺失）
+    nav(send, "setlist")
+    di5 = js(send, "const els=[...document.querySelectorAll('.dt-inst')];"
+             "const cs=els.length?getComputedStyle(els[0]):null;"
+             "return {n:els.length,"
+             "t:els.map(e=>e.textContent.trim()).join('|'),"
+             "mt:cs?cs.marginTop:null, mb:cs?cs.marginBottom:null}")
+    ok("br.r5.mapping-inst", di5.get("n") == 2
+       and di5.get("t") == "JUNO DS-88|AX-09 Lucina"
+       and di5.get("mt") == "16px" and di5.get("mb") == "6px",
+       json.dumps(di5, ensure_ascii=False))
 
     # ---- 启动打开被控软件开关（行为卡、退出关闭之前、载荷带键）----
     nav(send, "settings")
