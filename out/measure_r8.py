@@ -72,20 +72,9 @@ try:
       return { cols: r('.cols'), main: r('#main'),
                pad: getComputedStyle(document.querySelector('#p-setlist'))
                         .paddingBottom }; })())""")
-    ok("P1 编排内容区下缘距底=8px",
-       abs(g["main"] - g["cols"] - 8) <= 1,
+    ok("P1 编排内容区下缘贴底栏(0px)",
+       abs(g["main"] - g["cols"]) <= 0.5,
        "gap=%.1f pad=%s" % (g["main"] - g["cols"], g["pad"]))
-    ev("document.querySelector('.b-vj').click()")
-    time.sleep(1.2)
-    g2 = jv(r"""JSON.stringify((() => {
-      const f = document.querySelector('#p-vj .page-foot')
-          .getBoundingClientRect().bottom;
-      const m = document.querySelector('#main')
-          .getBoundingClientRect().bottom;
-      return { foot: f, main: m }; })())""")
-    ok("P1 与 VJ 页脚距底一致(8px)",
-       abs((g2["main"] - g2["foot"]) - (g["main"] - g["cols"])) <= 1.5,
-       "vj gap=%.1f" % (g2["main"] - g2["foot"]))
 
     # ---- P2 触发槽位/全局移调音名：无键帽内距，左缘=文字左缘 ----
     ev("document.querySelector('.b-vj').click()")

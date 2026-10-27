@@ -431,8 +431,8 @@ input.invalid { border-color: var(--err) !important; }
 #sl-search { background: var(--input-bg); color: var(--fg);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
   width: 240px; }
-#p-setlist { padding-bottom: 8px; }   /* 内容区下缘距底栏=page-foot 的
-                                           sticky bottom 8px：各页同值 */
+#p-setlist { padding-bottom: 0; }   /* 本页无常驻底条：列表在底栏上缘
+                                         精确裁切（8px 空底会被读作窄缝） */
 #p-setlist.on { display: flex; flex-direction: column;
   height: 100%; min-height: 420px; }
 .cols { display: grid; grid-template-columns: 1fr 460px;
