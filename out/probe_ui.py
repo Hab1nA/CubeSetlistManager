@@ -2560,6 +2560,22 @@ def stage_r(send):
        "%s -> %s" % (json.dumps(v7), json.dumps(v7b)))
     js(send, RESTORE)
 
+    # ---- 审计落地项：dawAlive 字段 + 快捷键 ----
+    nav(send, "console")
+    a8 = js(send, "const r=await fetch('/state');const j=await r.json();"
+             "return {dawAlive:'dawAlive' in j,"
+             "chip:document.getElementById('tchip').textContent}")
+    # Ctrl+3 切踩钉页
+    a8b = js(send, "document.dispatchEvent(new KeyboardEvent('keydown',"
+             "{key:'3',ctrlKey:true,bubbles:true,cancelable:true}));"
+             "return {page:document.querySelector('.page.on').id}")
+    ok("br.audit-dawalive-keys",
+       a8.get("dawAlive") and a8.get("chip")
+       and a8b.get("page") == "p-pedal",
+       "%s page=%s" % (json.dumps(a8, ensure_ascii=False),
+                       json.dumps(a8b)))
+    nav(send, "console")
+
     errs = js(send, "return window.__errs")
     ok("br.no-js-errors", not errs, str(errs)[:300])
 

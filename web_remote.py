@@ -572,6 +572,10 @@ def build_snapshot(app, has_project, proj_name=None):
         "ready": ctrl is not None or lite,
         "busy": bool(ctrl is not None and ctrl.busy),
         "open": bool(has_project),
+        # DAW 进程在场（主线程 _tick_banner 3s 节流枚举后缓存到 app；
+        # HTTP 线程只读缓存——快照纪律「不碰 win32 枚举」不破坏）：
+        # 崩溃/被误关后前端据此区分「已暂停」与「DAW 已失联」（审计 #2）
+        "dawAlive": bool(getattr(app, "_daw_alive", False)),
         "projName": proj_name,
         "confirm": bool(app.switch_confirm),
         "live": bool(app.watch is not None and app.watch.is_transport_live()),

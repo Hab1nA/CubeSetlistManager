@@ -199,6 +199,68 @@ def _check_in_here(p):
     return p
 
 
+# ---- 文件日志（审计 #15：q 消费漏斗单点接入；专用线程异步落盘——
+#     日志行已在 Tk 线程消费，磁盘 IO 再入专用线程，主线程零等待）----
+_LOGDIR = pathlib.Path(os.environ.get("APPDATA") or str(_HERE)) / \
+    "CubeSetlistManager" / "logs"
+_LOG_KEEP_DAYS = 7
+
+
+class _FileLog:
+    """按日滚动日志写手：put() 由消费线程调用，写盘在专属线程排队完成；
+    进程退出靠 daemon+行级 flush 尽力而为（黑匣子另有 crash/stall 链）。"""
+
+    def __init__(self, directory):
+        self._dir = pathlib.Path(directory)
+        self._q = queue.Queue(maxsize=2000)
+        self._fh = None
+        self._day = None
+        threading.Thread(target=self._run, daemon=True,
+                         name="filelog").start()
+
+    def put(self, msg, lv):
+        try:
+            self._q.put_nowait((time.time(), msg, lv))
+        except queue.Full:
+            pass                      # 洪峰丢行不阻塞消费线程
+
+    def _open(self, day):
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._dir / ("%s.log" % day), "a",
+                        encoding="utf-8")
+        self._day = day
+        # 清 7 天前的旧日志
+        cutoff = time.time() - _LOG_KEEP_DAYS * 86400
+        try:
+            for p in self._dir.glob("*.log"):
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+        except OSError:
+            pass
+
+    def _run(self):
+        while True:
+            t, msg, lv = self._q.get()
+            day = time.strftime("%Y%m%d", time.localtime(t))
+            if self._fh is None or day != self._day:
+                self._open(day)
+            try:
+                self._fh.write("%s [%s] %s\n" % (
+                    time.strftime("%H:%M:%S", time.localtime(t)),
+                    lv or "I", msg))
+                self._fh.flush()
+            except OSError:
+                pass
+
+
+_FILE_LOG = None    # App.__init__ 里惰性创建（避免 import 期副作用）
+
+
 def _rotate(baks, path):
     """写前滚动备份：bak2→bak3、bak→bak2、当前→bak（误存坏数据可回退
     最近三次；路径全部来自模块级字面量常量）。"""
@@ -207,6 +269,76 @@ def _rotate(baks, path):
             os.replace(str(baks[i - 1]), str(baks[i]))
     if path.exists():
         shutil.copy(str(path), str(baks[0]))
+
+
+# ---- OBS WebSocket 密码 DPAPI 加密（审计 #12：明文落盘泄露面=文件本身；
+#     CryptProtectData 绑当前 Windows 用户，拷贝到他机不可解）----
+_DPAPI_PREFIX = "dpapi:"
+
+
+def _dpapi_protect(plain):
+    """UTF-8 明文 → "dpapi:"+base64(CryptProtectData)。失败返回原明文
+    （加密不可用时不阻断启动）。"""
+    try:
+        import ctypes.wintypes as wt
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cb", wt.DWORD), ("pb", ctypes.c_void_p)]
+
+        buf = ctypes.create_string_buffer(plain.encode("utf-8"))
+        pin = _BLOB(len(buf), ctypes.cast(buf, ctypes.c_void_p))
+        pout = _BLOB()
+        if ctypes.windll.crypt32.CryptProtectData(
+                ctypes.byref(pin), None, None, None, None, 0,
+                ctypes.byref(pout)):
+            try:
+                import base64
+                return _DPAPI_PREFIX + base64.b64encode(
+                    ctypes.string_at(pout.pb, pout.cb)).decode("ascii")
+            finally:
+                ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(pout.pb))
+    except Exception:
+        pass
+    return plain
+
+
+def _dpapi_unprotect(stored):
+    """"dpapi:"+base64 → 明文；非该前缀=旧明文原样返回（迁移兼容）。"""
+    if not stored or not stored.startswith(_DPAPI_PREFIX):
+        return stored
+    try:
+        import ctypes.wintypes as wt
+        import base64
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cb", wt.DWORD), ("pb", ctypes.c_void_p)]
+
+        raw = base64.b64decode(stored[len(_DPAPI_PREFIX):])
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        pin = _BLOB(len(raw), ctypes.cast(buf, ctypes.c_void_p))
+        pout = _BLOB()
+        if ctypes.windll.crypt32.CryptUnprotectData(
+                ctypes.byref(pin), None, None, None, None, 0,
+                ctypes.byref(pout)):
+            try:
+                # CryptProtectData 输出含终止 NUL（原文明文不含 \x00，
+                # 续着进 ObsWs 握手会炸）——decode 后去掉
+                return ctypes.string_at(pout.pb, pout.cb).decode(
+                    "utf-8").rstrip("\x00")
+            finally:
+                ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(pout.pb))
+    except Exception:
+        pass
+    return ""   # 解密失败（跨机拷贝的密文）：按空密码对待，不让连接崩
+
+
+def _protect_obs_password(cfg):
+    """读取链统一入口：识别 dpapi: 前缀解密；遇旧明文则原值可用并标记
+    待升级（写入链在下次 _save_config 时加密落盘）。"""
+    pwd = (cfg or {}).get("password") or ""
+    if pwd.startswith(_DPAPI_PREFIX):
+        return _dpapi_unprotect(pwd)
+    return pwd
 
 
 def _load_config():
@@ -490,6 +622,8 @@ class App:
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件
+        global _FILE_LOG
+        _FILE_LOG = _FileLog(_LOGDIR)   # 文件日志（审计 #15；惰性首建）
         # 数据文件损坏隔离提示（_load_config/_load_playlist 改名 .corrupt）
         for c in (_CONFIG_CORRUPT, _PLAYLIST_CORRUPT):
             if c.exists():
@@ -1043,6 +1177,10 @@ class App:
             try:
                 self.ctl = ObsController(_load_config()["obs"])
                 self.ctl.on_connected = self._on_obs_connected
+                # 密码以 dpapi: 密文落盘：控制器拿解密后的明文去连接；
+                # 旧明文原样通过（写入链在下次保存时升级为密文）
+                self.ctl.cfg["password"] = _protect_obs_password(
+                    self.ctl.cfg)
                 # OBS 自动拉起生效值三重门落位（obs.autoStart ∧ 总闸 ∧
                 # 已配投屏位置）：连接循环据此决定是否拉起 OBS
                 self.ctl.cfg["autoStart"] = self._obs_autostart_effective()
@@ -2226,6 +2364,10 @@ class App:
                     obs["vjMute"] = mute
                 if media is not None:
                     obs["mediaInput"] = media
+                # 密码落盘前升级为 DPAPI 密文（旧明文/未加密自动迁移）
+                if obs.get("password") and \
+                        not str(obs["password"]).startswith(_DPAPI_PREFIX):
+                    obs["password"] = _dpapi_protect(str(obs["password"]))
                 cfg["obs"] = obs
             daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
             if proj:
@@ -3449,6 +3591,8 @@ class App:
                 break
             self.log.insert("end", time.strftime("[%H:%M:%S] ") + msg)
             self.log_ring.append((time.time(), msg, _log_lv(msg)))
+            if _FILE_LOG is not None:
+                _FILE_LOG.put(msg, _log_lv(msg))   # 文件日志（异步线程）
             # 新前端日志级别体系唯一来源（产生端定级，UI 只消费不重判）
             if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
                 self.log.itemconfigure(self.log.size() - 1,
@@ -3626,6 +3770,17 @@ class App:
         self.state_lbl.config(text="当前状态：" + st_t,
                               style=dpi.tone(st_c) + ".TLabel",
                               foreground=st_c)
+        # DAW 进程在场（供 /state 的 dawAlive：崩溃/误关后前端区分
+        # 「已暂停」与「DAW 失联」）。枚举有成本，3s 节流（400ms 快照拍
+        # 不每次都枚举）
+        now_m = time.monotonic()
+        if now_m - getattr(self, "_daw_alive_t", 0.0) > 3.0:
+            self._daw_alive_t = now_m
+            try:
+                self._daw_alive = bool(
+                    find_processes_by_prefix(self.facts["proc_prefix"]))
+            except Exception:
+                pass
         self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
 
     def _progress(self, frac):
@@ -4382,6 +4537,10 @@ class SettingsWindow(tk.Toplevel):
                 obs["videoRoot"] = vid
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
+            # 密码落盘前升级为 DPAPI 密文（Tk 路径同迁移）
+            if obs.get("password") and \
+                    not str(obs["password"]).startswith(_DPAPI_PREFIX):
+                obs["password"] = _dpapi_protect(str(obs["password"]))
             cfg["obs"] = obs
             daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
             if proj:

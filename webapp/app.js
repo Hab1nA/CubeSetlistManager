@@ -213,8 +213,8 @@ document.addEventListener("keydown", e => {
     setShow(false);
   }
 });
-// 空格=智能播放（主控台/演出模式；输入框与弹层内不劫持）：停止→开始，
-// 播放中→暂停，已暂停→继续（按钮分离后空格仍保留三态语义）
+// 快捷键（审计 #24 默认键位表）：←→ 上下曲 / R 回零 / Shift+Space 全停
+// （双键防误触）/ Ctrl+1..6 切页；输入框与弹层内不劫持（与空格同守卫）
 document.addEventListener("keydown", e => {
   if (e.key !== " " || e.repeat) return;
   const t = e.target;
@@ -227,6 +227,32 @@ document.addEventListener("keydown", e => {
   const a = (!stState || !stState.tstate || stState.tstate === "stopped")
       ? "play" : $("#smart").dataset.action;
   if (a) cmd(a);
+});
+document.addEventListener("keydown", e => {
+  if (e.repeat || popEl) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT"
+            || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    if (typeof stCur !== "number" || !stState) return;
+    e.preventDefault();
+    const i = Math.min(stState.songs ? stState.songs.length - 1 : 0,
+                       Math.max(0, stCur + (e.key === "ArrowRight" ? 1 : -1)));
+    const s = stState.songs ? stState.songs[i] : null;
+    if (s && i !== stCur) switchTo(i, null, false, s.key);
+  } else if (e.key === "r" || e.key === "R") {
+    if (!pageOn("console")) return;
+    e.preventDefault();
+    cmd("rewind");
+  } else if (e.key === " " && e.shiftKey) {
+    if (!pageOn("console")) return;
+    e.preventDefault();
+    cmd("panic");
+  } else if (e.ctrlKey && e.key >= "1" && e.key <= "6") {
+    const pages = ["console", "setlist", "pedal", "kbd", "vj", "settings"];
+    e.preventDefault();
+    nav(pages[Number(e.key) - 1]);
+  }
 });
 
 // ---- HTTP（失败可见，不静默）----
@@ -354,7 +380,9 @@ function render(st) {
   const chip = $("#tchip");
   const ts = st.busy ? "busy" : (st.tstate || "stopped");
   chip.className = "chip " + (st.tstate || "stopped");
-  chip.textContent = st.busy ? "切换中…" :
+  // DAW 失联判别（审计 #2）：进程消失时不再假显「已暂停」
+  chip.textContent = st.dawAlive === false ? "DAW 未运行" :
+      st.busy ? "切换中…" :
       {playing: "播放中", paused: "已暂停", stopped: "未在播放"}[st.tstate]
       || "未在播放";
   const live = st.tstate === "playing" || st.tstate === "paused";
@@ -460,8 +488,11 @@ function lamps(st) {
     if (cls) el.classList.add(cls);
     el.dataset.tip = tip || "";
   };
-  set("l-daw", st.open ? "ok" : "err",
-      st.open ? "工程已打开：" + (st.projName || "") : "未打开工程");
+  set("l-daw", st.dawAlive === false ? "err"
+      : st.open ? "ok" : "err",
+      st.dawAlive === false ? "DAW 进程未运行（已崩溃或被关闭）——"
+          + "可重启本软件自动拉起，或手动打开 " + (st.projName ? "" : "")
+      : st.open ? "工程已打开：" + (st.projName || "") : "未打开工程");
   set("l-obs", st.obs ? "ok" : "warn",
       st.obs ? "obs-websocket 已连接"
       : (st.vj && st.vj.obsErr ? "OBS 未连接：" + st.vj.obsErr

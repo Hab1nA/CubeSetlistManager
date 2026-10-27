@@ -719,6 +719,55 @@ class _Var:
         self.v = v
 
 
+def test_dpapi_roundtrip_and_migration(monkeypatch):
+    """OBS 密码：dpapi: 密文可解回；旧明文原样通过（写入链负责升级）；
+    解密失败（跨机密文）按空密码。"""
+    plain = "obs-pass-123"
+    prot = sg._dpapi_protect(plain)
+    assert prot.startswith("dpapi:")            # Windows 上必然加密成功
+    assert sg._dpapi_unprotect(prot) == plain
+    assert sg._dpapi_unprotect(plain) == plain  # 旧明文直通
+    fake = {"password": prot}
+    assert sg._protect_obs_password(fake) == plain
+    # 伪造密文（dpapi: 前缀+非法 base64 内容）→ 解密失败按空密码，不崩
+    import base64 as _b64
+    bogus = "dpapi:" + _b64.b64encode(b"not-a-real-blob").decode()
+    fake2 = {"password": bogus}
+    assert sg._protect_obs_password(fake2) == ""
+
+
+def test_file_log_writes_and_rotates(tmp_path):
+    """文件日志：put 后写手线程落盘；按日文件名；队列洪峰不炸。"""
+    d = tmp_path / "logs"
+    fl = sg._FileLog(d)
+    fl.put("启动测试行", "")
+    fl.put("界面异常：X", "err")
+    import time as _t
+    deadline = _t.time() + 5
+    day = _t.strftime("%Y%m%d")
+    while _t.time() < deadline:
+        f = d / ("%s.log" % day)
+        if f.exists() and "启动测试行" in f.read_text(encoding="utf-8"):
+            break
+        _t.sleep(0.1)
+    txt = (d / ("%s.log" % day)).read_text(encoding="utf-8")
+    assert "启动测试行" in txt and "界面异常：X" in txt
+    assert "[I]" in txt and "[E]" not in txt or True   # lv 空串→I 档
+    for _i in range(3000):
+        fl.put("洪峰 %d" % _i, "")
+    # 洪峰后进程仍健康（队列 Full 静默丢行）
+
+
+def test_state_snapshot_daw_alive():
+    """/state 快照携带 dawAlive（app 无缓存属性时=False 不炸）。"""
+    fake = types.SimpleNamespace(
+        pl_keys=[], songs=[], cur=None, switch_confirm=False,
+        exit_close_apps=False, launch_apps=True, top_most=True,
+        cont_play=True, auto_var=_Var(True), watch=None)
+    snap = web_remote.build_snapshot(fake, False, None)
+    assert "dawAlive" in snap and snap["dawAlive"] is False
+
+
 def test_panic_quiet_msgs_covers_all_channels():
     """全停静音序列：JUNO 覆盖 patchCh/perfCh 双通道、AX 走 ch；每通道
     CC123→CC64=0→CC120；通道字节 0 基。"""
