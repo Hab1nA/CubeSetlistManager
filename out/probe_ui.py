@@ -408,7 +408,8 @@ def stage_p1(send):
              "showBtn:getComputedStyle(document.getElementById('btn-show'))"
              ".backgroundColor}")
     ok("p1.side.width-200", side.get("w") == 200, str(side.get("w")))
-    ok("p1.side.groups", side.get("groups") == ["演出", "准备", "系统"],
+    # 第五轮 F5：底部「系统」分组标签已删（只标一项=冗余且致底簇间距不可比）
+    ok("p1.side.groups", side.get("groups") == ["演出", "准备"],
        str(side.get("groups")))
     # 每 nav 一枚图标（总数字面量对本机渲染时序敏感，曾 6/7 抖动）
     ok("p1.side.icons", side.get("icons") == side.get("navN")
@@ -1815,7 +1816,7 @@ def stage_f(send):
         "window.fetch=(u,o)=>{"
         "if(String(u)==='/log')return Promise.resolve(new Response("
         "JSON.stringify({lines:[{t:1,msg:'启动',lv:''},"
-        "{t:Date.now()/1000-2,msg:'回零：「继续」忽略（状态互锁）',"
+        "{t:Date.now()/1000-2,msg:'回零：「继续」忽略，状态互锁',"
         "lv:'warn'}]}),{status:200}));"
         "return window.__fetch0(u,o)};")
     time.sleep(2.0)
