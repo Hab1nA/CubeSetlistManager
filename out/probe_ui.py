@@ -2526,6 +2526,40 @@ def stage_r(send):
        "%s %s" % (json.dumps(l7), json.dumps(l7b)))
     js(send, RESTORE)
 
+    # ---- VJ 映射即放即扫：stub /vjmap 文件集变化 → 5s 轮询自动跟上 ----
+    # 先装桩再进页：nav 内 refreshVj 会拉真 /vjmap 洗掉桩态渲染
+    js(send, UNSTUB + "window.__vf=1;window.__fetch0=window.fetch;"
+        "const VJROWS={1:"
+        "JSON.stringify([{note:60,name:'C4',file:'1.mp4',"
+        "blackout:false,hit:false}]),"
+        "2:JSON.stringify([{note:60,name:'C4',file:'1.mp4',"
+        "blackout:false,hit:true},{note:61,name:'C#4',file:'2.mp4',"
+        "blackout:false,hit:true}])};"
+        "window.fetch=(u,o)=>{"
+        "if(String(u)==='/settings')return Promise.resolve(new Response("
+        "JSON.stringify({obs:{projectorMonitor:'',mediaInput:'媒体',"
+        "videoRoot:'D:/vj',vjMute:false},screens:[]}),{status:200}));"
+        "if(String(u)==='/vjmap')return Promise.resolve(new Response("
+        "JSON.stringify({videoRoot:'D:/vj',rows:JSON.parse("
+        "VJROWS[window.__vf])}),"
+        "{status:200}));"
+        "return window.__fetch0(u,o)};")
+    js(send, "document.querySelector('.b-vj').click()")
+    time.sleep(6.0)          # 等一轮 5s 即放即扫轮询
+    v7 = js(send, "return {cells:document.querySelectorAll("
+             "'#vjmap .vj-cell').length}")
+    js(send, "window.__vf=2;return 1")
+    time.sleep(6.0)
+    v7b = js(send, "return {cells:document.querySelectorAll("
+             "'#vjmap .vj-cell').length,"
+             "stubbed:!!window.__fetch0,"
+             "vf:window.__vf,"
+             "pc0:(document.querySelector('#vjmap .vj-cell .s-pc')||{}"
+             ").textContent||''}")
+    ok("br.vj-rescan-poll", v7.get("cells") == 1 and v7b.get("cells") == 2,
+       "%s -> %s" % (json.dumps(v7), json.dumps(v7b)))
+    js(send, RESTORE)
+
     errs = js(send, "return window.__errs")
     ok("br.no-js-errors", not errs, str(errs)[:300])
 

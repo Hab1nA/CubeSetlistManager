@@ -2707,6 +2707,11 @@ setInterval(() => {
 }, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
 setInterval(refreshLog, 1500);
+// VJ 映射即放即扫：/vjmap 是 HTTP 线程直出的轻量快照（每次请求实时扫
+// 目录），仅 VJ 页打开且表单装载后 5s 拉一次——放/删视频文件后网格自动
+// 跟上，不再依赖重新进页或保存
+setInterval(() => { if (pageOn("vj") && vjLoaded)
+  refreshVjMap(vjMapRoot, true); }, 5000);
 refreshPlaylist();
 refreshPoints();
 refreshLog();
