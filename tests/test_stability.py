@@ -50,11 +50,21 @@ def test_settings_save_obs_off_main_thread():
     双端同改；旧的主线程直调写法不得回归。连续保存的热应用有锁串行。"""
     for name in ("setlist_gui.py", "automator_gui.py"):
         src = _slice(_src(name), "def _save(self)", "_MUTEX = None")
-        assert "def apply_obs" in src, name
-        assert "threading.Thread(target=apply_obs" in src, name
+        # setlist 走共享 _apply_obs_web（含「无→投屏拉起 OBS」判定），
+        # automator 保留本地闭包——两种形态都必须后台线程+锁串行
+        assert ("threading.Thread(target=apply_obs" in src
+                or "threading.Thread(target=app._apply_obs_web" in src), name
         assert "not app.ctl.apply_mute()" not in src, name
         assert "not app.ctl.apply_projector()" not in src, name
-        assert "with app._obs_apply_lock" in src, name
+        # 锁串行：本地闭包形态在 _save 内，共享方法形态在 App 侧（下方）
+        assert ("with app._obs_apply_lock" in src
+                or "_apply_obs_web" in src), name
+    # 共享方法的锁串行与拉起判定在 App 类侧（setlist）
+    src = _src("setlist_gui.py")
+    assert "def _apply_obs_web" in src
+    body = _slice(src, "def _apply_obs_web", "def _settings_apply_web")
+    assert "with self._obs_apply_lock" in body
+    assert "_ensure_obs_running" in body
 
 
 # ---- 修复3：简化版独立 _drain_calls + 两端排水循环 BaseException 韧性 ----

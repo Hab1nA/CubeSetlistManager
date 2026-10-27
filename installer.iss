@@ -63,6 +63,7 @@ Source: "dist\{#SrcDir}\{#SrcDir}.exe"; \
     Flags: ignoreversion
 Source: "dist\{#SrcDir}\_internal\*"; \
     DestDir: "{app}\_internal"; \
+    Excludes: ".mimosa"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef s1

@@ -16,6 +16,7 @@ import ctypes
 import faulthandler
 import json
 import os
+import shutil
 import pathlib
 import socket
 import queue
@@ -51,6 +52,22 @@ TX_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
             "stop": "停止", "rewind": "回零"}
 
 
+def panic_quiet_msgs(*cfgs):
+    """全停对琴的静音序列：CC123 All Notes Off → CC64=0 抬延音踏板 →
+    CC120 All Sound Off 兜底。每个配置发其全部 MIDI 通道（JUNO 走
+    patchCh/perfCh 两通道，AX 走 ch）。幂等无害，重复发不产生副作用。"""
+    out = []
+    for cfg in cfgs:
+        chs = ([cfg.get("patchCh", 1), cfg.get("perfCh", 16)]
+               if "perfCh" in cfg else [cfg.get("ch", 1)])
+        for ch in chs:
+            b = (ch - 1) & 0x0F
+            out.append(("short", 0xB0 | b | 123 << 8, 0))
+            out.append(("short", 0xB0 | b | 64 << 8, 0))
+            out.append(("short", 0xB0 | b | 120 << 8, 0))
+    return out
+
+
 def transport_blocked(action, tstate):
     """走带命令的状态互锁：S1 的 SPACE 系键序是播放⇄停止开关、Cubase 的
     「继续」也是裸 SPACE——不看当前状态盲发会反向作用（已暂停按「暂停」
@@ -65,6 +82,20 @@ def transport_blocked(action, tstate):
         return tstate == "playing"
     return False
 LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
+
+# 日志级别（新前端级别体系的唯一来源，产生端定级）：err=真实故障
+# （自检失败/启动失败/未恢复/不可用…）；「已停用/未启动」类有意停运
+# =warn 不算错。UI 的行内级别标签/着色/三档筛选全部消费此定级。
+_LOG_ERR = re.compile("失败|异常|错误|未恢复|不可用|不存在|无法|损坏")
+_LOG_WARN = re.compile("未生效|超时|降级|未就绪|忽略|未启动|未选|已停用|停用")
+
+
+def _log_lv(msg):
+    if _LOG_ERR.search(msg):
+        return "err"
+    if _LOG_WARN.search(msg):
+        return "warn"
+    return ""
 
 
 def _find_cubase_exe():
@@ -150,6 +181,13 @@ else:
     _HERE = pathlib.Path(__file__).resolve().parent
 CONFIG_PATH = _HERE / "config.json"
 PLAYLIST_PATH = _HERE / "playlist.json"
+# 滚动备份/损坏隔离文件：全部字面量常量（扫描器可静态判定无穿越面）
+_CONFIG_BAKS = (_HERE / "config.json.bak", _HERE / "config.json.bak2",
+                _HERE / "config.json.bak3")
+_CONFIG_CORRUPT = _HERE / "config.json.corrupt"
+_PLAYLIST_BAKS = (_HERE / "playlist.json.bak", _HERE / "playlist.json.bak2",
+                  _HERE / "playlist.json.bak3")
+_PLAYLIST_CORRUPT = _HERE / "playlist.json.corrupt"
 _CRASH_LOG = None                  # faulthandler 落盘句柄，防 GC
 
 
@@ -161,25 +199,189 @@ def _check_in_here(p):
     return p
 
 
+# ---- 文件日志（审计 #15：q 消费漏斗单点接入；专用线程异步落盘——
+#     日志行已在 Tk 线程消费，磁盘 IO 再入专用线程，主线程零等待）----
+_LOGDIR = pathlib.Path(os.environ.get("APPDATA") or str(_HERE)) / \
+    "CubeSetlistManager" / "logs"
+_LOG_KEEP_DAYS = 7
+
+
+class _FileLog:
+    """按日滚动日志写手：put() 由消费线程调用，写盘在专属线程排队完成；
+    进程退出靠 daemon+行级 flush 尽力而为（黑匣子另有 crash/stall 链）。"""
+
+    def __init__(self, directory):
+        self._dir = pathlib.Path(directory)
+        self._q = queue.Queue(maxsize=2000)
+        self._fh = None
+        self._day = None
+        threading.Thread(target=self._run, daemon=True,
+                         name="filelog").start()
+
+    def put(self, msg, lv):
+        try:
+            self._q.put_nowait((time.time(), msg, lv))
+        except queue.Full:
+            pass                      # 洪峰丢行不阻塞消费线程
+
+    def _open(self, day):
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._dir / ("%s.log" % day), "a",
+                        encoding="utf-8")
+        self._day = day
+        # 清 7 天前的旧日志
+        cutoff = time.time() - _LOG_KEEP_DAYS * 86400
+        try:
+            for p in self._dir.glob("*.log"):
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+        except OSError:
+            pass
+
+    def _run(self):
+        while True:
+            t, msg, lv = self._q.get()
+            day = time.strftime("%Y%m%d", time.localtime(t))
+            if self._fh is None or day != self._day:
+                self._open(day)
+            try:
+                self._fh.write("%s [%s] %s\n" % (
+                    time.strftime("%H:%M:%S", time.localtime(t)),
+                    lv or "I", msg))
+                self._fh.flush()
+            except OSError:
+                pass
+
+
+_FILE_LOG = None    # App.__init__ 里惰性创建（避免 import 期副作用）
+
+
+def _rotate(baks, path):
+    """写前滚动备份：bak2→bak3、bak→bak2、当前→bak（误存坏数据可回退
+    最近三次；路径全部来自模块级字面量常量）。当前文件不可解析（损坏且
+    .corrupt 改名失败的残余）时不入备份链——不顶掉最近的好备份。"""
+    for i in range(len(baks) - 1, 0, -1):
+        if baks[i - 1].exists():
+            os.replace(str(baks[i - 1]), str(baks[i]))
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                json.load(f)
+        except (ValueError, OSError):
+            return
+        shutil.copy(str(path), str(baks[0]))
+
+
+# ---- OBS WebSocket 密码 DPAPI 加密（审计 #12：明文落盘泄露面=文件本身；
+#     CryptProtectData 绑当前 Windows 用户，拷贝到他机不可解）----
+_DPAPI_PREFIX = "dpapi:"
+
+
+def _dpapi_protect(plain):
+    """UTF-8 明文 → "dpapi:"+base64(CryptProtectData)。失败返回原明文
+    （加密不可用时不阻断启动）。"""
+    try:
+        import ctypes.wintypes as wt
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cb", wt.DWORD), ("pb", ctypes.c_void_p)]
+
+        buf = ctypes.create_string_buffer(plain.encode("utf-8"))
+        pin = _BLOB(len(buf), ctypes.cast(buf, ctypes.c_void_p))
+        pout = _BLOB()
+        if ctypes.windll.crypt32.CryptProtectData(
+                ctypes.byref(pin), None, None, None, None, 0,
+                ctypes.byref(pout)):
+            try:
+                import base64
+                return _DPAPI_PREFIX + base64.b64encode(
+                    ctypes.string_at(pout.pb, pout.cb)).decode("ascii")
+            finally:
+                ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(pout.pb))
+    except Exception:
+        pass
+    return plain
+
+
+def _dpapi_unprotect(stored):
+    """"dpapi:"+base64 → 明文；非该前缀=旧明文原样返回（迁移兼容）。"""
+    if not stored or not stored.startswith(_DPAPI_PREFIX):
+        return stored
+    try:
+        import ctypes.wintypes as wt
+        import base64
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cb", wt.DWORD), ("pb", ctypes.c_void_p)]
+
+        raw = base64.b64decode(stored[len(_DPAPI_PREFIX):])
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        pin = _BLOB(len(raw), ctypes.cast(buf, ctypes.c_void_p))
+        pout = _BLOB()
+        if ctypes.windll.crypt32.CryptUnprotectData(
+                ctypes.byref(pin), None, None, None, None, 0,
+                ctypes.byref(pout)):
+            try:
+                # CryptProtectData 输出含终止 NUL（原文明文不含 \x00，
+                # 续着进 ObsWs 握手会炸）——decode 后去掉
+                return ctypes.string_at(pout.pb, pout.cb).decode(
+                    "utf-8").rstrip("\x00")
+            finally:
+                ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(pout.pb))
+    except Exception:
+        pass
+    return ""   # 解密失败（跨机拷贝的密文）：按空密码对待，不让连接崩
+
+
+def _protect_obs_password(cfg):
+    """读取链统一入口：识别 dpapi: 前缀解密；遇旧明文则原值可用并标记
+    待升级（写入链在下次 _save_config 时加密落盘）。"""
+    pwd = (cfg or {}).get("password") or ""
+    if pwd.startswith(_DPAPI_PREFIX):
+        return _dpapi_unprotect(pwd)
+    return pwd
+
+
 def _load_config():
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except ValueError:
-            return {}        # 文件损坏：降级为默认并让界面能起来
+            # 配置损坏：改名 .corrupt 留证隔离（防下一次保存把坏文件连同
+            # 全部设置覆盖掉），降级为默认让界面能起来；启动后 App 检查
+            # .corrupt 并向用户红字提示
+            try:
+                os.replace(str(CONFIG_PATH), str(_CONFIG_CORRUPT))
+            except OSError:
+                pass
+            return {}
     return {}
 
 
 def _atomic_write(path, text):
-    """先写临时文件再原子替换，避免断电/崩溃截断数据文件。"""
+    """先写临时文件再原子替换，避免断电/崩溃截断数据文件；写后 fsync
+    确保 os.replace 前内容已落盘（断电后替换的是完整数据而非空/半件）。
+    fsync 需另开句柄：write_text 已闭柄，FlushFileBuffers（os.fsync 的
+    Windows 底层）要求写权句柄，故 O_RDWR 重开仅作刷盘用。"""
     p = _check_in_here(path)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
+    fd = os.open(os.fspath(tmp), os.O_RDWR)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(str(tmp), str(p))
 
 
 def _save_config(cfg):
+    _rotate(_CONFIG_BAKS, CONFIG_PATH)
     _atomic_write(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
@@ -203,12 +405,21 @@ def _load_playlist():
             with open(PLAYLIST_PATH, encoding="utf-8") as f:
                 data = json.load(f)
         except ValueError:
-            data = {}        # 损坏降级：空播放列表（durations 启动探测会重建）
+            # 损坏降级：空播放列表（durations 启动探测会重建）；坏文件
+            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示
+            data = {}
+            try:
+                os.replace(str(PLAYLIST_PATH), str(_PLAYLIST_CORRUPT))
+            except OSError:
+                pass
         keys = data.get("playlist") or data.get("order") or []
+        durations = {}
+        for k, v in data.get("durations", {}).items():
+            d = cpr_meta.safe_dur(v)   # 历史毒化（NaN/Infinity/超界）归零
+            if d > 0:
+                durations[str(k)] = d
         return {"playlist": [str(k) for k in keys],
-                "durations": {k: float(v)
-                              for k, v in data.get("durations", {}).items()
-                              if isinstance(v, (int, float))},
+                "durations": durations,
                 "durSrc": {k: "manual"
                            for k, v in data.get("durSrc", {}).items()
                            if v == "manual"}}
@@ -219,6 +430,7 @@ def save_playlist(keys, durations, dur_src):
     data = json.dumps({"playlist": keys, "durations": durations,
                        "durSrc": dur_src},
                       ensure_ascii=False, indent=2)
+    _rotate(_PLAYLIST_BAKS, PLAYLIST_PATH)
     _atomic_write(PLAYLIST_PATH, data)
 
 
@@ -243,21 +455,25 @@ def scan_library(root, ext=".cpr"):
 
 
 def _read_duration(path):
-    """按工程扩展名分发时长解析：.cpr→RIFF 定位条，.song→ZIP/XML 事件终点。"""
-    return (song_meta.read_duration(path)
-            if path.lower().endswith(".song")
-            else cpr_meta.read_duration(path))
+    """按工程扩展名分发时长解析：.cpr→RIFF 定位条，.song→ZIP/XML 事件终点。
+    值域钳制（safe_dur）：伪造工程文件里的 inf/nan 不进 durations。"""
+    return cpr_meta.safe_dur(
+        song_meta.read_duration(path)
+        if path.lower().endswith(".song")
+        else cpr_meta.read_duration(path))
 
 
 def _read_span(path):
     """(时长, 左定位条偏移)：左定位条是时码位置→歌内已播秒的换算原点
-    （.song 无定位条概念 → 左=0；.cpr 解析不出 → (0, 0) 手填兜底）。"""
+    （.song 无定位条概念 → 左=0；.cpr 解析不出 → (0, 0) 手填兜底）。
+    同 _read_duration 钳制（伪造定位条 inf 不得毒化 watch/时码）。"""
     if path.lower().endswith(".song"):
-        return (song_meta.read_duration(path) or 0.0, 0.0)
+        return (cpr_meta.safe_dur(song_meta.read_duration(path)), 0.0)
     loc = cpr_meta.read_locators(path)
     if not loc:
         return (0.0, 0.0)
-    return ((loc[1] - loc[0]) if loc[1] > loc[0] else 0.0, loc[0])
+    return (cpr_meta.safe_dur(loc[1] - loc[0]) if loc[1] > loc[0] else 0.0,
+            cpr_meta.safe_dur(loc[0]))
 
 
 def _reprobe(songs, durations, dur_src):
@@ -398,6 +614,13 @@ class App:
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
+        # 启动连带开被控软件（DAW/OBS/loopMIDI，与退出关闭对等）；默认开=
+        # 保持历史行为（此前启动序列无条件拉起）
+        self.launch_apps = bool(cfg.get("launchAppsOnStart", True))
+        # OBS 自动拉起独立配置（config obs.autoStart，默认开）：生效值=
+        # 它 ∧ 总闸 ∧ 已配投屏位置，见 _obs_autostart_effective
+        self._obs_autostart_cfg = bool(
+            (cfg.get("obs") or {}).get("autoStart", True))
         # 端口提示名：空串=停用该联动（设置页下拉「无」）；缺键=无（不再
         # 回退旧硬编码端口名）
         self.vj_hint = str(cfg.get("vjPortHint") or "")
@@ -413,6 +636,16 @@ class App:
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件
+        global _FILE_LOG
+        _FILE_LOG = _FileLog(_LOGDIR)   # 文件日志（审计 #15；惰性首建）
+        # 数据文件损坏隔离提示（_load_config/_load_playlist 改名 .corrupt）
+        for c in (_CONFIG_CORRUPT, _PLAYLIST_CORRUPT):
+            if c.exists():
+                self.q.put("界面异常：检测到损坏的数据文件 %s，已隔离；"
+                           "本次按默认值启动，可从同名 .bak 恢复" % c.name)
+        # 一次性后台线程（探针/装载/热应用…）的异常统一进日志：此前
+        # daemon 线程死亡静默，只有 Tk 回调与排水链有兜底
+        threading.excepthook = self._thread_exc
         self.calls = stallguard.BoundedCallQueue(200)   # 跨线程 GUI 调用
         self.calls_urgent = collections.deque()  # 紧急调用（全停插队）
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
@@ -429,6 +662,9 @@ class App:
         # 自愈——LAN 信任域（/cmd 同级）内不构成升级，不为它上锁
         self._pedal_gwin = [0.0, 0]   # 全局限流窗：[窗起点, 窗内包数]
         self._pedal_gwin_lock = threading.Lock()   # gwin 非原子读改写
+        # seq/rate 同为线程池并发的非原子读改写（淘汰+写回交错会漏删/多删
+        # 一格）：与 gwin 各持小锁，不共用以免限流窗被去重表拖住
+        self._pedal_dedup_lock = threading.Lock()
         self._rclock_note = ("单踏板设计：bridge._rclock 为全体转发源共享，"
                              "多平板同开时 et 互跳会频繁重锚、安全退化为"
                              "到达时刻锚定（无锚定收益但不产生错误动作）")
@@ -464,6 +700,7 @@ class App:
         self.kb_err = ""                # 键盘自动化停用原因（监控栏显示）
         self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
         self._sel_lock = False          # 双列表互斥选中的防重入标记
+        self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 60-69）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
@@ -484,7 +721,9 @@ class App:
         self.points_win = None          # 定位点设置窗单例守卫槽
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
+        self._pedal_learner = None   # web 学习会话 (action, Learner, deadline)
         self.start_err = ""
+        self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
         self._build()
         # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
         # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
@@ -787,8 +1026,12 @@ class App:
             btn.config(state=tk.NORMAL if on else tk.DISABLED)
 
     def _on_exit(self):
-        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。"""
-        if self.ctrl is not None and self.ctrl.busy:
+        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。
+        webui_mode（pywebview 壳）跳过 Tk 弹窗：前端侧栏退出钮已两段式确认，
+        Tk 对话框跨窗口会沉底/触发 stallguard 误报（红队遗留）。"""
+        if getattr(self, "webui_mode", False):
+            ok = True
+        elif self.ctrl is not None and self.ctrl.busy:
             ok = messagebox.askyesno(
                 "退出", "正在切换工程，退出会中断切换流程。确定退出？")
         else:
@@ -851,6 +1094,15 @@ class App:
                 and not self.ctl.apply_projector():
             self.q.put("VJ显示位置未恢复：%s" % self.ctl.last_error)
 
+    def _obs_autostart_effective(self):
+        """OBS 自动拉起的生效值，三重门：obs.autoStart 独立配置 ∧
+        「启动时自动打开被控软件」 ∧ 已配置 VJ 显示位置（「无」=不投屏，
+        此时即使总闸开也不允许连接循环自动拉起 OBS）。"""
+        if self.ctl is None:
+            return False
+        mon = self.ctl.cfg.get("projectorMonitor", "") or ""
+        return bool(self._obs_autostart_cfg and self.launch_apps and mon)
+
     def _ensure_daw(self):
         """启动自检：DAW 未运行就自动拉起（Cubase 冷启动到 Hub 约 30 秒，
         之后切歌才能单实例转交）。进程在而界面全无=正在退出的空壳（上一局
@@ -896,28 +1148,44 @@ class App:
     def _startup(self):
         """后台启动：按依赖分组逐项降级——一组失败只废该组功能并记红字，
         其余服务照常起（缺什么补什么，不再一票否决）。三大后端
-        （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起。"""
+        （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起，受「启动时自动
+        打开被控软件」总闸控制（关闭=三个都不拉，对齐退出关闭的关闭面）。"""
         try:
-            self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
-            try:
-                hint = self.vj_hint or self.kb_hint or self.clock_hint
-                if hint:
-                    mb.ensure_loopmidi(hint)
-                    self.q.put("loopMIDI 端口就绪")
-                elif not find_processes_by_prefix("loopmidi"):
-                    # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的端口，
-                    # 不在则每次载入弹「未找到端口」。只拉起，不等端口。
-                    exe = mb._loopmidi_exe()
-                    if exe is None:
-                        raise SystemExit("找不到 loopMIDI.exe")
-                    if launch_detached(exe) <= 32:
-                        raise SystemExit("拉起 loopMIDI 失败")
-                    self.q.put("loopMIDI 已拉起（端口联动已停用）")
-            except SystemExit as e:      # 单项降级：缺 loopMIDI 不拖垮其余服务
-                self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用" % e)
+            if not self.launch_apps:
+                self.q.put("启动不自动打开被控软件（设置）：DAW/OBS/"
+                           "loopMIDI 均未拉起，需要时请手动打开")
+            else:
+                self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
+            if self.launch_apps:
+                try:
+                    hint = self.vj_hint or self.kb_hint or self.clock_hint
+                    if hint:
+                        mb.ensure_loopmidi(hint)
+                        self.q.put("loopMIDI 端口就绪")
+                    elif not find_processes_by_prefix("loopmidi"):
+                        # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的
+                        # 端口，不在则每次载入弹「未找到端口」。只拉起，
+                        # 不等端口。
+                        exe = mb._loopmidi_exe()
+                        if exe is None:
+                            raise SystemExit("找不到 loopMIDI.exe")
+                        if launch_detached(exe) <= 32:
+                            raise SystemExit("拉起 loopMIDI 失败")
+                        self.q.put("loopMIDI 已拉起（端口联动已停用）")
+                except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
+                    self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
+                               % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
-                if not find_processes_by_prefix("obs64"):   # 这里只补一条状态
-                    self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
+                if not find_processes_by_prefix("obs64"):   # 这里只补状态
+                    # 与三重门口径一致（此处 ctl 未建，按同源配置组合判）
+                    if self.launch_apps and self._obs_autostart_cfg and (
+                            _load_config().get("obs") or {}).get(
+                                "projectorMonitor", ""):
+                        self.q.put("OBS 未运行，将自动拉起（首次连接等它就绪）")
+                    else:
+                        self.q.put("OBS 未运行（不自动拉起：启动打开被控"
+                                   "软件或 OBS 自动启动未开，或未配置投屏"
+                                   "位置）")
             except Exception:
                 pass
             # VJ 链：OBS 客户端 → 走带同步/自动推进 → MIDI 监听（相互依赖，
@@ -925,6 +1193,13 @@ class App:
             try:
                 self.ctl = ObsController(_load_config()["obs"])
                 self.ctl.on_connected = self._on_obs_connected
+                # 密码以 dpapi: 密文落盘：控制器拿解密后的明文去连接；
+                # 旧明文原样通过（写入链在下次保存时升级为密文）
+                self.ctl.cfg["password"] = _protect_obs_password(
+                    self.ctl.cfg)
+                # OBS 自动拉起生效值三重门落位（obs.autoStart ∧ 总闸 ∧
+                # 已配投屏位置）：连接循环据此决定是否拉起 OBS
+                self.ctl.cfg["autoStart"] = self._obs_autostart_effective()
                 self.sync = mb.TransportSync(self.ctl, on_event=self.q.put)
                 self.watch = advance.AdvanceWatch(
                     on_finished=lambda: self.calls.put(self._advance),
@@ -1042,6 +1317,57 @@ class App:
             if self._pending_ports:      # 消费启动期票据：补热切换（幂等清零）
                 self._pending_ports = False
                 self.calls.put(self._apply_ports)
+        threading.Thread(target=self._web_status_loop, daemon=True,
+                         name="web-status-probe").start()
+
+    def _web_status_loop(self):
+        """遥控网络状态缓存（/settings GET 的 webStatus 数据源）：热点态
+        PS 查询与端口 connect 探测都是秒级慢操作，不能在 Tk 主线程做——
+        专职线程每 5 秒刷新，GET 只读缓存（GIL 原子）。"""
+        while True:
+            try:
+                self._web_status_probe()
+            except Exception:      # 单轮故障不得杀死线程（死=状态永久陈旧）
+                pass
+            time.sleep(5.0)
+
+    def _web_status_probe(self):
+        out = {"net": "?"}
+        try:
+            if str(self.web_cfg.get("mode") or "hotspot") == "lan":
+                cands = [ip for ip, _n in hotspot.lan_ips()
+                         if web_remote.valid_push_ip(ip)
+                         and not ip.startswith("127.")]
+                if self.web_cfg.get("ip") or len(cands) == 1:
+                    out["net"] = "lan-ready"
+                elif not cands:
+                    out["net"] = "lan-none"
+                else:
+                    out["net"] = "lan-multi"
+            else:
+                st = hotspot.state()
+                out["net"] = ("hot-on" if st.get("on") else
+                              "hot-off" if st.get("ok") else "hot-bad")
+        except Exception:
+            pass
+        srv_ip = "127.0.0.1"
+        try:
+            web = self.web
+            if web is not None and web.server is not None:
+                srv_ip = web.server.server_address[0]
+        except Exception:          # 服务重建竞态（_stop_server 置 None）
+            pass
+        out["listen"] = {}
+        for key, port in (("serverPort",
+                           self.web_cfg.get("serverPort") or 8765),
+                          ("appPort", self.web_cfg.get("appPort") or 8767)):
+            try:
+                s = socket.create_connection((srv_ip, port), timeout=0.8)
+                s.close()
+                out["listen"][key] = True
+            except OSError:
+                out["listen"][key] = False
+        self._web_status = out
 
     def _entry_alive(self, key):
         """播放列表条目存活判定：pt 条目 ⇔ 宿主在库且启用且点存在。"""
@@ -1735,6 +2061,931 @@ class App:
             self.q.put("工程未响应定位：《%s》时码未变化（检查 DAW 已勾 "
                        "MMC Slave 且输入口与 MMC 输出口为同一虚拟口）" % label)
 
+    # ---- 新前端（webui/平板 /app 页）命令面：主线程执行，经 calls 投递 ----
+
+    def _points_sync_list(self, lib_key):
+        """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
+        持久化刷新。PointsWindow._sync_list 与 /ptcmd 共用。"""
+        song = self.by_key.get(lib_key)
+        data = self.points.get(lib_key)
+        if song is None or data is None:
+            return "工程不存在"
+        try:
+            points.save_points(os.path.dirname(song["path"]), data)
+        except (OSError, ValueError) as e:
+            data2, _ = points.load_points(os.path.dirname(song["path"]))
+            self.points[lib_key] = data2          # 回读磁盘：放弃本次变更
+            self._refresh()
+            return "保存失败：%s" % e
+        if data["enabled"]:
+            old = list(self.pl_keys)
+            new = points.collapse_restore(old, lib_key)
+            new = points.expand_replace(new, lib_key,
+                                        points.pt_keys_for(lib_key, data))
+            self.pl_keys = new
+            self.cur = points.remap_cur(old, new, self.cur, lib_key)
+        self._persist()
+        self._refresh()
+        return None
+
+    def _points_cmd_web(self, op, lib_key, payload):
+        """/ptcmd：定位点增删改排（op: toggle/add/del/edit/move）。返回
+        None=成功，str=错误文案（HTTP 线程经 result 队列取回）。"""
+        song = self.by_key.get(lib_key)
+        if song is None:
+            return "工程不存在"
+        if op == "toggle":
+            self._toggle_points(lib_key, bool(payload.get("on")))
+            return None
+        data = self.points.get(lib_key) or points.empty_data()
+        if op == "add":
+            d_file, left = _read_span(song["path"])
+            start = payload.get("start")
+            if start is None:
+                start = self.mtc.position() if self.mtc is not None else 0.0
+            else:
+                start = points.finite_tc(start)
+                if start is None:
+                    return "开始时码必须为有限数字"
+            end = payload.get("end")
+            if end is None:
+                end = left + d_file if d_file else 0.0
+            else:
+                end = points.finite_tc(end)
+                if end is None:
+                    return "结束时码必须为有限数字"
+            pt, data = points.next_point(data, start, end)
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        pid = payload.get("id")
+        pt = points.get_point(data, int(pid or 0))
+        if pt is None:
+            return "定位点不存在"
+        if op == "del":
+            data["points"] = [q for q in data["points"]
+                              if q["id"] != pt["id"]]
+            self.points[lib_key] = data
+            if not data["points"]:
+                self._toggle_points(lib_key, False)   # 删光=自动停用
+                return None
+            return self._points_sync_list(lib_key)
+        if op == "edit":
+            start = float(payload.get("start") or 0.0)
+            end = float(payload.get("end") or 0.0)
+            err, _warn = points.validate_point(start, end)
+            if err:
+                return err
+            pt["name"] = str(payload.get("name") or pt["name"]).strip() \
+                or pt["name"]
+            pt["start"], pt["end"] = start, end
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        if op == "move":
+            step = int(payload.get("step") or 0)
+            idx = data["points"].index(pt)
+            j = idx + (1 if step > 0 else -1)
+            if not 0 <= j < len(data["points"]):
+                return None
+            data["points"][idx], data["points"][j] = \
+                data["points"][j], data["points"][idx]
+            self.points[lib_key] = data
+            return self._points_sync_list(lib_key)
+        return "未知操作"
+
+    def _pickdir_web(self):
+        """/pickdir：原生目录选择对话框（Tk 主线程执行；空串=取消）。"""
+        try:
+            # webui 模式 Tk 主窗全程 withdraw：对话框挂它名下会跟着沉底
+            # （弹了也看不见）——无父对话框独立居中置前
+            parent = None if getattr(self, "webui_mode", False) else self.root
+            path = filedialog.askdirectory(parent=parent, title="选择目录")
+        except Exception as e:
+            return {"error": _err(e)}
+        return {"path": path or ""}
+
+    def _pickfile_web(self):
+        """/pickdir kind=file：原生文件选择对话框（如 Cubase 程序）。"""
+        try:
+            parent = None if getattr(self, "webui_mode", False) else self.root
+            path = filedialog.askopenfilename(parent=parent,
+                                              title="选择程序")
+        except Exception as e:
+            return {"error": _err(e)}
+        return {"path": path or ""}
+
+    def _monitor_web(self):
+        """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
+        return {"/".join(k): list(v.cget("text") and
+                                  (v.cget("text"), v.cget("foreground")))
+                for k, v in self.rows.items()}
+
+    def _settings_get_web(self):
+        """设置页数据：当前生效值 + 可选列表（显示器/网卡/在线端口）。"""
+        cfg = _load_config()
+        obs = cfg.get("obs") or {}
+        web = self._web_config_payload()
+        # 服务网卡候选带 {name, ip}：前端显示名、提交 IP（后端 lan_ip 存的
+        # 是 IP，只报名永远配不上）；排除环回——_rebuild_lan 不认它
+        adapters = [{"name": name, "ip": ip} for ip, name in
+                    hotspot.lan_ips() if web_remote.valid_push_ip(ip)
+                    and not ip.startswith("127.")]
+        return {
+            "clockHint": self.clock_hint, "vjHint": self.vj_hint,
+            "kbHint": self.kb_hint,
+            "autoAdvance": self.watch.armed if self.watch else False,
+            "autoPlay": self.cont_play, "topMost": self.top_most,
+            "switchConfirm": self.switch_confirm,
+            "exitCloseApps": self.exit_close_apps,
+            "launchAppsOnStart": self.launch_apps,
+            "projectsRoot": self.ccfg.get("projectsRoot", ""),
+            "dawExe": self.ccfg.get("dawExe", ""),
+            "autoSave": bool(self.ccfg.get("autoSave", True)),
+            "obs": {"projectorMonitor": obs.get("projectorMonitor", ""),
+                    "vjMute": bool(obs.get("vjMute", True)),
+                    "videoRoot": obs.get("videoRoot", ""),
+                    "mediaInput": obs.get("mediaInput", "")},
+            "web": {k: web.get(k) for k in
+                    ("enabled", "serverPort", "appPort", "taskerPort",
+                     "midiIn", "mode", "ip")},
+            "screens": [n for n, _r in list_screens()],
+            "adapters": adapters,
+            "ports": [n for _i, n in mb._in_devices()],
+            "webStatus": dict(self._web_status),
+        }
+
+    def _apply_obs_web(self, vid, media, mon, mute):
+        """OBS 设置热应用（后台线程执行；vid/media/mon/mute 为 None=该键
+        不在场不动）。VJ 显示位置从「无」变为投屏且「启动时自动打开被控
+        软件」开着时，OBS 未运行则拉起——连接循环连上后 on_connected 会
+        按新位置恢复投影，此处无需（也无法，ws 未连）立即 apply_projector。"""
+        ctl = self.ctl
+        if ctl is None:
+            return
+        with self._obs_apply_lock:
+            if mute is not None:
+                ctl.cfg["vjMute"] = mute
+            if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
+                ctl.cfg["videoRoot"] = vid
+            if media is not None:
+                ctl.cfg["mediaInput"] = media
+            mon_prev = None
+            if mon is not None:
+                mon_prev = ctl.cfg.get("projectorMonitor", "") or ""
+                ctl.cfg["projectorMonitor"] = mon
+                # 位置变化改变「允许自动拉起」的判定，即时重算生效值
+                ctl.cfg["autoStart"] = self._obs_autostart_effective()
+            if mute is not None and ctl.is_connected() \
+                    and not ctl.apply_mute():
+                self.q.put("VJ静音未生效：%s" % ctl.last_error)
+            if mon is None:
+                return
+            if not mon:              # 显式改「无」：停投屏（关闭投影窗）
+                ctl.close_projector()
+                return
+            fresh = False
+            if mon and not mon_prev and self.launch_apps \
+                    and not find_processes_by_prefix("obs64"):
+                try:                 # 冷启动 OBS 并等端口就绪（≤30s）
+                    fresh = ctl._ensure_obs_running()
+                except Exception as e:
+                    self.q.put("OBS 自动拉起失败：%s" % _err(e))
+            if fresh:
+                return               # 投影恢复交给 on_connected（ws 连上后）
+            if not ctl.apply_projector():
+                self.q.put("VJ显示位置未生效：%s" % ctl.last_error)
+            # 配置了显示器=保持投影（仅显式改「无」才关，上方分支已覆盖）；
+            # 此处不得 close——否则保存任意 VJ 配置都会打灭投影
+
+    def _settings_apply_web(self, p):
+        """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
+        热应用链（端口/工程库/OBS/遥控/持久化），取值来自 payload。
+        在场检测：payload 缺席的键既不动内存也不落盘——VJ 页只发 obs
+        节、设置页发全量，缺席按 False/空处理曾把四端口/行为开关/遥控
+        服务跨页静默清空（互 wipe）。"""
+        def hint(k):               # 端口名：None=不在场，""=停用（「无」）
+            if k not in p:
+                return None
+            v = str(p.get(k) or "")
+            return "" if v == "无" else v
+
+        vj, kb, ck = hint("vjHint"), hint("kbHint"), hint("clockHint")
+        obs_in = p.get("obs")
+        obs_in = obs_in if isinstance(obs_in, dict) else {}
+        mon = (None if "projectorMonitor" not in obs_in else
+               "" if str(obs_in.get("projectorMonitor") or "") in ("无",)
+               else str(obs_in.get("projectorMonitor") or ""))
+        mute = bool(obs_in["vjMute"]) if "vjMute" in obs_in else None
+        vid = (str(obs_in.get("videoRoot") or "")
+               if "videoRoot" in obs_in else None)
+        media = (str(obs_in.get("mediaInput") or "")
+                 if "mediaInput" in obs_in else None)
+
+        def pint(src, k, d):
+            try:
+                v = int(str(src.get(k, d)).strip())
+                assert v > 0
+                return v
+            except (ValueError, AssertionError):
+                return d
+
+        web_in = p.get("web")
+        web_in = web_in if isinstance(web_in, dict) else {}
+        web_fields = {}
+        if "enabled" in web_in:
+            web_fields["enabled"] = bool(web_in["enabled"])
+        if "serverPort" in web_in:
+            web_fields["serverPort"] = pint(web_in, "serverPort", 8765)
+        if "appPort" in web_in:
+            web_fields["appPort"] = pint(web_in, "appPort", 8767)
+        if "taskerPort" in web_in:
+            web_fields["taskerPort"] = pint(web_in, "taskerPort", 8766)
+        if "midiIn" in web_in:
+            web_fields["midiIn"] = str(web_in.get("midiIn") or "")
+        if "mode" in web_in:
+            web_fields["mode"] = web_in.get("mode")
+        if "ip" in web_in:
+            web_fields["ip"] = str(web_in.get("ip") or "")
+        web_changed = any(self.web_cfg.get(k) != v
+                          for k, v in web_fields.items())
+        self.web_cfg.update(web_fields)
+        if "autoAdvance" in p or "autoPlay" in p:
+            cont = (bool(p["autoPlay"]) if "autoPlay" in p
+                    else self.cont_play)
+            auto = (bool(p["autoAdvance"]) if "autoAdvance" in p
+                    else self.auto_var.get()) or cont
+            self.cont_play = cont
+            self.auto_var.set(auto)
+            self._toggle_auto()
+        if "topMost" in p:
+            self.top_most = bool(p["topMost"])
+            self.root.attributes("-topmost", self.top_most)
+        if "switchConfirm" in p:
+            self.switch_confirm = bool(p["switchConfirm"])
+        if "exitCloseApps" in p:
+            self.exit_close_apps = bool(p["exitCloseApps"])
+        if "launchAppsOnStart" in p:
+            self.launch_apps = bool(p["launchAppsOnStart"])
+            if self.ctl is not None:   # 总闸变化：OBS 拉起生效值即时重算
+                self.ctl.cfg["autoStart"] = self._obs_autostart_effective()
+
+        if obs_in and self.ctl is not None:
+            threading.Thread(target=self._apply_obs_web,
+                             args=(vid, media, mon, mute),
+                             daemon=True).start()
+        proj = str(p.get("projectsRoot") or "") if "projectsRoot" in p else ""
+        rescan = bool(proj) and proj != self.ccfg.get("projectsRoot")
+        if proj:
+            self.ccfg["projectsRoot"] = proj
+        if rescan:
+            self.q.put("工程库已变更，后台重扫…")
+            threading.Thread(target=self._load_songs, daemon=True).start()
+        ports_changed = any(v is not None and v != cur for v, cur in
+                            ((vj, self.vj_hint), (kb, self.kb_hint),
+                             (ck, self.clock_hint)))
+        self._clock_changed = ck is not None and ck != self.clock_hint
+        if vj is not None:
+            self.vj_hint = vj
+        if kb is not None:
+            self.kb_hint = kb
+        if ck is not None:
+            self.clock_hint = ck
+        try:
+            cfg = _load_config()
+            flags = {}
+            if "autoAdvance" in p or "autoPlay" in p:
+                flags.update({"autoAdvance": self.auto_var.get(),
+                              "autoPlay": self.cont_play})
+            if "topMost" in p:
+                flags["topMost"] = self.top_most
+            if "switchConfirm" in p:
+                flags["switchConfirm"] = self.switch_confirm
+            if "exitCloseApps" in p:
+                flags["exitCloseApps"] = self.exit_close_apps
+            if "launchAppsOnStart" in p:
+                flags["launchAppsOnStart"] = self.launch_apps
+            if vj is not None:
+                flags["vjPortHint"] = vj
+            if kb is not None:
+                flags["kbPortHint"] = kb
+            if ck is not None:
+                flags["clockPortHint"] = ck
+            cfg.update(flags)
+            if obs_in:
+                obs = cfg.get("obs") or {}
+                if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
+                    obs["videoRoot"] = vid
+                if mon is not None:
+                    obs["projectorMonitor"] = mon
+                if mute is not None:
+                    obs["vjMute"] = mute
+                if media is not None:
+                    obs["mediaInput"] = media
+                # 密码落盘前升级为 DPAPI 密文（旧明文/未加密自动迁移）
+                if obs.get("password") and \
+                        not str(obs["password"]).startswith(_DPAPI_PREFIX):
+                    obs["password"] = _dpapi_protect(str(obs["password"]))
+                cfg["obs"] = obs
+            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
+            if proj:
+                daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
+            if "dawExe" in p and p.get("dawExe"):
+                daw_sec["dawExe"] = str(p["dawExe"])
+            if "autoSave" in p:
+                daw_sec["autoSave"] = bool(p["autoSave"])
+                self.ccfg["autoSave"] = bool(p["autoSave"])
+            cfg["dawSettings"] = daw_sec
+            if web_fields:
+                cfg["webRemote"] = self._web_config_payload(**web_fields)
+            _save_config(cfg)
+        except (ValueError, OSError) as e:
+            self.q.put("配置保存失败：%s" % e)
+            return "配置保存失败：%s" % e
+        if ports_changed:
+            self._apply_ports()
+        if web_changed:
+            self._apply_web()
+        self.q.put("设置已保存")
+        return None
+
+    def _pedal_get_web(self):
+        p = self.pedal
+        return {"deviceHint": self.pedal_device_hint,
+                "hint": self.pedal_hint,
+                "binds": self.pedal_binds, "hid": self.pedal_hid,
+                "gestures": self.pedal_gestures,
+                "intercept": self.pedal_intercept,
+                "doubleWindow": self.pedal_double,
+                "remoteEnabled": self.pedal_remote_enabled,
+                "connected": bool(getattr(p, "connected", False)),
+                "hidActive": bool(getattr(p, "hid_active", False)),
+                "deviceOnline": (p.device_online() if p is not None
+                                 else False),
+                "muted": bool(getattr(p, "muted", False))}
+
+    def _pedal_devices_web(self):
+        """在线键盘类设备 [(身份子串, 展示名)]（Raw Input 枚举）。已选设备
+        不在场时补幽灵项（友好名查注册表，回来自动接上）。"""
+        devs = pedal.pedal_list_devices_safe()
+        cur = self.pedal_device_hint
+        if cur and cur not in {h for h, _n in devs}:
+            devs = list(devs) + [(cur, pedal.device_display(cur))]
+        return {"devices": devs}
+
+    def _pedal_learn_start_web(self, action):
+        """web 学习启动（镜像 PedalWindow._learn）：页面静音须已开（进页置位，
+        静音已让出 MIDI 口给学习器）。"""
+        if action not in dict(pedal.ACTIONS):
+            return "未知动作"
+        self._pedal_learn_cancel_web()
+        try:
+            learner = pedal.Learner(
+                self.pedal_hint, self.pedal_device_hint, self.pedal.bridge,
+                double_window=self.pedal_double,
+                kb_ports=((self.jcfg["inHint"], kbd_auto._in_dev(self.jcfg)),
+                          (self.axcfg["inHint"],
+                           kbd_auto._in_dev(self.axcfg))))
+        except BaseException:
+            return "学习启动失败（口被占用？）"
+        self._pedal_learner = (action, learner,
+                               time.time() + pedal.LEARN_TIMEOUT)
+        return None
+
+    def _pedal_learn_cancel_web(self):
+        """取消学习：关学习器 + 桥配置回灌（保持页面静音，离页才恢复）。"""
+        tup = getattr(self, "_pedal_learner", None)
+        if tup is None:
+            return
+        tup[1].close()
+        self._pedal_learner = None
+        if self.pedal is not None:
+            self.pedal.apply(self.pedal_hint, self.pedal_binds,
+                             self.pedal_hid, self.pedal_device_hint,
+                             self.pedal_intercept, self.pedal_gestures,
+                             self.pedal_double)
+
+    def _pedal_learn_poll_web(self):
+        """web 学习轮询（镜像 _tick_once 学习分支）：分类/改绑迁移/应用/落盘
+        在 Tk 线程一次完成，回前端展示包。"""
+        tup = getattr(self, "_pedal_learner", None)
+        if tup is None:
+            return {"active": False}
+        action, learner, deadline = tup
+        res = learner.result()
+        if res is not None:
+            kind, dev, code, gesture = res
+            learner.close()
+            self._pedal_learner = None
+            # 改绑身份=(码, 手势)：同键同手势只能属一个动作（自旧动作摘除）
+            moved = []
+            if kind == "hid":
+                moved = [a for a, v in self.pedal_hid.items()
+                         if v == code and a != action
+                         and self.pedal_gestures.get(a, "single") == gesture]
+                for a in moved:
+                    del self.pedal_hid[a]
+                    if self.pedal_binds.get(a) is None:
+                        self.pedal_gestures.pop(a, None)
+                self.pedal_hid[action] = code
+                label = "按键「%s」%s" % (dev, pedal._GNAME.get(gesture, ""))
+            else:
+                self.pedal_hint = dev
+                moved = [a for a, v in self.pedal_binds.items()
+                         if v == code and a != action
+                         and self.pedal_gestures.get(a, "single") == gesture]
+                for a in moved:
+                    del self.pedal_binds[a]
+                    if self.pedal_hid.get(a) is None:
+                        self.pedal_gestures.pop(a, None)
+                self.pedal_binds[action] = code
+                label = "%s 的 CC %d%s" % (dev, code,
+                                           pedal._GNAME.get(gesture, ""))
+            self.pedal_gestures[action] = gesture
+            if moved:
+                label += "（自「%s」改绑）" % "、".join(
+                    dict(pedal.ACTIONS)[a] for a in moved)
+            self._pedal_apply_web({})       # 应用当前态并落盘
+            return {"active": False, "done": True,
+                    "result": {"action": action, "gesture": gesture,
+                               "label": label}}
+        if time.time() > deadline:
+            self._pedal_learn_cancel_web()
+            return {"active": False, "done": True, "error": (
+                "学习超时：所选设备没发按键（踏板连接/模式请检查）"
+                if self.pedal_device_hint
+                else "学习超时：未选输入设备，没等到 MIDI CC")}
+        return {"active": True, "remain": max(0.0, deadline - time.time())}
+
+    def _pedal_mute_web(self, on):
+        """页面存活期静音（进页 on / 离页 off，镜像 PedalWindow 开关页）。
+        off 先收学习会话再恢复——学习者占着候选 MIDI 口，不关则踩钉哑到
+        下次进页（旧窗 _close 同序）。"""
+        p = self.pedal
+        if p is None:
+            return None
+        if on:
+            self._pedal_learn_cancel_web()
+            p.mute()
+        else:
+            self._pedal_learn_cancel_web()
+            p.unmute()
+            p.try_open()
+        return None
+
+    def _pedal_apply_web(self, p):
+        gest = p.get("gestures")
+        if gest:
+            if not isinstance(gest, dict) or not all(
+                    k in dict(pedal.ACTIONS) and v in pedal.GESTURES
+                    for k, v in gest.items()):
+                return "手势载荷非法（动作或手势名不认识）"
+        for field, lo, hi in (("binds", 0, 127), ("hid", 1, 0xFF)):
+            vals = p.get(field)
+            if vals is None:
+                continue
+            if not isinstance(vals, dict) or not all(
+                    k in dict(pedal.ACTIONS) and isinstance(v, int)
+                    and not isinstance(v, bool) and lo <= v <= hi
+                    for k, v in vals.items()):
+                return "%s 载荷非法" % ("绑定（CC 0-127）" if field == "binds"
+                                       else "按键绑定（VK 码）")
+        self.pedal_hint = str(p.get("hint") or self.pedal_hint)
+        self.pedal_device_hint = str(p.get("deviceHint")
+                                     if p.get("deviceHint") is not None
+                                     else self.pedal_device_hint)
+        # 在场检测：清空最后一个绑定要能落下去（`or` 回退旧值会让末位
+        # 清除静默失败、gestures 残条目永存）；null 与缺席同义（显式
+        # JSON null 不得把整表写成 None）
+        if p.get("binds") is not None:
+            self.pedal_binds = p["binds"]
+        if p.get("hid") is not None:
+            self.pedal_hid = p["hid"]
+        if p.get("gestures") is not None:
+            self.pedal_gestures = p["gestures"] or {}
+        self.pedal_intercept = bool(p.get("intercept", self.pedal_intercept))
+        try:
+            # 运行期夹取（与 load_gestures 同区间）：API 直写超界值不再
+            # 带着哑窗口撑到重启
+            self.pedal_double = min(1.0, max(
+                0.12, float(p.get("doubleWindow", self.pedal_double))))
+        except (TypeError, ValueError):
+            pass
+        self.pedal_remote_enabled = bool(p.get("remoteEnabled",
+                                               self.pedal_remote_enabled))
+        self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
+                         self.pedal_device_hint, self.pedal_intercept,
+                         self.pedal_gestures, self.pedal_double)
+        self.pedal.try_open()
+        # 键名对齐启动加载器（load_binding/load_hid/load_device_cfg）与
+        # PedalWindow._save：deviceHint=MIDI 口名、hidDeviceHint=设备身份
+        self._persist_config(
+            pedal={"deviceHint": self.pedal_hint,
+                   "bindings": self.pedal_binds,
+                   "hidBindings": self.pedal_hid,
+                   "hidDeviceHint": self.pedal_device_hint,
+                   "intercept": self.pedal_intercept,
+                   "gestures": self.pedal_gestures,
+                   "doubleWindow": self.pedal_double,
+                   "remoteEnabled": self.pedal_remote_enabled})
+        return None
+
+    def _kbd_song_key(self):
+        """当前装载映射的曲 key（cur_song_path 反查；未装载/游离=None）。"""
+        if not self.cur_song_path:
+            return None
+        for k, s in self.by_key.items():
+            if s["path"] == self.cur_song_path:
+                return k
+        return None
+
+    def _kbd_get_web(self, song_key=None):
+        """/kbd 数据面：live 态 + 曲目清单（任意曲预配映射）+ 端口候选与
+        命中态 + 槽位人话描述 + 最近一次切换结果。song_key 给定时返回
+        该曲的映射（后台装载，首答 loading）。"""
+        loaded = self._kbd_song_key()
+        out = {"junoIn": self.jcfg.get("inHint", ""),
+               "junoOut": self.jcfg.get("outHint", ""),
+               "axIn": self.axcfg.get("inHint", ""),
+               "axOut": self.axcfg.get("outHint", ""),
+               "junoInDev": kbd_auto._in_dev(self.jcfg),
+               "junoOutDev": self.jcfg.get("dev", 0),
+               "axInDev": kbd_auto._in_dev(self.axcfg),
+               "axOutDev": self.axcfg.get("dev", 0),
+               "junoShift": self.juno_shift, "axShift": self.ax_shift,
+               "songKey": loaded,
+               "songs": [{"key": s["key"], "team": s["team"],
+                          "name": s["name"]} for s in self.songs],
+               "lastResult": self._kb_last[0],
+               "counts": {"juno": len(self.slots),
+                          "ax": len(self.ax_slots)}}
+        # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）。
+        # 3 秒快照缓存：键盘页/详情面板 1.5s 轮询不再每拍都在 Tk 线程
+        # 枚举 winmm/BLE 端口（枚举本身快，但别给演出中的主线程加压）
+        now = time.monotonic()
+        snap = getattr(self, "_kbd_ports_snap", None)
+        if snap and now - snap[0] < 3.0:
+            out["ports"], out["portStatus"] = snap[1], snap[2]
+        else:
+            ins = kbd_auto._all_in_devices()
+            outs = kbd_auto._all_out_devices()
+
+            def entries(devs):
+                return [{"label": l, "name": n, "dev": k} for l, n, k
+                        in kbd_auto._device_entries([n for _, n in devs])]
+
+            def side(devs, hint, dev):
+                hit = kbd_auto._pick_hit(devs, hint, dev)
+                if hit is None:
+                    return {"hit": False}
+                pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+                return {"hit": True, "name": hit[1], "pos": pos, "total": total}
+
+            out["ports"] = {"in": entries(ins), "out": entries(outs)}
+            out["portStatus"] = {
+                "junoIn": side(ins, self.jcfg.get("inHint", ""),
+                               kbd_auto._in_dev(self.jcfg)),
+                "junoOut": side(outs, self.jcfg.get("outHint", ""),
+                                self.jcfg.get("dev", 0)),
+                "axIn": side(ins, self.axcfg.get("inHint", ""),
+                             kbd_auto._in_dev(self.axcfg)),
+                "axOut": side(outs, self.axcfg.get("outHint", ""),
+                              self.axcfg.get("dev", 0))}
+            self._kbd_ports_snap = (now, out["ports"], out["portStatus"])
+
+        def with_desc(slots, fn):
+            return {str(n): dict(v, desc=fn(v))
+                    for n, v in (slots or {}).items()}
+
+        def edit_song(key, name, loading, slots, ax):
+            return {"key": key, "name": name, "loading": loading,
+                    "slots": with_desc(slots, kbd_auto.describe_slot),
+                    "axSlots": with_desc(ax, kbd_auto.describe_ax)}
+
+        if song_key and song_key != loaded:
+            song = self.by_key.get(song_key)
+            if song is None:
+                out["editSong"] = {"key": None, "loading": False,
+                                   "slots": {}, "axSlots": {}}
+                return out
+            if not hasattr(self, "_kbd_song_cache"):
+                self._kbd_song_cache = {}
+            if song_key in self._kbd_song_cache:
+                slots, ax = self._kbd_song_cache[song_key]
+                out["editSong"] = edit_song(song_key, song["name"],
+                                            False, slots, ax)
+            else:               # 后台装载（网络盘 IO 不进 Tk 线程）；代际
+                out["editSong"] = {"key": song_key, "name": song["name"],
+                                   "loading": True, "slots": {}, "axSlots": {}}
+                path = song["path"]
+                if not hasattr(self, "_kbd_cache_gen"):
+                    self._kbd_cache_gen = {}
+                self._kbd_cache_gen[song_key] = \
+                    self._kbd_cache_gen.get(song_key, 0) + 1
+                gen = self._kbd_cache_gen[song_key]
+
+                def run():
+                    slots = kbd_auto.load_slots(path)
+                    ax = kbd_auto.load_slots(path, "ax")
+                    if self._kbd_cache_gen.get(song_key) != gen:
+                        return    # IO 期间已保存失效：不回写旧数据
+                    self._kbd_song_cache[song_key] = (slots, ax)
+                threading.Thread(target=run, daemon=True).start()
+            return out
+        song = self.by_key.get(loaded) if loaded else None
+        out["editSong"] = edit_song(loaded, song["name"] if song else None,
+                                    False, self.slots, self.ax_slots)
+        return out
+
+    def _kbd_record_web(self, inst, stop=False):
+        """录制（琴上捕获）：镜像 KeyboardAutoWindow 录制半程——开该琴
+        输入口持续跟踪最近一次 BS/PC；stop 关口保留最后捕获值。"""
+        cap_old = getattr(self, "_kbd_cap", None)
+        if cap_old is not None:
+            try:
+                cap_old["port"].close()
+            except OSError:
+                pass
+        if stop:
+            if cap_old is not None:
+                cap_old["closed"] = True
+            else:
+                self._kbd_cap = None
+            return None
+        cfg = self.axcfg if inst == "ax" else self.jcfg
+        cap = kbd_auto.SlotCapture()
+        try:
+            port = kbd_auto.RawMidiIn(cfg["inHint"], cap.feed,
+                                      dev=kbd_auto._in_dev(cfg))
+        except kbd_auto.PortNotFound as e:
+            self._kbd_cap = None
+            return str(e)
+        self._kbd_cap = {"inst": inst, "cap": cap, "port": port,
+                         "closed": False}
+        return None
+
+    def _kbd_record_poll_web(self):
+        cap = getattr(self, "_kbd_cap", None)
+        if cap is None:
+            return {"active": False}
+        slot = cap["cap"].slot
+        if slot is not None:      # 附人话描述：录制弹层直读琴显编号
+            slot = dict(slot, desc=(kbd_auto.describe_ax(slot)
+                                    if cap["inst"] == "ax"
+                                    else kbd_auto.describe_slot(slot)))
+        return {"active": not cap["closed"], "inst": cap["inst"],
+                "slot": slot}
+
+    def _kbd_apply_web(self, p):
+        if p.get("junoIn") is not None:
+            self.jcfg["inHint"] = str(p["junoIn"])
+        if p.get("junoOut") is not None:
+            self.jcfg["outHint"] = str(p["junoOut"])
+        if p.get("axIn") is not None:
+            self.axcfg["inHint"] = str(p["axIn"])
+        if p.get("axOut") is not None:
+            self.axcfg["outHint"] = str(p["axOut"])
+        # 同名端口序号（两只同型号盒消歧）：out 行落 dev、in 行落 inDev
+        for cfg, ipfx, opfx in ((self.jcfg, "junoInDev", "junoOutDev"),
+                                (self.axcfg, "axInDev", "axOutDev")):
+            if p.get(ipfx) is not None:
+                cfg["inDev"] = kbd_auto._norm_dev(p[ipfx])
+            if p.get(opfx) is not None:
+                cfg["dev"] = kbd_auto._norm_dev(p[opfx])
+        self._persist_config(juno=self.jcfg, ax=self.axcfg)
+        kb_changed = True
+        self._apply_ports_kbd(kb_changed)
+        return None
+
+    def _apply_ports_kbd(self, kb_changed):
+        """键盘自动化口/收发器热重建（_apply_ports 的键盘段抽离复用）。"""
+        if kb_changed and self.kb_port is not None:
+            try:
+                self.kb_port.close()
+            except Exception:
+                pass
+        if kb_changed:
+            self.kb_port = None
+            try:
+                self.switcher = kbd_auto.ToneSwitcher(self.jcfg, self.q.put,
+                                                      on_result=self.
+                                                      _on_kb_result)
+                self.ax_switcher = kbd_auto.ToneSwitcher(
+                    self.axcfg, self.q.put, on_result=self._on_kb_result)
+            except Exception as e:
+                self.q.put("音色收发器重建失败：%s" % _err(e))
+        if not self.kb_hint:
+            if kb_changed:
+                self.q.put("键盘自动化监听已停用")
+            return
+        if kb_changed or self.kb_port is None:
+            try:
+                self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
+                                                  self._on_kb_msg)
+                self.q.put("键盘自动化监听已切换（%s）" % self.kb_port.name)
+            except kbd_auto.PortNotFound as e:
+                self.kb_err = str(e)
+                self.q.put("键盘自动化停用：%s" % e)
+
+    def _kbd_test_web(self, inst, note, song_key=None):
+        """试听：向琴发送一个槽位音色。song_key 给定且非当前装载曲时，
+        从该曲旁挂文件现读映射（详情面板可试任意预配曲），其余走 live。"""
+        note = int(note)
+        if song_key and song_key != self._kbd_song_key():
+            song = self.by_key.get(song_key)
+            if song is None:
+                return "曲目不在素材库"
+            slots = kbd_auto.load_slots(
+                song["path"], "ax" if inst == "ax" else "slots")
+            slot = slots.get(note)
+        else:
+            slots = self.ax_slots if inst == "ax" else self.slots
+            slot = slots.get(note)
+        if slot is None:
+            return "音符 %d 未配置音色映射" % note
+        sw = self.ax_switcher if inst == "ax" else self.switcher
+        if sw is None:
+            return "收发器未就绪"
+        # 端口同步预检：输出口不在场时提交也是石沉大海，直接给明确报错
+        cfg = self.axcfg if inst == "ax" else self.jcfg
+        devs = kbd_auto._all_out_devices()
+        hit = kbd_auto._pick_hit(devs, cfg.get("outHint", ""),
+                                 cfg.get("dev", 0))
+        if hit is None:
+            return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
+                cfg.get("outHint", ""),
+                "、".join(n for _, n in devs) or "无")
+        sw.submit(slot, why="web 测试")
+        return None
+
+    def _slots_save_web(self, inst, slots, song_key=None):
+        """槽位保存（镜像 kbd 窗 _persist_async 语义）：song_key 给定时写
+        那首歌的旁挂文件（任意曲预配），缺省写当前装载曲；仅当目标=当前
+        装载曲时热更新 live 映射。"""
+        if song_key:
+            song = self.by_key.get(song_key)
+            if song is None:
+                return "曲目不在素材库"
+            path = song["path"]
+        else:
+            if not self.cur_song_path:
+                return "当前没有打开的工程"
+            path = self.cur_song_path
+        key = "ax" if inst == "ax" else "slots"
+        clean = {}
+        for k, v in (slots or {}).items():
+            if not (str(k).isdigit() and isinstance(v, dict)):
+                continue
+            pc = v.get("pc")
+            if not isinstance(pc, int) or isinstance(pc, bool) \
+                    or not 0 <= pc <= 127:
+                return "PC 须为 0-127"
+            slot = {"pc": pc}
+            for f in ("msb", "lsb"):
+                x = v.get(f)
+                if x is None:
+                    continue
+                if not isinstance(x, int) or isinstance(x, bool) \
+                        or not 0 <= x <= 127:
+                    return "%s 须为 0-127" % f.upper()
+                slot[f] = x
+            clean[int(k)] = slot
+        kbd_auto.save_slots(path, clean, key=key)
+        if hasattr(self, "_kbd_song_cache"):
+            self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
+            # 代际失效键与 pop 键统一：song_key=None（存当前装载曲）时按
+            # 解析后的装载键作废，否则在途后台装载不被作废（陈旧映射回写）
+            gen_key = song_key or self._kbd_song_key()
+            self._kbd_cache_gen[gen_key] = \
+                self._kbd_cache_gen.get(gen_key, 0) + 1
+            self._kbd_song_cache.pop(gen_key, None)      # 脏缓存重装载
+        if path == self.cur_song_path:
+            with self._load_lock:
+                if path == self.cur_song_path:   # 锁内复核：IO 期间切歌不串写
+                    if inst == "ax":
+                        self.ax_slots = clean
+                    else:
+                        self.slots = clean
+        return None
+
+    def _pl_cmd_web(self, op, key, payload=None):
+        """/plcmd：编排动作（op: add/remove/up/down/clear/move/setdur/
+        redict）。返回 None=成功。"""
+        payload = payload or {}
+        if op == "clear":
+            self.pl_keys = []
+            self.cur = None
+            self._persist()
+            self._refresh()
+            return None
+        if op == "setdur":        # 手动写入时长（秒数或 分:秒）
+            if points.parse_pt_key(key):
+                return "定位点条目时长由起止点决定，不手填"
+            if key not in self.by_key:
+                return "素材库里没有该工程"
+            sec = cpr_meta.parse_mmss(str(payload.get("dur") or ""))
+            if not sec:
+                return "时长格式：秒数或 分:秒（如 213 或 3:33）"
+            self.durations[key] = sec
+            self.dur_src[key] = "manual"
+            self._persist()
+            self._refresh()
+            loaded = (self.pl_keys[self.cur] if self.cur is not None
+                      and self.cur < len(self.pl_keys) else None)
+            if key == loaded and self.watch is not None:
+                self.watch.set_duration(sec)   # watch 缺席降级态同 _switch
+            self.q.put("《%s》手动时长已写为 %s"
+                       % (key.split("/")[-1], cpr_meta.fmt_mmss(sec)))
+            return None
+        if op == "redict":        # 清手填值，重读工程内原时长（后台读文件）
+            if points.parse_pt_key(key):
+                return "定位点条目时长由起止点决定，无需识别"
+            song = self.by_key.get(key)
+            if song is None:
+                return "素材库里没有该工程"
+            loaded = (self.pl_keys[self.cur] if self.cur is not None
+                      and self.cur < len(self.pl_keys) else None)
+            path, name = song["path"], song["name"]
+
+            def run():
+                d, left = _read_span(path)
+                if not d:
+                    self.q.put("《%s》工程内未设循环定位条，无法识别（保留现有值）"
+                               % name)
+                    return
+                self.durations[key] = d
+                self.dur_src.pop(key, None)     # 回归自动来源
+                self._persist()
+                if key == loaded and self.watch is not None:
+                    self.watch.set_duration(d, left)
+                self.calls.put(self._refresh)
+                self.q.put("已识别《%s》工程内原时长 %s"
+                           % (name, cpr_meta.fmt_mmss(d)))
+            threading.Thread(target=run, daemon=True).start()
+            return None
+        if op == "move":          # 原子重排（拖拽一次一发；from/to 0 基）
+            frm, to = payload.get("from"), payload.get("to")
+            if not all(isinstance(x, int) and not isinstance(x, bool)
+                       for x in (frm, to)):
+                return "move 参数非法"
+            if not 0 <= frm < len(self.pl_keys) \
+                    or not 0 <= to < len(self.pl_keys):
+                return "列表刚变化，未能移动"   # 静默 200 会让前端谎报「已移动」
+            item = self.pl_keys.pop(frm)
+            self.pl_keys.insert(to, item)
+            if self.cur is not None:
+                if self.cur == frm:
+                    self.cur = to
+                elif frm < self.cur <= to:
+                    self.cur -= 1
+                elif to <= self.cur < frm:
+                    self.cur += 1
+            self._persist()
+            self._refresh()
+            return None
+        if op == "add":
+            pt = points.parse_pt_key(key)
+            if pt is None:
+                if key not in self.by_key:
+                    return "素材库里没有该工程"
+            else:       # 定位点条目（素材库已展开视图的加入路径）
+                song = self.by_key.get(pt[0])
+                data = self.points.get(pt[0])
+                if song is None:
+                    return "素材库里没有该工程"
+                if not (data and data["enabled"]
+                        and points.get_point(data, pt[1])):
+                    return "该定位点不存在或未启用"
+            if key in self.pl_keys:
+                return "已在播放列表里"
+            self.pl_keys.append(key)
+        else:
+            try:
+                i = self.pl_keys.index(key)
+            except ValueError:
+                return "条目不在播放列表里"
+            if op == "remove":
+                self.pl_keys.pop(i)
+                if self.cur is not None:
+                    if i < self.cur:
+                        self.cur -= 1
+                    elif i == self.cur:
+                        self.cur = (min(self.cur, len(self.pl_keys) - 1)
+                                    if self.pl_keys else None)
+            elif op in ("up", "down"):
+                j = i + (-1 if op == "up" else 1)
+                if not 0 <= j < len(self.pl_keys):
+                    return None
+                self.pl_keys[i], self.pl_keys[j] = \
+                    self.pl_keys[j], self.pl_keys[i]
+                if self.cur == i:
+                    self.cur = j
+                elif self.cur == j:
+                    self.cur = i
+            else:
+                return "未知操作"
+        self._persist()
+        self._refresh()
+        return None
+
     def _auto_play(self):
         """切换完成后自动播放：窗口标题出现≠加载完成——过早发播放键会被
         未就绪的 Cubase 吞掉（实测需再点一次）。等「正在加载」浮层消失
@@ -1909,6 +3160,16 @@ class App:
             self.pedal_win = pedal.PedalWindow(self)
         self.pedal_win.lift()
 
+    def _thread_exc(self, a):
+        """threading.excepthook：一次性后台线程的未捕获异常统一进日志
+        （此前探针/装载/热应用线程死亡静默，演出中无从察觉）。"""
+        try:
+            self.q.put("后台线程异常（%s）：%s"
+                       % (getattr(a.thread, "name", "?"),
+                          _err(a.exc_value)))
+        except Exception:
+            pass
+
     def _panic(self):
         if self.ctrl is None:
             self.q.put("服务未就绪（启动未完成）")
@@ -1925,6 +3186,12 @@ class App:
                         and self.watch.is_transport_live():
                     self.q.put("全停核验：走带仍在播放（停止键未生效），"
                                "请手动停止 DAW")
+            # 对两琴发静音序列（All Notes Off/踏板抬/全发声关）：DAW 自动化
+            # 轨的 CC64 延音或挂留音不随走带停止消失（QLab Panic 同款安全网）
+            for sw, cfg in ((self.switcher, self.jcfg),
+                            (self.ax_switcher, self.axcfg)):
+                if sw is not None:
+                    sw.submit_msgs(panic_quiet_msgs(cfg), "全停静音")
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
@@ -2341,6 +3608,10 @@ class App:
             except queue.Empty:
                 break
             self.log.insert("end", time.strftime("[%H:%M:%S] ") + msg)
+            self.log_ring.append((time.time(), msg, _log_lv(msg)))
+            if _FILE_LOG is not None:
+                _FILE_LOG.put(msg, _log_lv(msg))   # 文件日志（异步线程）
+            # 新前端日志级别体系唯一来源（产生端定级，UI 只消费不重判）
             if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
                 self.log.itemconfigure(self.log.size() - 1,
                                        foreground=dpi.C_ERR)
@@ -2517,6 +3788,17 @@ class App:
         self.state_lbl.config(text="当前状态：" + st_t,
                               style=dpi.tone(st_c) + ".TLabel",
                               foreground=st_c)
+        # DAW 进程在场（供 /state 的 dawAlive：崩溃/误关后前端区分
+        # 「已暂停」与「DAW 失联」）。枚举有成本，3s 节流（400ms 快照拍
+        # 不每次都枚举）
+        now_m = time.monotonic()
+        if now_m - getattr(self, "_daw_alive_t", 0.0) > 3.0:
+            self._daw_alive_t = now_m
+            try:
+                self._daw_alive = bool(
+                    find_processes_by_prefix(self.facts["proc_prefix"]))
+            except Exception:
+                pass
         self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
 
     def _progress(self, frac):
@@ -2713,30 +3995,14 @@ class PointsWindow(tk.Toplevel):
 
     def _sync_list(self):
         """启用态下把播放列表中该工程的点条目块重排为当前表格顺序；
-        停用态不动列表（条目不在）。含持久化与刷新。"""
-        app = self.app
-        data = self._data()
-        song = self._song()
-        if song is None:
+        停用态不动列表（条目不在）。落盘/重排/刷新统一走 App 共享方法。"""
+        if self._song() is None:
             self._say("工程已不在素材库", dpi.C_ERR)
             return
-        try:
-            points.save_points(os.path.dirname(song["path"]), data)
-        except (OSError, ValueError) as e:
-            app.q.put("定位点保存失败：%s" % e)
-            data2, _ = points.load_points(os.path.dirname(song["path"]))
-            app.points[self.lib_key] = data2     # 回读磁盘：放弃本次变更
-            self._refill()
-            return
-        if data["enabled"]:
-            old = list(app.pl_keys)
-            new = points.collapse_restore(old, self.lib_key)
-            new = points.expand_replace(new, self.lib_key,
-                                        points.pt_keys_for(self.lib_key, data))
-            app.pl_keys = new
-            app.cur = points.remap_cur(old, new, app.cur, self.lib_key)
-        app._persist()
-        app._refresh()
+        err = self.app._points_sync_list(self.lib_key)
+        if err:
+            self._say(err, dpi.C_ERR)
+        self._refill()
 
     # ---- 事件 ----
 
@@ -3036,6 +4302,10 @@ class SettingsWindow(tk.Toplevel):
                         % app.facts["display_name"],
                         variable=self.closeapps_var).pack(anchor="w",
                                                           pady=(pad, 1))
+        self.launchapps_var = tk.BooleanVar(value=app.launch_apps)
+        ttk.Checkbutton(body, text="启动时自动打开被控软件（开投屏位置才会"
+                        "拉 OBS）", variable=self.launchapps_var).pack(
+                            anchor="w", pady=(0, 1))
 
         # 主操作绿（与主窗「开始」同级），与「取消」等宽等高、只以颜色区分
         self.save_btn = ttk.Button(btns, text="保存并应用", width=10,
@@ -3237,6 +4507,7 @@ class SettingsWindow(tk.Toplevel):
         confirm = self.confirm_var.get()
         mute = self.mute_var.get()
         closeapps = self.closeapps_var.get()
+        launchapps = self.launchapps_var.get()
         proj = self.proj_var.get().strip()
         vid = self.vid_var.get().strip()
         # 自动播放 / 前台 / 切换确认：即时生效
@@ -3247,30 +4518,18 @@ class SettingsWindow(tk.Toplevel):
         app.root.attributes("-topmost", top)
         app.switch_confirm = confirm
         app.exit_close_apps = closeapps
+        app.launch_apps = launchapps
+        if app.ctl is not None:   # 总闸变化：OBS 拉起生效值即时重算
+            app.ctl.cfg["autoStart"] = app._obs_autostart_effective()
         # VJ静音/视频目录/VJ显示位置：OBS 热应用全放后台——apply_mute/
         # apply_projector 每请求 5s 超时且全程持 ctl._lock，此前在主线程
         # 直跑，「保存并应用」最坏卡 20s+（黑面+指令积压惯犯二号）。
         # 没连 OBS 只存配置，连上后 on_connected 自动同步，语义不变。
-        def apply_obs():
-            ctl = app.ctl
-            if ctl is None:
-                return
-            # 串行化：连续两次保存的两个 apply_obs 线程不许交错（旧保存的
-            # close_projector 落在新保存的 apply_projector 之后=状态回退）
-            with app._obs_apply_lock:
-                ctl.cfg["vjMute"] = mute
-                if vid:
-                    ctl.cfg["videoRoot"] = vid
-                ctl.cfg["projectorMonitor"] = mon
-                if ctl.is_connected() and not ctl.apply_mute():
-                    app.q.put("VJ静音未生效：%s" % ctl.last_error)
-                if mon and not ctl.apply_projector():
-                    app.q.put("VJ显示位置未生效：%s" % ctl.last_error)
-                elif not mon:
-                    ctl.close_projector()
-
+        # 走共享 _apply_obs_web（含「无→投屏拉起 OBS」判定），与 web 同链。
         if app.ctl is not None:
-            threading.Thread(target=apply_obs, daemon=True).start()
+            threading.Thread(target=app._apply_obs_web,
+                             args=(vid, None, mon, mute),
+                             daemon=True).start()
         rescan = bool(proj) and proj != app.ccfg.get("projectsRoot")
         if proj:
             app.ccfg["projectsRoot"] = proj
@@ -3288,13 +4547,18 @@ class SettingsWindow(tk.Toplevel):
             cfg.update({"autoAdvance": auto, "autoPlay": cont,
                         "topMost": top, "switchConfirm": confirm,
                         "exitCloseApps": closeapps,
+                        "launchAppsOnStart": launchapps,
                         "vjPortHint": vj, "kbPortHint": kb,
                         "clockPortHint": ck})
             obs = cfg.get("obs") or {}
-            if vid:
+            if vid is not None:      # 空串=显式清空（与 web 路径同口径）
                 obs["videoRoot"] = vid
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
+            # 密码落盘前升级为 DPAPI 密文（Tk 路径同迁移）
+            if obs.get("password") and \
+                    not str(obs["password"]).startswith(_DPAPI_PREFIX):
+                obs["password"] = _dpapi_protect(str(obs["password"]))
             cfg["obs"] = obs
             daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
             if proj:
@@ -3338,6 +4602,17 @@ def main():
         ctypes.windll.user32.MessageBoxW(
             0, "Cube Setlist Manager 已在运行", "Cube Setlist Manager", 0x30)
         return
+    # 新前端入口分流：pywebview 可用即走 Web UI（旧 Tk 路径设 CUBE_TK=1
+    # 可强制回退，作为兜底与对照环境保留）
+    if os.environ.get("CUBE_TK") != "1":
+        try:
+            import webui
+        except ImportError:
+            print("pywebview 未安装：回退旧 Tk 界面（pip install pywebview "
+                  "可启用新前端）", flush=True)
+        else:
+            webui.main()
+            return
     try:                        # noconsole exe 无 stderr：崩溃栈落 crash.log
         _cl = _HERE / "crash.log"
         if _cl.exists() and _cl.stat().st_size > 512 * 1024:   # 轮转防无限增长

@@ -14,8 +14,10 @@ jobs:
         with:
           python-version: "3.14"
       - name: 语法检查（全部源码模块 + tests/tools）
-        run: python -m compileall -q advance.py cpr_meta.py daw_ctrl.py dpi.py hotspot.py kbd_auto.py midi_bridge.py obs_ctrl.py obs_ws.py pedal.py setlist_gui.py song_meta.py web_remote.py tests tools
-      - name: 离线自检（tests/test_bridge.py，无需 OBS/loopMIDI/Cubase 在场）
+        run: python -m compileall -q advance.py cpr_meta.py daw_ctrl.py dpi.py hotspot.py kbd_auto.py midi_bridge.py obs_ctrl.py obs_ws.py pedal.py setlist_gui.py song_meta.py web_remote.py webui.py tests tools
+      - name: 离线测试全量（全部无需 OBS/loopMIDI/Cubase 在场）
         run: |
           python -m pip install pytest -q
-          python -m pytest tests/test_bridge.py -v
+          python -m pytest tests/ -q
+      - name: 前端语法冒烟（webapp/app.js）
+        run: node --check webapp/app.js

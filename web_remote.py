@@ -9,24 +9,33 @@
 所有控制动作经 app.calls 队列回 Tk 主线程执行，HTTP 线程不碰 Tk。"""
 import json
 import os
+import pathlib
 import queue
 import sys
 import threading
 import time
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cpr_meta
 import hotspot
 import kbd_auto
+import obs_ctrl
 import ui_text
 
 CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
 CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
 DEV_NOTES = tuple(range(60, 70))   # C4–A4 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
+
+if getattr(sys, "frozen", False):
+    _HERE = pathlib.Path(getattr(sys, "_MEIPASS", "")) or \
+        pathlib.Path(sys.executable).resolve().parent   # 打包态：_internal
+else:
+    _HERE = pathlib.Path(__file__).resolve().parent
 COMBO_WINDOW = 0.1           # 归并窗口：从窗口首音符起算（M0 实测校准点）
 PUSH_TIMEOUT = 1.5           # 推送短超时：连接池省掉了握手，但平板 Wi-Fi
                              # 省电唤醒仍可达秒级；失败只记日志不拖累别的设备
@@ -393,10 +402,47 @@ class DeviceRegistry:
         return out, None
 
 
+def _ver():
+    """git describe（开发仓库；打包态/失败为空——侧栏版本号缺省不显示）。"""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "describe", "--tags"],
+                             capture_output=True, text=True, timeout=3,
+                             cwd=os.path.dirname(os.path.abspath(__file__)))
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+_VER = None           # 首次 build_snapshot 时算一次
+
+
 # ---- /state 快照（App._tick_banner 每 400ms 在 Tk 主线程重建） ----
 
 def _fmt_dur(d):
     return cpr_meta.fmt_mmss(d) if d else ""
+
+
+# loopMIDI 在场探测（状态灯真实化）：进程快照有成本，专职线程 5 秒一扫，
+# build_snapshot 只读布尔（Tk 主线程零开销；GIL 原子读 bool）。
+_loop_state = {"on": False, "started": False}
+
+
+def _loopmidi_online():
+    if not _loop_state["started"]:
+        _loop_state["started"] = True
+
+        def probe():
+            while True:
+                try:
+                    _loop_state["on"] = bool(
+                        obs_ctrl.find_processes_by_prefix("loopmidi"))
+                except Exception:
+                    pass
+                time.sleep(5.0)
+        threading.Thread(target=probe, daemon=True,
+                         name="loopmidi-probe").start()
+    return _loop_state["on"]
 
 
 def _apk_file():
@@ -447,16 +493,20 @@ def build_snapshot(app, has_project, proj_name=None):
         if e is not None:
             dur = (_fmt_dur(e["point"]["end"] - e["point"]["start"])
                    if e["point"] else _fmt_dur(app.durations.get(key)))
-            songs.append({"name": e["display"], "dur": dur})
+            songs.append({"key": key, "name": e["display"], "dur": dur})
             continue
         s = app.by_key.get(key)
         if s is None:                       # 列表有而素材库缺：还能切回，保留显示
-            songs.append({"name": key.split("/")[-1], "dur": ""})
+            songs.append({"key": key, "name": key.split("/")[-1], "dur": ""})
             continue
-        songs.append({"name": s["name"], "dur": _fmt_dur(app.durations.get(key))})
+        songs.append({"key": key, "name": s["name"],
+                      "dur": _fmt_dur(app.durations.get(key))})
     cur = app.cur
     w = getattr(app, "watch", None)
     ctrl = getattr(app, "ctrl", None)
+    obs_ctl = getattr(app, "ctl", None)
+    web = getattr(app, "web", None)
+    web_srv = getattr(web, "server", None)
     lite = bool(getattr(app, "lite", False))
     # 简化版（Cube Automator，app.lite=True）无切歌控制器：三态直接看时码
     if w is None or (ctrl is None and not lite):
@@ -470,9 +520,9 @@ def build_snapshot(app, has_project, proj_name=None):
     cur_entry = resolve(key) if (resolve is not None and key) else None
     if cur_entry is not None and cur_entry["point"] is not None:
         p = cur_entry["point"]
-        dur = p["end"] - p["start"]
+        dur = cpr_meta.safe_dur(p["end"] - p["start"])
     else:
-        dur = float(app.durations.get(key) or 0.0) if key else 0.0
+        dur = cpr_meta.safe_dur(app.durations.get(key)) if key else 0.0
     pos = min(dur, max(0.0, w.played())) if (w is not None and dur > 0) else 0.0
     # 平板转发踩钉路健康（远程注入；GIL 原子读桥上的 float 时间戳）。
     # link：心跳/事件 15 秒内有=ok，从无=never，超时=stale。
@@ -492,10 +542,40 @@ def build_snapshot(app, has_project, proj_name=None):
                   "unknown": br.remote_unknown,
                   "lastEventAge": (round(now - br.remote_event_t, 1)
                                    if br.remote_event_t > 0.0 else None)}
+    # VJ/监控状态块（与主窗 _tick_body 的 VJ 监控格同源同语义）：
+    # follow=走带跟随（playing/paused/off，off=未启用或未收到时码）、
+    # video=当前视频文件名、obsErr=OBS 错误详情/启动中过渡文本
+    global _VER
+    if _VER is None:
+        _VER = _ver()
+    vj_state = None
+    sync_vj = getattr(app, "sync", None)
+    start_err = getattr(app, "start_err", "")
+    if not lite and (sync_vj is not None or obs_ctl is not None
+                     or start_err):
+        # VJ 链构造失败（ctl/sync 双 None）也要带出 start_err——否则
+        # 失败原因在新 UI 永远不可见
+        if sync_vj is None or not sync_vj.is_following():
+            follow = "off"
+        else:
+            follow = sync_vj.video_state
+        vj_state = {
+            "follow": follow,
+            "video": (getattr(sync_vj, "current_video", None)
+                      if sync_vj is not None else None),
+            "portOn": getattr(app, "port", None) is not None,
+            "vjEnabled": bool(getattr(app, "vj_hint", "")),
+            "obsErr": ((getattr(obs_ctl, "last_error", "") or "")
+                       if obs_ctl is not None else "") or start_err,
+        }
     return {
         "ready": ctrl is not None or lite,
         "busy": bool(ctrl is not None and ctrl.busy),
         "open": bool(has_project),
+        # DAW 进程在场（主线程 _tick_banner 3s 节流枚举后缓存到 app；
+        # HTTP 线程只读缓存——快照纪律「不碰 win32 枚举」不破坏）：
+        # 崩溃/被误关后前端据此区分「已暂停」与「DAW 已失联」（审计 #2）
+        "dawAlive": bool(getattr(app, "_daw_alive", False)),
         "projName": proj_name,
         "confirm": bool(app.switch_confirm),
         "live": bool(app.watch is not None and app.watch.is_transport_live()),
@@ -505,8 +585,15 @@ def build_snapshot(app, has_project, proj_name=None):
         "cur": cur,
         "songs": songs,
         "pedalRemote": remote,
+        # 联动健康（状态灯真实化）：OBS=obs-websocket 连接；loop=loopMIDI 进程
+        # 在场；webIp=移动端遥控服务实际绑定地址（未启用为空串）
+        "obs": bool(obs_ctl is not None and obs_ctl.is_connected()),
+        "vj": vj_state,
+        "loop": _loopmidi_online(),
+        "webIp": (web_srv.server_address[0] if web_srv is not None else ""),
         # APP 端自动纠正用：APP 若误连 serverPort，从快照得知正确 APP 端口
-        "appPort": getattr(getattr(app, "web", None), "app_port", None),
+        "appPort": getattr(web, "app_port", None) if web is not None else None,
+        "ver": _VER,
     }
 
 
@@ -517,20 +604,25 @@ PAGE_COMMON = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#14161a">
+<meta name="theme-color" content="#101418">
 <title>Cube 遥控</title>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
-:root{--bg:#14161a;--panel:#1e2127;--panel2:#262a32;--line:#2e323b;
-  --fg:#e9ebef;--mut:#8b909a;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;
-  --acc:#7fe896}
+/* 设计 token 与桌面新 UI（webapp/app.css）同名同值：移动/APP/桌面三端
+   同一设计语言（蓝=强调、绿=播放语义、暗面族配套）。 */
+:root{--bg:#101418;--panel:#171c22;--panel2:#1f262e;--line:#262d36;
+  --fg:#e8eaed;--mut:#8a929c;--ok:#7fd487;--warn:#e8c268;--err:#ef8080;
+  --acc:#4aa3ff;--ok-bg:#1d3a26;--ok-bg-hi:#245030;--ok-line:#2c5c3a;
+  --ok-bg-dim:#16281e;--err-bg:#402024;--err-line:#6b3439;
+  --input-bg:#0d1116}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{background:var(--bg);color:var(--fg);min-height:100vh;
-  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei UI",sans-serif;
+  font-family:"Microsoft YaHei","PingFang SC",system-ui,"Segoe UI",sans-serif;
   user-select:none;-webkit-user-select:none;
   padding-bottom:calc(158px + env(safe-area-inset-bottom))}
-button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;
+  transition:background-color 120ms,color 120ms,border-color 120ms}
 
 header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--err)}
@@ -543,7 +635,7 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .ghost:active{background:var(--panel2)}
 
 .hero{padding:18px 20px 8px}
-.lbl{font-size:11px;letter-spacing:.18em;color:var(--mut);font-weight:700}
+.lbl{font-size:12px;letter-spacing:.14em;color:var(--mut);font-weight:700}
 .strow{display:flex;align-items:baseline;justify-content:space-between}
 .tstate{font-weight:700}
 .tstate.playing{color:var(--ok)}
@@ -584,18 +676,18 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .now{font-size:30px;font-weight:800;line-height:1.25;margin:4px 0 10px;
   word-break:break-all}
 .prow{display:flex;align-items:center;gap:10px;margin:-4px 0 10px}
-.pbar{flex:1;height:4px;background:var(--panel2);border-radius:2px;
+.pbar{flex:1;height:6px;background:var(--panel2);border-radius:3px;
   overflow:hidden}
-.pbar i{display:block;height:100%;width:0;background:var(--acc)}
+.pbar i{display:block;height:100%;width:0;background:var(--ok)}
 .ptime{flex:none;font-size:12px;color:var(--mut);
   font-variant-numeric:tabular-nums}
 .nextrow{display:flex;align-items:baseline;gap:10px;font-size:16px;min-height:24px}
 .next{color:var(--mut);word-break:break-all}
 
 .list{list-style:none;margin:14px 12px 0;border:1px solid var(--line);
-  border-radius:14px;overflow:hidden;background:var(--panel)}
+  border-radius:10px;overflow:hidden;background:var(--panel)}
 .list li{display:flex;align-items:center;gap:12px;padding:13px 14px;
-  border-bottom:1px solid var(--line);font-size:16px}
+  border-bottom:1px solid var(--line);font-size:15px}
 .list li:last-child{border-bottom:0}
 .list li:active{background:var(--panel2)}
 .list .no{width:22px;color:var(--mut);font-size:13px;flex:none;
@@ -603,9 +695,9 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .list .nm{flex:1;min-width:0;line-height:1.35}
 .list .du{color:var(--mut);font-size:13px;flex:none;
   font-variant-numeric:tabular-nums}
-.list li.cur{background:rgba(127,232,150,.10)}
-.list li.cur .no,.list li.cur .du{color:var(--acc)}
-.list li.cur .nm{color:var(--acc);font-weight:700}
+.list li.cur{background:var(--ok-bg-dim)}
+.list li.cur .no,.list li.cur .du{color:var(--ok)}
+.list li.cur .nm{color:var(--ok);font-weight:700}
 .empty{padding:44px 16px;text-align:center;color:var(--mut);font-size:14px}
 
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
@@ -614,36 +706,37 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .bar .row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .bar .row.row3{grid-template-columns:repeat(3,1fr)}
 .bar .row+.row{margin-top:8px}
-.tbtn{height:52px;border-radius:12px;background:var(--panel2);
+.tbtn{height:52px;border-radius:8px;background:var(--panel2);
   border:1px solid var(--line);font-size:15px;font-weight:600}
-.tbtn:active{background:#333845}
+.tbtn:active{background:var(--panel2)}
 .tbtn[disabled]{opacity:.35}
-.tbtn.panic{color:var(--err);border-color:rgba(248,113,113,.45)}
-.tbtn.go{background:var(--acc);border-color:var(--acc);color:#10130f}
-.tbtn.go:active{background:#8ff0a2}
+.tbtn.panic{background:var(--err-bg);border-color:var(--err-line);
+  color:var(--err)}
+.tbtn.go{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+.tbtn.go:active{background:var(--ok-bg-hi)}
 
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
   align-items:flex-end;z-index:20}
 .mask.center{align-items:center}
 .mask.show{display:flex}
-.sheet{width:100%;background:var(--panel);border-radius:18px 18px 0 0;
+.sheet{width:100%;background:var(--panel);border-radius:10px 10px 0 0;
   padding:16px 16px calc(20px + env(safe-area-inset-bottom));
   max-height:88vh;overflow-y:auto}
-.sheet h2,.dlg h2{font-size:17px;margin-bottom:4px}
+.sheet h2,.dlg h2{font-size:15px;margin-bottom:4px}
 .sub{font-size:12px;color:var(--mut);line-height:1.6}
-.grp{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
-.fld{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
+.grp{border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px}
+.fld{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px}
 .fld:first-of-type{margin-top:0}
 .fld label{width:60px;color:var(--mut);font-size:13px;flex:none}
-.fld input[type=text],.fld select{flex:1;min-width:0;background:var(--panel2);
-  color:var(--fg);border:1px solid var(--line);border-radius:8px;
+.fld input[type=text],.fld select{flex:1;min-width:0;background:var(--input-bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:6px;
   padding:9px 10px;font:inherit}
-.fld input[type=checkbox]{width:18px;height:18px;accent-color:var(--acc)}
-.btn{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+.fld input[type=checkbox]{width:18px;height:18px;accent-color:var(--ok)}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
   padding:10px 14px;font-size:14px;font-weight:600;color:inherit;
   text-decoration:none}
-.btn.pri{background:var(--acc);color:#10130f;border-color:var(--acc)}
-.btn.on{background:var(--acc);color:#10130f;border-color:var(--acc);
+.btn.pri{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.btn.on{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line);
   font-weight:700}
 .btn:active{filter:brightness(1.12)}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -662,10 +755,10 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .ind.bad{color:var(--err);border-color:rgba(248,113,113,.45)}
 .mono{color:var(--fg);font-variant-numeric:tabular-nums}
 .dlg{margin:auto;width:min(92vw,380px);background:var(--panel);
-  border:1px solid var(--line);border-radius:16px;padding:18px}
+  border:1px solid var(--line);border-radius:10px;padding:18px}
 .dlg p{font-size:15px;line-height:1.7;margin:8px 0 4px}
 #toast{position:fixed;left:50%;bottom:calc(180px + env(safe-area-inset-bottom));
-  transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;
+  transform:translateX(-50%);background:rgba(16,20,24,.9);color:var(--fg);
   font-size:13px;border-radius:99px;padding:9px 16px;opacity:0;
   transition:opacity .25s;pointer-events:none;z-index:40;max-width:80vw}
 #toast.show{opacity:1}
@@ -728,7 +821,7 @@ __DEV_PANEL__
 
 <script>
 "use strict";
-var st=null,conn=null,pend=-1,toastT=null,lastSig=null;
+var st=null,conn=null,pend=-1,pendK="",toastT=null,lastSig=null;
 
 function $(id){return document.getElementById(id)}
 function el(tag,cls,txt){var e=document.createElement(tag);
@@ -784,7 +877,8 @@ function render(){
     li.appendChild(el("span","no",String(i+1)));
     li.appendChild(el("span","nm",st.songs[i].name));
     li.appendChild(el("span","du",st.songs[i].dur||""));
-    li.addEventListener("click",onRow.bind(null,i));
+    li.addEventListener("click",onRow.bind(null,i,
+      st.songs[i].key||""));
     L.appendChild(li);
   }
   $("empty").hidden=st.songs?st.songs.length>0:true;
@@ -820,31 +914,43 @@ function renderLive(){
   $("ptime").textContent=fmtT(pos)+" | "+fmtT(d-pos);
 }
 
-function onRow(i){
+function onRow(i,k){
   if(!st||st.busy||!st.ready)return;
   if(st.confirm&&st.open&&i!==st.cur){
-    pend=i;
+    pend=i;pendK=k||"";
     // 「从」名与 PC 弹窗同源：真实工程名优先（cur 为空也拿得到）
     var a=st.projName||(st.songs[st.cur]&&st.songs[st.cur].name),
         b=st.songs[i];
     $("c-text").textContent="确定从《"+(a||"？")+"》切换到《"+
       b.name+"》？当前工程将被关闭（自动保存）。";
     $("m-confirm").classList.add("show");
-  }else cmd("switch",i);
+  }else cmd("switch",i,k);
 }
 $("c-no").addEventListener("click",function(){
   $("m-confirm").classList.remove("show")});
 $("c-yes").addEventListener("click",function(){
   $("m-confirm").classList.remove("show");
-  if(pend>=0)cmd("switch",pend);pend=-1});
+  if(pend>=0){
+    var i=pend,k=pendK;pend=-1;pendK="";
+    /* 确认窗内列表可能被它端重排：按 key 现场重解析，key 失效即中止
+       （与桌面新前端同一防线；旧后端 songs 无 key 时按原下标发） */
+    if(k&&st&&st.songs){
+      var f=-1;
+      for(var q=0;q<st.songs.length;q++)
+        if(st.songs[q].key===k){f=q;break}
+      if(f<0){toast("该曲目已不在播放列表");return}
+      i=f}
+    cmd("switch",i,k)}
+});
 
 var tbs=document.querySelectorAll(".tbtn");
 for(var ti=0;ti<tbs.length;ti++){
   tbs[ti].addEventListener("click",function(){cmd(this.dataset.cmd)});
 }
 
-function cmd(action,index){
-  post("/cmd",{action:action,index:index}).then(function(r){
+function cmd(action,index,key){
+  post("/cmd",{action:action,index:index,key:key||undefined})
+  .then(function(r){
     if(!r.j||!r.j.ok)toast((r.j&&r.j.error)||"操作失败");
     refresh();
   },function(){setConn(false);toast("发送失败")});
@@ -1348,11 +1454,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- 应答小工具 --
 
-    def _send(self, code, ctype, data, dispo=None):
+    def _send(self, code, ctype, data, dispo=None, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if dispo:
             self.send_header("Content-Disposition", dispo)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         try:
@@ -1364,6 +1472,33 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(code, "application/json; charset=utf-8",
                    json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
+    # -- 新前端静态托管（/app）--
+
+    def _h_app_asset(self, path):
+        """webapp/ 静态文件（新前端壳）。白名单后缀、目录恒定——无穿越面；
+        文件缺失回 404 JSON（与既有 API 风格一致）。简化版端点面不全，
+        不托管完整前端（避免半坏界面）。"""
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无新前端"})
+            return
+        rel = path[len("/app"):].lstrip("/") or "index.html"
+        if rel not in ("index.html", "app.css", "app.js"):
+            self._json(404, {"error": "未知资源"})
+            return
+        fp = _HERE / "webapp" / rel
+        try:
+            data = fp.read_bytes()
+        except OSError:
+            self._json(404, {"error": "新前端文件缺失：%s" % rel})
+            return
+        ctype = ("text/html; charset=utf-8" if rel.endswith(".html")
+                 else "text/css; charset=utf-8" if rel.endswith(".css")
+                 else "text/javascript; charset=utf-8")
+        # 前端三件套迭代频繁且无版本化 URL：禁缓存，防 WebView2 磁盘缓存
+        # 供旧样式（间距返工曾因此实测纹丝不动）
+        self._send(200, ctype, data,
+                   extra={"Cache-Control": "no-cache"})
+
     # -- GET --
 
     def do_GET(self):
@@ -1371,6 +1506,43 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, "text/html; charset=utf-8",
                        self.server.page.encode("utf-8"))
+        elif path == "/app" or path.startswith("/app/"):
+            self._h_app_asset(path)
+        elif path == "/playlist":
+            self._h_playlist()
+        elif path == "/points":
+            self._h_points()
+        elif path == "/log":
+            self._h_log()
+        elif path == "/vjmap":
+            self._h_vjmap()
+        elif path == "/monitor":
+            self._run_on_app(lambda: None, result_fn=lambda: dict(
+                self.server.app._monitor_web()))
+        elif path == "/settings":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._settings_get_web)
+        elif path == "/pedal":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_get_web)
+        elif path == "/pedal/devices":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_devices_web)
+        elif path == "/pedal/learn":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._pedal_learn_poll_web)
+        elif path == "/kbd":
+            song = self.path.split("?", 1)
+            song_key = None
+            if len(song) > 1:
+                for kv in song[1].split("&"):
+                    if kv.startswith("song="):
+                        song_key = urllib.parse.unquote(kv[5:])
+            self._run_on_app(lambda: None, result_fn=lambda:
+                             self.server.app._kbd_get_web(song_key))
+        elif path == "/kbd/record":
+            self._run_on_app(lambda: None,
+                             result_fn=self.server.app._kbd_record_poll_web)
         elif path == "/state":
             snap = getattr(self.server.app, "_web_snap", None) or {}
             self._json(200, snap)
@@ -1412,13 +1584,300 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_unregister, "/device/unregister"),
                           (self._h_test, "/device/test"),
                           (self._h_diag, "/diag"),
-                          (self._h_pedal, "/pedal/event")):
+                          (self._h_pedal, "/pedal/event"),
+                          (self._h_plcmd, "/plcmd"),
+                          (self._h_ptcmd, "/ptcmd"),
+                          (self._h_settings_set, "/settings"),
+                          (self._h_pickdir, "/pickdir"),
+                          (self._h_pedal_set, "/pedalset"),
+                          (self._h_pedal_learn, "/pedal/learn"),
+                          (self._h_pedal_mute, "/pedal/mute"),
+                          (self._h_exit, "/exit"),
+                          (self._h_kbd_set, "/kbdset"),
+                          (self._h_kbd_test, "/kbdtest"),
+                          (self._h_kbd_record, "/kbdrecord"),
+                          (self._h_checkpath, "/checkpath"),
+                          (self._h_slot_set, "/slotset")):
                 if path == p:
                     fn(body, ip)
                     return
             self._json(404, {"error": "未知路径"})
         except Exception as e:
             self._json(500, {"error": _err(e)})
+
+    # -- 新前端（/app）数据与命令端点 --
+
+    def _h_vjmap(self):
+        """VJ 音符 ↔ 视频对应表：NOTE_MAP 固定规则（音符 N → N-59.mp4，
+        F#6=熄屏）+ 视频库实际文件宽松匹配（精确 basename 或「编号+空格」
+        前缀）。只读快照，无 App 状态，HTTP 线程直出。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无 VJ 联动"})
+            return
+        import re as _re
+        ctl = getattr(app, "ctl", None)
+        root = (ctl.cfg.get("videoRoot", "") if ctl is not None else "") or ""
+        files = (obs_ctrl.scan_videos(root)
+                 if root and os.path.isdir(root) else [])
+        by_base, by_num = {}, {}
+        for rel in files:
+            b = os.path.basename(rel)
+            by_base.setdefault(b, rel)
+            m = _re.match(r"(\d+)\s", b)
+            if m:
+                by_num.setdefault(m.group(1), rel)
+        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
+                 "A#", "B")
+        rows = []
+        for n in range(60, 91):
+            f = __import__("midi_bridge").NOTE_MAP[n]
+            nm = names[n % 12] + str(n // 12 - 1)
+            if f is None:
+                rows.append({"note": n, "name": nm, "file": "熄屏",
+                             "blackout": True, "hit": None})
+                continue
+            base = os.path.basename(f)
+            num = _re.match(r"(\d+)", base)
+            hit = by_base.get(base) or (by_num.get(num.group(1))
+                                        if num else None)
+            rows.append({"note": n, "name": nm, "file": hit or base,
+                         "blackout": False, "hit": hit})
+        self._json(200, {"videoRoot": root, "files": len(files),
+                         "rows": rows})
+
+    def _h_playlist(self):
+        """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+
+        播放列表解析视图 + 当前指针。只读快照（GIL 原子性足够，与 /state
+        同一容错语义）。durSec/durSrc 供前端时长三态着色（自动绿/手动黄/
+        未知红，定位点=段长）。"""
+        app = self.server.app
+        resolve = getattr(app, "_resolve_entry", None)
+        if resolve is None:
+            self._json(403, {"error": "简化版无编排遥控"})
+            return
+        durations = getattr(app, "durations", {})
+        dur_src = getattr(app, "dur_src", {})
+
+        def dur_info(key, point):
+            if point is not None:
+                return cpr_meta.safe_dur(point["end"] - point["start"]), "pt"
+            d = cpr_meta.safe_dur(durations.get(key))
+            if not d:
+                return 0.0, "unknown"
+            return d, "manual" if dur_src.get(key) == "manual" else "auto"
+
+        def view(key, name):
+            e = resolve(key)
+            p = e["point"] if e else None
+            if e is None:
+                return {"key": key, "name": name or key.split("/")[-1],
+                        "dur": "", "durSec": 0.0, "durSrc": "unknown",
+                        "pt": False}
+            sec, src = dur_info(key, p)
+            return {"key": key, "name": e["display"], "dur": _fmt_dur(sec),
+                    "durSec": sec, "durSrc": src, "pt": p is not None}
+
+        lib = []
+        for s in getattr(app, "_lib_view", list)():
+            v = view(s["key"], s["name"])
+            v["team"] = s["team"]
+            lib.append(v)
+        pl = [view(k, None) for k in app.pl_keys]
+        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
+
+    def _h_points(self):
+        """定位点定义：全部工程的 sidecar 数据 + 启用态。"""
+        app = self.server.app
+        pts = getattr(app, "points", None)
+        if pts is None:
+            self._json(403, {"error": "简化版无定位点"})
+            return
+        out = {}
+        for key, data in pts.items():
+            song = app.by_key.get(key)
+            out[key] = {"name": song["name"] if song else key,
+                        "enabled": bool(data["enabled"]),
+                        # 出口防御：内存毒化值（NaN/Infinity）不得进 JSON
+                        "points": [{"id": p["id"], "name": p["name"],
+                                    "start": cpr_meta.safe_dur(p["start"]),
+                                    "end": cpr_meta.safe_dur(p["end"])}
+                                   for p in data["points"]]}
+        self._json(200, {"projects": out,
+                         # 定位点能力位：仅 Cubase 支持；MMC 输出口就绪与否
+                         "cubase": bool(getattr(
+                             app.facts, "get", lambda *_: None)("name")
+                             == "cubase") if getattr(app, "facts", None)
+                         else False,
+                         "mmcReady": getattr(app, "mmc_out", None)
+                         is not None})
+
+    def _h_log(self):
+        """日志环形缓冲（App 主线程 q 消费处追加，含产生端定级 lv；
+        lenient 兼容无级别的旧元组）。"""
+        app = self.server.app
+        ring = getattr(app, "log_ring", None)
+        if ring is None:
+            self._json(403, {"error": "简化版无日志"})
+            return
+        self._json(200, {"lines": [
+            {"t": it[0], "msg": it[1],
+             "lv": it[2] if len(it) > 2 else ""} for it in ring]})
+
+    def _run_on_app(self, fn, result_fn=None, timeout=8.0):
+        """经 calls 投递主线程执行并同步取回结果：result_fn=None 时 fn 的
+        返回值即语义（None=成功 → {ok:true}；str=错误 → 400）；给了
+        result_fn 则其返回值作为 JSON 200 载荷（GET 型数据端点）。
+        timeout 可调（目录选择等交互型端点给长窗）。"""
+        app = self.server.app
+        done = threading.Event()
+        box = {}
+
+        def job():
+            try:
+                box["r"] = result_fn() if result_fn is not None else fn()
+            except Exception as e:
+                box["err"] = _err(e)
+            done.set()
+
+        app.calls.put(job)
+        if not done.wait(timeout):
+            self._json(504, {"error": "主线程响应超时"})
+            return
+        if "err" in box:
+            self._json(400, {"error": box["err"]})
+            return
+        if result_fn is not None:
+            self._json(200, box.get("r") or {})
+            return
+        r = box.get("r")
+        if r:
+            self._json(400, {"error": r})
+        else:
+            self._ok()
+
+    def _h_plcmd(self, body, _ip):
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无编排遥控"})
+            return
+        self._run_on_app(lambda: app._pl_cmd_web(
+            str(body.get("op") or ""), str(body.get("key") or ""),
+            body.get("payload") or {}))
+
+    def _h_ptcmd(self, body, _ip):
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无定位点"})
+            return
+        self._run_on_app(lambda: app._points_cmd_web(
+            str(body.get("op") or ""), str(body.get("key") or ""),
+            body.get("payload") or {}))
+
+    def _h_settings_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无设置"})
+            return
+        self._run_on_app(lambda: self.server.app._settings_apply_web(body))
+
+    def _h_pickdir(self, body, _ip):
+        """目录/文件选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，
+        长超时窗；简化版与旧宿主无此能力时明确拒绝）。body.kind="file"
+        走文件选择（如 Cubase 程序）。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无目录选择"})
+            return
+        if str(body.get("kind") or "") == "file":
+            fn = getattr(app, "_pickfile_web", None)
+            if fn is None:
+                self._json(403, {"error": "当前宿主不支持文件选择"})
+                return
+        else:
+            fn = getattr(app, "_pickdir_web", None)
+            if fn is None:
+                self._json(403, {"error": "当前宿主不支持目录选择"})
+                return
+        self._run_on_app(lambda: None, result_fn=fn, timeout=180.0)
+
+    def _h_pedal_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        self._run_on_app(lambda: self.server.app._pedal_apply_web(body))
+
+    def _h_pedal_learn(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        if body.get("cancel"):   # 再点学习中的行/离页收口（前端取消通道）
+            self._run_on_app(
+                lambda: self.server.app._pedal_learn_cancel_web())
+            return
+        self._run_on_app(lambda: self.server.app._pedal_learn_start_web(
+            str(body.get("action") or "")))
+
+    def _h_pedal_mute(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无踩钉"})
+            return
+        self._run_on_app(lambda: self.server.app._pedal_mute_web(
+            bool(body.get("on"))))
+
+    def _h_kbd_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_apply_web(body))
+
+    def _h_kbd_test(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_test_web(
+            str(body.get("inst") or "juno"), int(body.get("note") or 0),
+            song_key=body.get("songKey") or None))
+
+    def _h_slot_set(self, body, _ip):
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._slots_save_web(
+            str(body.get("inst") or "juno"), body.get("slots") or {},
+            song_key=body.get("songKey") or None))
+
+    def _h_checkpath(self, body, ip):
+        """路径存在性探测（设置页即时校验）：仅限本机 loopback——目录
+        存在性属主机信息，LAN 平板不得探测。"""
+        if getattr(self.server.app, "lite", False) \
+                or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        path = body.get("path")
+        if not isinstance(path, str) or not path.strip():
+            self._json(400, {"error": "path 必填"})
+            return
+        import os as _os
+        self._json(200, {"ok": True, "exists": _os.path.exists(path),
+                         "isdir": _os.path.isdir(path)})
+
+    def _h_exit(self, _body, ip):
+        """退出程序（侧栏退出钮）：仅限本机 loopback——LAN 平板不得遥控
+        关闭电脑端。走 Tk 主线程 _on_exit（含退出确认弹窗与收尾链）。"""
+        app = self.server.app
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        app.calls.put(app._on_exit)
+        self._ok()
+
+    def _h_kbd_record(self, body, _ip):
+        """录制（琴上捕获）：POST 启动/停止（stop=true 关口保留最后值）。"""
+        if getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无键盘自动化"})
+            return
+        self._run_on_app(lambda: self.server.app._kbd_record_web(
+            str(body.get("inst") or "juno"), stop=bool(body.get("stop"))))
 
     def _h_pedal(self, body, ip):
         """平板转发的踩钉事件包（远程踩钉冗余路）：有线踏板接平板 → APP
@@ -1492,33 +1951,41 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(sid, str) or len(sid) > 32:
             sid = ""
         key = (device, sid)
-        if key not in app._pedal_seq:
-            devs = [k for k in app._pedal_seq if k[0] == device]
-            if not devs and len({k[0] for k in app._pedal_seq}) >= 32:
-                self._json(429, {"error": "设备数超限"})
+        # 去重/限流读改写在并发线程池下串行；getattr 兜底防测试替身缺锁
+        import contextlib
+        _lk = getattr(app, "_pedal_dedup_lock", None)
+        with (_lk if _lk is not None else contextlib.nullcontext()):
+            if key not in app._pedal_seq:
+                devs = [k for k in app._pedal_seq if k[0] == device]
+                if not devs and len({k[0] for k in app._pedal_seq}) >= 32:
+                    self._json(429, {"error": "设备数超限"})
+                    return
+                if len(devs) >= 4:
+                    del app._pedal_seq[devs[0]]     # dict 保序：最旧会话先出
+            last = app._pedal_seq.get(key)
+            if last is not None and seq == last:
+                # dup 查在 per-device 限流之前（刻意）：已送达包的重试拿到
+                # 即时幂等 ack，不耗限流窗；dup 不触碰任何状态
+                self._ok(dup=True)
                 return
-            if len(devs) >= 4:
-                del app._pedal_seq[devs[0]]     # dict 保序：最旧会话先出
-        last = app._pedal_seq.get(key)
-        if last is not None and seq == last:
-            # dup 查在 per-device 限流之前（刻意）：已送达包的重试拿到即时
-            # 幂等 ack，不耗限流窗；dup 不触碰任何状态
-            self._ok(dup=True)
-            return
-        if now - app._pedal_rate.get(device, 0.0) < 0.02:
-            self._json(429, {"error": "包率超限"})
-            return
-        if device not in app._pedal_rate and len(app._pedal_rate) >= 32:
-            del app._pedal_rate[next(iter(app._pedal_rate))]   # 淘汰最旧
-        app._pedal_rate[device] = now
-        app._pedal_seq[key] = seq
+            if now - app._pedal_rate.get(device, 0.0) < 0.02:
+                self._json(429, {"error": "包率超限"})
+                return
+            if device not in app._pedal_rate                     and len(app._pedal_rate) >= 32:
+                del app._pedal_rate[next(iter(app._pedal_rate))]
+            app._pedal_rate[device] = now
+            app._pedal_seq[key] = seq
         # 注入抛异常（→ dispatcher 500）同样回滚 seq：重试不被 dup 吞
         try:
             r = app.pedal_remote_inject(
                 {"hb": True} if events is None else
                 {"device": device, "events": events, "et": body.get("et", 0)})
         except Exception:
-            app._pedal_seq.pop(key, None)
+            if _lk is not None:
+                with _lk:
+                    app._pedal_seq.pop(key, None)
+            else:
+                app._pedal_seq.pop(key, None)
             raise
         if not r.get("ok"):
             # 注入失败不烧 seq：回滚记录，客户端同 seq 重试可再次注入
@@ -1552,6 +2019,27 @@ class _Handler(BaseHTTPRequestHandler):
             app.calls.put(app._prev)
         elif action == "switch":
             i = body.get("index")
+            # key 优先：按 key 定向（红队 P0：多端重排后下标漂移错切歌）。
+            # key→下标必须留到主线程执行时刻解析（结论攻击实证：HTTP 线程
+            # 解完再入队=TOCTOU——队列里排在前面的 remove/move 会先改表，
+            # 陈旧下标切到邻曲且服务端照样回 ok）。key 不在列表=已移除，
+            # 拒发让前端提示；执行时刻再消失=静默跳过（列表已是最新态）
+            key = body.get("key")
+            if isinstance(key, str) and key:
+                if key not in app.pl_keys:
+                    self._json(400, {"error": "该曲目已不在播放列表"})
+                    return
+                # ValueError 兜底：后台重扫线程重建 pl_keys 的瞬间，in
+                # 判断已过而 index 抛错时静默跳过，不打穿排空循环
+                def _go(k=key):
+                    try:
+                        app._switch(app.pl_keys.index(k), "手动")
+                        return True
+                    except ValueError:
+                        return False
+                app.calls.put(_go)
+                self._ok()
+                return
             if not isinstance(i, int) or isinstance(i, bool) \
                     or not 0 <= i < len(app.pl_keys):
                 self._json(400, {"error": "index 越界"})

@@ -431,7 +431,7 @@ class ObsController:
     def _act(self, label, fn):
         with self._lock:
             if not self._ws:
-                self.last_error = "未连接 OBS（启动中或断线）"
+                self.last_error = "未连接 OBS：启动中或断线"
                 return False
             try:
                 fn(self._ws)
@@ -448,6 +448,8 @@ class ObsController:
 
     def _abs_path(self, file_rel):
         root = self.cfg.get("videoRoot", "")
+        if not root:
+            return None     # 根未设/已清空：不落到进程 CWD 探测
         cand = os.path.join(root, file_rel)
         if os.path.exists(cand):
             return os.path.abspath(cand)

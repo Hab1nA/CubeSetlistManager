@@ -648,8 +648,8 @@ def test_kbd_auto():
     assert kbd_auto._name_pos(devs, "USB-Midi", 2) == (2, 2)
     assert kbd_auto._name_pos(devs, "JUNO-DS", 3) == (1, 1)
     es = kbd_auto._device_entries(["Rubix24", "USB-Midi", "USB-Midi"])
-    assert [e[0] for e in es] == ["Rubix24", "USB-Midi（第1个）",
-                                  "USB-Midi（第2个）"]
+    assert [e[0] for e in es] == ["Rubix24", "USB-Midi · 第1个",
+                                  "USB-Midi · 第2个"]
     assert [e[2] for e in es] == [0, 0, 1]
     assert kbd_auto._device_entries([]) == []
     # 默认值带 dev=0：旧 config 无此键时单设备行为不变
@@ -1818,6 +1818,7 @@ def test_web_api():
         assert snap["pos"] == 0 and snap["dur"] == 0
         assert snap["songs"][0]["name"] == "歌一"
         assert snap["songs"][0]["dur"] == "3:33"
+        assert snap["songs"][0]["key"] == "A队/歌一"   # 行键直取（防漂移）
         # NOW/弹窗「从」名用真实工程名（对齐 PC 横幅），不再按 cur 查《？》
         assert "st.projName" in web_remote.PAGE_COMMON
         # /cmd：入队后在"主线程"执行
