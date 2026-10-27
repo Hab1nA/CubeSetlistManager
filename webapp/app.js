@@ -430,6 +430,7 @@ function consoleRow(s, i, cur) {
   const nm = document.createElement("span");
   nm.className = "nm";
   nm.textContent = s.name;
+  nm.title = s.name;              // 截断时悬停可见全名
   const go = document.createElement("button");
   go.className = "btn ghost xs go-switch";
   go.textContent = "切歌";
@@ -634,6 +635,7 @@ function libRow(s, inPl) {
   const nm = document.createElement("span");
   nm.className = "nm";
   nm.textContent = s.name;
+  nm.title = s.name;              // 截断时悬停可见全名
   const dur = document.createElement("span");
   dur.className = "dur " + durCls(s.durSrc);
   dur.textContent = durText(s);
@@ -878,6 +880,7 @@ function plRow(i, it) {
   });
   no.textContent = (i + 1) + ".";
   nm.textContent = it.name;
+  nm.title = it.name;             // 截断时悬停可见全名
   return div;
 }
 let movePend = false;    // move 在途门：回显未落地前放行=下一次 move 按
@@ -1955,6 +1958,7 @@ function slotRow(note, slot, inst) {
   const pc = document.createElement("span");
   pc.className = "s-pc";
   pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未设置";
+  if (slot) pc.title = pc.textContent;   // 长名省略时悬停可见全名
   const sub = document.createElement("span");
   sub.className = "s-sub";
   const ops = document.createElement("span");
