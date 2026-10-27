@@ -208,9 +208,9 @@ def main():
         ok("F2 可见列底=cols底（不再截断留空）",
            nw["col"] and abs(nw["col"]["b"] - nw["cols"]["b"]) <= 1,
            "%s vs %s" % (nw["col"] and nw["col"]["b"], nw["cols"]["b"]))
-        ok("F2 cols 底=页底-padding(24)",
-           abs(nw["cols"]["b"] - (nw["page"]["b"] - 24)) <= 1,
-           "%s vs %s" % (nw["cols"]["b"], nw["page"]["b"] - 24))
+        ok("F2 cols 底=页底-padding(8，r8 口径)",
+           abs(nw["cols"]["b"] - (nw["page"]["b"] - 8)) <= 1,
+           "%s vs %s" % (nw["cols"]["b"], nw["page"]["b"] - 8))
         ok("F2 列表内部滚动可用（sh>=ch）", nw["list"]["sh"] >= nw["list"]["ch"],
            "%s/%s" % (nw["list"]["sh"], nw["list"]["ch"]))
         # 详情列同规
