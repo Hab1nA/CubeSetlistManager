@@ -55,12 +55,15 @@ def track_segments(d, lo, hi):
             if n in (len(m.group()), len(m.group()) + 3):
                 anchors.append((a - 4, nm))
     anchors.sort()
-    # 同名相邻去重(同一轨被多次引用, 只保留段长>200 的)
-    segs = []
-    for i, (off, nm) in enumerate(anchors):
-        end = anchors[i + 1][0] if i + 1 < len(anchors) else hi
-        if segs and segs[-1][0] == nm and off - segs[-1][1] < 200:
+    # 先去重(同名且相邻<200B 的重复引用)再切段, 避免跳过的锚点截断前段留缝
+    filt = []
+    for off, nm in anchors:
+        if filt and filt[-1][1] == nm and off - filt[-1][0] < 200:
             continue
+        filt.append((off, nm))
+    segs = []
+    for i, (off, nm) in enumerate(filt):
+        end = filt[i + 1][0] if i + 1 < len(filt) else hi
         segs.append((nm, off, end))
     return segs
 
@@ -144,6 +147,14 @@ def main():
                 merged_names.append(nm)
             else:
                 tail.extend(chunks)
+        # B 区头部(首锚点前的前置结构, 含设备/速度/拍号轨)并入尾追,
+        # 补齐头部携带的媒体引用
+        if bseg:
+            head = bytes(ds[ss:bseg[0][1]])
+        else:
+            head = bytes(ds[ss:es])
+        if head:
+            tail.insert(0, head)
         # 从后往前插
         for nm in sorted(merged_names, key=lambda n: -ins_at[n][0]):
             pos, chunks = ins_at[nm]
