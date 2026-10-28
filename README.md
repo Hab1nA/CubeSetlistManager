@@ -83,9 +83,10 @@ Win11 圆角）。全程本地通信，不经互联网。
 段（旧 `cubase` 段仍兼容读取）。S1 完整版已与 Cubase 版功能对齐：工程时长从
 `.song`（ZIP/XML 容器）按事件终点自动解析（`song_meta.py`）、键盘自动化音色
 槽按工程路径旁挂 JSON、退出保存框按窗口样式判别自动确认。走带时钟链路已
-真机实证（S1 需以「**新建乐器**」类型建外部设备并勾 Send MIDI Clock，键盘类
-设备进不了音轨输出）；每首歌需有输出到 VJ/Keyboard/Score 外部设备的乐器轨
-（本机库内两首已接好）。
+真机实证（S1 走带需在「歌曲选项→同步」勾 **MIDI 时码输出** 到本程序的
+时码端口，详见 docs/MTC时码部署.md；「新建乐器」类型建外部设备仅用于
+音符轨输出，键盘类设备进不了音轨输出）；每首歌需有输出到 VJ/Keyboard/
+Score 外部设备的乐器轨（本机库内两首已接好）。
 
 ### Cube Automator Studio One（S1 简化版）
 
@@ -118,9 +119,10 @@ VJ 视频跟随、键盘音色/移调/延音踏板（CC64）自动化、翻谱�
 
 ### 开发 / 构建
 
-- Python **3.14.x**（实测版本）。第三方运行时依赖两项：UI 主题库 sv-ttk
-  （`py -m pip install sv_ttk`）——全套控件迁移 ttk 后以 sv-ttk dark 换取
-  Win11 原生深色观感（演出暗场远距离可读）；BLE MIDI 后端 pywinrt 系
+- Python **3.14.x**（实测版本）。第三方运行时依赖三项：pywebview（`py -m pip
+  install pywebview`，桌面新前端宿主；缺失时 exe 静默回退旧 Tk 界面）；UI 主题库
+  sv-ttk（`py -m pip install sv_ttk`，Tk 回退界面深色主题）；BLE MIDI 后端
+  pywinrt 系
   （`py -m pip install winrt-runtime winrt-Windows.Foundation winrt-Windows.Foundation.Collections
   winrt-Windows.Devices.Enumeration winrt-Windows.Devices.Midi winrt-Windows.Storage.Streams`，
   键盘自动化走蓝牙 MIDI 用，包缺失自动降级纯 winmm）；MIDI/OBS 协议仍为
@@ -173,13 +175,14 @@ AX-09 Lucina 端口、全局移调键位）/ **VJ**（OBS 连接、触发槽位�
 - **踩钉**：功能绑定点行即开始学习（学习中再点取消）；全部设置即改
   即生效。
 - **快捷键**：空格=开始/暂停/继续；←→=上一首/下一首；R=回零；
-  Shift+空格=全停；Ctrl+1..6=切页；F11/ESC=演出模式进出。
-- **演出模式**：大字居中全屏，走带行保留（全停右侧「退出演出」），
-  状态灯隐藏；适合投屏+暗场。
-- **被控软件联动**：「启动时自动打开被控软件」开时启动自动拉起 DAW/
+  Shift+空格=全停；Ctrl+1…6=切页；F11/ESC=演出模式进出。
+- **演出模式**：大字居中全屏，窗口自动置顶，走带行保留（全停右侧
+  「退出演出」），状态灯隐藏；适合投屏+暗场。
+- **被控软件联动**：「启动时打开被控软件」开时启动自动拉起 DAW/
   loopMIDI（OBS 需已配 VJ 显示位置）；「退出时关闭被控软件」对等关闭。
 - 旧 Tk 界面保留为兜底与对照环境：设 `CUBE_TK=1` 回退（下述旧界面
-  描述适用于该环境）。
+  描述适用于该环境）。该回退面已冻结：只修业务缺陷、不加新功能，
+  新功能一律落新前端。
 
 ### 旧版 Tk 界面（CUBE_TK=1 回退环境）
 
@@ -256,7 +259,11 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 
 保存即应用，写 `config.json` 持久化：
 
-- **联动端口**：VJ / 键盘自动化 / 翻谱信号的 loopMIDI 端口下拉（列当前在线端口），保存即热切换监听；选「无」停用该自动化（两联动都停用时 loopMIDI 仍会拉起——DAW 工程时钟端口靠它承载）；已存设定当前不在场（设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，改选其它项即替换；
+- **联动端口**：时码 / VJ / 键盘自动化的 loopMIDI 端口下拉（列当前在线
+  端口），保存即热切换监听；选「无」停用该联动（时码停用=走带三态/已播/
+  自动推进不可用）；翻谱接收端口在「移动端遥控」卡。已存设定当前不在场
+  （设备未上电/端口改名）时显示「（当前不可用）」，不动它保存则保留原设定，
+  改选其它项即替换；
 - **移动端遥控**：总开关（开=按服务网络起网→起网页服务→开翻谱端口，
   关=全停；热点模式且热点是本程序开的，退出时自动关掉）、**服务网络**
   二选一：「自动开热点」（原有方式，电脑开 Windows 热点给平板连）/
@@ -270,17 +277,18 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   Windows 会弹防火墙放行，允许一次即可（局域网若被拦，把该网络设为
   「专用」或放行本程序入站）；建议路由器给电脑配静态 IP，避免地址变动后
   APP 记住的连接地址失效；
-- **VJ显示位置**：列本机显示器（Windows 枚举，不依赖 OBS 在线），选中即把
+- **VJ 显示位置**（在「VJ」页）：列本机显示器（Windows 枚举，不依赖 OBS 在线），选中即把
   OBS 节目画面全屏投影过去（换屏先关旧投影不留双份；屏名对不上 OBS 命名时按
   屏幕排列排名兜底；OBS 重连后自动恢复）；选「无」关闭投影；
-- **VJ静音播放**：勾选=媒体源静音+关监听；不勾=开「监视器并输出」，声音进
+- **VJ 静音播放**（在「VJ」页）：勾选=媒体源静音+关监听；不勾=开「监视器并输出」，声音进
   OBS「设置→音频→高级→监视输出设备」（默认=系统播放设备）；
 - **目录**：DAW 工程库变更触发热重扫，VJ 视频目录热生效（均支持文件夹
   选择对话框）；
-- **行为开关**：自动切换工程 / 连续播放 / 保持软件前台 / 切换工程需确认 /
-  **退出时关闭被控软件**（DAW → OBS → loopMIDI 按序优雅关闭：Cubase 未保存
-  确认框回车=保存、S1 保存框默认钮=「是」=保存；OBS 走 WM_CLOSE 不强杀；
-  loopMIDI 先关后终止）。
+- **行为开关**：播完自动切换 / 切完自动播放 / 手动切歌确认 / 启动时打开
+  被控软件 / **退出时关闭被控软件**（DAW → OBS → loopMIDI 按序优雅关闭：
+  Cubase 未保存确认框回车=保存、S1 保存框默认钮=「是」=保存；OBS 走
+  WM_CLOSE 不强杀；loopMIDI 先关后终止）；「保持软件前台」已由演出模式
+  自动置顶替代，无独立开关。
 
 ## 配置参考
 
@@ -294,17 +302,18 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | obs | vjMute | VJ 静音播放：勾选=静音+关监听；不勾=开监听「监视器并输出」（设置页可改，默认勾选） |
 | obs | projectorMonitor | VJ 显示位置屏名（空=不投影），设置页可改 |
 | daw | （顶层） | 底座选择：`cubase`（默认）或 `studioone` |
-| dawSettings | dawExe / projectsRoot / autoSave | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）、切换时自动保存 |
+| dawSettings | dawExe / projectsRoot | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）。切歌时 Cubase 经保存对话框恒保存、Studio One 丢弃未存修改，切歌前自行保存 |
 | juno | inHint / outHint / dev / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道；dev=同名端口序号（两台同型号无线 MIDI 盒时在「键盘自动化」窗下拉选择，0 基，一般勿手改） |
 | ax09 | inHint / outHint / ch / dev | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK×4 可查改）；dev 同 juno |
 | pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double，「学习」时踩出即自动分类）与双踩窗（默认 0.35s） |
 | pedal | remoteEnabled | 允许平板转发踩钉（踩钉控制页开关持久化；APP 侧另有「踩钉转发」开关，双开生效） |
 | webRemote | enabled / mode / ip / serverPort / appPort / taskerPort | 移动端遥控总开关（设置页可改，保存即整套起停）、服务网络（hotspot=自动开热点 / lan=用现有局域网）、lan 模式服务网卡 IP（空=自动；设置页按网卡名选择）、网页服务端口（8765）、APP 页面端口（8767）、翻谱接收端口（8766） |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（槽位/名字/IP/启停/分辨率——由 APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
-| autoAdvance | （顶层） | 「自动切换工程（播完自动切下一首）」勾选持久化（默认开） |
-| autoPlay / topMost / switchConfirm | （顶层） | 连续播放 / 保持软件前台 / 切换工程需确认（默认开，设置页可改） |
+| autoAdvance | （顶层） | 「播完自动切换」勾选持久化（默认开） |
+| autoPlay / switchConfirm | （顶层） | 连续播放（默认关）/ 切换工程需确认（默认开），设置页可改 |
+| topMost | （顶层） | 保持软件前台——仅 CUBE_TK=1 回退界面有开关；新前端由演出模式自动置顶替代 |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
-| clockPortHint | （顶层） | MIDI 时钟监听端口（设置页「时钟端口名称」，独立于 VJ 音符口；DAW 侧需把时钟发到该端口——Cubase 工程设置的时钟发送端口、S1 外部设备勾 Send MIDI Clock；空串=停用，走带三态/已播/自动推进不可用） |
+| clockPortHint | （顶层） | MTC 时码接收端口（设置页「时码端口」，独立于 VJ 音符口；DAW 侧需把 **MIDI 时码输出** 发到该端口——Cubase 工程同步设置勾「MIDI 时码输出」、S1 歌曲选项→同步勾 MIDI 时码输出；只开 MIDI 时钟不开时码则走带全盲；空串=停用，走带三态/已播/自动推进不可用）。部署细节见 docs/MTC时码部署.md |
 | exitCloseApps | （顶层） | 「退出时关闭被控软件（DAW/OBS/loopMIDI）」勾选持久化 |
 
 ## 文件架构
@@ -325,7 +334,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器+踩钉转发）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
-├─ tests\                test_bridge（离线自检）/ test_stability / test_pedal_wire（线级黑盒）/ test_dialog_drain / test_manual_adopt / pedal_sim / e2e_test（真机分阶段）
+├─ tests\                test_bridge（离线自检）/ test_webapp / test_points / test_mtc / test_sysex_out / test_stability / test_pedal_wire（线级黑盒）/ test_dialog_drain / test_manual_adopt / pedal_sim / e2e_test（真机分阶段）
 ├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
 ├─ config.example.json / config.studioone.json / config.automator.json   各产品预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）

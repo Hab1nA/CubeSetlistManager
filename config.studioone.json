@@ -2,8 +2,7 @@
   "daw": "studioone",
   "dawSettings": {
     "dawExe": "C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe",
-    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs",
-    "autoSave": true
+    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs"
   },
   "obs": {
     "host": "127.0.0.1",
@@ -14,7 +13,7 @@
     "mediaInput": "舞台视频",
     "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
     "projectorMonitor": "",
-    "vjMute": false,
+    "vjMute": true,
     "retrySec": 5
   },
   "juno": {
@@ -38,9 +37,10 @@
     "serverPort": 8765,
     "taskerPort": 8766,
     "midiIn": "",
-    "devices": []
+    "devices": [],
+    "appPort": 8767
   },
-  "autoAdvance": false,
+  "autoAdvance": true,
   "autoPlay": false,
   "topMost": true,
   "switchConfirm": true,

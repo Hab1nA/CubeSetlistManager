@@ -9,13 +9,12 @@
     "mediaInput": "舞台视频",
     "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
     "projectorMonitor": "",
-    "vjMute": false,
+    "vjMute": true,
     "retrySec": 5
   },
   "dawSettings": {
     "dawExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
-    "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects",
-    "autoSave": true
+    "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects"
   },
   "juno": {
     "inHint": "JUNO",
@@ -47,9 +46,10 @@
     "serverPort": 8765,
     "taskerPort": 8766,
     "midiIn": "",
-    "devices": []
+    "devices": [],
+    "appPort": 8767
   },
-  "autoAdvance": false,
+  "autoAdvance": true,
   "autoPlay": false,
   "topMost": true,
   "switchConfirm": true,
