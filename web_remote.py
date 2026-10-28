@@ -58,6 +58,18 @@ def _err(e):
     return str(e).strip() or type(e).__name__
 
 
+def _cross_origin(origin, host):
+    """CSRF 判定：Origin 与 Host 不一致=跨站。None/空=非浏览器客户端
+    （curl/探针/APP 原生转发）放行；「null」等无法解析的也按跨站拒。"""
+    if not origin:
+        return False
+    try:
+        org = (urllib.parse.urlsplit(origin).netloc or "").lower()
+    except ValueError:
+        return True
+    return org != (host or "").lower()
+
+
 def _port(v, default):
     try:
         n = int(v)
@@ -1503,6 +1515,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        # 兜底与 do_POST 对称：handler 异常回 500 JSON，而非无响应掐断
+        # 连接被前端当断连（曾因 /log /points 迭代竞态 RuntimeError 实发）
+        try:
+            self._do_get(path)
+        except Exception as e:
+            self._json(500, {"error": _err(e)})
+
+    def _do_get(self, path):
         if path == "/":
             self._send(200, "text/html; charset=utf-8",
                        self.server.page.encode("utf-8"))
@@ -1577,6 +1597,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "请求体不是合法 JSON"})
             return
         ip = self.client_address[0]
+        # CSRF 门：浏览器对 POST 恒发 Origin——同源页（本服务加载的桌面/
+        # 平板/APP 页面）与 Host 一致即放行，跨站「简单请求」（text/plain
+        # 免预检）为攻击者域，拒。无 Origin=非浏览器客户端（curl/探针/
+        # APP 原生转发），放行。
+        if _cross_origin(self.headers.get("Origin"), self.headers.get("Host")):
+            self._json(403, {"error": "跨站请求被拒绝"})
+            return
         try:
             for fn, p in ((self._h_cmd, "/cmd"),
                           (self._h_claim, "/device/claim"),
@@ -1720,9 +1747,15 @@ class _Handler(BaseHTTPRequestHandler):
         if ring is None:
             self._json(403, {"error": "简化版无日志"})
             return
-        self._json(200, {"lines": [
-            {"t": it[0], "msg": it[1],
-             "lv": it[2] if len(it) > 2 else ""} for it in ring]})
+        lines = None
+        for _ in range(3):    # 迭代中 Tk 线程 append → RuntimeError；重取
+            try:
+                lines = [{"t": it[0], "msg": it[1],
+                          "lv": it[2] if len(it) > 2 else ""} for it in ring]
+                break
+            except RuntimeError:
+                continue
+        self._json(200, {"lines": lines or []})
 
     def _run_on_app(self, fn, result_fn=None, timeout=8.0):
         """经 calls 投递主线程执行并同步取回结果：result_fn=None 时 fn 的
@@ -1780,13 +1813,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._run_on_app(lambda: self.server.app._settings_apply_web(body))
 
-    def _h_pickdir(self, body, _ip):
+    def _h_pickdir(self, body, ip):
         """目录/文件选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，
-        长超时窗；简化版与旧宿主无此能力时明确拒绝）。body.kind="file"
+        长超时窗）——LAN 侧触发=远程冻结整套 UI+骚扰现场操作员，仅限本机
+        loopback（与 /checkpath、/exit 同门）。body.kind="file"
         走文件选择（如 Cubase 程序）。"""
         app = self.server.app
-        if getattr(app, "lite", False):
-            self._json(403, {"error": "简化版无目录选择"})
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
             return
         if str(body.get("kind") or "") == "file":
             fn = getattr(app, "_pickfile_web", None)

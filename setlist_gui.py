@@ -164,7 +164,7 @@ def daw_settings(cfg, daw):
     旧 cubase 段与 cubaseExe 键只对 cubase 底座生效——它们语义上就是
     Cubase 的路径，S1 底座继承会把 Cubase 当成自己的 exe/工程库
     （真机事故：S1 版启动自检把 Cubase 拉了起来）。"""
-    s = dict(autoSave=True)
+    s = {}
     if daw == "cubase":
         s.update(cfg.get("cubase") or {})
     s.update(cfg.get("dawSettings") or {})
@@ -590,6 +590,9 @@ class Marquee(ttk.Entry):
 
 
 class App:
+    """业务栈根对象。Tk 兜底界面（_build/SettingsWindow/PointsWindow，
+    CUBE_TK=1 可达）已冻结：只修业务缺陷不加新功能，新功能一律落 webapp 前端。"""
+
     def __init__(self, root):
         self.root = root
         cfg = _load_config()
@@ -1252,8 +1255,7 @@ class App:
             # 切歌/走带控制（独立于 VJ 链）
             try:
                 self.ctrl = daw_ctrl.DawController(
-                    self.facts, self.ccfg["dawExe"],
-                    auto_save=self.ccfg["autoSave"], log=self.q.put)
+                    self.facts, self.ccfg["dawExe"], log=self.q.put)
             except Exception as e:
                 self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
@@ -1428,13 +1430,17 @@ class App:
         songs = scan_library(root, self.facts["song_ext"])
         self.by_key = {s["key"]: s for s in songs}
         self.songs = songs
-        # 定位点 sidecar 装载（工程目录级）；损坏降级为停用空表并告警
-        self.points = {}
+        # 定位点 sidecar 装载（工程目录级）；损坏降级为停用空表并告警。
+        # 逐键装载含逐目录磁盘 IO：先建本地表再整体重绑——HTTP 线程的
+        # /points、/playlist 直接迭代 self.points，边建边填会 dict
+        # changed size during iteration（单次重绑对读者原子）
+        pts = {}
         for s in songs:
             data, err = points.load_points(os.path.dirname(s["path"]))
             if err:
                 self.q.put("《%s》%s" % (s["name"], err))
-            self.points[s["key"]] = data
+            pts[s["key"]] = data
+        self.points = pts
         # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）
         self.pl_keys = [k for k in self.pl_keys if self._entry_alive(k)]
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表
@@ -2199,7 +2205,6 @@ class App:
             "launchAppsOnStart": self.launch_apps,
             "projectsRoot": self.ccfg.get("projectsRoot", ""),
             "dawExe": self.ccfg.get("dawExe", ""),
-            "autoSave": bool(self.ccfg.get("autoSave", True)),
             "obs": {"projectorMonitor": obs.get("projectorMonitor", ""),
                     "vjMute": bool(obs.get("vjMute", True)),
                     "videoRoot": obs.get("videoRoot", ""),
@@ -2390,9 +2395,6 @@ class App:
                 daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
             if "dawExe" in p and p.get("dawExe"):
                 daw_sec["dawExe"] = str(p["dawExe"])
-            if "autoSave" in p:
-                daw_sec["autoSave"] = bool(p["autoSave"])
-                self.ccfg["autoSave"] = bool(p["autoSave"])
             cfg["dawSettings"] = daw_sec
             if web_fields:
                 cfg["webRemote"] = self._web_config_payload(**web_fields)

@@ -293,7 +293,8 @@ document.addEventListener("keydown", e => {
 // 快捷键（审计 #24 默认键位表）：←→ 上下曲 / R 回零 / Shift+Space 全停
 // （双键防误触）/ Ctrl+1..6 切页；输入框与弹层内不劫持（与空格同守卫）
 document.addEventListener("keydown", e => {
-  if (e.key !== " " || e.repeat) return;
+  // Shift+空格归下方 panic 分支；此处放行会与全停同拍双触发（先起播再全停）
+  if (e.key !== " " || e.repeat || e.shiftKey) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT"
             || t.tagName === "TEXTAREA" || t.tagName === "BUTTON"
@@ -439,7 +440,9 @@ const fmt = s => {
 let pedalPrevAge = null;
 function render(st) {
   if (!$("#p-console")) return;
-  $("#now").textContent = st.open ? st.projName : "未打开工程";
+  if (!st.busy)   // 切歌期保持切歌前歌名不动（与移动页同口径），启动期明示
+    $("#now").textContent = st.open ? st.projName
+        : (st.ready ? "未打开工程" : "启动中…");
   // 超长歌名跑马灯：文本变化才重测重挂（每 500ms remove/add 会把
   // 14s 动画永远打回 0）；测量时临时 nowrap 拿单行宽（平时 break-all
   // 折行恒不溢出）
@@ -510,6 +513,7 @@ function render(st) {
     rows.forEach((s, i) => list.appendChild(consoleRow(s, i, cur)));
   }
   $("#console-empty").hidden = rows.length > 0;
+  $("#console-list").hidden = rows.length === 0;
   const cln = $("#cl-n");
   if (cln && cln.textContent !== rows.length + " 首")
     cln.textContent = rows.length + " 首";
@@ -1043,11 +1047,12 @@ function drawPl() {
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   el.innerHTML = "";
-  // 团队匹配与素材库同口径（pt 条目经宿主工程查团队）
+  // 团队匹配与素材库同口径：pt 条目自带 team（_lib_view 原位展开），
+  // 未启用定位点的曲才需回落宿主 key 查
   const teamOf = it => {
-    const base = it.key.startsWith("pt:")
-        ? ptBaseOf(it.key) : it.key;
-    const lib = plCache.lib.find(x => x.key === base);
+    const lib = plCache.lib.find(x => x.key === it.key)
+        || (it.key.startsWith("pt:")
+            ? plCache.lib.find(x => x.key === ptBaseOf(it.key)) : null);
     return lib ? (lib.team || "").toLowerCase() : "";
   };
   let rendered = 0;
@@ -1471,7 +1476,9 @@ $("#lg-clear").addEventListener("click", ev => {
   }, "确认清空？");
 });
 $("#lg-copy").addEventListener("click", () => {
-  const txt = $$("#log .ln").map(l => l.textContent).join("\n");
+  // 复制所见：级别过滤是 CSS 隐藏（offsetParent null），剪贴板同步排除
+  const txt = $$("#log .ln").filter(l => l.offsetParent)
+      .map(l => l.textContent).join("\n");
   copyText(txt, "日志已复制");
 });
 function copyText(txt, msg) {
@@ -1613,18 +1620,19 @@ async function refreshPedal(force) {
     const d = await r0.json();
     pdData = d;
     const c = $("#pedal-conn");
-    // 三态：无绑定提示 / 通道异常警示 / 静音中（本页打开期间，如实标注）
+    // 状态序：无绑定 / 已静音（本页打开期 mute 会主动让出 MIDI 口，
+    // 须先于「口未连」警示判定，否则静音期恒误报故障）/ 通道异常 / 已连接
     let txt = "已静音", cls = "";
     if (!Object.keys(d.binds || {}).length
         && !Object.keys(d.hid || {}).length) {
       txt = "无绑定"; cls = "";
+    } else if (d.muted) {
+      txt = "已静音 · 关本页恢复";
     } else if (d.hid && Object.keys(d.hid).length && !d.deviceOnline
                && !d.deviceHint) {
       txt = "未选设备"; cls = "warn";
     } else if (d.hint && !d.connected && !d.hidActive) {
       txt = "口未连"; cls = "warn";
-    } else if (d.muted) {
-      txt = "已静音 · 关本页恢复";
     } else {
       txt = "已连接"; cls = "ok";
     }
@@ -2181,6 +2189,10 @@ async function refreshKbdDetail() {
       dtKbd = null;
       $("#dt-kbd-stat").textContent = !es0 || es0.loading
           ? "映射装载中…" : "映射不可用，曲目不在素材库";
+      // 陈旧响应/异常态不同帧渲染：同步清槽位，防旧曲槽卡残留可点
+      $("#dt-slots").textContent = "";
+      $("#dt-axslots").textContent = "";
+      updateDtBadge();
       return;
     }
     dtKbd = d;
@@ -2435,7 +2447,6 @@ async function refreshSettings(force) {
     $("#st-launch").checked = d.launchAppsOnStart !== false;
     $("#st-root").value = d.projectsRoot;
     $("#st-exe").value = d.dawExe;
-    $("#st-autosave").checked = d.autoSave;
     setTgl($("#st-web"), !!d.web.enabled);
     $("#st-mode").value = d.web.mode;
     // config 里存了非法 mode（手改文件）：回落首个候选，保存即归一
@@ -2513,7 +2524,6 @@ $("#st-save").addEventListener("click", async () => {
     exitCloseApps: $("#st-exit").checked,
     launchAppsOnStart: $("#st-launch").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
-    autoSave: $("#st-autosave").checked,
     web: {mode: $v("#st-mode"),
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),

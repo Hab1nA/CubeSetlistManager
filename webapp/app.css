@@ -296,7 +296,7 @@ input.invalid { border-color: var(--err) !important; }
 .col-pl .md-head, #logcard .md-head { flex: none; }
 #console-list { flex: 1; overflow: auto; min-height: 0;
   scrollbar-gutter: stable; }
-#console-empty { flex: 1; }
+#console-empty { flex: 1; justify-content: center; }
 #logcard { display: flex; flex-direction: column; }
 .hero { padding: var(--s4); }
 .hero-top { display: flex; align-items: center; gap: var(--s3);
@@ -386,7 +386,7 @@ input.invalid { border-color: var(--err) !important; }
 .eq { display: none; align-items: flex-end; gap: 2px; height: 14px;
   flex: none; }
 .row.cur .eq { display: flex; }
-.eq i { width: 3px; background: var(--ok); border-radius: 1px;
+.eq i { width: 3px; height: 8px; background: var(--ok); border-radius: 1px;
   animation: eq 1.2s ease-in-out infinite; }
 .eq i:nth-child(2) { animation-delay: .2s; }
 .eq i:nth-child(3) { animation-delay: .4s; }
