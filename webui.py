@@ -116,7 +116,6 @@ def main():
                      name="web-watchdog").start()
     try:
         webview.start(gui="edgechromium")   # 主线程阻塞至窗口关闭
-        biz.join(timeout=5)                 # 窗先关：等 Tk 收尾
     except Exception as e:
         # WebView2 Runtime 缺失/损坏的可读出口（pywebview 起窗失败在此抛）
         import ctypes
@@ -129,7 +128,11 @@ def main():
         app.calls.put(app._on_exit)
         return
     ui_srv.shutdown()
-    app.calls.put(app._on_exit)         # 窗口关=通知 Tk 线程退出全程序
+    # 先入队退出再 join：_on_exit（热点/OBS/连带关闭）跑完才 root.destroy，
+    # biz 线程随之结束——join 在 join 之后入队则 Tk 线程无死亡路径，恒
+    # 超时、清理与解释器退出赛跑（/exit 路径 Tk 已自毁，重复入队幂等）
+    app.calls.put(app._on_exit)
+    biz.join(timeout=5)                 # 等 Tk 收尾（热点关停等秒级作业）
 
 
 if __name__ == "__main__":

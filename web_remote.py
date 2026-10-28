@@ -1803,9 +1803,18 @@ class _Handler(BaseHTTPRequestHandler):
         if getattr(app, "lite", False):
             self._json(403, {"error": "简化版无定位点"})
             return
+        op = str(body.get("op") or "")
+        key = str(body.get("key") or "")
+        # add/toggle 的默认结束点要整工程解析（网络盘秒级）：在 HTTP 线程
+        # 预取（纯文件读取不碰 Tk，慢只慢本请求），Tk 线程只收现成值
+        span = None
+        if op in ("add", "toggle"):
+            try:
+                span = app.span_for(key)
+            except Exception:
+                span = None    # 预取失败回退主线程现读（旧行为）
         self._run_on_app(lambda: app._points_cmd_web(
-            str(body.get("op") or ""), str(body.get("key") or ""),
-            body.get("payload") or {}))
+            op, key, body.get("payload") or {}, span=span))
 
     def _h_settings_set(self, body, _ip):
         if getattr(self.server.app, "lite", False):
@@ -2116,7 +2125,12 @@ class _Handler(BaseHTTPRequestHandler):
         self._ok(device=dev)
 
     def _h_diag(self, body, ip):
-        """APP 侧诊断回传：把翻谱推送处理时的内部状态直接打进电脑日志。"""
+        """APP 侧诊断回传：把翻谱推送处理时的内部状态直接打进电脑日志。
+        写的是主线程消费队列（无界），加私网来源门——误接公共 WiFi 时
+        LAN 任意主机不得灌日志（与 /pedal/event 同门）。"""
+        if not valid_push_ip(ip):   # 含环回；公网/链路本地拒
+            self._json(403, {"error": "仅限私网来源"})
+            return
         msg = str(body.get("msg") or "")[:500]
         if msg:
             self.server.app.q.put("APP 诊断：%s" % msg)

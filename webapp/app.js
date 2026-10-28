@@ -428,7 +428,9 @@ $("#next-go").addEventListener("click", () => {
       : (typeof stCur === "number" ? stCur : -1);
   const i = cur + 1;
   const s = stState && stState.songs ? stState.songs[i] : null;
-  switchTo(i, $("#next-go"), false, s ? s.key : undefined);
+  if (!s) return;   // 目标行已不在（它端删空 NEXT）：不发裸下标（key 防线
+                    // 会被 undefined 跳过），等 ≤500ms 轮询重绘卡面
+  switchTo(i, $("#next-go"), false, s.key);
 });
 
 const fmt = s => {
@@ -1014,7 +1016,9 @@ async function movePl(from, to) {
   const item = plCache.pl[from];
   dragKey = null;                      // 拖拽收尾：恢复轮询重绘
   movePend = true;
-  const j = await post("/plcmd", {op: "move", payload: {from, to}});
+  // key 随发：服务端执行时刻校验身份，快照窗口内它端增删时拒绝而非错移
+  const j = await post("/plcmd",
+      {op: "move", payload: {from, to, key: item.key}});
   if (j.ok) toast("已移动《" + item.name + "》");
   // 回显必须落地才放门：null（被在途调用取代）不算失败——再等一拉；
   // 两拉皆 false=真断网——保门+提示，任何调用方落地即自动放门

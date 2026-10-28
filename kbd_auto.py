@@ -288,7 +288,10 @@ def save_slots(cpr_path, slots, key="slots"):
         data = {}
     data[key] = {str(k): slots[k] for k in sorted(slots)}
     data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    tmp = p.with_name(p.name + ".tmp")      # 先写临时再替换：断电不截断原文件
+    # 先写临时再替换：断电不截断原文件。临时名带进程+线程标识——Tk 线程
+    # 与后台保存线程（及双开进程）并发写同一固定 .tmp 会交错损坏
+    tmp = p.with_name("%s.%d-%d.tmp"
+                      % (p.name, os.getpid(), threading.get_ident()))
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                    encoding="utf-8")
     os.replace(str(tmp), str(p))

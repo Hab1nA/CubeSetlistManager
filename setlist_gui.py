@@ -1369,6 +1369,11 @@ class App:
                 out["listen"][key] = True
             except OSError:
                 out["listen"][key] = False
+        # 网卡枚举同属秒级慢操作（PS 子进程）：与状态一起在专职线程刷新，
+        # _settings_get_web 只读缓存——设置页 GET 不得冻结 Tk 主线程
+        out["adapters"] = [{"name": name, "ip": ip} for ip, name in
+                           hotspot.lan_ips() if web_remote.valid_push_ip(ip)
+                           and not ip.startswith("127.")]
         self._web_status = out
 
     def _entry_alive(self, key):
@@ -1873,7 +1878,9 @@ class App:
         if self.ctrl is None or not self.ctrl.switch_to(
                 entry["path"], on_done=self._switch_done):
             if via == "手动":       # 忙时保留最后一次用户请求，完成后自动执行
-                self._pending_switch = i
+                # 记 key 不记下标：排队期间列表被它端增删时，执行时刻按
+                # key 重定位（switch key 防线同款），不再切到漂移后的邻位
+                self._pending_switch = key
                 self.q.put("切换中：《%s》已排队，完成后自动执行"
                            % entry["song_name"])
             else:
@@ -1996,16 +2003,18 @@ class App:
         else:
             self._regain_focus()      # 单实例转交激活了 Cubase，焦点收回
 
-    def _toggle_points(self, lib_key, on):
+    def _toggle_points(self, lib_key, on, span=None):
         """启用/停用定位点（主线程，定位点设置窗调用）：sidecar 翻 enabled +
         播放列表原位替换/还原（可逆、数据无损，不弹确认）。启用且无点时
-        建初始点「定位点1」=[0:00, 工程末尾]。"""
+        建初始点「定位点1」=[0:00, 工程末尾]。span=HTTP 线程预取的
+        (时长, 左偏移)，None=现读（Tk 窗路径；网络盘会阻塞，回退环境接受）。"""
         song = self.by_key.get(lib_key)
         if song is None:
             return
         data = self.points.get(lib_key) or points.empty_data()
         if on and not data["points"]:
-            d_file, left = _read_span(song["path"])
+            d_file, left = span if span is not None \
+                else _read_span(song["path"])
             end = left + d_file if d_file else 0.0
             data = points.initial_data(end)
             if not end:
@@ -2030,8 +2039,15 @@ class App:
             self.pl_keys = points.collapse_restore(old_keys, lib_key)
         self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
         if self._pending_switch is not None:
-            self._pending_switch = points.remap_cur(
-                old_keys, self.pl_keys, self._pending_switch, lib_key)
+            # 排队切换以 key 记账：宿主被 toggle 时跟随家族首键；它端删掉则弃
+            k = self._pending_switch
+            pt = points.parse_pt_key(k)
+            if k == lib_key or (pt and pt[0] == lib_key):
+                fam = (points.pt_keys_for(lib_key, data)
+                       if data["enabled"] else [lib_key])
+                self._pending_switch = fam[0] if fam else None
+            elif k not in self.pl_keys:
+                self._pending_switch = None
         try:
             points.save_points(os.path.dirname(song["path"]), data)
         except (OSError, ValueError) as e:
@@ -2094,18 +2110,28 @@ class App:
         self._refresh()
         return None
 
-    def _points_cmd_web(self, op, lib_key, payload):
+    def span_for(self, key):
+        """工程文件 (时长, 左定位条偏移)：供 HTTP 线程预取用——_read_span
+        是整工程解析（网络盘秒级），不能在 Tk 线程现读；本方法无 Tk 依赖，
+        任意线程可调。工程不在库返回 None。"""
+        song = self.by_key.get(key)
+        return _read_span(song["path"]) if song else None
+
+    def _points_cmd_web(self, op, lib_key, payload, span=None):
         """/ptcmd：定位点增删改排（op: toggle/add/del/edit/move）。返回
-        None=成功，str=错误文案（HTTP 线程经 result 队列取回）。"""
+        None=成功，str=错误文案（HTTP 线程经 result 队列取回）。
+        span=HTTP 线程预取的 (时长, 左偏移)：_read_span 是整工程解析，
+        网络盘秒级，不得在 Tk 线程现读。"""
         song = self.by_key.get(lib_key)
         if song is None:
             return "工程不存在"
         if op == "toggle":
-            self._toggle_points(lib_key, bool(payload.get("on")))
+            self._toggle_points(lib_key, bool(payload.get("on")), span=span)
             return None
         data = self.points.get(lib_key) or points.empty_data()
         if op == "add":
-            d_file, left = _read_span(song["path"])
+            d_file, left = span if span is not None \
+                else _read_span(song["path"])
             start = payload.get("start")
             if start is None:
                 start = self.mtc.position() if self.mtc is not None else 0.0
@@ -2191,10 +2217,10 @@ class App:
         obs = cfg.get("obs") or {}
         web = self._web_config_payload()
         # 服务网卡候选带 {name, ip}：前端显示名、提交 IP（后端 lan_ip 存的
-        # 是 IP，只报名永远配不上）；排除环回——_rebuild_lan 不认它
-        adapters = [{"name": name, "ip": ip} for ip, name in
-                    hotspot.lan_ips() if web_remote.valid_push_ip(ip)
-                    and not ip.startswith("127.")]
+        # 是 IP，只报名永远配不上）；排除环回——_rebuild_lan 不认它。
+        # lan_ips 是 PS 秒级慢操作：只读专职线程 5s 刷新的缓存，不在本
+        # （Tk）线程现算（首启缓存未热时给空表，用户展开下拉前必有值）
+        adapters = (self._web_status or {}).get("adapters") or []
         return {
             "clockHint": self.clock_hint, "vjHint": self.vj_hint,
             "kbHint": self.kb_hint,
@@ -2312,6 +2338,12 @@ class App:
             web_fields["ip"] = str(web_in.get("ip") or "")
         web_changed = any(self.web_cfg.get(k) != v
                           for k, v in web_fields.items())
+        # 端口互异：Windows SO_REUSEADDR 允许对活动端口二次 bind（两服务
+        # 随机接客、无报错），保存时就地拒绝
+        srv_p = web_fields.get("serverPort", self.web_cfg.get("serverPort"))
+        app_p = web_fields.get("appPort", self.web_cfg.get("appPort"))
+        if srv_p and app_p and srv_p == app_p:
+            return "网页端口与 APP 端口不能相同"
         self.web_cfg.update(web_fields)
         if "autoAdvance" in p or "autoPlay" in p:
             cont = (bool(p["autoPlay"]) if "autoPlay" in p
@@ -2680,6 +2712,13 @@ class App:
                 path = song["path"]
                 if not hasattr(self, "_kbd_cache_gen"):
                     self._kbd_cache_gen = {}
+                inflight = getattr(self, "_kbd_inflight", None)
+                if inflight is None:
+                    inflight = self._kbd_inflight = set()
+                if song_key in inflight:
+                    return out  # 装载在途：不废旧代际（前端 700ms 自拉若
+                                # 每次顶掉 gen，慢盘装载永不收敛）
+                inflight.add(song_key)
                 self._kbd_cache_gen[song_key] = \
                     self._kbd_cache_gen.get(song_key, 0) + 1
                 gen = self._kbd_cache_gen[song_key]
@@ -2687,6 +2726,7 @@ class App:
                 def run():
                     slots = kbd_auto.load_slots(path)
                     ax = kbd_auto.load_slots(path, "ax")
+                    inflight.discard(song_key)
                     if self._kbd_cache_gen.get(song_key) != gen:
                         return    # IO 期间已保存失效：不回写旧数据
                     self._kbd_song_cache[song_key] = (slots, ax)
@@ -2931,6 +2971,12 @@ class App:
             if not 0 <= frm < len(self.pl_keys) \
                     or not 0 <= to < len(self.pl_keys):
                 return "列表刚变化，未能移动"   # 静默 200 会让前端谎报「已移动」
+            # 身份校验（switch key 防线同款）：快照到执行的窗口内它端增删
+            # 会使下标漂移——错移别的歌不可接受，拒绝让前端重解析重试。
+            # 不带 key 视为存量调用方，维持旧行为（switch index 路径同例）
+            mv_key = str(payload.get("key") or "")
+            if mv_key and mv_key != self.pl_keys[frm]:
+                return "列表刚变化，未能移动"
             item = self.pl_keys.pop(frm)
             self.pl_keys.insert(to, item)
             if self.cur is not None:
@@ -3525,9 +3571,11 @@ class App:
     def _tick_body(self):
         if (self._pending_switch is not None and self.ctrl is not None
                 and not self.ctrl.busy):
-            i = self._pending_switch
+            k = self._pending_switch
             self._pending_switch = None
-            self._switch(i, "排队")     # busy 期间用户点的歌，完成后接续执行
+            if k in self.pl_keys:      # 排队期间被它端删掉则弃
+                self._switch(self.pl_keys.index(k), "排队")
+                                            # busy 期间用户点的歌，完成后接续执行
         self._check_goto_ack()
         if self.vj_hint:
             # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：查询本身毫秒级，

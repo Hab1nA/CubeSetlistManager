@@ -76,7 +76,7 @@ class _FakeWebApp:
 
         self._pl_cmd_web = pl_cmd
 
-        def pt_cmd(op, key, payload):
+        def pt_cmd(op, key, payload, span=None):
             self.pl_log.append((op, key, payload))
             return None
 
@@ -128,6 +128,40 @@ def _get(port, path):
 
 def _post(port, path, body):
     return _req("POST", port, path, body)[1]
+
+
+def test_cross_origin_gate():
+    """CSRF 门：同源（Origin==Host）与无 Origin 放行，跨站/空源 403。"""
+    assert web_remote._cross_origin("http://evil.example", "192.168.1.5:8765")
+    assert web_remote._cross_origin("null", "127.0.0.1:60416")
+    assert not web_remote._cross_origin(None, "192.168.1.5:8765")
+    assert not web_remote._cross_origin(
+        "http://192.168.1.5:8765", "192.168.1.5:8765")
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection(_LOOPBACK, port, timeout=5)
+        try:
+            conn.request("POST", "/cmd", body=b'{"action":"panic"}',
+                         headers={"Content-Type": "text/plain",
+                                  "Origin": "http://evil.example"})
+            r = conn.getresponse()
+            assert r.status == 403, r.read()
+        finally:
+            conn.close()
+        assert app.calls.qsize() == 0          # 命令未入队
+        # 同源放行：Host 与 Origin 一致（本服务页面的正常请求形态）
+        st, resp = _req("POST", port, "/cmd", {"action": "switch", "index": 0,
+                                               "key": "A/歌一"})
+        assert st == 200 and resp["ok"] is True
+        app.calls.get(timeout=2)()
+        assert app.switch_log == [(0, "手动")]
+    finally:
+        srv.shutdown()
 
 
 def test_switch_key_toctou():
@@ -983,7 +1017,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
         cont_play=True, auto_var=_Var(True), top_most=True,
         switch_confirm=True, exit_close_apps=False,
-        ccfg={"projectsRoot": "C:/x", "autoSave": True, "dawExe": "e"},
+        ccfg={"projectsRoot": "C:/x", "dawExe": "e"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
@@ -1016,7 +1050,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
         "clockHint": "CK1", "vjHint": "VJ1", "kbHint": "KB1",
         "autoAdvance": True, "autoPlay": True, "topMost": True,
         "switchConfirm": True, "exitCloseApps": False,
-        "projectsRoot": "C:/x", "dawExe": "e", "autoSave": True,
+        "projectsRoot": "C:/x", "dawExe": "e",
         "web": {"enabled": True, "serverPort": 8765, "appPort": 8767,
                 "taskerPort": 8766, "midiIn": "", "mode": "lan",
                 "ip": "192.168.1.9"}}) is None
