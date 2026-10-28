@@ -101,7 +101,7 @@ DAW_DEFAULTS = {
 
 def daw_settings(cfg, daw):
     """DAW 路径段归一（与完整版同规则：dawSettings > 旧 cubase 段 > 默认）。"""
-    s = dict(autoSave=True)
+    s = {}
     s.update(cfg.get("cubase") or {})
     s.update(cfg.get("dawSettings") or {})
     legacy = s.pop("cubaseExe", None)

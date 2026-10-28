@@ -128,7 +128,7 @@ STUDIOONE = dict(
     app_suffix=" Studio One",
     # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
     # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
-    # 先关后开，autoSave 无实际作用（文档注明：切歌前自行保存）。
+    # 先关后开（文档注明：切歌前自行保存）。
     close_before_open=False,
     # 待校准中：Space=播放/停止切换（真机双向已验）、小键盘.（NUMDOT）=
     # 返回零点（用户查 S1 默认键表；真机单向待验）。S1 无独立暂停键，
@@ -379,11 +379,10 @@ class DawController:
     """串行切歌控制器。switch_to 线程安全：正忙返回 False 并忽略请求，
     流程在独立线程跑，日志/完成经 log/on_done 回调交给 GUI。"""
 
-    def __init__(self, facts, exe, auto_save=True, log=print):
+    def __init__(self, facts, exe, log=print):
         self.facts = facts
         set_active(facts)       # 模块级函数跟随本控制器的底座
         self.exe = exe
-        self.auto_save = auto_save
         self._log = log
         self.busy = False
         self._lock = threading.Lock()

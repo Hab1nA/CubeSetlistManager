@@ -2,8 +2,7 @@
   "daw": "studioone",
   "dawSettings": {
     "dawExe": "C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe",
-    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs",
-    "autoSave": false
+    "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs"
   },
   "obs": {
     "host": "127.0.0.1",
