@@ -2269,13 +2269,13 @@ def stage_r(send):
        and s1.get("ipFs") == s1.get("inFs")
        and s1.get("noPill") and s1.get("kvN") == 3,
        json.dumps(s1, ensure_ascii=False))
-    s2 = js(send, "const c=document.getElementById('st-autosave')"
+    s2 = js(send, "const c=document.getElementById('st-confirm')"
             ".closest('.card');"
             "return {h3:c.querySelector('h3').textContent,"
             "sw:!!document.getElementById('st-web'),"
             "swTag:document.getElementById('st-web').tagName,"
             "swInH3:!!document.getElementById('st-web').closest('h3')}")
-    ok("br.n15.autosave-in-behavior", s2.get("h3") == "行为",
+    ok("br.n15.confirm-in-behavior", s2.get("h3") == "行为",
        json.dumps(s2, ensure_ascii=False))
     ok("br.n17.web-tgl-in-h3",
        s2.get("sw") and s2.get("swTag") == "BUTTON" and s2.get("swInH3"),
