@@ -2370,7 +2370,7 @@ function renderVjState() {
 // ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
 const ST_FIELDS = ["st-clock", "st-vj", "st-kb", "st-auto", "st-cont",
                    "st-confirm", "st-exit", "st-launch", "st-root",
-                   "st-exe", "st-autosave", "st-mode", "st-srv", "st-app",
+                   "st-exe", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
 const stSnap = () => ST_FIELDS.map(id => {
