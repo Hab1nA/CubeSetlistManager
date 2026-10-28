@@ -4,10 +4,12 @@
 线程模型：pywebview 强制主线程（6.x 显式检查），因此 Tk 业务栈整体迁到
 专属子线程——Tk 线程亲和意味着所有 Tk 调用都在创建线程内即可，App 现有
 跨线程约定（calls/q 队列投递 Tk 线程执行）语义不变，业务层零改动。
-桌面壳不引入 js_api：动作全走既有 HTTP 端点（与平板同一条命令面）。
+桌面壳 js_api 仅窗口控制（演出模式置顶走 Win32，见 _Shell）；业务动作
+全走既有 HTTP 端点（与平板同一条命令面）。
 web 服务：WebRemote 主服务仍按用户配置绑定（热点/LAN）；桌面壳另起一个
 127.0.0.1 随机口的服务实例承载 /app（UI 专用，遥控语义零改动）。
-用法：python webui.py [主窗宽] [主窗高]"""
+用法：python webui.py [主窗宽] [主窗高]（正式入口=setlist_gui.py，含
+单实例守卫）"""
 import os
 import sys
 import threading

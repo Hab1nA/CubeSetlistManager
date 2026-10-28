@@ -433,6 +433,9 @@ $("#next-go").addEventListener("click", () => {
   switchTo(i, $("#next-go"), false, s.key);
 });
 
+// 走带三态词表：与 ui_text.FOLLOW 同源；off=VJ 走带跟随未启用专用
+const FOLLOW_TXT = {playing: "播放中", paused: "已暂停",
+                    stopped: "未在播放", off: "未跟随"};
 const fmt = s => {
   s = Math.max(0, Math.round(s || 0));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -465,11 +468,11 @@ function render(st) {
   const chip = $("#tchip");
   const ts = st.busy ? "busy" : (st.tstate || "stopped");
   chip.className = "chip " + (st.tstate || "stopped");
-  // DAW 失联判别（审计 #2）：进程消失时不再假显「已暂停」
+  // DAW 失联判别（审计 #2）：进程消失时不再假显「已暂停」。
+  // 三态词表与 ui_text.FOLLOW 同源（VJ follow 另有 off 态，见 FOLLOW_TXT）
   chip.textContent = st.dawAlive === false ? "DAW 未运行" :
       st.busy ? "切换中…" :
-      {playing: "播放中", paused: "已暂停", stopped: "未在播放"}[st.tstate]
-      || "未在播放";
+      (FOLLOW_TXT[st.tstate] || "未在播放");
   const live = st.tstate === "playing" || st.tstate === "paused";
   const pos = live ? st.pos : 0;
   $("#clock").textContent = !live && pos <= 0 && !(st.dur > 0)
@@ -579,7 +582,7 @@ function lamps(st) {
   set("l-daw", st.dawAlive === false ? "err"
       : st.open ? "ok" : "err",
       st.dawAlive === false ? "DAW 进程未运行（已崩溃或被关闭）——"
-          + "可重启本软件自动拉起，或手动打开 " + (st.projName ? "" : "")
+          + "重启本软件可按设置自动拉起，或手动打开被控软件"
       : st.open ? "工程已打开：" + (st.projName || "") : "未打开工程");
   set("l-obs", st.obs ? "ok" : "warn",
       st.obs ? "obs-websocket 已连接"
@@ -942,11 +945,13 @@ function plRow(i, it) {
     ev.stopPropagation();
     movePlKey(it.key, 1);
   });
-  const more = mk("⋯", "写入时长 / 重新识别");
-  more.addEventListener("click", ev => {
-    ev.stopPropagation();
-    plMoreMenu(more, it);
-  });
+  if (!it.pt) {           // pt 条目时长由起止点决定，后端必拒：不出菜单
+    const more = mk("⋯", "写入时长 / 重新识别");
+    more.addEventListener("click", ev => {
+      ev.stopPropagation();
+      plMoreMenu(more, it);
+    });
+  }
   const del = mk("✕", "移出播放列表", "danger");
   del.addEventListener("click", ev => {
     ev.stopPropagation();
@@ -1848,6 +1853,12 @@ function fillPortSel(id, list, hintKey, devHint) {
     o.dataset.dev = "ghost";
     sel.appendChild(o);
   }
+  if (!sel.options.length) {    // 无任何在线口也无已存 hint：给「无」兜底
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "无";
+    sel.appendChild(o);
+  }
   if (keepName) {
     const opts = Array.from(sel.options);
     let i = opts.findIndex(o => o.title === keepName
@@ -2134,6 +2145,13 @@ function slotRow(note, slot, inst) {
   div.title = "点击录制；再点一次停止并保存";
   div.tabIndex = 0;
   div.addEventListener("click", () => cardRecord(div, inst, note));
+  // 键盘可达（F3）：Enter/Space 触发录制，与行/卡片点击同义
+  div.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      cardRecord(div, inst, note);
+    }
+  });
   return div;
 }
 async function refreshKbd(force) {
@@ -2217,6 +2235,10 @@ async function refreshKbdDetail() {
 }
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
 $("#kb-save").addEventListener("click", async () => {
+  if (!kbData) {              // /kbd 未装载（启动期 504 等）：裸取会抛
+    toast("键盘配置未装载，稍候重试", "err");
+    return;
+  }
   const pick = (id, hint, dev) => {
     const sel = $("#" + id);
     const i = Number(sel.value);
@@ -2322,8 +2344,6 @@ function renderVjState() {
       err || (stState.ready ? "" : "正在启动…");
   // 走带跟随卡（与旧监控格同源文案，值域 playing/paused/stopped/off）
   const f = $("#vj-follow");
-  const FOLLOW_TXT = {playing: "播放中", paused: "已暂停",
-                      stopped: "未在播放", off: "未跟随"};
   f.textContent = FOLLOW_TXT[vj.follow] || "—";
   f.className = "stat-big " +
       (vj.follow === "playing" ? "ok"

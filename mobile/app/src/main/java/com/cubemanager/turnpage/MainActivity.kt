@@ -302,6 +302,7 @@ class MainActivity : Activity() {
         webView.stopLoading()
         loaded = false
         hadError = false
+        timeoutTask?.let { mainHandler.removeCallbacks(it) }   // 连续连接不叠旧超时
         showStatus("连接中 $url …", false)
         timeoutTask = Runnable {
             if (!loaded) showStatus("连接超时：请确认电脑已启动、热点已连", true)
@@ -371,6 +372,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         if (instance === this) instance = null
         mainHandler.removeCallbacksAndMessages(null)
+        webView.destroy()      // 释放渲染资源（改地址重启路径紧接 exit，常态销毁也走此）
         super.onDestroy()
     }
 
@@ -614,7 +616,12 @@ class MainActivity : Activity() {
                 webView.stopLoading()
                 hadError = false
                 loaded = false
+                timeoutTask?.let { mainHandler.removeCallbacks(it) }
                 showStatus("已自动切换到 APP 端口 $p …", false)
+                timeoutTask = Runnable {
+                    if (!loaded) showStatus("加载超时：APP 端口 $p 无响应，回欢迎页重试", true)
+                }
+                mainHandler.postDelayed(timeoutTask!!, 15000)
                 welcome.visibility = ViewGroup.VISIBLE
                 webView.loadUrl(url)
             }

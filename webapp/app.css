@@ -375,9 +375,9 @@ input.invalid { border-color: var(--err) !important; }
 .row .dur.dur-auto { color: var(--ok); }
 .row .dur.dur-manual { color: var(--warn); }
 .row .dur.dur-unknown { color: var(--err); }
-.row .no { color: var(--dim); width: 26px; flex: none;
+.row .no { color: var(--dim); min-width: 26px; flex: none;
   font-variant-numeric: tabular-nums; }
-.row.played .nm, .row.played .dur, .row.played .no { color: #5b636d; }
+.row.played .nm, .row.played .dur, .row.played .no { color: var(--dim); }
 .row.cur { background: var(--ok-bg-dim); border-color: var(--ok-line); }
 .row.cur .nm { color: var(--ok); font-weight: 700; }
 .row.sel { border-color: var(--accent); }
@@ -496,7 +496,8 @@ input.invalid { border-color: var(--err) !important; }
                                    上下文本就无效，窄窗 flex 上下文曾把本列
                                    钳在 460px 造成底部空隙） */
 #dt-scroll { flex: 1; overflow: auto; display: flex;
-  flex-direction: column; gap: 14px; padding-right: 2px; }
+  flex-direction: column; gap: 14px; padding-right: 2px;
+  scrollbar-gutter: stable; }   /* 选中曲出滚动条时内容不横移（同 #console-list） */
 #dt-none { flex: 1; justify-content: center; }
 #dt-scroll .card { margin: 0; }
 #dt-body { display: flex; flex-direction: column; gap: 14px; }
@@ -645,8 +646,9 @@ input.invalid { border-color: var(--err) !important; }
 .slot.recording { border-color: var(--err); background: #241417; }
 .slot.recording .s-sub { color: var(--err); }
 
-/* VJ 音符↔视频映射网格：与音色槽同款卡片语言（键帽音名+目标+状态副行） */
-.vj-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+/* VJ 音符↔视频映射网格：与音色槽同款卡片语言（键帽音名+目标+状态副行）。
+   min 105px：默认窗宽下键盘页 4 张移调卡单排放得下（120px 会折 3+1） */
+.vj-grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
   gap: 10px; }
 .vj-cell { cursor: default; }   /* padding 随 .slot（10px 12px），同语言同值 */
 .vj-empty { grid-column: 1 / -1; }

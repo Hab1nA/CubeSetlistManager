@@ -1,6 +1,11 @@
 @echo off
 chcp 65001 >nul
 cd /d %~dp0
+rem pywebview: default desktop UI host; missing import falls back to old Tk silently, so fail here
+py -c "import webview" 2>nul || (
+  echo ERROR: pywebview not installed - run: py -m pip install pywebview
+  exit /b 1
+)
 rem sv-ttk: UI theme runtime dep introduced by the ttk migration; fail fast, no silent fallback
 py -c "import sv_ttk" 2>nul || (
   echo ERROR: sv_ttk not installed - run: py -m pip install sv_ttk
@@ -46,6 +51,8 @@ copy /y dist\_s1_config.bak "dist\Cube Setlist Manager Studio One\config.json" >
 pyinstaller "Cube Automator Studio One.spec" --noconfirm || goto :err
 copy /y dist\_auto_config.bak "dist\Cube Automator Studio One\config.json" >nul
 del dist\_config.bak dist\_playlist.bak dist\_s1_config.bak dist\_auto_config.bak >nul
+rem smoke: boot packed exe, assert /app loads+nav+no JS error (guards silent Tk fallback)
+py out\_smoke_dist.py || goto :err
 rem APK for /app.apk download endpoint
 if exist "mobile\app\build\outputs\apk\debug\app-debug.apk" (
   copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^

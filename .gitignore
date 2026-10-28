@@ -34,7 +34,7 @@ mobile/local.properties
 
 # 可再生调试产物（日志/工具工作目录）
 out/*.log
-stall*.log
+stall*.log*
 tmp*.log
 .video_agent/
 .v2c/

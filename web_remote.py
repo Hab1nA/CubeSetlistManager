@@ -623,8 +623,10 @@ PAGE_COMMON = """<!DOCTYPE html>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
-/* 设计 token 与桌面新 UI（webapp/app.css）同名同值：移动/APP/桌面三端
-   同一设计语言（蓝=强调、绿=播放语义、暗面族配套）。 */
+/* 设计 token 与桌面新 UI（webapp/app.css）同值：移动/APP/桌面三端
+   同一设计语言（蓝=强调、绿=播放语义、暗面族配套）。桌面侧 5 个已
+   改名（--bg/--panel/--panel2/--mut/--acc ↔ --sur-0/1/2/--dim/--accent），
+   同值约定由 tests/test_webapp.py 的 token 测试硬校验。 */
 :root{--bg:#101418;--panel:#171c22;--panel2:#1f262e;--line:#262d36;
   --fg:#e8eaed;--mut:#8a929c;--ok:#7fd487;--warn:#e8c268;--err:#ef8080;
   --acc:#4aa3ff;--ok-bg:#1d3a26;--ok-bg-hi:#245030;--ok-line:#2c5c3a;
@@ -655,6 +657,7 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .tstate.playing{color:var(--ok)}
 .tstate.paused{color:var(--warn)}
 .tstate.stopped{color:var(--mut)}
+.tstate.err{color:var(--err)}
 .nowrow{display:flex;align-items:baseline;gap:12px}
 .nowrow .now{flex:1;min-width:0}
 /* 尺寸壳在外（断点显隐）、状态字在内（JS 只改状态类）——字号走
@@ -913,6 +916,8 @@ function renderLive(){
   var ts=st.busy?"busy":(st.tstate||"stopped");
   var txt={__TSTATE_MAP__,busy:"切换中…"}[ts];
   var cls="tstate "+(ts==="busy"?"paused":ts);
+  // DAW 进程失联与「已暂停」在手机上不可辨（桌面端审计 #2 同款）：优先报失联
+  if(st.dawAlive===false&&!st.busy){txt="DAW 未运行";cls="tstate err"}
   var tes=document.querySelectorAll(".tstate");
   for(var i=0;i<tes.length;i++){
     tes[i].textContent=txt;
@@ -936,7 +941,8 @@ function onRow(i,k){
     var a=st.projName||(st.songs[st.cur]&&st.songs[st.cur].name),
         b=st.songs[i];
     $("c-text").textContent="确定从《"+(a||"？")+"》切换到《"+
-      b.name+"》？当前工程将被关闭（自动保存）。";
+      b.name+"》？当前工程将被关闭：Cubase 弹保存框自动保存，"
+      +"Studio One 未存修改不保留，切歌前请自行保存。";
     $("m-confirm").classList.add("show");
   }else cmd("switch",i,k);
 }
@@ -973,8 +979,8 @@ function cmd(action,index,key){
 function refresh(){
   fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
     .then(function(j){st=j;setConn(true);render();renderLive()},
-          function(e){setConn(false);
-            try{toast("刷新失败："+e)}catch(_){}});
+          function(){setConn(false)});
+    // 断线只靠徽标表达（每秒重试 toast 会常驻闪现且暴露原始错误文案）
   try{if(window.updateAcc)updateAcc()}catch(e){}
   try{if(window.refreshUsageTip)refreshUsageTip()}catch(e){}
   try{if(window.refreshTarget)refreshTarget()}catch(e){}
@@ -1066,8 +1072,8 @@ DEV_PANEL_APP = """
         </div>
       </div>
       <div class="sub" style="margin-top:8px">踏板用 USB-C 线连本机时，把按键
-        经 Wi-Fi 转发给电脑（蓝牙路径的备份）。电脑端「踩钉控制」页需同步
-        勾选「允许平板转发」。APP 升级后若踩下无反应，请到系统设置把本 APP
+        经 Wi-Fi 转发给电脑（蓝牙路径的备份）。电脑端「踩钉」页的「平板转发
+        链路」卡需先点「启用」。APP 升级后若踩下无反应，请到系统设置把本 APP
         的无障碍关闭再开启（按键捕获能力在升级后可能需重开生效）。电脑端
         未开启时踏板键会透传给前台谱面 App。</div>
       <div class="fld" style="margin-top:10px"><label>谱面 App</label>
@@ -1187,8 +1193,8 @@ for(var _mi=0;_mi<_mbs.length;_mi++)(function(b){
     }else toast("设置失败");
   });
 })(_mbs[_mi]);
-/* 踩钉转发：有线踏板接本机时捕获按键转发给电脑（电脑端踩钉控制页
-   需同步勾选「允许平板转发」；两开关默认都关） */
+/* 踩钉转发：有线踏板接本机时捕获按键转发给电脑（电脑端「踩钉」页
+   「平板转发链路」卡需先启用；两开关默认都关） */
 function renderPedal(){
   if(!window.CubeApp)return;
   var cur=false;try{cur=CubeApp.pedalForward()===true}catch(e){}

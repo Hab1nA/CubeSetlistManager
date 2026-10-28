@@ -1057,3 +1057,25 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     assert fake.web_cfg["enabled"] is True
     assert disk["webRemote"]["enabled"] is True
     assert calls == ["web"]
+
+
+def test_design_tokens_shared_values():
+    """移动页内嵌 CSS 与桌面 app.css 共享 token 同值：三端同一设计语言是
+    手工同步约定，必须有硬校验（5 个 token 桌面侧已改名，按别名映射）。"""
+    import re
+    root = pathlib.Path(__file__).resolve().parents[1]
+    desktop = (root / "webapp" / "app.css").read_text(encoding="utf-8")
+    md = re.search(r":root\s*\{(.*?)\}", desktop, re.S)
+    d_tokens = dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", md.group(1)))
+    src = (root / "web_remote.py").read_text(encoding="utf-8")
+    mm = re.search(r":root\{(.*?)\}", src, re.S)   # 首块=移动/APP 页；
+    m_tokens = dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", mm.group(1)))
+    alias = {"--bg": "--sur-0", "--panel": "--sur-1", "--panel2": "--sur-2",
+             "--mut": "--dim", "--acc": "--accent"}
+    assert m_tokens, "移动端 token 块解析失败"
+    for name, value in m_tokens.items():
+        dname = alias.get(name, name)
+        assert dname in d_tokens, "桌面缺 token：%s（别名 %s）" % (name, dname)
+        assert d_tokens[dname].strip() == value.strip(), \
+            "token 漂移：移动 %s=%s vs 桌面 %s=%s" % (
+                name, value, dname, d_tokens[dname])
