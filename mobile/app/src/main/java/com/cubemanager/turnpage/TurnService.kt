@@ -102,6 +102,12 @@ class TurnService : Service() {
             reportDiag("$tag 无障碍未开启，点按/滑动不可用")
             return
         }
+        if (method != "media" && MainActivity.resumed) {
+            // 盲手势坐标落点=本页歌单/确认框区域：停在本 APP 前台时丢弃
+            // （media 键走系统媒体会话，不碰本页，无需守卫）
+            reportDiag("$tag 本机前台是 Cube Remote，丢弃盲手势")
+            return
+        }
         val done = { ok: Boolean ->
             val tDone = android.os.SystemClock.elapsedRealtime()
             reportDiag("$tag recv→disp=${tDisp - tRecv}ms " +

@@ -551,6 +551,8 @@ def build_snapshot(app, has_project, proj_name=None):
             link = "ok"
         remote = {"enabled": bool(getattr(app, "pedal_remote_enabled", False)),
                   "link": link,
+                  "muted": bool(getattr(app, "pedal", None) is not None
+                                and app.pedal.muted),
                   "unknown": br.remote_unknown,
                   "lastEventAge": (round(now - br.remote_event_t, 1)
                                    if br.remote_event_t > 0.0 else None)}

@@ -588,8 +588,10 @@ function lamps(st) {
   set("l-loop", st.loop ? "ok" : "warn",
       st.loop ? "loopMIDI 运行中" : "loopMIDI 未运行");
   const pr = st.pedalRemote;
-  set("l-pedal", !pr ? "" : pr.link === "ok" ? "ok" : "warn",
-      !pr ? "踩钉桥未就绪" : (pr.link === "ok"
+  set("l-pedal", !pr ? "" : (pr.link === "ok" && !pr.muted) ? "ok" : "warn",
+      !pr ? "踩钉桥未就绪" : pr.muted
+      ? "踩钉静音中：踩钉页打开期间的有意静音；已离开页面仍静音=关窗清理丢失，进一次踩钉页即恢复"
+      : (pr.link === "ok"
       ? "转发链路健康：15s 内有信号" : pr.link === "stale"
       ? "转发链路超时：15s 内无信号" : (pr.enabled
       ? "未收到转发信号" : "未启用转发")));
@@ -1745,7 +1747,9 @@ function pollLearn() {
       if (!r.ok) {
         pollLearn.fails = (pollLearn.fails || 0) + 1;
         if (pollLearn.fails > 5) {
-          learnAction = null;
+          // learnCancel 一并补发后端 cancel（录制放弃补 stop 同理）：
+          // 后端 Learner 无自超时，不收口则候选 MIDI 口一直被占
+          learnCancel();
           refreshPedal();
           toast("学习状态查询连续失败，请重试学习", "err");
         } else pollLearn();

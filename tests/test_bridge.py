@@ -2400,9 +2400,11 @@ def test_pedal_remote():
     app2 = _FakeWebApp()
     app2._web_snap = web_remote.build_snapshot(app2, True, "歌一")
     assert app2._web_snap["pedalRemote"] is None    # 无 pedal 对象：字段缺省
-    app2.pedal = type("P", (), {"bridge": pedal.DeviceBridge(None)})()
+    app2.pedal = type("P", (), {"bridge": pedal.DeviceBridge(None),
+                                "muted": False})()
     snap = web_remote.build_snapshot(app2, True, "歌一")
-    assert snap["pedalRemote"] == {"enabled": False, "link": "never",
+    assert snap["pedalRemote"] == {"enabled": False, "muted": False,
+                                   "link": "never",
                                    "unknown": 0, "lastEventAge": None}
     app2.pedal.bridge.note_remote_hb()
     app2.pedal.bridge.inject(0xB0, True)

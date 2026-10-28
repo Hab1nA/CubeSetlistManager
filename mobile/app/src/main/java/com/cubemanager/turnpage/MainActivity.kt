@@ -51,6 +51,11 @@ class MainActivity : Activity() {
         @Volatile
         var instance: MainActivity? = null
             private set
+
+        /** 本机前台是否是本 APP：翻谱服务盲手势的守卫依据（停在本页时
+         * 盲点会落进自身 WebView，可能误触切歌确认框）。 */
+        @Volatile
+        var resumed = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -246,6 +251,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        resumed = false
     }
 
     private fun prefs() = getSharedPreferences("cube", MODE_PRIVATE)
@@ -369,9 +380,12 @@ class MainActivity : Activity() {
 
         @android.webkit.JavascriptInterface
         fun requestAddressChange(url: String): String {
-            val clean = url.trim()
-            val host = android.net.Uri.parse(
-                if ("://" in clean) clean else "http://$clean").host
+            // 归一后再校验与落盘：重启自动直连/转发器按存值解析 host，
+            // 存无 scheme 原串会让 Uri.parse 把 IP 当 scheme（host=null
+            // →「电脑不可达」）。与 doConnect 同基准（补 scheme+去尾斜杠）
+            var clean = normUrl(url.trim())
+            if ("://" !in clean) clean = "http://$clean"
+            val host = android.net.Uri.parse(clean).host
             if (host == null || !PRIVATE_HOST.matches(host)) return "invalid"
             val prefs = prefs()
             val old = prefs.getString("addr", "") ?: ""
