@@ -34,6 +34,8 @@ mobile/local.properties
 
 # 可再生调试产物（日志/工具工作目录）
 out/*.log
+# 合并工程原型测试件（1.2GB 工程/媒体，本地保留不入库）
+out/mergetest/
 stall*.log*
 tmp*.log
 .video_agent/
