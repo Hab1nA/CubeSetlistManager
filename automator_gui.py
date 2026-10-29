@@ -536,7 +536,7 @@ class App:
             # 简化版不管理其它软件的生命周期：loopMIDI 不在场只提示，
             # 由用户手动启动（obs.autoStart=false 同理，OBS 只连不拉起）
             if not find_processes_by_prefix("loopmidi"):
-                self.q.put("loopMIDI 未运行——请手动启动后重启本程序"
+                self.q.put("loopMIDI 未运行：请手动启动，端口稍后自动接上"
                            "（简化版不自动拉起其它软件）")
             # VJ 链：OBS 客户端 → 走带同步 → MIDI 监听
             try:
@@ -560,7 +560,7 @@ class App:
                         self.q.put("VJ 触发监听已停用")
                 except SystemExit as e:
                     self.port = None
-                    self.q.put("MIDI 监听未启动：%s" % e)
+                    self.q.put("MIDI 监听未启动：%s，每 10 秒自动重试" % e)
                 # 时码监听：独立端口（与 VJ 音符口解耦）
                 self.mtc = mtc.Decoder(on_qf=self.sync.on_clock,
                                        on_position=self.watch.on_position,
@@ -579,7 +579,7 @@ class App:
                 except SystemExit as e:
                     self.clock_port = None
                     self.mtc = None
-                    self.q.put("时码监听未启动：%s，走带三态不可用" % e)
+                    self.q.put("时码监听未启动：%s，走带三态暂不可用；每 10 秒自动重试" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -605,7 +605,7 @@ class App:
                 except kbd_auto.PortNotFound as e:
                     self.kb_port = None
                     self.kb_err = str(e)
-                    self.q.put("键盘自动化停用：%s" % e)
+                    self.q.put("键盘自动化停用：%s，每 10 秒自动重试" % e)
             except Exception as e:
                 self.kb_port = None
                 self.kb_err = str(e)
@@ -820,6 +820,61 @@ class App:
 
     # ---- 端口/遥控热切换与持久化（与完整版同构）----
 
+    def _heal_link_ports(self):
+        """联动端口自愈（_tick 主线程执行，与 _apply_ports 同线程串行）：
+        只补开「已配置但当前未打开」的监听口（VJ 触发/时码/键盘/翻谱），已在场
+        的口不动。失败静默等下一轮（10s），成功才记日志——简化版不拉起
+        loopMIDI，用户手动启动后端口自动接上，无需重启本程序。"""
+        if not self._startup_done:
+            return
+        _t0 = time.monotonic()
+        try:
+            if (self.ctl is not None and self.sync is not None
+                    and self.vj_hint and self.port is None):
+                try:
+                    self.port = mb.MidiIn(
+                        self.vj_hint,
+                        mb.note_handler(self.ctl, self.sync,
+                                        report=self.q.put))
+                    self.q.put("VJ 监听已自动接上（%s）" % self.port.name)
+                except SystemExit:
+                    pass
+            if time.monotonic() - _t0 > 2.0:   # winmm 专线毒化预算：弃轮
+                return
+            if (self.ctl is not None and self.sync is not None
+                    and self.watch is not None and self.clock_hint
+                    and self.clock_port is None):
+                try:
+                    if self.mtc is None:
+                        self.mtc = mtc.Decoder(
+                            on_qf=self.sync.on_clock,
+                            on_position=self.watch.on_position,
+                            on_full=self.watch.on_full_position)
+                    self.clock_port = mb.MidiIn(
+                        self.clock_hint, lambda n, v: None,
+                        on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                        on_sysex=self.mtc.full_frame)
+                    self.q.put("时码监听已自动接上（%s）"
+                               % self.clock_port.name)
+                except SystemExit:
+                    self.clock_port = None
+                    self.mtc = None
+            if (self.kb_hint and self.kb_port is None
+                    and self.switcher is not None):
+                try:
+                    self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
+                                                      self._on_kb_msg)
+                    self.kb_err = ""
+                    self.q.put("键盘自动化监听已自动接上（%s）"
+                               % self.kb_port.name)
+                except kbd_auto.PortNotFound:
+                    pass
+            # 翻谱 MIDI 口（WebRemote 内部口，同族受害场景）
+            if self.web is not None:
+                self.web.try_reopen_midi()
+        except Exception as e:
+            self.q.put("联动端口自愈异常：%s" % _err(e))
+
     def _apply_ports(self):
         """设置页改了端口名称后热切换监听（主线程调用）。启动未完成时禁
         热切换——启动线程与主线程无锁交叉会泄漏句柄。"""
@@ -1029,6 +1084,11 @@ class App:
     def _tick_body(self):
         # 标题识别（主线程 400ms；完整版 _tick_banner 同款轮询点）
         self._apply_title()
+        # 联动端口自愈（10s 一轮，与完整版同款）：简化版不拉起 loopMIDI，
+        # 用户手动启动后端口在此自动接上（启动早于 loopMIDI 无需重启）
+        if time.monotonic() > getattr(self, "_link_heal_at", 0.0):
+            self._link_heal_at = time.monotonic() + 10
+            self._heal_link_ports()
         if self.vj_hint:
             # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：主线程少碰与
             # midiInOpen/Close 共进程级锁的 winmm 调用（完整版同款）

@@ -91,6 +91,11 @@ input:focus-visible, select:focus-visible {
 .btn.sm { padding: 5px 12px; font-size: var(--f-sm); }
 .btn.xs { padding: 2px 8px; font-size: var(--f-xs); }
 .btn.lg { padding: 12px 26px; font-size: var(--f-lg); min-height: 48px; }
+/* 走带钮内联图标：SVG 定尺寸 1em（消灭 ⏸/■ 等字形跨字体的大小与基线
+   漂移），flex 居中保垂直对齐；描边语言与侧栏图标一致 */
+.btn .ic { width: 1em; height: 1em; flex: none; margin-right: 8px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---- 启用类开关钮：点文字即启停，启用=绿（自动滚动/定位点启用/
    平板转发/移动端遥控共用）---- */
@@ -331,7 +336,10 @@ input.invalid { border-color: var(--err) !important; }
   border-radius: 6px;
   transition: width 500ms linear;   /* 与 /state 500ms 轮询咬合 */ }
 #transport .btn { height: 48px; }
-#transport { display: flex; align-items: center; gap: var(--s2); }
+/* 全文本七钮行宽 ~1017px（对抗复审 P1）：窄于此不横向溢出（全停安全阀
+   不得被挤出视口），换行收纳 */
+#transport { display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--s2); }
 #next-card { display: flex; align-items: center; gap: var(--s4);
   padding: 10px var(--s4); }
 .next-row { display: flex; align-items: center; gap: var(--s3); flex: 1;
@@ -554,6 +562,16 @@ input.invalid { border-color: var(--err) !important; }
 .kv .v.off { color: var(--dim); }
 .kv .v.warn { color: var(--warn); }
 .stat-big + .kv { margin-top: 8px; }
+/* 三页状态卡（踩钉/键盘/VJ）行距统一：以踩钉页 kv 行节奏为基准——
+   大字行 → 下一个小字行 8px 间距 + 小字行自身上下 5px 衬（踩钉页
+   stat-big→kv 的实测节奏），键盘 stat-pair / VJ 副行不再各自为政 */
+.stat-cards .stat-song + .stat-pair,
+.stat-cards .stat-big + .dim.sm-txt { margin-top: 8px; padding: 5px 0; }
+/* 小标题 → 首个内容的文字间距并入同一节奏（实测 18.57 → 13）：标题行
+   min-height 30px 为对齐「启用」钮卡保留，内容侧负 margin 抵消空余 */
+.stat-cards .card.stat > .stat-big,
+.stat-cards .card.stat > .stat-song,
+.stat-cards .card.stat > .evt-log { margin-top: -1.5px; }
 .stat-song { font-size: var(--f-lg); font-weight: 700; margin-top: var(--s1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat-big.ok { color: var(--ok); }

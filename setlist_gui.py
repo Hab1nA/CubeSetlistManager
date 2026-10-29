@@ -590,8 +590,10 @@ class Marquee(ttk.Entry):
 
 
 class App:
-    """业务栈根对象。Tk 兜底界面（_build/SettingsWindow/PointsWindow，
-    CUBE_TK=1 可达）已冻结：只修业务缺陷不加新功能，新功能一律落 webapp 前端。"""
+    """业务栈根对象。界面唯一入口=webapp 前端（webui.py/pywebview）；
+    App 在隐藏 Tk 根上构建的业务骨架（_build 的变量/显示件）同时服务
+    旧窗体类（SettingsWindow 等，仅历史可达路径残留），web 业务面走
+    HTTP 端点独立实现，不依赖这些窗体。"""
 
     def __init__(self, root):
         self.root = root
@@ -682,6 +684,7 @@ class App:
                          self.pedal_gestures, self.pedal_double)
         self.pedal.try_open()
         self._pedal_retry = 0.0
+        self._link_heal_at = 0.0    # 联动端口自愈下轮时间（_tick 挂钩，10s 一轮）
         # 移动端遥控（webRemote 段；web 实例在 _startup 里起）
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
         self.web_cfg.update(cfg.get("webRemote") or {})
@@ -1223,7 +1226,7 @@ class App:
                         self.q.put("VJ 触发监听已停用")
                 except SystemExit as e:  # 没有端口/被占用：只废 VJ 触发这一项
                     self.port = None
-                    self.q.put("MIDI 监听未启动：%s" % e)
+                    self.q.put("MIDI 监听未启动：%s，每 10 秒自动重试" % e)
                 # 时码监听：独立端口（与 VJ 音符口解耦，端口可各自指定）。
                 # 解码器居中分髮：QF 逐条喂三态、装配位置喂推进；全帧只进位置
                 self.mtc = mtc.Decoder(on_qf=self.sync.on_clock,
@@ -1243,7 +1246,8 @@ class App:
                 except SystemExit as e:
                     self.clock_port = None
                     self.mtc = None
-                    self.q.put("时码监听未启动：%s，走带三态/自动推进不可用" % e)
+                    self.q.put("时码监听未启动：%s，走带三态/自动推进暂"
+                               "不可用；每 10 秒自动重试" % e)
                 self.ctl.enabled = True
                 self.ctl.start()
                 threading.Thread(target=self._watch, daemon=True).start()
@@ -1280,7 +1284,7 @@ class App:
                 except kbd_auto.PortNotFound as e:
                     self.kb_port = None
                     self.kb_err = str(e)
-                    self.q.put("键盘自动化停用：%s" % e)
+                    self.q.put("键盘自动化停用：%s，每 10 秒自动重试" % e)
             except Exception as e:
                 self.kb_port = None
                 self.kb_err = str(e)
@@ -1408,20 +1412,24 @@ class App:
         return {"display": song["name"], "path": song["path"],
                 "lib_key": key, "song_name": song["name"], "point": None}
 
-    def _open_mmc_out(self):
+    def _open_mmc_out(self, quiet=False):
         """MMC 输出口启动（_startup 工作线程调用）：仅 Cubase 底座 + 时码口
-        已配；找不到/打不开只降级定位点定位，不拦主流程。"""
+        已配；找不到/打不开只降级定位点定位，不拦主流程。quiet=自愈轮静默
+        重试（失败不记日志，10s 一轮防刷屏）。"""
         self.mmc_out = None
         if self.facts.get("name") != "cubase" or not self.clock_hint:
             return
         dev = mb._pick(mb._out_devices(), self.clock_hint)
         if dev is None:
-            self.q.put("MMC 输出口未启动：找不到含「%s」的输出端口"
-                       "，定位点定位不可用" % self.clock_hint)
+            if not quiet:
+                self.q.put("MMC 输出口未启动：找不到含「%s」的输出端口"
+                           "，定位点定位暂不可用；每 10 秒自动重试"
+                           % self.clock_hint)
             return
         h, err = mb.open_out(dev[0])
         if h is None:
-            self.q.put("MMC 输出口未启动：%s" % err)
+            if not quiet:
+                self.q.put("MMC 输出口未启动：%s" % err)
             return
         self.mmc_out = h
         self.q.put("MMC 输出已启动：%s" % dev[1])
@@ -2000,8 +2008,9 @@ class App:
             self.calls.put(lambda: threading.Thread(
                 target=self._auto_play, daemon=True).start())
             self.q.put("加载完成，自动开始播放")
-        else:
-            self._regain_focus()      # 单实例转交激活了 Cubase，焦点收回
+        # 非自动播放分支不再收回焦点：daw_ctrl._switch 已还原操作前前台
+        # （对抗复核：此处再 _regain_focus 会二次翻转，踩钉/手机触发的
+        # 切歌把用户从原窗口拽到本软件）
 
     def _toggle_points(self, lib_key, on, span=None):
         """启用/停用定位点（主线程，定位点设置窗调用）：sidecar 翻 enabled +
@@ -3245,7 +3254,9 @@ class App:
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
                 # 竞争），主线程直跑=全停按钮最坏卡 10s+（黑面+指令积压）
                 ctl.stop_media()
-            self._regain_focus()
+            # 焦点收口在 daw_ctrl.panic 内（还原操作前前台）；skip_keys 路
+            # 径没碰 DAW 焦点，不事后抢——本就未在播放时按全停不该把用户
+            # 从当前窗口拽走
 
         threading.Thread(target=run, daemon=True).start()
         if self.watch is not None:  # watch 可能没起来（VJ 链构造失败而 ctrl
@@ -3359,24 +3370,135 @@ class App:
                 self.kb_err = str(e)
                 self.q.put("键盘自动化停用：%s" % e)
 
+    def _heal_link_ports(self):
+        """联动端口自愈（_tick 主线程执行，与 _apply_ports 同线程天然串行）：
+        只补开「已配置但当前未打开」的监听口（VJ 触发/时码/MMC 输出/键盘/
+        翻谱），已在场的口绝不动（不做扰动性关开）。失败静默等下一轮
+        （10s，monotonic 计时防墙钟回退暂停），成功才记日志——本软件启动
+        早于 loopMIDI、端口迟到时自动接上，无需重启。
+        边界（已知，接受）：只治「从未打开」；loopMIDI 中途被杀重启后
+        旧句柄仍在但不通（winmm 无热拔插通知），时码断流仍需重开本软件。
+        单轮 2s 预算：winmm 专线被毒化时枚举/开口各吃 1-3s 上限，超预算
+        弃轮防主线程停摆（对抗复审 P2）。"""
+        if not self._startup_done:
+            return
+        _t0 = time.monotonic()
+        try:
+            # VJ 触发口
+            if (self.ctl is not None and self.sync is not None
+                    and self.vj_hint and self.port is None):
+                try:
+                    self.port = mb.MidiIn(
+                        self.vj_hint,
+                        mb.note_handler(self.ctl, self.sync,
+                                        report=self.q.put))
+                    self.q.put("VJ 监听已自动接上：%s" % self.port.name)
+                except SystemExit:
+                    pass
+            if time.monotonic() - _t0 > 2.0:
+                return
+            # 时码口（启动失败路径会清掉 mtc 解码器：先重建再开口）
+            if (self.ctl is not None and self.sync is not None
+                    and self.watch is not None and self.clock_hint
+                    and self.clock_port is None):
+                try:
+                    if self.mtc is None:
+                        self.mtc = mtc.Decoder(
+                            on_qf=self.sync.on_clock,
+                            on_position=self.watch.on_position,
+                            on_full=self.watch.on_full_position)
+                    self.clock_port = mb.MidiIn(
+                        self.clock_hint, lambda n, v: None,
+                        on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8,
+                        on_sysex=self.mtc.full_frame)
+                    self.q.put("时码监听已自动接上：%s"
+                               % self.clock_port.name)
+                except SystemExit:
+                    self.clock_port = None
+                    self.mtc = None
+            if time.monotonic() - _t0 > 2.0:
+                return
+            # MMC 输出口（成功时 _open_mmc_out 自带一条日志）
+            if (self.facts.get("name") == "cubase" and self.clock_hint
+                    and self.mmc_out is None):
+                self._open_mmc_out(quiet=True)
+            # 键盘自动化口（switcher 门：收发器没起来时键盘口开了也没人
+            # 消费——理论边界，ToneSwitcher 构造几乎不失败）
+            if (self.kb_hint and self.kb_port is None
+                    and self.switcher is not None):
+                try:
+                    self.kb_port = kbd_auto.RawMidiIn(self.kb_hint,
+                                                      self._on_kb_msg)
+                    self.kb_err = ""
+                    self.q.put("键盘自动化监听已自动接上：%s"
+                               % self.kb_port.name)
+                except kbd_auto.PortNotFound:
+                    pass
+            # 翻谱 MIDI 口（WebRemote 内部口，同族受害场景）
+            if self.web is not None:
+                self.web.try_reopen_midi()
+        except Exception as e:
+            self.q.put("联动端口自愈异常：%s" % _err(e))
+
     def _regain_focus(self):
         """把键盘焦点收回本程序（工作线程调用）。置顶只保视觉 Z 序，
-        不保焦点——走带键发完后焦点在 Cubase，若不收回，用户接着打字
-        会打进 Cubase（空格=停走带）。hwnd 在构造期主线程预取：工作线程
-        直接调 winfo_id() 会被 threaded Tcl 封送回主线程事件循环阻塞等待，
-        主线程停摆期间整批 worker（走带/全停/切歌完成回调）集体挂起。"""
+        不保焦点——外部事件（单实例转交等）把 Cubase 顶到前台后，若不
+        收回，用户接着打字会打进 Cubase（空格=停走带）。走带/全停/切歌
+        已由 daw_ctrl 按「还原操作前前台」收口，本方法只管这类外部激活。
+        Tk 模式 hwnd 构造期主线程预取（工作线程直接调 winfo_id() 会被
+        threaded Tcl 封送回主线程事件循环阻塞等待）；WebUI 模式 Tk 根
+        全程隐藏、直接聚焦必失败——枚举本进程可见顶层窗（=pywebview
+        主窗）代之。"""
         try:
-            if self._main_hwnd:
+            if getattr(self, "webui_mode", False):
+                hwnd = self._visible_own_window()
+                if hwnd:
+                    daw_ctrl.focus(hwnd, tries=2)
+            elif self._main_hwnd:
                 daw_ctrl.focus(self._main_hwnd, tries=2)
         except Exception:
             pass
 
+    def _visible_own_window(self):
+        """本进程当前可见顶层窗中面积最大者（WebUI 模式=pywebview 主窗；
+        无则 0）。取最大而非 z 序首个：/pickdir 原生对话框等同进程可见窗
+        且更顶，hits[0] 会把「收回主窗」变成「聚焦对话框」（对抗复审 P2）。
+        纯 Win32 枚举无 Tk 调用，工作线程安全；隐藏的 Tk 根被
+        IsWindowVisible 自然滤掉。"""
+        import ctypes.wintypes as wt
+
+        class _rect(ctypes.Structure):
+            _fields_ = [("l", wt.LONG), ("t", wt.LONG),
+                        ("r", wt.LONG), ("b", wt.LONG)]
+
+        u32 = ctypes.windll.user32
+        best, best_area = 0, 0
+
+        @daw_ctrl._ctypes_cb
+        def _cb(h, _l):
+            nonlocal best, best_area
+            pid = wt.DWORD()
+            u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+            if pid.value != os.getpid() or not u32.IsWindowVisible(h):
+                return True
+            rc = _rect()
+            if u32.GetWindowRect(h, ctypes.byref(rc)):
+                area = max(0, rc.r - rc.l) * max(0, rc.b - rc.t)
+                if area > best_area:
+                    best, best_area = h, area
+            return True
+
+        u32.EnumWindows(_cb, 0)
+        return best
+
     def _transport_thread(self, action):
+        # 焦点收口在 daw_ctrl.transport 内（还原操作前前台，不再事后
+        # 收回本软件——踩钉/手机触发时用户原窗口可能不是本软件）
         if self.ctrl.transport(action, live=self._transport_state() == "playing") \
                 and action == "rewind" \
                 and self.watch is not None:
             self.watch.reset()      # 回零=停在零点：纪元复位让显示立即归零，
-        self._regain_focus()        # 不等下一条时码（播放/暂停无需复位——位置自证）
+                                    # 不等下一条时码（播放/暂停无需复位——位置自证）
 
     def _toggle_auto(self):
         # 回写属性：watch 建立时按它恢复；踩钉可在 watch 存在前翻转
@@ -3645,10 +3767,16 @@ class App:
                 and ((ped.hint and not ped.connected)
                      or (ped.hid_binds and ped.device_hint
                          and not ped.bridge.running))   # HID 泵死了也重拉，
-                and time.time() > self._pedal_retry):  # 此前只盯 MIDI 口
-            self._pedal_retry = time.time() + 10
+                and time.monotonic() > self._pedal_retry):  # 此前只盯 MIDI 口
+            self._pedal_retry = time.monotonic() + 10
             if ped.try_open():
                 self.q.put("CC 踩钉已连接：%s" % ped.name)
+        # 联动端口自愈（同款 10s 节奏，monotonic 计时）：启动早于 loopMIDI/
+        # 端口迟到的场景，配置过的口（VJ/时码/MMC/键盘/翻谱）后台补开，
+        # 不再要求重启本软件
+        if time.monotonic() > self._link_heal_at:
+            self._link_heal_at = time.monotonic() + 10
+            self._heal_link_ports()
         self._update_transport_buttons()
         self._tick_banner()
         follow = self.log.yview()[1] > 0.99    # 上翻看历史时不强行滚回底部
@@ -4652,17 +4780,6 @@ def main():
         ctypes.windll.user32.MessageBoxW(
             0, "Cube Setlist Manager 已在运行", "Cube Setlist Manager", 0x30)
         return
-    # 新前端入口分流：pywebview 可用即走 Web UI（旧 Tk 路径设 CUBE_TK=1
-    # 可强制回退，作为兜底与对照环境保留）
-    if os.environ.get("CUBE_TK") != "1":
-        try:
-            import webui
-        except ImportError:
-            print("pywebview 未安装：回退旧 Tk 界面（pip install pywebview "
-                  "可启用新前端）", flush=True)
-        else:
-            webui.main()
-            return
     try:                        # noconsole exe 无 stderr：崩溃栈落 crash.log
         _cl = _HERE / "crash.log"
         if _cl.exists() and _cl.stat().st_size > 512 * 1024:   # 轮转防无限增长
@@ -4671,31 +4788,14 @@ def main():
         faulthandler.enable(_CRASH_LOG)
     except OSError:
         pass
-    root = tk.Tk()
-    root.withdraw()     # 幕后建窗：Tk 窗口创建即上屏，不撤下则构建过程逐块浮现
-    dpi.apply_theme(root)   # ttk+sv-ttk dark（Win11 观感），建控件前挂主题
-    ico = os.path.join(getattr(sys, "_MEIPASS", "") or ".", "app.ico")
-    if os.path.exists(ico):
-        root.iconbitmap(ico)        # 窗口/任务栏图标（打包由 spec datas 带入）
-        # Tk 的 iconbitmap 只稳定覆盖标题栏小图标槽；任务栏读 ICON_BIG 槽
-        # 可能仍是 Tk 默认图——用原生 WM_SETICON 把大小两槽都强设一遍
-        hicon = ctypes.windll.user32.LoadImageW(
-            None, ico, 1, 0, 0, 0x40 | 0x10)   # IMAGE_ICON|DEFAULTSIZE|FROMFILE
-        if hicon:
-            root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or \
-                root.winfo_id()
-            u32 = ctypes.windll.user32
-            u32.SendMessageW(hwnd, 0x80, 1, hicon)   # ICON_BIG
-            u32.SendMessageW(hwnd, 0x80, 0, hicon)   # ICON_SMALL
-    App(root)
-    # 幕后首绘定稿再显形：透明状态亮窗完成首绘——<Map> 触发 DWM 深色
-    # 标题栏重写、ttk 图片元素高度定稿——恢复不透明时一次性以终态出现
-    root.attributes("-alpha", 0)
-    root.deiconify()
-    root.update()
-    root.attributes("-alpha", 1)
-    root.mainloop()
+    try:
+        import webui
+    except ImportError:
+        ctypes.windll.user32.MessageBoxW(
+            0, "需要 pywebview 运行新前端：\npy -m pip install pywebview",
+            "Cube Setlist Manager", 0x30)
+        return
+    webui.main()
 
 
 if __name__ == "__main__":

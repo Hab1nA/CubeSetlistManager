@@ -56,14 +56,14 @@
       </div>
       <div id="transport">
         <button id="btn-start" class="btn primary lg" data-cmd="play"
-          title="无打开工程时自动加载播放列表当前项">▶ 开始</button>
-        <button id="smart" class="btn lg" disabled>⏸ 暂停</button>
-        <button data-cmd="rewind" class="btn icon" title="回零">⟲</button>
-        <button data-cmd="prev" class="btn icon" title="上一首">⏮</button>
-        <button data-cmd="next" class="btn icon" title="下一首">⏭</button>
+          title="无打开工程时自动加载播放列表当前项"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.6v8.8L13 8z"/></svg><span>开始</span></button>
+        <button id="smart" class="btn lg" disabled title="暂停 / 继续，随走带态切换"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path id="smart-ic" d="M5.7 4v8M10.3 4v8"/></svg><span id="smart-t">暂停</span></button>
+        <button data-cmd="prev" class="btn lg" title="切换到播放列表上一首"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.2 4v8"/><path d="M12.6 4.2v7.6L6.5 8z"/></svg><span>上一首</span></button>
+        <button data-cmd="rewind" class="btn lg" title="停止并回到本曲开头"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.2v4.2h4.2"/><path d="M3.3 11.9a5.6 5.6 0 1 0 .8-6.9L2.6 6.6"/></svg><span>回零</span></button>
+        <button data-cmd="next" class="btn lg" title="切换到播放列表下一首"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.8 4v8"/><path d="M3.4 4.2v7.6L9.5 8z"/></svg><span>下一首</span></button>
         <span class="tspacer"></span>
-        <button data-cmd="panic" class="btn danger-outline lg">■ 全停</button>
-        <button id="show-exit" class="btn lg" title="退出演出模式：ESC / F11">⨯ 退出演出</button>
+        <button data-cmd="panic" class="btn danger-outline lg" title="安全阀：切换卡死时也可用"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1"/></svg><span>全停</span></button>
+        <button id="show-exit" class="btn lg" title="退出演出模式：ESC / F11"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.6 4.6l6.8 6.8M11.4 4.6l-6.8 6.8"/></svg><span>退出演出</span></button>
       </div>
       <div id="chips" class="chips" hidden></div>
       <div id="next-card" class="card">

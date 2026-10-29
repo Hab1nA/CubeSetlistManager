@@ -443,13 +443,13 @@ def stage_p1(send):
        or hero.get("clock", "") == "时长未知",
        hero.get("clock", ""))
     ok("p1.console.smart-btn", hero.get("startBtn")
-       and hero.get("smart") in ("⏸ 暂停", "▷ 继续")
+       and hero.get("smart") in ("暂停", "继续")
        and hero.get("smartAct") in ("pause", "resume", "")
        and (hero.get("smartAct") == "" or hero.get("smartDis") is False),
        "%s/%s dis=%s" % (hero.get("smart"), hero.get("smartAct"),
                          hero.get("smartDis")))
     ok("p1.console.panic-isolated",
-       hero.get("panic") == "play,rewind,prev,next,panic"
+       hero.get("panic") == "play,prev,rewind,next,panic"
        and hero.get("panicIso"),
        "%s iso=%s" % (hero.get("panic"), hero.get("panicIso")))
     shot(send, "x_p1_console")
@@ -1606,7 +1606,7 @@ def stage_d(send):
     ok("bd.d2.port-select",
        any("第2个" in t for t in d2["jin"]["labels"])
        and d2["jin"]["sel"] == "JUNO-DS"
-       and "未接入" in d2["ain"]["sel"]
+       and d2["ain"]["sel"] == "AX-09"   # 幽灵项裸名（未接入后缀已删，徽章单显）
        and d2["jst"]["t"] == "已接" and "on" in d2["jst"]["c"]
        and d2["jout"]["t"] == "已接" and "on" in d2["jout"]["c"]
        and d2["ast"]["t"] == "未接" and "off" in d2["ast"]["c"],

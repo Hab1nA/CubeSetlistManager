@@ -724,7 +724,10 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 .bar .row.row3{grid-template-columns:repeat(3,1fr)}
 .bar .row+.row{margin-top:8px}
 .tbtn{height:52px;border-radius:8px;background:var(--panel2);
-  border:1px solid var(--line);font-size:15px;font-weight:600}
+  border:1px solid var(--line);font-size:15px;font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.tbtn .ic{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .tbtn:active{background:var(--panel2)}
 .tbtn[disabled]{opacity:.35}
 .tbtn.panic{background:var(--err-bg);border-color:var(--err-line);
@@ -809,15 +812,15 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px 0}
 
 <footer class="bar">
   <div class="row row3">
-    <button class="tbtn go" data-cmd="play">▶ 开始</button>
-    <button class="tbtn" data-cmd="pause" id="b-pause">⏸ 暂停</button>
-    <button class="tbtn" data-cmd="resume">▷ 继续</button>
+    <button class="tbtn go" data-cmd="play"><svg class="ic" viewBox="0 0 16 16"><path d="M6 3.6v8.8L13 8z"/></svg>开始</button>
+    <button class="tbtn" data-cmd="pause" id="b-pause"><svg class="ic" viewBox="0 0 16 16"><path d="M5.7 4v8M10.3 4v8"/></svg>暂停</button>
+    <button class="tbtn" data-cmd="resume"><svg class="ic" viewBox="0 0 16 16"><path d="M6 3.6v8.8L13 8z"/></svg>继续</button>
   </div>
   <div class="row">
-    <button class="tbtn" data-cmd="prev">⏮ 上一首</button>
-    <button class="tbtn" data-cmd="rewind">⟲ 回零</button>
-    <button class="tbtn" data-cmd="next">⏭ 下一首</button>
-    <button class="tbtn panic" data-cmd="panic">■ 全停</button>
+    <button class="tbtn" data-cmd="prev"><svg class="ic" viewBox="0 0 16 16"><path d="M4.2 4v8"/><path d="M12.6 4.2v7.6L6.5 8z"/></svg>上一首</button>
+    <button class="tbtn" data-cmd="rewind"><svg class="ic" viewBox="0 0 16 16"><path d="M2.6 3.2v4.2h4.2"/><path d="M3.3 11.9a5.6 5.6 0 1 0 .8-6.9L2.6 6.6"/></svg>回零</button>
+    <button class="tbtn" data-cmd="next"><svg class="ic" viewBox="0 0 16 16"><path d="M11.8 4v8"/><path d="M3.4 4.2v7.6L9.5 8z"/></svg>下一首</button>
+    <button class="tbtn panic" data-cmd="panic"><svg class="ic" viewBox="0 0 16 16"><rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1"/></svg>全停</button>
   </div>
 </footer>
 
@@ -2339,9 +2342,35 @@ class WebRemote:
             self.midi_port = kbd_auto.RawMidiIn(self.midi_hint, self._on_midi)
         except kbd_auto.PortNotFound as e:
             self.midi_port = None
-            self._report("翻谱信号监听未启动：%s" % e)
+            self._report("翻谱信号监听未启动：%s，每 10 秒自动重试" % e)
         else:
             self._report("翻谱信号监听已启动：%s" % self.midi_port.name)
+
+    def try_reopen_midi(self):
+        """翻谱 MIDI 口自愈（App 联动端口自愈轮 10s 调用）：启动早于
+        loopMIDI 的同族受害场景（口未开→翻谱推送永久失效）补开口。
+        已启用且口未开才尝试；失败静默（成功才记日志，10s 节奏防刷屏）。
+        非阻塞抢 _lock：设置页 apply 重建期间让路，下轮再来。"""
+        if not (self.enabled and self.midi_hint and self.midi_port is None):
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self.midi_port is not None:
+                return False          # 双检：抢锁间隙已被 apply 起好
+            try:
+                if self.hub is None:
+                    self.hub = ScoreTurnHub(
+                        self.registry, lambda: self.tasker_port,
+                        self._report)
+                self.midi_port = kbd_auto.RawMidiIn(self.midi_hint,
+                                                    self._on_midi)
+            except kbd_auto.PortNotFound:
+                return False
+            self._report("翻谱信号监听已自动接上：%s" % self.midi_port.name)
+            return True
+        finally:
+            self._lock.release()
 
     def _stop_midi(self):
         if self.midi_port is not None:

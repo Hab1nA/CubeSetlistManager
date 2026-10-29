@@ -371,6 +371,23 @@ def focus(hwnd, tries=6):
     return False
 
 
+def foreground_hwnd():
+    """当前前台窗口句柄（操作前捕获，操作完 restore_foreground 还原）。"""
+    return _user32.GetForegroundWindow()
+
+
+def restore_foreground(hwnd, tries=2):
+    """把焦点交还给操作前的前台窗口（本软件按钮发起时=本软件窗，踩钉/
+    手机发起时=用户原本所在的窗口，不偷别人的焦点）。窗口已销毁/聚焦
+    失败静默返回 False——还原是收尾动作，不得反过来打断主流程。"""
+    if not hwnd or not _user32.IsWindow(hwnd):
+        return False
+    try:
+        return focus(hwnd, tries)
+    except Exception:
+        return False
+
+
 class SwitchError(Exception):
     pass
 
@@ -404,11 +421,14 @@ class DawController:
         发到当前工程窗口（键盘路径，需聚焦）。
         live=调用方感知的走带状态（True 播放中/False 已停/None 未知）：
         S1 的回零键序是「空格停→点跳开头」，已停时空格会反向起播——
-        事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。"""
+        事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。
+        键发完把焦点交还操作前的前台窗口（不收回=用户接着打字/点按
+        会打进 DAW）。"""
         ws = current_project()
         if not ws:
             self._log("走带控制：没有工程窗口")
             return False
+        prev = foreground_hwnd()
         if not focus(ws[0]):
             self._log("走带控制：无法聚焦工程窗口")
             return False
@@ -420,11 +440,13 @@ class DawController:
             tap(VK[k])
         self._log("走带 %s → 《%s》" % (ACTION_NAMES.get(action, action),
                                        project_name_from_title(ws[1])))
+        restore_foreground(prev)
         return True
 
     def panic(self):
         """向所有工程窗口发停止键序——激活错乱也保证静音。"""
         ws = project_windows()
+        prev = foreground_hwnd()
         n = 0
         for h, t in ws:
             if focus(h):
@@ -432,12 +454,23 @@ class DawController:
                     tap(VK[k])
                 n += 1
         self._log("全停：已向 %d/%d 个工程窗口发送停止" % (n, len(ws)))
+        restore_foreground(prev)
 
     # ---- 切歌流程（工作线程内执行） ----
+
+    def _daw_owns_foreground(self):
+        """当前前台是否属于 DAW 进程（切歌还原前的接管判定）。"""
+        cur = _user32.GetForegroundWindow()
+        if not cur:
+            return False
+        pids = {pid for pid, _p
+                in find_processes_by_prefix(self.facts["proc_prefix"])}
+        return _pid_of(cur) in pids
 
     def _switch(self, path, on_done):
         opened = None
         self._seen = set()                  # 弹窗标题去重（每次切换重新记）
+        prev = foreground_hwnd()            # 切歌全程会抢焦点到 DAW：记原前台
         try:
             self._log("切换开始：%s" % _disp(path))
             if not os.path.exists(path):
@@ -455,10 +488,16 @@ class DawController:
         except SwitchError as e:
             self._log("切换失败：%s" % e)
         finally:
+            # 焦点先还再跑 on_done（时长/映射装载是秒级慢 IO，别让用户
+            # 干等）；on_done 期间保持 busy：此前先清 busy 再跑 on_done，
+            # 完成回调的 IO 尾巴里用户可再点切歌，旧映射回落到新歌上
+            # （复审 R3-1 的门控失效口）。
+            # 接管判定（对抗复审 P2）：切歌最长达 3-4 分钟，期间用户主动
+            # 切到别的程序=已接管，还原 prev 会抢走他的焦点——只在当前
+            # 前台仍是 DAW（我们放上去的）或已是 prev 时才还原。
+            if self._daw_owns_foreground() or foreground_hwnd() == prev:
+                restore_foreground(prev)
             try:
-                # on_done（含时长/映射装载的慢文件 IO）期间保持 busy：此前
-                # 先清 busy 再跑 on_done，完成回调的 IO 尾巴里用户可再点
-                # 切歌，旧映射回落到新歌上（复审 R3-1 的门控失效口）
                 if on_done:
                     on_done(project_name_from_title(opened)
                             if opened else None)

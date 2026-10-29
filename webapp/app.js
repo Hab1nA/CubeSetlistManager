@@ -374,9 +374,11 @@ async function post(path, body) {
 // ---- 走带 ----
 $$("#transport [data-cmd]").forEach(b =>
   b.addEventListener("click", () => cmd(b.dataset.cmd)));
-// 暂停/继续一键切换（对齐原 UI 的分开按钮：开始=独立钮从零起播，
-// 暂停⇄继续按走带态切换；停止态无意义=禁用，起播只走「开始」）
-const SMART = {playing: ["⏸ 暂停", "pause"], paused: ["▷ 继续", "resume"]};
+// 暂停⇄继续一键切换（对齐原 UI 的分开按钮：开始=独立钮从零起播，
+// 暂停⇄继续按走带态切换；停止态无意义=禁用，起播只走「开始」）。
+// 图标随态换 path（内联 SVG 与文字同字号同基线，替代旧 ⏸/▷ 字形）
+const SMART = {playing: ["pause", "暂停"], paused: ["resume", "继续"]};
+const SMART_ICON = {pause: "M5.7 4v8M10.3 4v8", resume: "M6 3.6v8.8L13 8z"};
 $("#smart").addEventListener("click", () => {
   const a = $("#smart").dataset.action;
   if (a) cmd(a);
@@ -484,11 +486,12 @@ function render(st) {
   $("#barfill").style.width =
       st.dur > 0 ? Math.min(100, st.pos / st.dur * 100) + "%" : "0";
   // 暂停⇄继续切换钮（busy 或停止态禁用；开始钮由 data-cmd 循环管 busy）
-  const m = SMART[st.tstate] || ["⏸ 暂停", ""];
+  const m = SMART[st.tstate] || ["", "暂停"];
   const smart = $("#smart");
-  smart.textContent = m[0];
-  smart.dataset.action = st.busy ? "" : m[1];
-  smart.disabled = !!st.busy || !m[1];
+  $("#smart-t").textContent = m[1];
+  $("#smart-ic").setAttribute("d", SMART_ICON[m[0]] || SMART_ICON.pause);
+  smart.dataset.action = st.busy ? "" : m[0];
+  smart.disabled = !!st.busy || !m[0];
   smart.classList.toggle("pulse", !!st.busy);   // busy 脉动（F 批）
   // 全停是切换卡死时的安全阀（后端 busy 放行），其余走带键 busy 期禁用；
   // 行内切歌/定位点快跳同禁——关闭确认时的双击=两次完整工程切换
@@ -1848,8 +1851,10 @@ function fillPortSel(id, list, hintKey, devHint) {
   if (hintKey && !names.includes(hintKey)) {
     const o = document.createElement("option");   // 幽灵项保名（未上电）
     o.value = "-1";
-    o.textContent = hintKey + " · 未接入";
-    o.title = hintKey;
+    // 不加「· 未接入」后缀：label 行右侧的 已接/未接 状态徽同源同义
+    // （portStatus.hit 与本幽灵项共用同一份端口枚举），重复展示已删
+    o.textContent = hintKey;
+    o.title = hintKey + "（未接入）";
     o.dataset.dev = "ghost";
     sel.appendChild(o);
   }

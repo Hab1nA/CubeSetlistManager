@@ -32,7 +32,7 @@ LOG_FG = "#b8b8b8"    # 日志正文：比主文字暗一档（黑匣子不该�
 CUR_BG = "#28496e"    # 列表当前曲行底色：蓝系、暗于选中色，未选中可定位
 
 # 强调按钮前景（Start=绿底深字 / Stop=红底白字）；底色在 assets/ 官方
-# 精灵图色相变体里（make_accent_assets.py 生成），不在代码中配
+# 精灵图色相变体里（历史一次性生成，生成器已移除），不在代码中配
 START_FG = "#101418"
 
 
@@ -184,7 +184,7 @@ def apply_theme(root):
         s.configure("%s.TLabel" % name, foreground=color)
     # 强调按钮：sv-ttk 的按钮外观烘焙在精灵图里（image element 运行时
     # 不可换色，官方 Accent.TButton 只有固定蓝）——assets/ 下的绿/红
-    # 按钮图由 tools/make_accent_assets.py 从官方精灵图切片做色相重映射
+    # 按钮图由官方精灵图切片做色相重映射一次性生成（生成器已移除）
     # 一次性生成（圆角/抗锯齿/九宫格全保真），tk 原生读 PNG 零自绘；
     # 悬停/按压/禁用 = 图片态切换（照官方 dark.tcl 的状态表），文字色走
     # style configure/map。frozen 时资产在 _MEIPASS。

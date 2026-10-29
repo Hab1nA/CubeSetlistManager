@@ -25,6 +25,9 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.zxing.integration.android.IntentIntegrator
 import org.json.JSONObject
 
@@ -37,6 +40,8 @@ class MainActivity : Activity() {
     private lateinit var welcome: LinearLayout
     private lateinit var webView: WebView
     private lateinit var addrInput: EditText
+    private lateinit var form: LinearLayout
+    private lateinit var root: FrameLayout
     private var hadError = false
     private var loaded = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -168,6 +173,29 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         this.addrInput = addrInput
+        // 表单列宽上限：宽屏（平板横屏）不整屏拉伸——min(屏宽-64dp 边距, 440dp)
+        val formWidth = formWidth()
+        form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(addrInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT))
+            // 连接 + 扫码同一行：连接占满余宽，扫码=窄方形图标钮
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(bigButton("连 接").apply {
+                    setOnClickListener { doConnect() }
+                }, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { topMargin = dp(16) })
+                addView(scanButton(), LinearLayout.LayoutParams(
+                    dp(56), ViewGroup.LayoutParams.MATCH_PARENT)
+                    .apply { marginStart = dp(12); topMargin = dp(16) })
+            }
+            addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         welcome = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -189,23 +217,10 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { bottomMargin = dp(12) })
-            addView(addrInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+            addView(form, LinearLayout.LayoutParams(formWidth,
                 ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(bigButton("连 接").apply {
-                setOnClickListener { doConnect() }
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(16) })
-            addView(bigButton("扫码连接").apply {
-                setOnClickListener { startScan() }
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(12) })
         }
-        val root = FrameLayout(this).apply {
+        root = FrameLayout(this).apply {
             // edge-to-edge：按系统栏+刘海实际尺寸让出边界（targetSdk 35 强制）
             setOnApplyWindowInsetsListener { v, insets ->
                 val bar = insets.getInsets(
@@ -222,6 +237,14 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT))
         }
         setContentView(root)
+        // 首次布局后按 inset 后内容宽复算一次（构造期 root.width=0 走的
+        // 是屏宽回落值）
+        root.post {
+            (form.layoutParams as? LinearLayout.LayoutParams)?.let {
+                it.width = formWidth()
+                form.requestLayout()
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -246,6 +269,25 @@ class MainActivity : Activity() {
         val saved = prefs().getString("addr", null)?.trimEnd('/')
         if (!saved.isNullOrEmpty() && saved == prefs().getString("addrOkUrl", null)) {
             connect(saved)
+        }
+    }
+
+    /** 表单列宽：宽屏不整屏拉伸——min(可用内容宽-64dp 边距, 440dp)。
+     *  用 root 实测宽（已扣 edge-to-edge 系统栏/刘海 inset 的 padding），
+     *  构造期 root 未建/未布局时回落屏宽（真机闪退教训： lateinit 提前
+     *  访问；横屏刘海不遮输入框由 root.post 首布局后复算兜住）。 */
+    private fun formWidth(): Int {
+        val content = if (::root.isInitialized && root.width > 0) root.width
+        else resources.displayMetrics.widthPixels
+        return minOf(content - dp(64), dp(440))
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // manifest 拦截旋转不重建：欢迎页表单宽随当前屏宽重算（横竖屏切换）
+        (form.layoutParams as? LinearLayout.LayoutParams)?.let {
+            it.width = formWidth()
+            form.requestLayout()
         }
     }
 
@@ -284,6 +326,26 @@ class MainActivity : Activity() {
             setPadding(dp(40), 0, dp(40), 0)
         }
 
+    /** 扫码连接：窄方形图标钮——深灰底 + 浅灰取景框图标（与绿主钮同行，
+     *  视觉降一档不抢主操作；contentDescription 保无障碍可达）。
+     *  fitCenter 按内容区最小边缩放：行高 48dp 下垂直 padding 15dp →
+     *  画布 ~18dp，取景框有效图形≈12dp，与「连 接」16sp 字形同档
+     *  （真机反馈 24dp 全撑过大）。 */
+    private fun scanButton(): android.widget.ImageView =
+        android.widget.ImageView(this).apply {
+            contentDescription = "扫码连接"
+            setImageResource(R.drawable.ic_scan)
+            setPadding(dp(19), dp(15), dp(19), dp(15))
+            val shape = GradientDrawable().apply {
+                setColor(0xFF3a414c.toInt())
+                cornerRadius = dp(12).toFloat()
+            }
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x33ffffff),
+                shape, shape)
+            setOnClickListener { startScan() }
+        }
+
     private fun showStatus(text: String, isError: Boolean) {
         status.text = text
         status.setTextColor(if (isError) 0xFFB00020.toInt() else 0xFF9aa0aa.toInt())
@@ -311,9 +373,30 @@ class MainActivity : Activity() {
         webView.loadUrl(url)
     }
 
-    /** 扫设置页二维码直连：zxing 内嵌扫描页（自带相机权限申请），
-     *  取消返回空结果不动作。 */
+    /** 扫设置页二维码直连：优先 Google Code Scanner（Play services 的
+     *  标准扫码界面——多数 APP 调出的即此 UI，且免相机权限）；设备无
+     *  GMS / 模块不可用时回退 zxing 内嵌扫描页（自带相机权限申请）。
+     *  两条路径的结果统一进 handleScan；取消不动作。 */
     private fun startScan() {
+        try {
+            GmsBarcodeScanning.getClient(this)
+                .startScan()
+                .addOnSuccessListener { b -> b.rawValue?.let(::handleScan) }
+                .addOnCanceledListener { }
+                .addOnFailureListener { e ->
+                    // 用户取消也会以 CANCELED 落到失败回调（个别 GMS 版本
+                    // 包成 cause 里的 ApiException）：不得据此弹回退页
+                    val api = (e as? ApiException)
+                        ?: (e?.cause as? ApiException)
+                    if (api?.statusCode != CommonStatusCodes.CANCELED)
+                        fallbackScan()
+                }
+        } catch (e: Exception) {
+            fallbackScan()       // 无 GMS 等构造期失败
+        }
+    }
+
+    private fun fallbackScan() {
         IntentIntegrator(this).apply {
             setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
             setPrompt("对准电脑端设置页的二维码")
@@ -322,12 +405,11 @@ class MainActivity : Activity() {
         }.initiateScan()
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int,
-                                  data: Intent?) {
-        val res = IntentIntegrator.parseActivityResult(requestCode, resultCode,
-                                                       data) ?: return
-        val contents = res.contents ?: return          // 取消扫码
+    /** 扫码结果统一入口（GMS 与 zxing 共用）：私网校验后直连。
+     *  isDestroyed 守卫：扫码期间走「改地址重启」路径销毁了界面时，
+     *  迟到的结果不得再 loadUrl。 */
+    private fun handleScan(contents: String) {
+        if (isDestroyed) return
         val raw = if ("://" in contents) contents else "http://$contents"
         val host = android.net.Uri.parse(raw).host
         if (host == null || !PRIVATE_HOST.matches(host)) {
@@ -338,6 +420,14 @@ class MainActivity : Activity() {
         addrInput.setText(url.removePrefix("http://"))
         prefs().edit().putString("addr", url).apply()
         connect(url)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int,
+                                  data: Intent?) {
+        val res = IntentIntegrator.parseActivityResult(requestCode, resultCode,
+                                                       data) ?: return
+        res.contents?.let(::handleScan)          // 空=取消扫码
     }
 
     private fun doConnect() {

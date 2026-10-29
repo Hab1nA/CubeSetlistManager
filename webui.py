@@ -124,8 +124,7 @@ def main():
         ctypes.windll.user32.MessageBoxW(
             0, "新前端需要 WebView2 Runtime，但启动失败：\n%s\n\n"
                "安装指引：https://developer.microsoft.com/microsoft-edge/"
-               "webview2/（Evergreen Bootstrapper）\n"
-               "或设置环境变量 CUBE_TK=1 回退旧 Tk 界面。" % e,
+               "webview2/（Evergreen Bootstrapper）" % e,
             "Cube Setlist Manager", 0x30)
         app.calls.put(app._on_exit)
         return
