@@ -2240,6 +2240,11 @@ class App:
             "launchAppsOnStart": self.launch_apps,
             "projectsRoot": self.ccfg.get("projectsRoot", ""),
             "dawExe": self.ccfg.get("dawExe", ""),
+            # daw=落盘值（回填下拉用），dawActive=生效值（落盘≠生效时前端
+            # 提示重启），dawName=生效底座显示名（exe 字段 label 动态化）
+            "daw": cfg.get("daw") or self.daw,
+            "dawActive": self.daw,
+            "dawName": self.facts["display_name"],
             "obs": {"projectorMonitor": obs.get("projectorMonitor", ""),
                     "vjMute": bool(obs.get("vjMute", True)),
                     "videoRoot": obs.get("videoRoot", ""),
@@ -2437,6 +2442,10 @@ class App:
             if "dawExe" in p and p.get("dawExe"):
                 daw_sec["dawExe"] = str(p["dawExe"])
             cfg["dawSettings"] = daw_sec
+            # 底座切换：白名单校验后只落盘（重启生效），内存 facts/ctrl/
+            # MMC 口/素材库一律不动——热切换要重挂整条链，不值
+            if "daw" in p and str(p["daw"] or "") in daw_ctrl.FACTS:
+                cfg["daw"] = str(p["daw"])
             if web_fields:
                 cfg["webRemote"] = self._web_config_payload(**web_fields)
             _save_config(cfg)
@@ -4035,7 +4044,7 @@ class PointsWindow(tk.Toplevel):
         self._transient_until = 0.0
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=pad, pady=(pad, 4))
-        self.s1 = self.app.facts.get("name") == "cubase"
+        self.has_points = self.app.facts.get("name") == "cubase"
         song = self.app.by_key.get(lib_key)
         self.enable_var = tk.BooleanVar(
             value=bool((self.app.points.get(lib_key)
@@ -4044,7 +4053,7 @@ class PointsWindow(tk.Toplevel):
             body, text="为《%s》启用定位点" % (song["name"] if song else lib_key),
             variable=self.enable_var, command=self._on_toggle)
         cb.pack(fill="x")
-        if not self.s1:
+        if not self.has_points:
             cb.state(["disabled"])
             self._say("定位点仅 Cubase 支持", dpi.C_ERR)
         dpi.bind_hint(cb, on_hint, "启用后该工程以定位点条目示人；停用还原"
@@ -4132,7 +4141,7 @@ class PointsWindow(tk.Toplevel):
             self.status.config(text=self._transient[0],
                                foreground=self._transient[1])
         else:
-            if self.s1 and self.app.mmc_out is None:
+            if self.has_points and self.app.mmc_out is None:
                 self.status.config(text="MMC 输出口未就绪：定位不可用"
                                         "（检查时码口配置）", foreground=dpi.C_ERR)
             else:
@@ -4760,16 +4769,12 @@ _MUTEX = None
 def _acquire_single_instance():
     """命名互斥体防双开：双开会双份发走带键/双份监听 MIDI，行为错乱。
     句柄存全局防 GC（句柄关闭=互斥体销毁）；进程退出内核自动释放。
-    名字带底座后缀：Cubase 版与 S1 版是两套安装，允许并存（不同时跑）。"""
+    合一后单安装用固定名；不再带底座后缀——旧双版安装残留与新装并存
+    时靠发布口径「先卸旧版」保证不同名互踩不再出现。"""
     global _MUTEX
-    daw = "cubase"
-    try:
-        daw = str(_load_config().get("daw") or "cubase")
-    except Exception:
-        pass
     k32 = ctypes.windll.kernel32
     k32.CreateMutexW.restype = ctypes.c_void_p
-    _MUTEX = k32.CreateMutexW(None, False, "Local\\CubeSetlistManager-" + daw)
+    _MUTEX = k32.CreateMutexW(None, False, "Local\\CubeSetlistManager")
     return k32.GetLastError() != 183        # ERROR_ALREADY_EXISTS
 
 

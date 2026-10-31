@@ -2373,9 +2373,9 @@ function renderVjState() {
 }
 
 // ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
-const ST_FIELDS = ["st-clock", "st-vj", "st-kb", "st-auto", "st-cont",
-                   "st-confirm", "st-exit", "st-launch", "st-root",
-                   "st-exe", "st-mode", "st-srv", "st-app",
+const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb", "st-auto",
+                   "st-cont", "st-confirm", "st-exit", "st-launch",
+                   "st-root", "st-exe", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
 const stSnap = () => ST_FIELDS.map(id => {
@@ -2396,6 +2396,16 @@ function stDirty() {
   $("#st-save").disabled = dirty && !bad ? false : true;
   $("#st-save").title = bad ? "端口须为 1-65535 的整数" : "";
 }
+// ---- 底座切换：落盘≠生效（后端 dawActive）时提示重启；重启后两值
+//      相等自动隐。文案沿用全仓口径「重启程序后生效」。
+let stDawActive = "";
+function stDawNote() {
+  const changed = stDawActive !== "" && $("#st-daw").value !== stDawActive;
+  $("#st-daw-note").hidden = !changed;
+  if (changed) $("#st-daw-note").textContent =
+    "底座已切换，重启程序后生效；切换后请重设工程库根";
+}
+$("#st-daw").addEventListener("change", stDawNote);
 // ---- 端口/显示器下拉共用填充：首项「无」（值空串=停用）+ 在线候选 +
 // 幽灵项（已存名不在清单时显示「原名（未接入）」，value=原名：保存即保名，
 // 设备回来自动接上）。cur 为已存提示名，前缀命中在线口时选中完整名。
@@ -2480,6 +2490,10 @@ async function refreshSettings(force) {
     $("#st-launch").checked = d.launchAppsOnStart !== false;
     $("#st-root").value = d.projectsRoot;
     $("#st-exe").value = d.dawExe;
+    $("#st-daw").value = d.daw;
+    $("#st-exe-label").textContent = (d.dawName || "Cubase") + " 程序";
+    stDawActive = d.dawActive || "";
+    stDawNote();
     setTgl($("#st-web"), !!d.web.enabled);
     $("#st-mode").value = d.web.mode;
     // config 里存了非法 mode（手改文件）：回落首个候选，保存即归一
@@ -2557,6 +2571,7 @@ $("#st-save").addEventListener("click", async () => {
     exitCloseApps: $("#st-exit").checked,
     launchAppsOnStart: $("#st-launch").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
+    daw: $v("#st-daw"),
     web: {mode: $v("#st-mode"),
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),

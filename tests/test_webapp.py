@@ -1079,3 +1079,61 @@ def test_design_tokens_shared_values():
         assert d_tokens[dname].strip() == value.strip(), \
             "token 漂移：移动 %s=%s vs 桌面 %s=%s" % (
                 name, value, dname, d_tokens[dname])
+
+
+def test_daw_setting_persist(monkeypatch):
+    """daw 在场检测：白名单值落盘，非法值忽略，缺席键零波及（其它设置
+    不被底座切换跨页静默清空）。"""
+    disk = {"daw": "cubase", "launchAppsOnStart": True,
+            "obs": {"projectorMonitor": "DP-1", "vjMute": True}}
+    monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
+        json.dumps(disk)))
+    monkeypatch.setattr(sg, "_save_config",
+                        lambda cfg: disk.clear() or disk.update(cfg))
+    fake = types.SimpleNamespace(
+        vj_hint="VJ1", kb_hint="CK1", clock_hint="CK1",
+        cont_play=True, auto_var=_Var(True), top_most=True,
+        switch_confirm=True, exit_close_apps=False, launch_apps=True,
+        _obs_autostart_cfg=True,
+        ccfg={"projectsRoot": "C:/x", "dawExe": "e", "autoSave": True},
+        web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
+        _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
+        root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
+        _toggle_auto=lambda: None,
+        _apply_ports=lambda: None,
+        _apply_web=lambda: None,
+        _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f),
+        _load_songs=lambda: None)
+    # 合法值落盘，其余键零波及
+    assert sg.App._settings_apply_web(fake, {"daw": "studioone"}) is None
+    assert disk["daw"] == "studioone"
+    assert disk["launchAppsOnStart"] is True
+    assert disk["obs"]["projectorMonitor"] == "DP-1"
+    # 非法值静默忽略
+    assert sg.App._settings_apply_web(fake, {"daw": "foobar"}) is None
+    assert disk["daw"] == "studioone"
+    # 缺席键不动现有底座（与既有设置同包保存互不 wipe）
+    assert sg.App._settings_apply_web(
+        fake, {"launchAppsOnStart": False}) is None
+    assert disk["daw"] == "studioone" and disk["launchAppsOnStart"] is False
+
+
+def test_settings_get_web_daw_fields(monkeypatch):
+    """/settings GET 三键：daw=落盘值优先（前端回填防刷回旧值），
+    dawActive=生效值（落盘≠生效时前端提示重启），dawName=label 动态化。"""
+    fake = types.SimpleNamespace(
+        clock_hint="", vj_hint="", kb_hint="", watch=None,
+        cont_play=False, top_most=False, switch_confirm=True,
+        exit_close_apps=False, launch_apps=True,
+        ccfg={"projectsRoot": "", "dawExe": ""},
+        daw="studioone", facts={"display_name": "Studio One"},
+        _web_status={}, _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f))
+    monkeypatch.setattr(sg, "_load_config", lambda: {"daw": "cubase"})
+    monkeypatch.setattr(sg, "list_screens", lambda: [])
+    monkeypatch.setattr(sg.mb, "_in_devices", lambda: [])
+    d = sg.App._settings_get_web(fake)
+    assert d["daw"] == "cubase"           # 落盘值优先（回填用）
+    assert d["dawActive"] == "studioone"  # 生效值（重启生效语义）
+    assert d["dawName"] == "Studio One"   # label 动态化
