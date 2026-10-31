@@ -7,8 +7,7 @@ import time
 
 # (dist 子目录, 数据文件)
 PRODUCTS = (
-    ("Cube Setlist Manager Cubase", ("config.json", "playlist.json")),
-    ("Cube Setlist Manager Studio One", ("config.json",)),
+    ("Cube Setlist Manager", ("config.json", "playlist.json")),
     ("Cube Automator Studio One", ("config.json",)),
 )
 

@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pedal                                        # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CFG = os.path.join(ROOT, "dist", "Cube Setlist Manager Cubase", "config.json")
+CFG = os.path.join(ROOT, "dist", "Cube Setlist Manager", "config.json")
 
 cfg = json.load(open(CFG, encoding="utf-8"))
 p = cfg.get("pedal") or {}

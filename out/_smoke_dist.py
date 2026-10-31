@@ -10,8 +10,8 @@ import urllib.request
 import websocket
 
 CDP = 9233
-EXE = os.path.join("dist", "Cube Setlist Manager Cubase",
-                   "Cube Setlist Manager Cubase.exe")
+EXE = os.path.join("dist", "Cube Setlist Manager",
+                   "Cube Setlist Manager.exe")
 assert os.path.exists(EXE), EXE
 env = dict(os.environ)
 env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (

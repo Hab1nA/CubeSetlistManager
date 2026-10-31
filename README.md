@@ -56,23 +56,21 @@ Win11 圆角）。全程本地通信，不经互联网。
 
 **安装版（推荐）**：Release 下载对应产品的安装包双击安装——按用户安装到
 `%LOCALAPPDATA%\Programs\` 下各产品独立目录（免管理员），自动创建开始菜单/
-桌面快捷方式，自带卸载器；三个安装包独立 AppId/目录，**可并存安装**；升级
-直接装新版，`config.json` 等数据保留（Studio One 完整版首装预置 studioone
-配置、简化版预置 automator 配置，已有配置不被覆盖）。
+桌面快捷方式，自带卸载器；两个安装包独立 AppId/目录，**可并存安装**；升级
+直接装新版，`config.json` 等数据保留（简化版首装预置 automator 配置，
+已有配置不被覆盖；完整版首装不预置，缺失按默认值起）。
 
 | 产品 | 端 / 底座 | 定位 |
 |---|---|---|
-| **Cube Setlist Manager** | Windows · Cubase | 演出主程序：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动（本 README 主线） |
-| **Cube Setlist Manager Studio One** | Windows · Studio One 7 Pro | 同上功能的 Studio One 版 |
-| **Cube Automator Studio One** | Windows · Studio One 7 Pro | 自动化简化版：无歌单/切歌/走带遥控，保留其余全部自动化（见下节） |
+| **Cube Setlist Manager** | Windows · Cubase / Studio One 7 Pro | 演出主程序：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动；设置页选底座（切换重启生效，本 README 主线） |
+| **Cube Automator Studio One** | Windows · Studio One 7 Pro | 自动化简化版：无歌单/切歌/底座切换，保留其余全部自动化（见下节） |
 | **Cube Remote** | Android 8.0+ | 遥控/翻谱 APP：控制页 + 谱面自动翻页（详见下文「移动端遥控 / 谱面自动翻页」） |
 
-对应 Release 资产：`CubeSetlistManager-Cubase-Setup-x.y.z.exe` /
-`CubeSetlistManager-StudioOne-Setup-x.y.z.exe` /
+对应 Release 资产：`CubeSetlistManager-Setup-x.y.z.exe` /
 `CubeAutomator-StudioOne-Setup-x.y.z.exe` / `CubeRemote-vX.Y.apk`
 （APP 亦可装好电脑端后连热点经网页「下载 APP」获取）；安装目录分别为
-`%LOCALAPPDATA%\Programs\` 下的 `CubeSetlistManagerCubase` /
-`CubeSetlistManagerStudioOne` / `CubeAutomatorStudioOne`。
+`%LOCALAPPDATA%\Programs\` 下的 `CubeSetlistManager` /
+`CubeAutomatorStudioOne`。
 
 `config.json`、`playlist.json` 放 exe 同目录（安装根目录）。
 
@@ -308,10 +306,10 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 ├─ cpr_meta.py / song_meta.py   .cpr 与 .song 工程时长解析（RIFF 定位条 / ZIP+XML 事件终点）
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器+踩钉转发）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
-├─ Cube Setlist Manager Cubase.spec / Cube Setlist Manager Studio One.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（三产品各一份 spec、一个安装包，命名按底座对称）
+├─ Cube Setlist Manager.spec / Cube Automator Studio One.spec / build.bat / installer.iss   打包 + 安装包（两产品各一份 spec、一个安装包）
 ├─ tests\                test_bridge（离线自检）/ test_webapp / test_points / test_mtc / test_sysex_out / test_stability / test_pedal_wire（线级黑盒）/ test_dialog_drain / test_manual_adopt / pedal_sim / e2e_test（真机分阶段）
 ├─ tools\                _render_check（离线渲染断言+截图）/ probe_* 真机探针 / _snapshot_bak（打包数据快照）
-├─ config.example.json / config.studioone.json / config.automator.json   各产品预置配置样例
+├─ config.example.json / config.automator.json   各产品预置配置样例
 ├─ config.json / playlist.json   仓库根副本（重打包事故的恢复源）
 ├─ _bak_dist\            重打包前 dist 数据备份（确认新版正常后可删）
 ├─ dist\                 打包产物 + 安装包（exe 同目录放运行时真实数据，不入库）
