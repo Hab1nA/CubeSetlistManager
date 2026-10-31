@@ -6,7 +6,9 @@ play/resume 后位置推进、stop/pause 后冻结、rewind 后归零、close �
 Remote」；driver 已在 Cubase MIDI Remote Manager 里映射到该口；工程勾 MTC
 时码输出（MTC 监听=时钟口，同 App 接线）。
 用法：
-  py -u tools/probe_mr_ctrl.py [动作] [秒数] [MR口子串]  # 默认 play 12 CubeSetlist Remote
+  py -u tools/probe_mr_ctrl.py [动作] [秒数] [MR口子串] [MTC口子串]
+  # 默认 play 12 CubeSetlist Remote loopMIDI Port（监听口按机器实际时钟口传，
+  # 如 VJ Automation）
   py -u tools/probe_mr_ctrl.py --selftest                # JS↔Python CC 表离线自检
 取证清单：
   ① play/resume：SENT 后 POS 持续推进（QF 流活跃）
@@ -59,6 +61,7 @@ def main():
     action = (sys.argv[1] if len(sys.argv) > 1 else "play").lower()
     seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 12
     hint = sys.argv[3] if len(sys.argv) > 3 else mr_ctrl.PORT_HINT_DEFAULT
+    mtc_hint = sys.argv[4] if len(sys.argv) > 4 else mb.PORT_HINT
     if action not in ACTIONS:
         print("未知动作 %r（可选：%s）" % (action, "/".join(ACTIONS)), flush=True)
         return
@@ -69,7 +72,7 @@ def main():
     dec = mtc.Decoder(on_qf=lambda: qf.__setitem__(0, qf[0] + 1),
                       on_position=pos.append)
     try:
-        port = mb.MidiIn(mb.PORT_HINT, lambda n, v: None,
+        port = mb.MidiIn(mtc_hint, lambda n, v: None,
                          on_mtc=dec.feed, on_f8=dec.note_f8,
                          on_sysex=dec.full_frame)
     except SystemExit as e:
