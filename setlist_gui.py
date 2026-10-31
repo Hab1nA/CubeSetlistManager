@@ -36,6 +36,7 @@ import daw_ctrl
 import dpi
 import hotspot
 import kbd_auto
+import mr_ctrl
 import mtc
 import midi_bridge as mb
 import pedal
@@ -631,6 +632,9 @@ class App:
         self.vj_hint = str(cfg.get("vjPortHint") or "")
         self.kb_hint = str(cfg.get("kbPortHint") or "")
         self.clock_hint = str(cfg.get("clockPortHint") or "")
+        # MIDI Remote 直控口名：空=用默认口名（与其它 hint 空=停用不同：
+        # MR 直控无需配置即启用，口在=生效，口缺=回落键盘路径）
+        self.mr_hint = str(cfg.get("mrPortHint") or "")
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
@@ -1263,6 +1267,11 @@ class App:
             except Exception as e:
                 self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
+            # MIDI Remote 直控口（走带/全停/关工程 CC 化，daw_ctrl 动作级
+            # 回落键盘）：仅 Cubase；口名缺省=默认 loopMIDI 口
+            if self.facts.get("name") == "cubase":
+                mr_ctrl.set_port_hint(
+                    self.mr_hint or mr_ctrl.PORT_HINT_DEFAULT)
             # MMC 输出口（定位点 GOTO）：仅 Cubase 底座，走与 MTC 收听同一
             # 虚拟口——外发 SysEx 经 loopMIDI 喂给 DAW；mtc.Decoder 不解析
             # MMC 帧（F0 7F 7F 06 …），回环进本程序无害

@@ -361,6 +361,35 @@ def send_sysex(idx, data, timeout=None):
         close_out(h)
 
 
+def send_cc_h(h, ch, cc, val, timeout=1.0):
+    """在已开的 OUT 口发一条 CC（midiOutShortMsg 同步短消息：无 SysEx 的
+    prepare/DONE 轮询环节，同样走专线序）。返回 None 或错误文案。"""
+    result = {}
+
+    def job():
+        r = _winmm.midiOutShortMsg(
+            h, 0xB0 | (ch & 0xF) | ((cc & 0x7F) << 8) | ((val & 0x7F) << 16))
+        if r:
+            result["err"] = "midiOutShortMsg 失败，code %d" % r
+
+    done, _ = run_io(job, timeout)
+    if not done:
+        return "CC 发送超时 %.1f 秒" % timeout
+    return result.get("err")
+
+
+def send_cc(idx, ch, cc, val, timeout=None):
+    """一次性打开 OUT 口发一条 CC 再关闭（探针/命令行用；App 常驻口走
+    send_cc_h——MIDI Remote 直控）。返回 None 或错误文案。"""
+    h, err = open_out(idx, timeout)
+    if h is None:
+        return err
+    try:
+        return send_cc_h(h, ch, cc, val, timeout)
+    finally:
+        close_out(h)
+
+
 def _in_devices():
     # 用 A 版查询：W 版对 teVirtualMIDI/Rubix 等驱动返回 INVALPARAM，名字拿不到
     def job():

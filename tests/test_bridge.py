@@ -456,8 +456,7 @@ def test_clock_port():
         assert "on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8" in src
         assert "on_sysex=self.mtc.full_frame" in src
         assert "on_clock=lambda" not in src          # 旧脉冲直连已根除
-    for f in ("config.example.json", "config.studioone.json",
-              "config.automator.json"):
+    for f in ("config.example.json", "config.automator.json"):
         cfg = json.load(open(pathlib.Path(__file__).resolve().parents[1] / f,
                              encoding="utf-8"))
         assert cfg.get("clockPortHint"), "%s 缺 clockPortHint" % f

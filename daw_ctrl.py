@@ -10,8 +10,10 @@
 转交打开（Cubase E2E 实测最稳；Hub 上 Ctrl+O+键入路径受前台锁/对话框预填/
 内部激活态影响，时灵时不灵，已废弃）。模态弹窗阻塞期间单实例转交会被
 Cubase 丢弃，放行弹窗后要补发一次打开请求。
-走带=键序表驱动（facts["transport"]），需真聚焦窗口（transport 用键盘），
-切歌链路则完全不依赖焦点。全程只走正常键序/消息，绝不强杀进程（强杀会留
+走带=MIDI Remote 直控优先（仅 Cubase：mr_ctrl CC 序列，不聚焦不抢焦点；
+不可用动作级回落键序表 facts["transport"]，键序表需真聚焦窗口）；关闭工程
+同样先试 MR 的 stop+save（受理则确认框不弹）再走 WM_CLOSE 老路。切歌链路
+完全不依赖焦点。全程只走正常键序/消息，绝不强杀进程（强杀会留
 崩溃标记弹「检测到崩溃」）。
 
 双底座：各 DAW 的「事实表」（进程名前缀/窗口类与标题标记/弹窗词表/键序表/
@@ -24,6 +26,7 @@ import threading
 import time
 from ctypes import wintypes
 
+import mr_ctrl
 from obs_ctrl import find_processes_by_prefix, launch_detached
 
 WM_CLOSE = 0x0010
@@ -407,6 +410,18 @@ class DawController:
 
     # ---- 对 GUI 的入口 ----
 
+    def _mr(self, action):
+        """MIDI Remote 直控尝试（仅 Cubase）：成功返回 True。哑协议无受理
+        回执——回落由调用方各自保留原路径（transport 键盘键序 / panic 逐窗
+        扫描 / _close 的 WM_CLOSE），效果核验在 GUI 的 MTC 走带态。"""
+        if self.facts.get("name") != "cubase":
+            return False
+        err = mr_ctrl.send(action)
+        if err:
+            self._log("MR 直控未生效（%s），回落原路径" % err)
+            return False
+        return True
+
     def switch_to(self, song_path, on_done=None):
         with self._lock:
             if self.busy:
@@ -424,6 +439,10 @@ class DawController:
         事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。
         键发完把焦点交还操作前的前台窗口（不收回=用户接着打字/点按
         会打进 DAW）。"""
+        if self._mr(action):
+            self._log("走带 %s（MR 直控）"
+                      % ACTION_NAMES.get(action, action))
+            return True
         ws = current_project()
         if not ws:
             self._log("走带控制：没有工程窗口")
@@ -445,6 +464,11 @@ class DawController:
 
     def panic(self):
         """向所有工程窗口发停止键序——激活错乱也保证静音。"""
+        # MR 直控只作用激活工程：正常单窗走它（不动焦点）；多窗错乱态
+        # 必须逐窗键盘停止，不走捷径
+        if self._mr("stop") and len(project_windows()) <= 1:
+            self._log("全停：MR 直控已发送停止")
+            return
         ws = project_windows()
         prev = foreground_hwnd()
         n = 0
@@ -508,6 +532,9 @@ class DawController:
         """PostMessage WM_CLOSE 直达窗口（Cubase E2E 实测 0.5s 生效）。
         有未保存修改时弹确认框：自动保存策略=对弹窗仿人回车（默认键=保存）。"""
         self._log("关闭工程…")
+        # MR 先发 stop+save+close（哑协议无回执）；WM_CLOSE 老路兜底——
+        # 窗口死没死以轮询为准，MR 无受理也不影响关闭，双路无害
+        self._mr("close")
         _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
         deadline = time.time() + CLOSE_TIMEOUT
         kicked = False
