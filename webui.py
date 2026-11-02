@@ -51,8 +51,11 @@ class _Shell:
 
 
 def main():
-    w = int(sys.argv[1]) if len(sys.argv) > 1 else 1280
-    h = int(sys.argv[2]) if len(sys.argv) > 2 else 800
+    # 位置参数仅认数字（宽高）；跳过 --wait-parent 等旗标及其值——重启链
+    # 继任实例带 --wait-parent <pid> 进来，int() 旗标会启动即崩
+    nums = [a for a in sys.argv[1:] if a.isdigit()]
+    w = int(nums[0]) if nums else 1280
+    h = int(nums[1]) if len(nums) > 1 else 800
     sg.dpi.enable()
 
     holder = {}
