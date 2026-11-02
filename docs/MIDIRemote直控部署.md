@@ -10,20 +10,20 @@ CC 转成键令（runCommand），全程不聚焦不抢焦点。v1 范围与不�
 | 停止 stop / 暂停 pause | 103 停 | 原地停 |
 | 继续 resume | 102 播 | 原位置续播 |
 | 回零 rewind | 103 停 → 104 回零 | 停在零点 |
-| 全停 panic | 103 停（单窗时） | 多窗错乱态仍走键盘逐窗停 |
-| 关工程（切歌链路内） | 103 停 → 105 存 → 106 关 | WM_CLOSE 老路保留兜底 |
+| 全停 panic | 103 停 | 作用激活工程 |
+| 关工程（切歌链路内） | 103 停 → 105 存 → 106 关 | 窗口消亡轮询验收 |
 
 不变项：打开工程仍走 CLI 单实例转交；定位点 GOTO 仍走 MMC SysEx；
 Studio One 底座完全不涉及（直控仅 Cubase）。
 
-## 回落链（为什么可以放心先部署）
+## 失效行为（完整迁移，无回落）
 
-- 口「CubeSetlist Remote」不存在/打不开 → 每个动作自动回落原键盘路径，
-  行为与升级前一致（设置零改动，装好口才生效）。
-- 单条 CC 发送失败 → 同上，弃口 10 秒冷却后自愈重试。
-- **已知限制（v1 无心跳）**：口在、但 driver 未在 Cubase 里映射（或
-  Cubase 没开）时，CC 发进虚拟口无人受理且不报错——走带会「没反应」。
-  部署完成后务必跑下面的验收三步；正式演出口不删、映射不动即可长期生效。
+- 走带/全停/关闭工程只有 MIDI Remote 一条路：口「CubeSetlist Remote」
+  不存在/打不开、或 Cubase 未开 → 动作失败并在日志报错（切歌在关闭步
+  失败并中止）。
+- 部署三步是演出前置条件；演出前跑一遍下面的验收三步。
+- **已知限制（v1 无心跳）**：口在、driver 未被 Cubase 装载时 CC 静默
+  无人受理——表现同上，跑验收三步可暴露。
 
 ## 部署三步（真机一次性）
 
@@ -34,9 +34,10 @@ Studio One 底座完全不涉及（直控仅 Cubase）。
    层级拷到：
    `C:\Users\<用户>\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\
    Local\CubeSetlistManager\CubeSetlistRemote\`
-3. **映射**：重启 Cubase → 菜单「Studio → MIDI Remote Manager」→ 列表
-   出现 `CubeSetlistManager CubeSetlistRemote` → 点它右侧 Connect/
-   端口列，输入/输出都选 `CubeSetlist Remote` → 确认映射保存。
+3. **确认自动连接**：重启 Cubase → 菜单「Studio → MIDI Remote Manager」→
+   列表出现 `CubeSetlistManager CubeSetlistRemote` 且端口列已自动填
+   `CubeSetlist Remote`（检测单元严格同名自动连接，真机实证零手工映射；
+   罕见未连时手选该口）。
 
 ## 验收（三步全绿才算部署完成）
 
@@ -47,9 +48,9 @@ py -u -X utf8 tools/probe_mr_ctrl.py rewind 8       # ③ rewind：POS 跳 0
 ```
 
 ②③ 的 POS 来自 MTC 时码（前提=工程已勾 MTC 时码输出，同定位点功能前提）。
-探针结论行显示「直控生效/已归零」即通；「位置未推进」= 映射没做或 Cubase
-没开（见上节已知限制）。App 内同样可验：走带按钮点按后日志出现
-「走带 …（MR 直控）」且 MTC 三态跟随，即为直控路径在工作。
+探针结论行显示「直控生效/已归零」即通；「位置未推进」= driver 未装载或
+Cubase 没开（见上节已知限制）。App 内同样可验：走带按钮点按后日志出现
+「走带 播放」类条目且 MTC 三态跟随，即为直控路径在工作。
 
 ## 配置
 

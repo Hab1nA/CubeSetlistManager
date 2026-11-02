@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """Cubase MIDI Remote 直控（CC → driver → runCommand）。
-哑协议：一条 CC=一条命令，动作序列语义在本模块，对齐 daw_ctrl facts 键序
-语义（先停防播放中定位续播）。driver=mr_driver/Local/CubeSetlistManager/
-CubeSetlistRemote/（部署 docs/MIDIRemote直控部署.md），端口=loopMIDI 建
-「CubeSetlist Remote」单口双向。v1 driver 无回读：可用性=口开成功，效果
-核验沿用既有 MTC 三态/全停核验；不可用（口缺失/发送失败）→ 调用方
-（daw_ctrl）动作级回落键盘模拟，全程不改焦点。
+哑协议：一条 CC=一条命令，动作序列语义在本模块。driver=mr_driver/Local/
+CubeSetlistManager/CubeSetlistRemote/（部署 docs/MIDIRemote直控部署.md），
+端口=loopMIDI「CubeSetlist Remote」单口双向。完整迁移：Cubase 无键盘
+回落，口不在或发送失败=动作失败报错；效果核验沿用 MTC 三态。
 ponytail: v1 无在线心跳——driver 死而口在=CC 无人受理且不报错，Phase 2
-加 feedback 绑定（driver 死→口开成功但无心跳→动作级回落）。"""
+加 feedback 绑定。"""
 import threading
 import time
 
@@ -20,8 +18,8 @@ RETRY_AFTER = 10.0   # 开口失败后重试间隔（loopMIDI 迟到自愈）
 # 原始命令 CC（与 driver JS 头 CC-TABLE 行一致，tests/test_mr_ctrl.py 校验）
 CC_START, CC_STOP, CC_RTZ, CC_SAVE, CC_CLOSE = 102, 103, 104, 105, 106
 
-# 动作→CC 序列（键=daw_ctrl facts["transport"] 五动作+close；每命令发
-# press127+release0）。语义对齐：play=从头播（先停防续播）→回零→播；
+# 动作→CC 序列（键=daw_ctrl.ACTION_NAMES 五动作+close；每命令发
+# press127+release0）。语义：play=从头播（先停防续播）→回零→播；
 # resume=原地续播（不发回零）；rewind=停止+回零；close=先停+保存再关。
 SEQ = {
     "play": (CC_STOP, CC_RTZ, CC_START),
@@ -56,26 +54,30 @@ def _drop_locked():
 
 
 def _ensure_locked():
-    """口未开且过了失败冷却则试开。返回句柄（None=暂不可用）。"""
+    """口未开且过了失败冷却则试开。返回 (句柄, 错误文案)；句柄为 None 时
+    错误必非空（口缺失/打开失败/冷却中）。"""
     global _out, _next_try
-    if _out is not None or time.time() < _next_try:
-        return _out
+    if _out is not None:
+        return _out, None
+    if time.time() < _next_try:
+        return None, "输出口暂不可用，稍后自动重试"
     dev = mb._pick(mb._out_devices(), _port_hint)
     if dev is None:
         _next_try = time.time() + RETRY_AFTER
-        return None
+        return None, "找不到含「%s」的输出口" % _port_hint
     h, err = mb.open_out(dev[0])
     if h is None:
         _next_try = time.time() + RETRY_AFTER
-        return None
+        return None, err
     _out = h
-    return h
+    return h, None
 
 
 def available():
     """直控是否就绪（探针/诊断用）：主动试开一次。"""
     with _lock:
-        return _ensure_locked() is not None
+        h, _err = _ensure_locked()
+        return h is not None
 
 
 def send(action):
@@ -85,9 +87,9 @@ def send(action):
     if seq is None:
         return "未知动作 %r" % action
     with _lock:
-        h = _ensure_locked()
+        h, err = _ensure_locked()
         if h is None:
-            return "MR 口未就绪（含「%s」的输出口缺失或打不开）" % _port_hint
+            return err
         for i, cc in enumerate(seq):
             if i:
                 time.sleep(CC_GAP)

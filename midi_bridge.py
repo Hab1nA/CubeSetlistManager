@@ -223,7 +223,7 @@ def open_in(idx, proc, timeout=None):
                                     #   原 0.5s no-op 宽限是死重+毒化期队列增长源）
     if result.get("ok"):
         return h, None
-    return None, result.get("err") or "打开超时（%.0f 秒）" % timeout
+    return None, result.get("err") or "打开超时 %.0f 秒" % timeout
 
 
 _close_guard = []           # 已收尾的句柄对象：close_in 幂等守卫。存对象
@@ -295,7 +295,7 @@ def open_out(idx, timeout=None):
         state["dead"] = True
     if result.get("ok"):
         return h, None
-    return None, result.get("err") or "打开超时（%.0f 秒）" % timeout
+    return None, result.get("err") or "打开超时 %.0f 秒" % timeout
 
 
 def close_out(h):

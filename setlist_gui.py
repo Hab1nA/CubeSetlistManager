@@ -633,7 +633,7 @@ class App:
         self.kb_hint = str(cfg.get("kbPortHint") or "")
         self.clock_hint = str(cfg.get("clockPortHint") or "")
         # MIDI Remote 直控口名：空=用默认口名（与其它 hint 空=停用不同：
-        # MR 直控无需配置即启用，口在=生效，口缺=回落键盘路径）
+        # 直控无需配置即启用，口缺=动作失败报错）
         self.mr_hint = str(cfg.get("mrPortHint") or "")
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
@@ -1267,8 +1267,8 @@ class App:
             except Exception as e:
                 self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
-            # MIDI Remote 直控口（走带/全停/关工程 CC 化，daw_ctrl 动作级
-            # 回落键盘）：仅 Cubase；口名缺省=默认 loopMIDI 口
+            # MIDI Remote 直控口（走带/全停/关工程，Cubase 唯一路径）：
+            # 仅 Cubase；口名缺省=默认 loopMIDI 口
             if self.facts.get("name") == "cubase":
                 mr_ctrl.set_port_hint(
                     self.mr_hint or mr_ctrl.PORT_HINT_DEFAULT)

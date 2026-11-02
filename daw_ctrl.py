@@ -10,11 +10,10 @@
 转交打开（Cubase E2E 实测最稳；Hub 上 Ctrl+O+键入路径受前台锁/对话框预填/
 内部激活态影响，时灵时不灵，已废弃）。模态弹窗阻塞期间单实例转交会被
 Cubase 丢弃，放行弹窗后要补发一次打开请求。
-走带=MIDI Remote 直控优先（仅 Cubase：mr_ctrl CC 序列，不聚焦不抢焦点；
-不可用动作级回落键序表 facts["transport"]，键序表需真聚焦窗口）；关闭工程
-同样先试 MR 的 stop+save（受理则确认框不弹）再走 WM_CLOSE 老路。切歌链路
-完全不依赖焦点。全程只走正常键序/消息，绝不强杀进程（强杀会留
-崩溃标记弹「检测到崩溃」）。
+走带/关闭工程=MIDI Remote 直控（仅 Cubase，mr_ctrl CC 序列，不聚焦不抢
+焦点，完整迁移无键盘回落——口不在即动作失败）；S1 走带仍键序表键盘路径，
+需真聚焦窗口。切歌链路完全不依赖焦点。全程只走正常键序/消息，绝不强杀
+进程（强杀会留崩溃标记弹「检测到崩溃」）。
 
 双底座：各 DAW 的「事实表」（进程名前缀/窗口类与标题标记/弹窗词表/键序表/
 工程扩展名等）收拢在 CUBASE / STUDIOONE 两个 dict，其余全部逻辑共用。
@@ -77,17 +76,8 @@ CUBASE = dict(
     name_after_mark=True,               # 「<版本名> 工程 - <歌名>」：歌名在后
     probe_duration=True,                # .cpr RIFF 解析时长（cpr_meta）
     app_suffix=" Cubase",               # 窗口标题后缀（与 Studio One 版对称）
-    # 走带键序=本机默认：空格(仅停止态当播放)/小键盘0(停止)/小键盘1(回零)。
-    # play=回零从头播/pause=原地停/resume=从当前位置继续/stop/rewind=停止+
-    # 回零（播放中定位到零点会继续播，须先停——回零即停在零点）。stop 与
-    # pause 同键序：stop 给踩钉/自动推进用，pause 给 UI 用，语义不同键序一致。
-    transport={
-        "play": ("ESC", "NUM0", "NUM1", "SPACE"),
-        "stop": ("ESC", "NUM0"),
-        "pause": ("ESC", "NUM0"),
-        "resume": ("ESC", "SPACE"),
-        "rewind": ("ESC", "NUM0", "NUM1"),
-    },
+    # 走带已完整迁移 MIDI Remote：动作→CC 序列语义在 mr_ctrl.SEQ；
+    # 键序表仅 S1 事实表持有（本表不设 transport 键）
 )
 
 # ---- Studio One 7 事实表（v1=按调研推断，待真机 M0 校准修订——
@@ -410,18 +400,6 @@ class DawController:
 
     # ---- 对 GUI 的入口 ----
 
-    def _mr(self, action):
-        """MIDI Remote 直控尝试（仅 Cubase）：成功返回 True。哑协议无受理
-        回执——回落由调用方各自保留原路径（transport 键盘键序 / panic 逐窗
-        扫描 / _close 的 WM_CLOSE），效果核验在 GUI 的 MTC 走带态。"""
-        if self.facts.get("name") != "cubase":
-            return False
-        err = mr_ctrl.send(action)
-        if err:
-            self._log("MR 直控未生效（%s），回落原路径" % err)
-            return False
-        return True
-
     def switch_to(self, song_path, on_done=None):
         with self._lock:
             if self.busy:
@@ -432,16 +410,19 @@ class DawController:
         return True
 
     def transport(self, action, live=None):
-        """走带键序由事实表 facts["transport"] 驱动（键名见 VK），
-        发到当前工程窗口（键盘路径，需聚焦）。
+        """Cubase=MIDI Remote 直控（CC 序列在 mr_ctrl，不聚焦不抢焦点）；
+        S1=键序表键盘路径（键名见 VK），发到当前工程窗口，需聚焦。
         live=调用方感知的走带状态（True 播放中/False 已停/None 未知）：
         S1 的回零键序是「空格停→点跳开头」，已停时空格会反向起播——
         事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。
-        键发完把焦点交还操作前的前台窗口（不收回=用户接着打字/点按
+        S1 键发完把焦点交还操作前的前台窗口（不收回=用户接着打字/点按
         会打进 DAW）。"""
-        if self._mr(action):
-            self._log("走带 %s（MR 直控）"
-                      % ACTION_NAMES.get(action, action))
+        if self.facts.get("name") == "cubase":
+            err = mr_ctrl.send(action)
+            if err:
+                self._log("走带控制：%s" % err)
+                return False
+            self._log("走带 %s" % ACTION_NAMES.get(action, action))
             return True
         ws = current_project()
         if not ws:
@@ -463,11 +444,11 @@ class DawController:
         return True
 
     def panic(self):
-        """向所有工程窗口发停止键序——激活错乱也保证静音。"""
-        # MR 直控只作用激活工程：正常单窗走它（不动焦点）；多窗错乱态
-        # 必须逐窗键盘停止，不走捷径
-        if self._mr("stop") and len(project_windows()) <= 1:
-            self._log("全停：MR 直控已发送停止")
+        """全停。Cubase=MIDI Remote 停止（作用激活工程）；S1=向所有工程
+        窗口发停止键序——激活错乱也保证静音。"""
+        if self.facts.get("name") == "cubase":
+            err = mr_ctrl.send("stop")
+            self._log("全停：已发送" if err is None else "全停：%s" % err)
             return
         ws = project_windows()
         prev = foreground_hwnd()
@@ -529,28 +510,20 @@ class DawController:
                 self.busy = False
 
     def _close(self, hwnd):
-        """PostMessage WM_CLOSE 直达窗口（Cubase E2E 实测 0.5s 生效）。
-        有未保存修改时弹确认框：自动保存策略=对弹窗仿人回车（默认键=保存）。"""
+        """发 MR 关闭序列（stop+save+close，CC 直达键令），轮询窗口消亡
+        验收。仅 Cubase 会走到（S1 close_before_open=False 同窗换歌）。"""
         self._log("关闭工程…")
-        # MR 先发 stop+save+close（哑协议无回执）；WM_CLOSE 老路兜底——
-        # 窗口死没死以轮询为准，MR 无受理也不影响关闭，双路无害
-        self._mr("close")
-        _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        err = mr_ctrl.send("close")
+        if err:
+            raise SwitchError("关闭未送达：%s" % err)
         deadline = time.time() + CLOSE_TIMEOUT
-        kicked = False
-        answered = False    # 已放过确认框就不补发（补发会叠第二层弹窗）
         while time.time() < deadline:
             if not _win_alive(hwnd):
                 time.sleep(0.5)
                 self._log("工程已关闭")
                 return
-            if (not kicked and not answered
-                    and time.time() >= deadline - CLOSE_TIMEOUT / 2):
-                kicked = True       # 过半没关且确认框没应到：补发一次
-                _user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-            answered = self._drain_dialogs("关闭") or answered
             time.sleep(0.4)
-        raise SwitchError("关闭超时：有无未处理的确认框？")
+        raise SwitchError("关闭超时：MIDI Remote 未受理")
 
     def _open(self, path):
         """统一走 CLI：未运行=冷启动；已运行=单实例转交打开。

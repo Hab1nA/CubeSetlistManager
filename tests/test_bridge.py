@@ -468,7 +468,7 @@ def test_daw_backends():
     assert daw_ctrl.FACTS["cubase"]["song_ext"] == ".cpr"
     s1 = daw_ctrl.FACTS["studioone"]
     assert s1["song_ext"] == ".song" and s1["probe_duration"]  # song_meta ZIP 解析
-    assert set(s1["transport"]) == set(daw_ctrl.CUBASE["transport"])  # 动作齐
+    assert set(s1["transport"]) == set(daw_ctrl.ACTION_NAMES)  # 动作齐
     daw_ctrl.set_active(s1)
     try:
         assert daw_ctrl.project_name_from_title("Studio One - 優しい彗星") \

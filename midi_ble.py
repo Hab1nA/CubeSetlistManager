@@ -220,10 +220,10 @@ def _open(raw_open, dev_id, timeout, wrap):
     threading.Thread(target=run, daemon=True, name="ble-open").start()
     if not done.wait(timeout):
         state["dead"] = True
-        return None, "BLE 打开超时（%.0f 秒，设备无应答？弃单将自回收）" % timeout
+        return None, "BLE 打开超时 %.0f 秒，设备无应答？弃单将自回收" % timeout
     if "port" in box:
         return wrap(box["port"]), None
-    return None, box.get("err") or "BLE 打开超时（%.0f 秒）" % timeout
+    return None, box.get("err") or "BLE 打开超时 %.0f 秒" % timeout
 
 
 def _buf_bytes(buf):

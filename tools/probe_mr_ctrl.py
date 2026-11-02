@@ -78,8 +78,8 @@ def main():
     except SystemExit as e:
         print("MTC 监听未启动：%s（探针需时码口在线）" % e, flush=True)
         return
-    print("=== MR 直控 %s（%d 秒观察窗，CC 序列 %s）==="
-          % (action, seconds, mr_ctrl.SEQ[action]), flush=True)
+    print("=== %s，%d 秒观察窗，CC 序列 %s ==="
+          % (action.upper(), seconds, mr_ctrl.SEQ[action]), flush=True)
     time.sleep(1.0)     # 等 IN 口 SysEx 缓冲池挂稳
     n_before = len(pos)
     err = mr_ctrl.send(action)

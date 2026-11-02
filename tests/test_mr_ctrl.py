@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""MIDI Remote 直控测试：CC 打包字节/动作序列/回落与冷却状态机（零设备，
+"""MIDI Remote 直控测试：CC 打包字节/动作序列/冷却状态机（零设备，
 假 winmm 替身，风格同 test_sysex_out）+ driver JS 与 Python 侧 CC-TABLE/
-命令绑定交叉校验 + daw_ctrl 动作级回落路径。"""
+命令绑定交叉校验 + daw_ctrl Cubase 直控唯一路径与 S1 键盘隔离。"""
 import pathlib
 import re
 import sys
@@ -175,66 +175,99 @@ def _mr_down():
     return lambda: setattr(mr_ctrl, "send", saved[0])
 
 
-def test_transport_mr_path_skips_keyboard():
+def test_transport_cubase_mr_only():
     ctl, logs = _ctl()
     sent = []
     undo = _mr_ok(sent)
     try:
-        # 本机无工程窗口：键盘路径必败——返回 True 证明走的是 MR 直控
+        # 完整迁移：无工程窗口也成功——Cubase 走带只有 MR 一条路
         assert ctl.transport("play") is True
         assert sent == ["play"]
-        assert any("MR 直控" in x for x in logs)
+        assert "走带 播放" in logs
     finally:
         undo()
 
 
-def test_transport_mr_down_falls_back_to_keyboard():
+def test_transport_mr_down_no_keyboard():
     ctl, logs = _ctl()
     undo = _mr_down()
     try:
         assert ctl.transport("play") is False
-        assert any("回落原路径" in x for x in logs)
-        assert any("没有工程窗口" in x for x in logs)   # 已进键盘路径
+        assert any(x.startswith("走带控制：") for x in logs)
+        assert not any("没有工程窗口" in x for x in logs)  # 键盘路径未进
     finally:
         undo()
 
 
-def test_panic_mr_single_window_short_circuit():
+def test_transport_studioone_keeps_keyboard():
+    logs = []
+    ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe", log=logs.append)
+    sent = []
+    undo = _mr_ok(sent)
+    try:
+        # S1 无 MR：本机无工程窗口→键盘路径失败，但绝不发 MR
+        assert ctl.transport("play") is False
+        assert sent == []
+        assert any("没有工程窗口" in x for x in logs)
+    finally:
+        undo()
+
+
+def test_panic_cubase_mr_only():
     ctl, logs = _ctl()
     sent = []
     undo = _mr_ok(sent)
     try:
-        ctl.panic()                              # 本机 0 窗=正常单窗形态
+        ctl.panic()
         assert sent == ["stop"]
-        assert any("MR 直控已发送停止" in x for x in logs)
+        assert "全停：已发送" in logs
     finally:
         undo()
 
 
-def test_panic_mr_down_sweeps_windows():
+def test_panic_mr_down_no_sweep():
     ctl, logs = _ctl()
     undo = _mr_down()
     try:
         ctl.panic()
-        assert any("回落原路径" in x for x in logs)
-        assert any("0/0" in x for x in logs)     # 逐窗扫描路径（本机 0 窗）
+        assert any(x.startswith("全停：") for x in logs)
+        assert not any("工程窗口发送停止" in x for x in logs)  # 逐窗扫描未进
     finally:
         undo()
 
 
-def test_close_attempt_mr_first():
-    # _close 的 MR 先行只需证调序：MR 关序列先于 WM_CLOSE（真机核验窗口
-    # 生死，本测试注入 hwnd 无效不进入完整关闭流程）
-    ctl, logs = _ctl()
-    sent = []
-    undo = _mr_ok(sent)
+def test_close_mr_down_fails_fast():
+    ctl, _logs = _ctl()
+    undo = _mr_down()
     try:
         try:
-            ctl._close(0)                        # 假 hwnd：轮询超时走异常
-        except daw_ctrl.SwitchError:
-            pass
-        assert sent == ["close"]                 # 关闭前已发过 MR 序列
+            ctl._close(0)
+        except daw_ctrl.SwitchError as e:
+            assert "关闭未送达" in str(e)
+        else:
+            raise AssertionError("未抛 SwitchError")
     finally:
+        undo()
+
+
+def test_close_mr_sent_then_window_poll():
+    ctl, _logs = _ctl()
+    sent = []
+    undo = _mr_ok(sent)
+    saved_t, saved_w = (daw_ctrl.CLOSE_TIMEOUT,), (daw_ctrl._win_alive,)
+    daw_ctrl.CLOSE_TIMEOUT = 0.3
+    daw_ctrl._win_alive = lambda h: True   # 假窗永不死：只验发送+轮询超时
+    try:
+        try:
+            ctl._close(1)
+        except daw_ctrl.SwitchError as e:
+            assert "关闭超时" in str(e)
+        else:
+            raise AssertionError("未抛 SwitchError")
+        assert sent == ["close"]
+    finally:
+        daw_ctrl.CLOSE_TIMEOUT = saved_t[0]
+        daw_ctrl._win_alive = saved_w[0]
         undo()
 
 
@@ -254,8 +287,8 @@ def test_driver_js_cc_table_and_bindings_match_python():
                      ("File", "Save"), ("File", "Close")]
 
 
-def test_seq_matches_transport_facts_semantics():
-    assert set(mr_ctrl.SEQ) == set(daw_ctrl.CUBASE["transport"]) | {"close"}
+def test_seq_covers_all_actions_with_semantics():
+    assert set(mr_ctrl.SEQ) == set(daw_ctrl.ACTION_NAMES) | {"close"}
     assert mr_ctrl.SEQ["play"][0] == mr_ctrl.CC_STOP      # 先停防续播
     assert mr_ctrl.SEQ["resume"] == (mr_ctrl.CC_START,)   # 原地续播
     assert mr_ctrl.SEQ["rewind"] == (mr_ctrl.CC_STOP, mr_ctrl.CC_RTZ)
