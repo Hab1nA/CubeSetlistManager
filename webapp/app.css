@@ -164,6 +164,8 @@ input:focus-visible, select:focus-visible {
    特异度须压过同值的 .card .field（:567 后位同级会反杀） */
 .card .grid2 .field, .card .grid3 .field { margin-bottom: 0; }
 .grid2 .field.wide, .grid2 .wide { grid-column: 1 / -1; }
+/* 设置页按钮宽统一：browse 钮文本宽随文案浮动，与重启钮差约 20px 观感 */
+#p-settings .browse, #st-daw-restart { min-width: 86px; }
 /* 网格内独立开关与同行 field 的**输入框**垂直居中：field 是「label 文字
    在上 + 控件在下」两段结构，开关联动到输入框那一行需要偏移半个标签行
    （label 行高 17px + field 顶 gap 4px → 上偏 ~10px 后居中） */

@@ -2407,20 +2407,22 @@ function stDawLabel() {
 }
 function stDawNote() {
   const changed = stDawActive !== "" && $("#st-daw").value !== stDawActive;
+  const btn = $("#st-daw-restart");
+  btn.disabled = !changed;            // 未改底座=灰不可点；改动=红可点
+  btn.classList.toggle("danger", changed);
   $("#st-daw-note").hidden = !changed;
-  if (changed) $("#st-daw-note").textContent =
-    "底座切换保存并重启程序后生效，工程库与程序路径已按底座分开记忆";
+  if (changed) $("#st-daw-note").textContent = "重启以实现切换";
 }
 function stDawApply() {               // change 联动：换显目标底座记忆的路径
   const cur = $("#st-daw").value;
   if (!cur || cur === stDawPrev) { stDawNote(); return; }
   const from = stDawCfg[stDawPrev] || {}, to = stDawCfg[cur] || {};
-  if ("root" in to && $v("#st-root") === (from.root || "")) {
-    $("#st-root").value = to.root || "";
+  if ("projectsRoot" in to && $v("#st-root") === (from.projectsRoot || "")) {
+    $("#st-root").value = to.projectsRoot || "";
     $("#st-root").dispatchEvent(new Event("input", {bubbles: true}));
   }
-  if ("exe" in to && $v("#st-exe") === (from.exe || "")) {
-    $("#st-exe").value = to.exe || "";
+  if ("dawExe" in to && $v("#st-exe") === (from.dawExe || "")) {
+    $("#st-exe").value = to.dawExe || "";
     $("#st-exe").dispatchEvent(new Event("input", {bubbles: true}));
   }
   stDawPrev = cur;
@@ -2610,14 +2612,13 @@ async function saveSettings() {
   return r.ok;
 }
 $("#st-save").addEventListener("click", saveSettings);
-// 底座重启：两段式确认（误触=整场演出中断）；表单有未保存编辑先保存
-// 再重启，底座切换的落盘由这次保存完成
-$("#st-daw-restart").addEventListener("click", ev =>
-    armConfirm(ev.currentTarget, async () => {
-      if (stBase !== null && stSnap() !== stBase && !await saveSettings())
-        return;                      // 保存失败（如端口非法）中止重启
-      post("/restart", {}).then(() => toast("正在重启…"));
-    }, "确认重启？"));
+// 底座重启：仅底座改动态可点（stDawNote 管 disabled）；表单有未保存
+// 编辑先保存再重启，底座切换的落盘由这次保存完成
+$("#st-daw-restart").addEventListener("click", async () => {
+  if (stBase !== null && stSnap() !== stBase && !await saveSettings())
+    return;                          // 保存失败（如端口非法）中止重启
+  post("/restart", {}).then(() => toast("正在重启…"));
+});
 // ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
 async function pickDir(inputId, kind) {
   const file = kind === "file";
