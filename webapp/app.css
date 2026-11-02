@@ -178,6 +178,9 @@ input:focus-visible, select:focus-visible {
 .field-row .field { flex: 1; }
 input.invalid { border-color: var(--err) !important; }
 .field-err { color: var(--err); font-size: var(--f-xs); min-height: 16px; }
+/* 底座 note 是唯一 p.field-err：清 UA p 边距（.card p.dim 同款问题），
+   行距全交 card 内 gap/占位 min-height */
+#st-daw-note { margin: var(--s3) 0 0; }
 
 /* ---- switch（拨杆）---- */
 .switch { display: inline-flex; align-items: center; gap: 12px; cursor: pointer;

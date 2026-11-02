@@ -2592,6 +2592,11 @@ $("#st-web").addEventListener("click", async () => {
   }
 });
 async function saveSettings() {
+  const bad = ["st-srv", "st-app", "st-tsk"].some(id => !portOk(id));
+  if (bad) {                           // 校验下沉：保存与重启两条路共用
+    toast("端口须为 1-65535 的整数", "err");
+    return false;
+  }
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
     autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
@@ -2617,7 +2622,8 @@ $("#st-save").addEventListener("click", saveSettings);
 $("#st-daw-restart").addEventListener("click", async () => {
   if (stBase !== null && stSnap() !== stBase && !await saveSettings())
     return;                          // 保存失败（如端口非法）中止重启
-  post("/restart", {}).then(() => toast("正在重启…"));
+  const r = await post("/restart", {});
+  if (r.ok) toast("正在重启…");        // 403/网络异常时 post 已弹错误
 });
 // ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
 async function pickDir(inputId, kind) {

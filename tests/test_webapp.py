@@ -1159,3 +1159,49 @@ def test_settings_get_web_daw_fields(monkeypatch):
     # 平铺 cubase 键不外溢：studioone 记忆=本底座默认
     assert d["dawSettings"]["studioone"]["projectsRoot"] == \
         sg.DAW_DEFAULTS["studioone"]["root"]
+
+
+def test_daw_settings_branches():
+    """daw_settings 兼容层分支：子段缺 dawExe 键落默认、子段 None 按缺失、
+    畸形旧 cubase 段（非 dict）不崩。"""
+    s = sg.daw_settings({"dawSettings": {"cubase": {"projectsRoot": "P"}}},
+                        "cubase")
+    assert s["projectsRoot"] == "P"
+    assert s["dawExe"] == sg.DAW_DEFAULTS["cubase"]["exe"]
+    s = sg.daw_settings({"dawSettings": {"cubase": None}}, "cubase")
+    assert s == {"dawExe": sg.DAW_DEFAULTS["cubase"]["exe"],
+                 "projectsRoot": sg.DAW_DEFAULTS["cubase"]["root"]}
+    s = sg.daw_settings({"cubase": "bogus", "daw": "cubase"}, "cubase")
+    assert s["projectsRoot"] == sg.DAW_DEFAULTS["cubase"]["root"]
+
+
+def test_wait_parent_process():
+    """_wait_parent：pid=0（OpenProcess 必败）秒回；真子进程存活期阻塞、
+    退出后放行（等进程而非互斥体——mutex 无人持有时 wait 立即成功）。"""
+    import subprocess as _sp
+    import sys as _sys
+    sg._wait_parent(0)                    # 前任已退态：立即返回
+    p = _sp.Popen([_sys.executable, "-c", "import time; time.sleep(1.2)"])
+    done = []
+    import threading as _th
+    t = _th.Thread(target=lambda: (sg._wait_parent(p.pid), done.append(1)),
+                   daemon=True)
+    t.start()
+    time.sleep(0.4)
+    assert done == []                     # 前任存活=阻塞中
+    p.wait()
+    t.join(2)
+    assert done == [1]                    # 前任退出=放行
+
+
+def test_webui_window_size_argv():
+    """webui 宽高解析：旗标跳过（底座重启继任 --wait-parent 不吃成宽高——
+    曾 int(pid) 启动即崩/窗口宽=PID）。"""
+    try:
+        import webui
+    except ImportError:                   # CI 无 pywebview 时跳过
+        import pytest
+        pytest.skip("pywebview 未安装")
+    assert webui._window_size(["--wait-parent"]) == (1280, 800)
+    assert webui._window_size(["1440", "900"]) == (1440, 900)
+    assert webui._window_size([]) == (1280, 800)

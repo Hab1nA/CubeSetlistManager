@@ -50,12 +50,16 @@ class _Shell:
         return ok
 
 
+def _window_size(argv):
+    """argv → (宽, 高)：只认纯数字位置参数（宽高），旗标（如底座重启链
+    继任实例的 --wait-parent）跳过。"""
+    nums = [a for a in argv if a.isdigit()]
+    return (int(nums[0]) if nums else 1280,
+            int(nums[1]) if len(nums) > 1 else 800)
+
+
 def main():
-    # 位置参数仅认数字（宽高）；跳过 --wait-parent 等旗标及其值——重启链
-    # 继任实例带 --wait-parent <pid> 进来，int() 旗标会启动即崩
-    nums = [a for a in sys.argv[1:] if a.isdigit()]
-    w = int(nums[0]) if nums else 1280
-    h = int(nums[1]) if len(nums) > 1 else 800
+    w, h = _window_size(sys.argv[1:])
     sg.dpi.enable()
 
     holder = {}

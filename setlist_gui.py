@@ -171,10 +171,11 @@ def daw_settings(cfg, daw):
     s = dict(sub) if isinstance(sub, dict) else {}
     if not s:
         if daw == str(cfg.get("daw") or "cubase"):
-            s.update({k: v for k, v in sec.items()
-                      if not isinstance(v, dict)})
+            s.update({k: v for k, v in sec.items() if isinstance(v, str)})
         if daw == "cubase":
-            s.update(cfg.get("cubase") or {})
+            legacy_sec = cfg.get("cubase")
+            if isinstance(legacy_sec, dict):   # 畸形旧段（手改）不崩
+                s.update(legacy_sec)
             legacy = s.pop("cubaseExe", None)
             if legacy:
                 s.setdefault("dawExe", legacy)
@@ -605,9 +606,11 @@ class App:
     def __init__(self, root):
         self.root = root
         cfg = _load_config()
-        # 底座选择：config 顶层 "daw"（cubase | studioone），缺省 cubase
-        self.daw = str(cfg.get("daw") or "cubase")
-        self.facts = daw_ctrl.FACTS.get(self.daw) or daw_ctrl.CUBASE
+        # 底座选择：config 顶层 "daw"（cubase | studioone），缺省 cubase；
+        # 非法值（手改 config）启动根归一，否则 daw_settings KeyError 无声死
+        daw = str(cfg.get("daw") or "cubase")
+        self.daw = daw if daw in daw_ctrl.FACTS else "cubase"
+        self.facts = daw_ctrl.FACTS[self.daw]
         daw_ctrl.set_active(self.facts)
         root.title("Cube Setlist Manager" + self.facts["app_suffix"])
         root.geometry(dpi.scale(root, 980, 840))
@@ -1102,9 +1105,10 @@ class App:
         daw_ctrl.close_app(log=lambda *_: None)
 
     def _restart(self):
-        """底座切换重启：脱管拉起继任实例（--wait-parent 等本进程退出
-        释放单实例互斥体，防抢先起撞「已在运行」框），再走标准退出链
-        （含 exitCloseApps 收尾——切底座本就该关掉旧底座的被控软件）。"""
+        """底座切换重启：脱管拉起继任实例后走标准退出链（含 exitCloseApps
+        收尾——切底座本就该关掉旧底座的被控软件）。继任带 --wait-parent
+        <pid> 等本进程退出释放单实例互斥体；等待上限 90s（对齐 close_app
+        60s + web 8s 收尾），超时放行撞双开框自然退出。"""
         argv = ([sys.executable] if getattr(sys, "frozen", False)
                 else [sys.executable, os.path.abspath(sys.argv[0])])
         try:
@@ -2491,7 +2495,11 @@ class App:
             for d in daw_ctrl.FACTS:
                 sub = old_ds.get(d)
                 if not isinstance(sub, dict):
-                    sub = (daw_settings(cfg, d) if d == self.daw else None)
+                    # 平铺键只迁给服役底座（cfg.daw 落盘值）与运行底座——
+                    # 待重启态（两者不同）部分载荷保存不丢平铺段
+                    sub = (daw_settings(cfg, d)
+                           if d in (self.daw, str(cfg.get("daw") or self.daw))
+                           else None)
                 if d == target:
                     sub = dict(sub or {})
                     if proj:
@@ -4843,21 +4851,26 @@ def _acquire_single_instance():
 
 
 def _wait_parent(pid):
-    """继任实例等前任退出（底座重启链）：单实例互斥体在前任进程退出时
-    才释放，抢先起会撞「已在运行」弹窗。前任僵死等不到则 15 秒放行。"""
+    """继任实例等前任进程退出（底座重启链）：单实例互斥体随进程退出才
+    释放，抢先起会撞「已在运行」弹窗。上限 90s——exitCloseApps 开时收尾
+    含 close_app 60s + web 8s，15s 会低估；超时放行撞双开框自然退出。"""
     k32 = ctypes.windll.kernel32
+    k32.OpenProcess.restype = ctypes.c_void_p
     h = k32.OpenProcess(0x00100000, False, pid)      # SYNCHRONIZE
     if not h:
         return                                      # 前任已退，直接起
-    k32.WaitForSingleObject(h, 15000)
+    k32.WaitForSingleObject(h, 90000)
     k32.CloseHandle(h)
 
 
 def main():
     global _CRASH_LOG
-    if "--wait-parent" in sys.argv:   # 底座重启继任实例：等前任释放互斥体
+    if "--wait-parent" in sys.argv:   # 底座重启继任实例：等前任退出
         try:
-            _wait_parent(int(sys.argv[sys.argv.index("--wait-parent") + 1]))
+            i = sys.argv.index("--wait-parent")
+            pid = int(sys.argv[i + 1])
+            sys.argv[i:i + 2] = []   # 从 argv 摘除，webui 宽高解析不误吃
+            _wait_parent(pid)
         except (ValueError, IndexError, OSError):
             pass
     dpi.enable()
