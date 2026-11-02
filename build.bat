@@ -20,7 +20,7 @@ rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never ove
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
 rem 两产品各自独立产物目录，数据备份/还原也各自对应。
-rem 完整版(Cubase)：dist\Cube Setlist Manager（缺省回退仓库根恢复源）
+rem 完整版：dist\Cube Setlist Manager（缺省回退仓库根恢复源）
 if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\config.json" dist\_config.bak >nul
   copy /y "dist\Cube Setlist Manager\playlist.json" dist\_playlist.bak >nul

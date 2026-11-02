@@ -69,9 +69,8 @@ Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}"; \
 
 [InstallDelete]
 ; 合一版原地升级清理：AppId 沿用旧 Cubase 版保原地升级，旧 exe 名与
-; 新名不同会残留成双图标/双入口——装新文件前删两类旧名
+; 新名不同会残留成双图标/双入口——装新文件前删旧名
 Type: files; Name: "{app}\Cube Setlist Manager Cubase.exe"
-Type: files; Name: "{app}\Cube Setlist Manager S1.exe"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppName}.exe"

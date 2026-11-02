@@ -2396,16 +2396,38 @@ function stDirty() {
   $("#st-save").disabled = dirty && !bad ? false : true;
   $("#st-save").title = bad ? "端口须为 1-65535 的整数" : "";
 }
-// ---- 底座切换：落盘≠生效（后端 dawActive）时提示重启；重启后两值
-//      相等自动隐。文案沿用全仓口径「重启程序后生效」。
-let stDawActive = "";
+// ---- 底座切换：两底座各自记忆工程库/程序路径（后端 dawSettings 按底座
+// 分段），切换时字段未被手改则联动换显；落盘≠生效（dawActive）提示重启。
+const DAW_LABEL = {cubase: "Cubase", studioone: "Studio One"};
+let stDawActive = "", stDawPrev = "";
+let stDawCfg = {};                    // {cubase:{root,exe}, studioone:{…}}
+function stDawLabel() {
+  $("#st-exe-label").textContent =
+    (DAW_LABEL[$("#st-daw").value] || "Cubase") + " 程序";
+}
 function stDawNote() {
   const changed = stDawActive !== "" && $("#st-daw").value !== stDawActive;
   $("#st-daw-note").hidden = !changed;
   if (changed) $("#st-daw-note").textContent =
-    "底座已切换，重启程序后生效；切换后请重设工程库根";
+    "底座切换保存并重启程序后生效，工程库与程序路径已按底座分开记忆";
 }
-$("#st-daw").addEventListener("change", stDawNote);
+function stDawApply() {               // change 联动：换显目标底座记忆的路径
+  const cur = $("#st-daw").value;
+  if (!cur || cur === stDawPrev) { stDawNote(); return; }
+  const from = stDawCfg[stDawPrev] || {}, to = stDawCfg[cur] || {};
+  if ("root" in to && $v("#st-root") === (from.root || "")) {
+    $("#st-root").value = to.root || "";
+    $("#st-root").dispatchEvent(new Event("input", {bubbles: true}));
+  }
+  if ("exe" in to && $v("#st-exe") === (from.exe || "")) {
+    $("#st-exe").value = to.exe || "";
+    $("#st-exe").dispatchEvent(new Event("input", {bubbles: true}));
+  }
+  stDawPrev = cur;
+  stDawLabel();
+  stDawNote();
+}
+$("#st-daw").addEventListener("change", stDawApply);
 // ---- 端口/显示器下拉共用填充：首项「无」（值空串=停用）+ 在线候选 +
 // 幽灵项（已存名不在清单时显示「原名（未接入）」，value=原名：保存即保名，
 // 设备回来自动接上）。cur 为已存提示名，前缀命中在线口时选中完整名。
@@ -2491,7 +2513,11 @@ async function refreshSettings(force) {
     $("#st-root").value = d.projectsRoot;
     $("#st-exe").value = d.dawExe;
     $("#st-daw").value = d.daw;
-    $("#st-exe-label").textContent = (d.dawName || "Cubase") + " 程序";
+    // 手改 config 存了非法 daw：下拉回落生效底座，保存即归一（st-mode 同款）
+    if (!$("#st-daw").value) $("#st-daw").value = d.dawActive || "cubase";
+    stDawPrev = $("#st-daw").value;
+    stDawCfg = d.dawSettings || {};
+    stDawLabel();
     stDawActive = d.dawActive || "";
     stDawNote();
     setTgl($("#st-web"), !!d.web.enabled);
@@ -2563,7 +2589,7 @@ $("#st-web").addEventListener("click", async () => {
     setTgl(btn, on);           // 失败回弹（设置页不回读，护住未保存编辑）
   }
 });
-$("#st-save").addEventListener("click", async () => {
+async function saveSettings() {
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
     autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
@@ -2577,10 +2603,21 @@ $("#st-save").addEventListener("click", async () => {
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
           ip: $v("#st-ip")}});
   if (r.ok) {
-    toast("设置已保存并应用");
+    toast($("#st-daw").value !== stDawActive && stDawActive !== ""
+          ? "设置已保存，底座切换待重启生效" : "设置已保存并应用");
     refreshSettings(true);
   }
-});
+  return r.ok;
+}
+$("#st-save").addEventListener("click", saveSettings);
+// 底座重启：两段式确认（误触=整场演出中断）；表单有未保存编辑先保存
+// 再重启，底座切换的落盘由这次保存完成
+$("#st-daw-restart").addEventListener("click", ev =>
+    armConfirm(ev.currentTarget, async () => {
+      if (stBase !== null && stSnap() !== stBase && !await saveSettings())
+        return;                      // 保存失败（如端口非法）中止重启
+      post("/restart", {}).then(() => toast("正在重启…"));
+    }, "确认重启？"));
 // ---- 目录选择（/pickdir：原生对话框，选择结果回填并触发脏标记）----
 async function pickDir(inputId, kind) {
   const file = kind === "file";

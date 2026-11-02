@@ -487,16 +487,27 @@ def test_daw_backends():
 
 
 def test_daw_settings_compat():
-    # config 兼容：旧 cubase 段（cubaseExe 键）→ dawSettings 优先、键名迁移
+    # config 兼容：旧 cubase 段（cubaseExe 键）→ dawSettings 子段优先、
+    # 键名迁移
     import setlist_gui as sg
     s = sg.daw_settings({"cubase": {"cubaseExe": "C:/x.exe",
                                     "projectsRoot": "P"}}, "cubase")
     assert s["dawExe"] == "C:/x.exe" and s["projectsRoot"] == "P"
-    s = sg.daw_settings({"cubase": {"cubaseExe": "OLD"},
-                         "dawSettings": {"dawExe": "NEW"}}, "studioone")
-    assert s["dawExe"] == "NEW"
-    # 底座隔离回归：cubase 遗留键（旧段与 cubaseExe 别名）绝不能泄漏给
-    # S1 底座——否则 S1 版启动自检会把 Cubase 拉起来（真机事故）
+    # 子段优先；平铺旧键只迁给活跃底座（daw 键所指）——迁给另一底座
+    # = Cubase exe 泄漏给 S1（真机事故：S1 自检拉起 Cubase）
+    s = sg.daw_settings({"daw": "cubase",
+                         "dawSettings": {"cubase": {"dawExe": "SUB"},
+                                         "dawExe": "FLAT"}}, "cubase")
+    assert s["dawExe"] == "SUB"
+    s = sg.daw_settings({"daw": "cubase",
+                         "dawSettings": {"dawExe": "FLAT-CB"}}, "cubase")
+    assert s["dawExe"] == "FLAT-CB"
+    # 底座隔离回归：cubase 遗留键（平铺/旧段/cubaseExe 别名）绝不能
+    # 泄漏给 S1 底座——否则 S1 版启动自检会把 Cubase 拉起来（真机事故）
+    s = sg.daw_settings({"daw": "cubase",
+                         "dawSettings": {"dawExe": "C:/Cubase.exe"}},
+                        "studioone")
+    assert "Cubase" not in s["dawExe"]
     s = sg.daw_settings({"dawSettings": {"cubaseExe": "C:/Cubase.exe"}},
                         "studioone")
     assert "Cubase" not in s["dawExe"]

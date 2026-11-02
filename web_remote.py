@@ -1631,6 +1631,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_pedal_learn, "/pedal/learn"),
                           (self._h_pedal_mute, "/pedal/mute"),
                           (self._h_exit, "/exit"),
+                          (self._h_restart, "/restart"),
                           (self._h_kbd_set, "/kbdset"),
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_record, "/kbdrecord"),
@@ -1923,6 +1924,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "仅限本机操作"})
             return
         app.calls.put(app._on_exit)
+        self._ok()
+
+    def _h_restart(self, _body, ip):
+        """重启程序（设置页底座切换生效钮）：仅限本机 loopback，与 /exit
+        同门。走 Tk 主线程 _restart：拉起 --wait-parent 继任实例+标准退出链。"""
+        app = self.server.app
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        app.calls.put(app._restart)
         self._ok()
 
     def _h_kbd_record(self, body, _ip):

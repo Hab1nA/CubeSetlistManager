@@ -22,6 +22,7 @@ import socket
 import queue
 import collections
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -159,19 +160,24 @@ DAW_DEFAULTS = {
 
 
 def daw_settings(cfg, daw):
-    """DAW 路径段归一：新 dawSettings 段优先，旧 cubase 段兼容读取
-    （cubaseExe 键名迁移为 dawExe，老配置零改动可用），缺项落底座默认。
-    优先级：dawSettings > 旧 cubase 段 > 默认。
-    旧 cubase 段与 cubaseExe 键只对 cubase 底座生效——它们语义上就是
-    Cubase 的路径，S1 底座继承会把 Cubase 当成自己的 exe/工程库
-    （真机事故：S1 版启动自检把 Cubase 拉了起来）。"""
-    s = {}
-    if daw == "cubase":
-        s.update(cfg.get("cubase") or {})
-    s.update(cfg.get("dawSettings") or {})
-    legacy = s.pop("cubaseExe", None)
-    if legacy and daw == "cubase":
-        s.setdefault("dawExe", legacy)
+    """DAW 路径段归一（按底座子段）：dawSettings.cubase/.studioone 各自
+    持 projectsRoot/dawExe，缺项落底座默认。兼容读取三层旧配置——本底座
+    无子段时：旧平铺 dawSettings 键只迁给 config 活跃底座（daw 键所指，
+    即平铺值实际服役的那个底座；迁给另一底座=Cubase exe 漏进 S1 段，
+    启动自检拉错 DAW 的真机事故换皮）；旧 cubase 段与 cubaseExe 键仍仅
+    对 cubase 生效；最后落 DAW_DEFAULTS。子段一旦写入即为权威，旧层忽略。"""
+    sec = cfg.get("dawSettings") or {}
+    sub = sec.get(daw)
+    s = dict(sub) if isinstance(sub, dict) else {}
+    if not s:
+        if daw == str(cfg.get("daw") or "cubase"):
+            s.update({k: v for k, v in sec.items()
+                      if not isinstance(v, dict)})
+        if daw == "cubase":
+            s.update(cfg.get("cubase") or {})
+            legacy = s.pop("cubaseExe", None)
+            if legacy:
+                s.setdefault("dawExe", legacy)
     s.setdefault("dawExe", DAW_DEFAULTS[daw]["exe"])
     s.setdefault("projectsRoot", DAW_DEFAULTS[daw]["root"])
     return s
@@ -1094,6 +1100,23 @@ class App:
         for fn in (close_obs_app, close_loopmidi):
             threading.Thread(target=fn, daemon=True).start()
         daw_ctrl.close_app(log=lambda *_: None)
+
+    def _restart(self):
+        """底座切换重启：脱管拉起继任实例（--wait-parent 等本进程退出
+        释放单实例互斥体，防抢先起撞「已在运行」框），再走标准退出链
+        （含 exitCloseApps 收尾——切底座本就该关掉旧底座的被控软件）。"""
+        argv = ([sys.executable] if getattr(sys, "frozen", False)
+                else [sys.executable, os.path.abspath(sys.argv[0])])
+        try:
+            subprocess.Popen(
+                argv + ["--wait-parent", str(os.getpid())],
+                creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0)
+                               | subprocess.CREATE_NEW_PROCESS_GROUP),
+                close_fds=True)
+        except OSError as e:
+            self.q.put("重启失败：%s，请手动退出后重开" % e)
+            return
+        self._on_exit()
 
     # ---- 后台线程：起服务 + 扫素材库 + 探时长 ----
 
@@ -2239,6 +2262,12 @@ class App:
         # lan_ips 是 PS 秒级慢操作：只读专职线程 5s 刷新的缓存，不在本
         # （Tk）线程现算（首启缓存未热时给空表，用户展开下拉前必有值）
         adapters = (self._web_status or {}).get("adapters") or []
+        # daw_saved=落盘底座（表单 select 显示的）：非法值回落生效底座
+        daw_saved = str(cfg.get("daw") or self.daw)
+        if daw_saved not in daw_ctrl.FACTS:
+            daw_saved = self.daw
+        shown = (self.ccfg if daw_saved == self.daw
+                 else daw_settings(cfg, daw_saved))
         return {
             "clockHint": self.clock_hint, "vjHint": self.vj_hint,
             "kbHint": self.kb_hint,
@@ -2247,13 +2276,16 @@ class App:
             "switchConfirm": self.switch_confirm,
             "exitCloseApps": self.exit_close_apps,
             "launchAppsOnStart": self.launch_apps,
-            "projectsRoot": self.ccfg.get("projectsRoot", ""),
-            "dawExe": self.ccfg.get("dawExe", ""),
-            # daw=落盘值（回填下拉用），dawActive=生效值（落盘≠生效时前端
-            # 提示重启），dawName=生效底座显示名（exe 字段 label 动态化）
-            "daw": cfg.get("daw") or self.daw,
+            # daw=落盘值（回填下拉），dawActive=生效值（落盘≠生效时前端
+            # 提示重启）；root/exe 顶层键随「落盘底座」走（表单 select 显示
+            # 的就是它），dawSettings=两底座各自的记忆（前端切换联动换显）
+            "projectsRoot": shown.get("projectsRoot", ""),
+            "dawExe": shown.get("dawExe", ""),
+            "daw": daw_saved,
             "dawActive": self.daw,
-            "dawName": self.facts["display_name"],
+            "dawSettings": {d: {k: daw_settings(cfg, d)[k]
+                                for k in ("projectsRoot", "dawExe")}
+                            for d in daw_ctrl.FACTS},
             "obs": {"projectorMonitor": obs.get("projectorMonitor", ""),
                     "vjMute": bool(obs.get("vjMute", True)),
                     "videoRoot": obs.get("videoRoot", ""),
@@ -2392,9 +2424,16 @@ class App:
             threading.Thread(target=self._apply_obs_web,
                              args=(vid, media, mon, mute),
                              daemon=True).start()
+        # 路径归属底座=payload 所选底座（合法时），否则当前生效底座；
+        # 归属≠生效底座（切换保存）时只落盘不动运行态——ccfg/重扫属生效底座
+        daw_new = str(p.get("daw") or "") if "daw" in p else ""
+        if daw_new not in daw_ctrl.FACTS:
+            daw_new = ""
+        target = daw_new or self.daw
         proj = str(p.get("projectsRoot") or "") if "projectsRoot" in p else ""
-        rescan = bool(proj) and proj != self.ccfg.get("projectsRoot")
-        if proj:
+        rescan = (bool(proj) and target == self.daw
+                  and proj != self.ccfg.get("projectsRoot"))
+        if proj and target == self.daw:
             self.ccfg["projectsRoot"] = proj
         if rescan:
             self.q.put("工程库已变更，后台重扫…")
@@ -2445,16 +2484,27 @@ class App:
                         not str(obs["password"]).startswith(_DPAPI_PREFIX):
                     obs["password"] = _dpapi_protect(str(obs["password"]))
                 cfg["obs"] = obs
-            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
-            if proj:
-                daw_sec["projectsRoot"] = self.ccfg["projectsRoot"]
-            if "dawExe" in p and p.get("dawExe"):
-                daw_sec["dawExe"] = str(p["dawExe"])
-            cfg["dawSettings"] = daw_sec
-            # 底座切换：白名单校验后只落盘（重启生效），内存 facts/ctrl/
-            # MMC 口/素材库一律不动——热切换要重挂整条链，不值
-            if "daw" in p and str(p["daw"] or "") in daw_ctrl.FACTS:
-                cfg["daw"] = str(p["daw"])
+            # dawSettings 按底座子段落盘：root/exe 落入 target（表单所显
+            # 底座）；旧平铺键收编进活跃底座子段后清除，段重构为纯子段
+            old_ds = cfg.get("dawSettings") or {}
+            new_ds = {}
+            for d in daw_ctrl.FACTS:
+                sub = old_ds.get(d)
+                if not isinstance(sub, dict):
+                    sub = (daw_settings(cfg, d) if d == self.daw else None)
+                if d == target:
+                    sub = dict(sub or {})
+                    if proj:
+                        sub["projectsRoot"] = proj
+                    if "dawExe" in p and p.get("dawExe"):
+                        sub["dawExe"] = str(p["dawExe"])
+                if sub:
+                    new_ds[d] = sub
+            cfg["dawSettings"] = new_ds
+            # 底座切换：只落盘（重启生效），内存 facts/ctrl/MMC 口/素材库
+            # 一律不动——热切换要重挂整条链，不值
+            if daw_new:
+                cfg["daw"] = daw_new
             if web_fields:
                 cfg["webRemote"] = self._web_config_payload(**web_fields)
             _save_config(cfg)
@@ -4756,9 +4806,14 @@ class SettingsWindow(tk.Toplevel):
                     not str(obs["password"]).startswith(_DPAPI_PREFIX):
                 obs["password"] = _dpapi_protect(str(obs["password"]))
             cfg["obs"] = obs
-            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
+            # dawSettings 已按底座分段子段化：Tk 路径只写当前生效底座
+            daw_sec = cfg.get("dawSettings") or {}
+            sub = daw_sec.get(app.daw)
+            sub = (dict(sub) if isinstance(sub, dict)
+                   else daw_settings(cfg, app.daw))
             if proj:
-                daw_sec["projectsRoot"] = proj
+                sub["projectsRoot"] = proj
+            daw_sec[app.daw] = sub
             cfg["dawSettings"] = daw_sec
             cfg["webRemote"] = app._web_config_payload()
             _save_config(cfg)
@@ -4787,8 +4842,24 @@ def _acquire_single_instance():
     return k32.GetLastError() != 183        # ERROR_ALREADY_EXISTS
 
 
+def _wait_parent(pid):
+    """继任实例等前任退出（底座重启链）：单实例互斥体在前任进程退出时
+    才释放，抢先起会撞「已在运行」弹窗。前任僵死等不到则 15 秒放行。"""
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x00100000, False, pid)      # SYNCHRONIZE
+    if not h:
+        return                                      # 前任已退，直接起
+    k32.WaitForSingleObject(h, 15000)
+    k32.CloseHandle(h)
+
+
 def main():
     global _CRASH_LOG
+    if "--wait-parent" in sys.argv:   # 底座重启继任实例：等前任释放互斥体
+        try:
+            _wait_parent(int(sys.argv[sys.argv.index("--wait-parent") + 1]))
+        except (ValueError, IndexError, OSError):
+            pass
     dpi.enable()
     if not _acquire_single_instance():
         ctypes.windll.user32.MessageBoxW(

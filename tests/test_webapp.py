@@ -980,7 +980,7 @@ def test_launch_apps_setting_persist(monkeypatch):
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
         cont_play=True, auto_var=_Var(True), top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
-        _obs_autostart_cfg=True, ccfg={"projectsRoot": "C:/x"},
+        _obs_autostart_cfg=True, daw="cubase", ccfg={"projectsRoot": "C:/x"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
@@ -1017,6 +1017,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
         cont_play=True, auto_var=_Var(True), top_most=True,
         switch_confirm=True, exit_close_apps=False,
+        daw="cubase",
         ccfg={"projectsRoot": "C:/x", "dawExe": "e"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
@@ -1083,19 +1084,23 @@ def test_design_tokens_shared_values():
 
 def test_daw_setting_persist(monkeypatch):
     """daw 在场检测：白名单值落盘，非法值忽略，缺席键零波及（其它设置
-    不被底座切换跨页静默清空）。"""
-    disk = {"daw": "cubase", "launchAppsOnStart": True,
+    不被底座切换跨页静默清空）。dawSettings 按底座子段落盘：root/exe 落
+    payload 所选底座，旧平铺键收编进活跃底座子段后清除。"""
+    disk = {"daw": "cubase",
+            "dawSettings": {"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"},
+            "launchAppsOnStart": True,
             "obs": {"projectorMonitor": "DP-1", "vjMute": True}}
     monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
         json.dumps(disk)))
     monkeypatch.setattr(sg, "_save_config",
                         lambda cfg: disk.clear() or disk.update(cfg))
+    rescans = []
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="CK1", clock_hint="CK1",
         cont_play=True, auto_var=_Var(True), top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
-        _obs_autostart_cfg=True,
-        ccfg={"projectsRoot": "C:/x", "dawExe": "e", "autoSave": True},
+        _obs_autostart_cfg=True, daw="cubase",
+        ccfg={"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
@@ -1104,12 +1109,20 @@ def test_daw_setting_persist(monkeypatch):
         _apply_web=lambda: None,
         _web_config_payload=lambda **f: dict(
             web_remote.DEFAULT_WEB_REMOTE, **f),
-        _load_songs=lambda: None)
-    # 合法值落盘，其余键零波及
-    assert sg.App._settings_apply_web(fake, {"daw": "studioone"}) is None
+        _load_songs=lambda: rescans.append(1))
+    # 切底座+目标底座路径：落 studioone 子段；cubase 平铺收编进子段
+    assert sg.App._settings_apply_web(
+        fake, {"daw": "studioone", "projectsRoot": "D:/songs",
+               "dawExe": "D:/S1.exe"}) is None
     assert disk["daw"] == "studioone"
-    assert disk["launchAppsOnStart"] is True
-    assert disk["obs"]["projectorMonitor"] == "DP-1"
+    ds = disk["dawSettings"]
+    assert set(ds) == {"cubase", "studioone"}          # 平铺键已清
+    assert ds["cubase"] == {"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"}
+    assert ds["studioone"]["projectsRoot"] == "D:/songs"
+    assert ds["studioone"]["dawExe"] == "D:/S1.exe"
+    # 归属≠生效底座：运行态 ccfg/重扫不动（重启后按新底座起）
+    assert fake.ccfg["projectsRoot"] == "C:/cb"
+    assert rescans == []
     # 非法值静默忽略
     assert sg.App._settings_apply_web(fake, {"daw": "foobar"}) is None
     assert disk["daw"] == "studioone"
@@ -1120,20 +1133,29 @@ def test_daw_setting_persist(monkeypatch):
 
 
 def test_settings_get_web_daw_fields(monkeypatch):
-    """/settings GET 三键：daw=落盘值优先（前端回填防刷回旧值），
-    dawActive=生效值（落盘≠生效时前端提示重启），dawName=label 动态化。"""
+    """/settings GET 底座键：daw=落盘值优先（回填防刷回），dawActive=生效值
+    （提示重启），root/exe 顶层键随落盘底座走（表单所显），dawSettings=两
+    底座各自记忆（前端联动换显）；平铺旧键只迁给活跃底座不外溢。"""
     fake = types.SimpleNamespace(
         clock_hint="", vj_hint="", kb_hint="", watch=None,
         cont_play=False, top_most=False, switch_confirm=True,
         exit_close_apps=False, launch_apps=True,
-        ccfg={"projectsRoot": "", "dawExe": ""},
-        daw="studioone", facts={"display_name": "Studio One"},
+        ccfg={"projectsRoot": "S:/songs", "dawExe": "S:/so.exe"},
+        daw="studioone",
         _web_status={}, _web_config_payload=lambda **f: dict(
             web_remote.DEFAULT_WEB_REMOTE, **f))
-    monkeypatch.setattr(sg, "_load_config", lambda: {"daw": "cubase"})
+    # 落盘=cubase（待重启切换），平铺 cubase 路径待收编
+    monkeypatch.setattr(sg, "_load_config", lambda: {
+        "daw": "cubase",
+        "dawSettings": {"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"}})
     monkeypatch.setattr(sg, "list_screens", lambda: [])
     monkeypatch.setattr(sg.mb, "_in_devices", lambda: [])
     d = sg.App._settings_get_web(fake)
     assert d["daw"] == "cubase"           # 落盘值优先（回填用）
     assert d["dawActive"] == "studioone"  # 生效值（重启生效语义）
-    assert d["dawName"] == "Studio One"   # label 动态化
+    assert d["projectsRoot"] == "C:/cb"   # 表单随落盘底座（非生效 ccfg）
+    assert d["dawSettings"]["cubase"] == {"projectsRoot": "C:/cb",
+                                          "dawExe": "C:/cb.exe"}
+    # 平铺 cubase 键不外溢：studioone 记忆=本底座默认
+    assert d["dawSettings"]["studioone"]["projectsRoot"] == \
+        sg.DAW_DEFAULTS["studioone"]["root"]

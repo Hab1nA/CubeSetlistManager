@@ -59,6 +59,10 @@ Win11 圆角）。全程本地通信，不经互联网。
 桌面快捷方式，自带卸载器；两个安装包独立 AppId/目录，**可并存安装**；升级
 直接装新版，`config.json` 等数据保留（简化版首装预置 automator 配置，
 已有配置不被覆盖；完整版首装不预置，缺失按默认值起）。
+**从旧双版本（Cube Setlist Manager Cubase / Studio One 两个独立安装包的时代）
+升级：先卸载两个旧版再装合一版**——旧版与合一版互斥名不同，并存会双跑双发
+走带键。旧 Cubase 版用户可直接原地升级（AppId 沿用），旧 Studio One 版用户
+卸载后在设置页把底座切到 Studio One 重启即可。
 
 | 产品 | 端 / 底座 | 定位 |
 |---|---|---|
@@ -324,8 +328,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   `s1_*` 五阶段（Studio One，库根 `CUBE_S1_PROJECTS_ROOT`）。
 - **重新打包一律用 `build.bat`（原生 cmd 或双击跑，Git Bash 调它会乱码）**：
   先备份 exe 目录两份 json → 打包 → 数据原样放回 → 拷入最新 APK → 编译安装包
-  `CubeSetlistManager-Cubase-Setup-<版本>.exe` /
-  `CubeSetlistManager-StudioOne-Setup-<版本>.exe` /
+  `CubeSetlistManager-Setup-<版本>.exe` /
   `CubeAutomator-StudioOne-Setup-<版本>.exe`（版本取最近 git tag；未装
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) 时跳过安装包只出绿色版），
   失败保留 .bak。
