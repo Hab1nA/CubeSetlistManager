@@ -74,6 +74,14 @@ final class AppModel: ObservableObject {
         webError = message
     }
 
+    /// 回到前台：NWListener 可能已被系统挂起，重新拉起端口与转发。
+    func resume() {
+        guard connection != nil else { return }
+        if !turnRunning { turnServer.start(port: turnPort) }
+        if pedalForward { startForwarder() }
+        pushBridge()
+    }
+
     func retryPage() {
         webError = nil
         webView?.reload()

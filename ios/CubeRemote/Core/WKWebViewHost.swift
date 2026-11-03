@@ -56,14 +56,20 @@ struct WKWebViewHost: UIViewRepresentable {
 
         func webView(_ webView: WKWebView,
                      didFail navigation: WKNavigation!, withError error: Error) {
-            Task { @MainActor in
-                model.pageFailed(error.localizedDescription)
-            }
+            report(error)
         }
 
         func webView(_ webView: WKWebView,
                      didFailProvisionalNavigation navigation: WKNavigation!,
                      withError error: Error) {
+            report(error)
+        }
+
+        private func report(_ error: Error) {
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled {
+                return
+            }
             Task { @MainActor in
                 model.pageFailed(error.localizedDescription)
             }
