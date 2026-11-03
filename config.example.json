@@ -47,7 +47,9 @@
     "taskerPort": 8766,
     "midiIn": "",
     "devices": [],
-    "appPort": 8767
+    "appPort": 8767,
+    "authToken": "",
+    "hosts": []
   },
   "autoAdvance": true,
   "autoPlay": false,
