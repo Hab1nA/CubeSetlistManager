@@ -24,6 +24,7 @@ import cpr_meta
 import hotspot
 import kbd_auto
 import obs_ctrl
+import points
 import ui_text
 
 CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
@@ -532,7 +533,13 @@ def build_snapshot(app, has_project, proj_name=None):
     cur_entry = resolve(key) if (resolve is not None and key) else None
     if cur_entry is not None and cur_entry["point"] is not None:
         p = cur_entry["point"]
-        dur = cpr_meta.safe_dur(p["end"] - p["start"])
+        pos_raw = w.position() if w is not None else None
+        # 与 PC 横幅同口径：位置在段内（含一帧容差）才算时长——空档/无
+        # 时码不显进度（旧口径空档=满进度条，移动端说「唱完了」而 PC
+        # 说「没在播」，两端互相矛盾）
+        dur = (cpr_meta.safe_dur(p["end"] - p["start"])
+               if pos_raw is not None and points.contains(p, pos_raw)
+               else 0.0)
     else:
         dur = cpr_meta.safe_dur(app.durations.get(key)) if key else 0.0
     pos = min(dur, max(0.0, w.played())) if (w is not None and dur > 0) else 0.0
@@ -597,6 +604,9 @@ def build_snapshot(app, has_project, proj_name=None):
         "pos": round(pos, 1),
         "dur": round(dur, 1),
         "cur": cur,
+        # 下一首目标下标（三面单一来源，_tick_banner 维护；与 App._next 同
+        # 口径：指针置空回打开工程首个条目，游离兜节目单头，末尾 None）
+        "nextIdx": getattr(app, "_next_idx", None),
         "songs": songs,
         "pedalRemote": remote,
         # 联动健康（状态灯真实化）：OBS=obs-websocket 连接；loop=loopMIDI 进程
@@ -888,8 +898,8 @@ function render(){
   if(!st.busy){
     $("now").textContent=st.projName?st.projName:
       (st.ready?"（无打开的工程）":"启动中…");
-    var n=st.songs?st.songs[cur+1]:null;
-    $("next").textContent=n?n.name:(s?"（末尾）":"—");
+    var n=cur>=0&&st.songs?st.songs[cur+1]:null;
+    $("next").textContent=n?n.name:(cur>=0&&s?"（末尾）":"（无）");
   }
   var L=$("list");L.textContent="";
   for(var i=0;i<(st.songs||[]).length;i++){

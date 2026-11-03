@@ -21,6 +21,14 @@ NAME_FMT = "定位点%d"
 MIN_SPAN = 1.0                  # 硬校验：终点必须大于起点
 SOFT_SPAN = 3.0                 # 软提示：段过短吃停止重试窗，只提示不拦
 MHDR_DONE = 0x1
+FRAME_TOL = 0.05                # MMC GOTO 帧取整（30fps 一帧≈33ms）回落
+                               # 容差：定位落点可能停在起点前 <1 帧
+
+
+def contains(p, sec):
+    """位置是否在点区间内。起点侧带一帧容差：GOTO 帧取整会把光标落在
+    起点前不足一帧处，不容差会把刚定位到的条目弹回前一段/空档。"""
+    return p["start"] - FRAME_TOL <= sec <= p["end"]
 
 
 def finite_tc(v):

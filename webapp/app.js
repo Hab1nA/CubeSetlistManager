@@ -314,11 +314,13 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     if (!stState) return;
     e.preventDefault();
-    // cur 未定（未切过歌=null）归一 -1：→=第一首，与 NEXT 卡同口径
+    // →=下一首（后端 nextIdx 单一来源，与 NEXT 卡/按钮同口径：置空态回
+    // 打开工程首个条目）；←=上一首（cur 未定归一 -1→第一首）
     const cur = typeof stCur === "number" ? stCur : -1;
     const rows = stState.songs || [];
-    const i = Math.min(rows.length - 1,
-                       Math.max(0, cur + (e.key === "ArrowRight" ? 1 : -1)));
+    const i = e.key === "ArrowRight"
+        ? (typeof stState.nextIdx === "number" ? stState.nextIdx : -1)
+        : Math.min(rows.length - 1, Math.max(0, cur - 1));
     const s = rows[i];
     if (s && i !== cur) switchTo(i, null, false, s.key);
   } else if (e.key === "r" || e.key === "R") {
@@ -421,15 +423,13 @@ function switchTo(i, btn, dbl, key) {
   fire();
 }
 $("#next-go").addEventListener("click", () => {
-  // 目标必须与卡面同拍、全部取自 /state 单一来源：cur=null 一律归一 -1
-  // （与 render 的 NEXT=第一首口径一致）——回退 stCur 仅限 stState 未就绪
-  // 的 boot 瞬间（四轮结论攻击：null 态回退 /playlist 拍会「卡面显 A 实
-  // 切任意曲」）。无 key 时走 index，不借 plCache
-  const cur = stState
-      ? (typeof stState.cur === "number" ? stState.cur : -1)
-      : (typeof stCur === "number" ? stCur : -1);
-  const i = cur + 1;
-  const s = stState && stState.songs ? stState.songs[i] : null;
+  // 目标全部取自 /state 单一来源 nextIdx（后端 _next 同口径：指针置空态
+  // 回当前打开工程的首个条目，不再是本地 cur+1→第一首）。无 key 时走
+  // index，不借 plCache
+  const i = stState && typeof stState.nextIdx === "number"
+      ? stState.nextIdx : null;
+  const s = (i != null && stState && stState.songs)
+      ? stState.songs[i] : null;
   if (!s) return;   // 目标行已不在（它端删空 NEXT）：不发裸下标（key 防线
                     // 会被 undefined 跳过），等 ≤500ms 轮询重绘卡面
   switchTo(i, $("#next-go"), false, s.key);
@@ -500,14 +500,16 @@ function render(st) {
       b.disabled = !!st.busy && b.dataset.cmd !== "panic");
   $$("#console-list .go-switch, #chips .chip-btn").forEach(b =>
       b.disabled = !!st.busy);
-  // NEXT 卡
+  // NEXT 卡（与 PC 横幅同口径：指针置空=（无），末尾=末尾；按钮目标走
+  // 后端 nextIdx 单一来源——置空态它仍可点「回打开工程首个条目」）
   const rows = st.songs || [];
   const cur = typeof st.cur === "number" ? st.cur : -1;
-  const nx = rows[cur + 1];
-  $("#next").textContent = nx ? nx.name : (rows.length ? "末尾" : "—");
+  const nx = cur >= 0 ? rows[cur + 1] : null;
+  $("#next").textContent = nx ? nx.name
+      : (cur >= 0 ? (rows.length ? "末尾" : "—") : "（无）");
   $("#next").classList.toggle("has", !!nx);
   marquee($("#next"));
-  $("#next-go").disabled = !nx || !!st.busy;
+  $("#next-go").disabled = !(typeof st.nextIdx === "number") || !!st.busy;
   // 曲目列表（三态；签名不变不动 DOM，悬停态不被轮询冲掉）。
   // 签名必须含 plCache 键列：行上的 dataset.k（switch 防 P0 漂移的凭据）
   // 取自建行时刻的 plCache——若 /playlist 后到而签名不含键，行永不重建、

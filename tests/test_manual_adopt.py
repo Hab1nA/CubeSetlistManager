@@ -17,15 +17,37 @@ class _FakeWatch:
     def __init__(self):
         self.durs, self.lefts, self.resets = [], [], 0
         self.ops = []                   # reset/dur 顺序（P0-1 纪元闭合锚）
+        self.pos = None                 # position()：对位测试用
+        self.duration = 0               # 现值镜像（闸门/恢复断言用）
+        self.armed = False
+        self._fired = False
+        self._live = False
+        self._since_live = 1e9          # 距最后 QF 秒数（默认=从未/久远）
 
     def set_duration(self, d, left=None):
         self.durs.append(d)
         self.lefts.append(left)
         self.ops.append("dur")
+        self.duration = d
 
     def reset(self):
         self.resets += 1
         self.ops.append("reset")
+
+    def position(self):
+        return self.pos
+
+    def played(self):
+        return self.pos or 0.0
+
+    def fired(self):
+        return self._fired
+
+    def is_transport_live(self):
+        return self._live
+
+    def since_live(self):
+        return self._since_live
 
 
 class _Q(list):
@@ -145,3 +167,282 @@ def test_adopt_empty_playlist_noop():
     setlist_gui.App._adopt(app, "X")
     assert app.cur == 5 and app.cur_song_path == "/keep"
     assert app.watch.durs == [] and app.logs == []
+
+
+def _pt_app(pl, pts, cur=0, pos=None):
+    """定位点对位 stub：pl=键序列，pts={lib_key: points data}。"""
+    import types
+    app = types.SimpleNamespace()
+    app.pl_keys = list(pl)
+    app.by_key = {"A": {"name": "工程A", "path": "/pA"},
+                  "B": {"name": "工程B", "path": "/pB"}}
+    app.points = pts
+    app.durations = {}
+    app.watch = _FakeWatch()
+    app.watch.pos = pos
+    app.cur = cur
+    app.q = app.logs = _Q()
+    app.calls = queue.Queue()
+    app.cur_song_path = "/pA"
+    app._goto_ack = None               # GOTO 在途闸（repick 触及）
+    app._refresh = lambda: app.logs.append("<refresh>")
+    app._resolve_entry = lambda key: \
+        setlist_gui.App._resolve_entry(app, key)
+    app._repick_by_position = lambda name, pos_: \
+        setlist_gui.App._repick_by_position(app, name, pos_)
+    app._repoint = lambda j, e, why: \
+        setlist_gui.App._repoint(app, j, e, why)
+    return app
+
+
+def _pts(data_points, enabled=True):
+    return {"enabled": enabled, "counter": len(data_points),
+            "points": data_points}
+
+
+def test_repick_keeps_when_current_contains_position():
+    """当前段含位置：指针不动（重复区间设计的稳定锚）。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 30.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=45.0)
+    assert not app._repick_by_position("工程A", 45.0)
+    # 45 在段1 [0,60] 内：指针不动（duration 从 0 起步→静默补段坐标）
+    assert app.cur == 0 and app.watch.durs == [60.0]
+    assert app.logs == []
+
+
+def test_repick_moves_to_containing_point():
+    """位置落在后面的段：指针移过去并换段坐标（同路径，映射缓存复用）。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 30.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=70.0)
+    assert app._repick_by_position("工程A", 70.0) is True
+    assert app.cur == 1
+    assert app.watch.durs == [60.0] and app.watch.lefts == [30.0]
+    assert any("按位置对位" in m for m in app.logs)
+
+
+def test_repick_identical_ranges_no_oscillation():
+    """两段完全同区间（重复设计）：当前段含位置即不动，不振荡。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 30.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 30.0,
+                                   "end": 60.0}])},
+                  cur=1, pos=45.0)
+    assert not app._repick_by_position("工程A", 45.0)
+    assert app.cur == 1 and app.watch.durs == [30.0]   # 静默补坐标，指针不动
+
+
+def test_repick_gap_follows_last_entered():
+    """空档（位置不在任何段内）：指针=起点≤位置的播放列表序最后一个；
+    当前已是它则不动——拖到段间空档 NOW 显裸工程名、NEXT 不倒退。空档
+    内段坐标清零（推进暂闭：空档起播不属于任何段，防「已过段尾」被误判
+    唱完而杀掉手动播放）。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 30.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=45.0)
+    assert not app._repick_by_position("工程A", 45.0)   # 段1 已是最后进入者
+    assert app.cur == 0 and app.watch.durs == []
+    # 位置越过全部段尾：指到最靠后的已进入段，坐标清零（推进暂闭）
+    assert app._repick_by_position("工程A", 95.0) is True
+    assert app.cur == 1
+    assert app.watch.durs == [0] and app.watch.lefts == [0.0]
+    assert any("空档对位" in m for m in app.logs)
+    # 指针已在最后进入段、位置在段后空档：不移动但同样清零
+    app2 = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                   pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                    "end": 30.0},
+                                   {"id": 2, "name": "定位点2", "start": 60.0,
+                                    "end": 90.0}])},
+                   cur=1, pos=95.0)
+    app2.watch.set_duration(30.0, 60.0)     # 段2 坐标在场
+    assert not app2._repick_by_position("工程A", 95.0)
+    assert app2.cur == 1
+    assert app2.watch.durs == [30.0, 0] and app2.watch.duration == 0
+
+
+def test_repick_heals_after_gap_zeroing():
+    """空档清零后位置回段内：①静默恢复段坐标（指针不动、不刷日志）。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 30.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=10.0)
+    app.watch.set_duration(30.0, 0.0)       # 段1 坐标在场
+    assert not app._repick_by_position("工程A", 45.0)   # 空档：清零
+    assert app.watch.duration == 0
+    assert not app._repick_by_position("工程A", 10.0)   # 回段内：静默恢复
+    assert app.cur == 0
+    assert app.watch.durs == [30.0, 0, 30.0]
+    assert app.watch.duration == 30.0
+    assert not any("按位置对位" in m for m in app.logs)
+
+
+def test_repick_advance_protocol_gate():
+    """自动推进协议在途（armed、未 fire、播过段尾仍在播）：位置对位让路
+    ——此刻换段坐标会把「停止→已播 0 秒不切换」打成 tick/poll 相位赌局
+    的随机死锁；推进闩已闭合（fired，全停抑制/已推进）则放行。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 120.0}])},
+                  cur=0, pos=70.0)
+    app.watch.set_duration(60.0, 0.0)
+    app.watch.armed, app.watch._live = True, True
+    assert not app._repick_by_position("工程A", 70.0)   # 协议在途：不动
+    assert app.cur == 0 and app.watch.durs == [60.0]
+    # QF 刚断（0.25s 翻假）但推进仍在收尾（poll 100ms+calls 50ms 交接缝）：
+    # 0.5s 缓冲窗内同样让路——否则 tick 落在缝里换段坐标=推进随机死锁
+    app.watch._live, app.watch._since_live = False, 0.2
+    assert not app._repick_by_position("工程A", 70.0)
+    assert app.cur == 0
+    # 停止态拖拽（久无 QF）：不在协议窗内，正常走空档规则
+    app.watch._since_live = 30.0
+    assert app._repick_by_position("工程A", 70.0) is True
+    assert app.cur == 1
+    app.watch._fired = True                    # 闩闭合（全停抑制）：放行
+    app2 = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                   pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                    "end": 60.0},
+                                   {"id": 2, "name": "定位点2", "start": 60.0,
+                                    "end": 120.0}])},
+                   cur=0, pos=70.0)
+    app2.watch.set_duration(60.0, 0.0)
+    app2.watch.armed, app2.watch._live = True, True
+    app2.watch._fired = True
+    assert app2._repick_by_position("工程A", 70.0) is True
+    assert app2.cur == 1
+
+
+def test_repick_before_all_starts_clears_pointer():
+    """位置在本工程全部点起点之前：指针置空（NOW 裸名/NEXT 空，「下一
+    首」回首个点条目），进入任一段后自动恢复。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 50.0,
+                                   "end": 100.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=10.0)
+    assert app._repick_by_position("工程A", 10.0) is True
+    assert app.cur is None
+    assert app.watch.durs == [0] and app.watch.lefts == [0.0]
+    assert any("指针置空" in m for m in app.logs)
+    assert not app._repick_by_position("工程A", 10.0)   # 不重复置空
+    # 位置进入段内：从空指针恢复（含位置的首个=定位点1）
+    assert app._repick_by_position("工程A", 70.0) is True
+    assert app.cur == 0
+    assert app.watch.durs == [0, 50.0] and app.watch.lefts == [0.0, 50.0]
+
+
+def test_repick_bare_project_noop():
+    """本工程无点条目（未启用定位点/裸条目模式）：位置再怪也不动指针。"""
+    app = _pt_app(pl=("A", "B"), pts={}, cur=0, pos=123.0)
+    assert not app._repick_by_position("工程A", 123.0)
+    assert app.cur == 0 and app.watch.durs == []
+
+
+def test_repick_foreign_pointer_untouched():
+    """指针在他曲条目：对位不动（归 _adopt 按 DAW 标题对位管）。"""
+    app = _pt_app(pl=("B", "pt:A#1"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0}])},
+                  cur=0, pos=30.0)
+    assert not app._repick_by_position("工程A", 30.0)
+    assert app.cur == 0 and app.watch.durs == []
+
+
+def test_repick_goto_in_flight_gated():
+    """程序内 GOTO 在途（_goto_ack 1.2s 窗）：位置对位让路（位置即将跳变，
+    程序跳转是权威）。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 30.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 90.0}])},
+                  cur=1, pos=10.0)            # 位置还在段1（旧位置）
+    app._goto_ack = (10.0, time.time(), "x")
+    assert not app._repick_by_position("工程A", 10.0)
+    assert app.cur == 1 and app.watch.durs == []
+
+
+def test_repick_unknown_position_noop():
+    """位置未知（未收到时码）：不动任何状态。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 30.0,
+                                   "end": 90.0}])},
+                  cur=0, pos=None)
+    assert not app._repick_by_position("工程A", None)
+    assert app.cur == 0 and app.watch.durs == []
+
+
+def test_repick_adjacent_relays_at_boundary():
+    """相邻段（段1 [0,60]、段2 [60,120]）：位置过界（>60）自然接力到段2；
+    恰在界点上（=60，两段都含）保持现指针。"""
+    app = _pt_app(pl=("pt:A#1", "pt:A#2"),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 0.0,
+                                   "end": 60.0},
+                                  {"id": 2, "name": "定位点2", "start": 60.0,
+                                   "end": 120.0}])},
+                  cur=0, pos=60.5)
+    assert app._repick_by_position("工程A", 60.5) is True
+    assert app.cur == 1
+    assert app.watch.durs == [60.0] and app.watch.lefts == [60.0]
+    assert not app._repick_by_position("工程A", 60.0)   # 界点保持现指针
+
+
+def test_adopt_pt_entry_defers_coords(monkeypatch):
+    """定位点条目的手动采纳：跨工程立即作废旧位置（reset+0），装载提交
+    也不写段坐标（首点未必含真实位置，坐标归 _repick_by_position 按时码
+    填），durations 不为 pt 键立目。"""
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
+                        lambda p: (0.0, 120.0))
+    monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
+                        lambda p, kind=None: {})
+    app = _app(pl=("pt:a#1",))
+    app.points = {"a": {"enabled": True, "counter": 1,
+                        "points": [{"id": 1, "name": "定位点1",
+                                    "start": 0.0, "end": 60.0}]}}
+    setlist_gui.App._adopt(app, "X")
+    assert app.cur == 0
+    assert app.watch.ops[:2] == ["reset", "dur"]        # 采纳即刻作废旧位置
+    assert app.watch.durs[0] == 0
+    assert _wait(app, lambda: app.cur_song_path == "/p1")
+    _drain(app)
+    # 提交半程：纪元复位+坐标仍 0（段坐标归位置对位）
+    assert app.watch.ops == ["reset", "dur", "reset", "dur"]
+    assert app.watch.durs == [0, 0]
+    assert "pt:a#1" not in app.durations
+
+
+def test_now_entry_display_matrix():
+    """NOW 显示名：段内→条目名（与 NEXT/播放列表同一套）；空档/他曲/无
+    指针/无时码→None（回落裸工程名——指针只是按标题猜的，不当事实显）；
+    裸条目→工程名。"""
+    e_pt = {"display": "工程A · 定位点2", "song_name": "工程A",
+            "point": {"start": 60.0, "end": 120.0}}
+    e_bare = {"display": "工程A", "song_name": "工程A", "point": None}
+    e_other = {"display": "工程B · 定位点1", "song_name": "工程B",
+               "point": {"start": 0.0, "end": 10.0}}
+    f = setlist_gui.App._now_entry_display
+    assert f(e_pt, "工程A", 90.0) == "工程A · 定位点2"   # 段内
+    assert f(e_pt, "工程A", 60.0) == "工程A · 定位点2"   # 双端含
+    assert f(e_pt, "工程A", 45.0) is None                # 空档→裸名
+    assert f(e_pt, "工程A", None) is None                # 无时码→裸名
+    assert f(e_bare, "工程A", 1.0) == "工程A"            # 裸条目
+    assert f(e_bare, "工程A", None) == "工程A"           # 裸条目无时码同
+    assert f(e_other, "工程A", 5.0) is None              # 指针在他曲
+    assert f(None, "工程A", 5.0) is None                 # 无指针（置空/游离）

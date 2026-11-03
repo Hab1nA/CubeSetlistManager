@@ -102,17 +102,36 @@ class AdvanceWatch:
         with self._lock:
             return self._live and self._t() - self._last <= self.clock_timeout
 
+    def since_live(self):
+        """距最后一个 QF 的秒数（从未收到=大数）。GUI 位置对位闸门用：
+        断流后一个短窗内停止→确认→推进协议仍在收尾，此刻换段坐标会把
+        推进打成「已播 0 秒不切换」的随机死锁（tick/poll 相位赌局）。"""
+        with self._lock:
+            return self._t() - self._last if self._live else 1e9
+
     def ever_live(self):
         """本工程是否收到过 QF（区分「未播放/已暂停」：
         收过但断流=暂停；从未收到=未播放，未发时码工程无从判断）。"""
         with self._lock:
             return self._live
 
+    def fired(self):
+        """推进闩是否已闭合（已推进过/全停抑制）——GUI 位置对位据此放行：
+        闩闭合后停止→推进协议不再在途，指针可随位置走。"""
+        with self._lock:
+            return self._fired
+
     def played(self):
         """歌内已播秒 = 位置−左定位条（钳 0）；位置未知=0（GUI 显示用）。"""
         with self._lock:
             return max(0.0, self._pos - self.left) \
                 if self._pos is not None else 0.0
+
+    def position(self):
+        """最近时码位置（工程绝对秒）；None=未知。GUI 定位点重选按此判
+        「位置落在哪个点的区间里」——必须用绝对值，played 已减左定位条。"""
+        with self._lock:
+            return self._pos
 
     def poll(self):
         finished = False
@@ -133,7 +152,10 @@ class AdvanceWatch:
                     self._last_stop = now
                     self.on_event("工程播到结尾，已播 %.0f 秒 / 时长 %.0f 秒"
                                   "→ 自动停止走带%s" % (
-                                      played, self.duration,
+                                      # 显示钳到时长：播放中前拖光标时
+                                      # played 可超时长（X>Y 日志误导）
+                                      min(played, self.duration),
+                                      self.duration,
                                       "" if self._stop_tries == 1
                                       else "，重试 %d/2" % (self._stop_tries - 1)))
                     self.on_stop_transport()
@@ -143,12 +165,15 @@ class AdvanceWatch:
                 # 后者（_reached 只由 QF 播放点亮），不切
                 self._fired = True
                 self.on_event("走带已停，已播 %.0f 秒 / 时长 %.0f 秒"
-                              "→ 自动切换下一首" % (played, self.duration))
+                              "→ 自动切换下一首"
+                              % (min(played, self.duration),
+                                 self.duration))
                 finished = True
             else:
                 if not self._dead_reported:
                     self._dead_reported = True
                     self.on_event("走带停止，已播 %.0f 秒，未满时长 %.0f 秒，"
-                                  "不切换" % (played, self.duration))
+                                  "不切换" % (min(played, self.duration),
+                                              self.duration))
                 return
         self.on_finished()              # 锁外触发，避免回调死锁

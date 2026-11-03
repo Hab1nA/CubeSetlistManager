@@ -3212,6 +3212,17 @@ class App:
                 self.q.put("播放列表保存失败：%s" % e)
 
     def _next(self):
+        if self.cur is None:
+            # 指针置空（位置在全部点之前）时回「当前打开工程」的首个条目
+            # ——节目单头可能是另一工程（位置对位④置空语义承诺的对象）
+            ws = daw_ctrl.current_project()
+            nm = daw_ctrl.project_name_from_title(ws[1]) if ws else None
+            if nm:
+                for i, k in enumerate(self.pl_keys):
+                    e = self._resolve_entry(k)
+                    if e is not None and e["song_name"] == nm:
+                        self._switch(i, "手动")
+                        return
         self._switch(0 if self.cur is None else self.cur + 1, "手动")
 
     def _prev(self):
@@ -3912,6 +3923,11 @@ class App:
                     self.ax_slots = {}
                     self._load_gen = getattr(self, "_load_gen", 0) + 1
                     gen = self._load_gen
+                if e["point"] is not None and self.watch is not None \
+                        and self.cur_song_path != e["path"]:
+                    self.watch.reset()               # 跨工程采纳：旧工程绝对
+                    self.watch.set_duration(0, 0.0)  # 秒立即作废——装载 IO 窗
+                    #   口（网络盘秒级）内不得拿旧位置参与新工程对位/显示
                 self._adopted_load(k, gen)
                 self._refresh()
                 self.q.put("已跟随手动打开：《%s》" % name)
@@ -3954,12 +3970,118 @@ class App:
                     self.watch.reset()  # 纪元闭合同 _switch_done：装载半程的
                     #   IO 窗口里旧工程可能还在播（尾流 QF 重灌位置），提交
                     #   时刻复位兜住，旧位置不得穿越新歌坐标系
-                    self.watch.set_duration(d, left)   # 不复位：位置自证
+                    if pt is None:
+                        self.watch.set_duration(d, left)   # 不复位：位置自证
+                    else:
+                        # 定位点段坐标不在此装载：手动打开的工程停在任意
+                        # 光标处，首个点条目未必含真实位置——主线程
+                        # _repick_by_position 已按位置选段，此处再写会与它
+                        # 竞态互相覆写（时长 0=推进暂闭，对位 tick 随后填）
+                        self.watch.set_duration(0, 0.0)
                 self.slots = slots
                 self.ax_slots = ax
                 self.cur_song_path = path
             self.calls.put(self._refresh)
         threading.Thread(target=run, daemon=True).start()
+
+    def _repoint(self, j, e, why):
+        """指针改指同工程点条目 j（同路径：音色映射/时长缓存全复用，只改
+        指针+段坐标；set_duration 不复位——时码绝对值自证）。日志只在走带
+        停止时记（DAW 循环播放跨界会按循环周期刷屏）。"""
+        self.cur = j
+        self.watch.set_duration(e["point"]["end"] - e["point"]["start"],
+                                e["point"]["start"])
+        self._refresh()
+        if not self.watch.is_transport_live():
+            self.q.put("%s：《%s》" % (why, e["display"]))
+
+    def _repick_by_position(self, name, pos):
+        """定位点指针随 DAW 位置对位（播放与手动拖光标同一路径，400ms
+        tick；GOTO 在途（_goto_ack 1.2s 窗）不动——位置即将跳变，程序
+        跳转是权威）：
+        ①当前点条目区间含位置→不动（重复区间设计的稳定锚，不振荡）；
+        ②否则指到同工程「含位置的播放列表序首个」点条目；
+        ③位置在段间空档→指到同工程点条目中「起点≤位置」的播放列表序
+          最后一个（=节目序最靠后的已进入段，NEXT=首个未进入的条目）；
+          空档内段坐标清零——空档起播不属于任何段，推进暂闭（防「位置
+          已过段尾」被误判唱完而杀掉手动播放），回段内由①/②恢复；
+        ④位置在本工程全部点起点之前→指针置空（NOW 裸工程名、NEXT 空，
+          「下一首」回当前打开工程的首个条目），位置进入任一段后自动恢复。
+        指针在他曲条目上不动（归 _adopt 按 DAW 标题对位）。返回是否
+        移动了指针。"""
+        if pos is None or self.watch is None or not self.pl_keys \
+                or self._goto_ack is not None:
+            return False
+        w = self.watch
+        if w.armed and not w.fired() and w.duration > 0 \
+                and w.played() >= w.duration \
+                and (w.is_transport_live() or w.since_live() <= 0.5):
+            return False    # 播过段尾且 QF 刚断（≤0.5s 缓冲）：停止→确认→
+            #   推进协议在途（含 3 次停止重试窗），段界归属自动推进——此
+            #   刻换段坐标会把「停止→已播 0 秒不切换」打成 tick/poll 相位
+            #   赌局的随机死锁。缓冲盖住 live 翻假到 _goto_ack 置位的交接
+            #   缝（poll 100ms + calls 50ms）；停止拖拽 since_live 大，不拦
+        cur_e = (self._resolve_entry(self.pl_keys[self.cur])
+                 if self.cur is not None and 0 <= self.cur < len(self.pl_keys)
+                 else None)
+        if cur_e is not None and cur_e["song_name"] != name:
+            return False        # 指针在他曲：标题对位（_adopt）的职责
+        pt = cur_e["point"] if cur_e is not None else None
+        if pt is not None and points.contains(pt, pos):
+            if w.duration <= 0:     # 空档清零后回到段内：静默恢复段坐标
+                w.set_duration(pt["end"] - pt["start"], pt["start"])
+            return False                        # ①当前段含位置：指针已对
+        same = []                               # 同工程点条目（播放列表序）
+        for j, k in enumerate(self.pl_keys):
+            e = self._resolve_entry(k)
+            if e is not None and e["song_name"] == name \
+                    and e["point"] is not None:
+                same.append((j, e))
+        if not same:
+            return False    # 本工程无点条目（未启用/裸条目模式）：不重选
+        for j, e in same:                       # ②含位置的首个
+            if points.contains(e["point"], pos):
+                if j != self.cur:
+                    self._repoint(j, e, "按位置对位")
+                    return True
+                return False
+        best = None                             # ③空档：起点≤位置的最后一个
+        for j, e in same:
+            if e["point"]["start"] - points.FRAME_TOL <= pos:
+                best = (j, e)
+        if best is not None:
+            j, e = best
+            if j != self.cur:
+                self.cur = j
+                w.set_duration(0, 0.0)          # 空档：推进暂闭（注③）
+                self._refresh()
+                if not w.is_transport_live():
+                    self.q.put("空档对位：《%s》" % e["display"])
+                return True
+            if w.duration > 0:                  # 已在最后进入段但位置在空档
+                w.set_duration(0, 0.0)          #   ——同样暂闭推进
+            return False
+        if self.cur is not None:                # ④位置在全部起点之前
+            self.cur = None
+            w.set_duration(0, 0.0)
+            self._refresh()
+            if not w.is_transport_live():
+                self.q.put("位置在《%s》全部定位点之前：指针置空" % name)
+            return True
+        return False
+
+    @staticmethod
+    def _now_entry_display(cur_e, name, pos):
+        """NOW 显示名（与 NEXT/播放列表同一套名字）：指针条目属当前工程
+        且（定位点）段区间含位置 → 条目显示名「工程 · 点名」；裸条目直接
+        认；空档（位置不在任何段内=没有定位点在播）、无时码（指针只是按
+        标题猜的，不当事实显）与指针不属本工程 → None（调用方回落裸工程
+        名，不说谎）。"""
+        if cur_e and cur_e["song_name"] == name:
+            p = cur_e["point"]
+            if p is None or (pos is not None and points.contains(p, pos)):
+                return cur_e["display"]
+        return None
 
     def _tick_banner(self):
         """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（外部手动改工程自动
@@ -4005,31 +4127,61 @@ class App:
                         self._adopt(name)
                         cur_e = _want()
                         want = cur_e["song_name"] if cur_e else None
-                now, color = "%s" % name, dpi.C_OK
+                # 定位点显示随位置对位：DAW 位置落在哪个点的区间里，指针
+                # /NEXT/进度就按哪个点算（含位置稳定锚+空档跟随+全部起点
+                # 之前置空，见 _repick_by_position 注）
+                pos = self.watch.position() \
+                    if self.watch is not None else None
+                if pos is not None and self._repick_by_position(name, pos):
+                    cur_e = _want()
+                    want = cur_e["song_name"] if cur_e else None
+                # 下一首目标（PC 按钮/移动/网页三面单一来源）：指针置空
+                # （位置对位④）时回当前打开工程的首个条目——与 _next 同
+                # 口径；找不到（游离）兜节目单头，与 _next 的回落一致
+                self._next_idx = None
+                if self.pl_keys:
+                    if self.cur is None:
+                        self._next_idx = 0
+                        for i, k in enumerate(self.pl_keys):
+                            e2 = self._resolve_entry(k)
+                            if e2 is not None and e2["song_name"] == name:
+                                self._next_idx = i
+                                break
+                    elif self.cur + 1 < len(self.pl_keys):
+                        self._next_idx = self.cur + 1
+                # NOW 与 NEXT/播放列表同一套名字：指针条目属当前工程且段
+                # 含位置（裸条目/无时码信指针）→「工程 · 点名」；空档=没
+                # 有定位点在播、指针不属本工程 → 裸工程名（不说谎）
+                disp = self._now_entry_display(cur_e, name, pos)
+                now = disp if disp is not None else "%s" % name
+                color = dpi.C_OK
+                proj_name = now     # 网页 NOW/确认弹窗与 PC 横幅同一套名字
                 if want and cur_e:
                     nk = (self.pl_keys[self.cur + 1]
                           if self.cur + 1 < len(self.pl_keys) else None)
                     ne = self._resolve_entry(nk) if nk else None
                     nxt = ne["display"] if ne else "（末尾）"
-                    if cur_e["point"] is not None:      # 定位点：段区间
-                        p = cur_e["point"]
-                        d = p["end"] - p["start"]
-                    else:
-                        d = self.durations.get(self.pl_keys[self.cur], 0.0)
-                    played = max(0.0, self.watch.played()
-                                 if self.watch is not None else 0.0)
-                    if not d:
-                        # 时长未知也可显已播（时码位置在，定位条没读到）
-                        remain = ("%d:%02d | 时长未知"
-                                  % (int(played) // 60, int(played) % 60)
-                                  if played > 0 else "时长未知")
-                    else:
-                        played = min(d, played)
-                        frac = min(1.0, played / d)
-                        rem = max(0, int(d - played))
-                        remain = ("%d:%02d | %d:%02d"
-                                  % (int(played) // 60, int(played) % 60,
-                                     rem // 60, rem % 60))
+                    if disp is not None:    # 进度/剩余只在段内（或无时码）
+                        if cur_e["point"] is not None:  # 定位点：段区间
+                            p = cur_e["point"]
+                            d = p["end"] - p["start"]
+                        else:
+                            d = self.durations.get(self.pl_keys[self.cur],
+                                                   0.0)
+                        played = max(0.0, self.watch.played()
+                                     if self.watch is not None else 0.0)
+                        if not d:
+                            # 时长未知也可显已播（时码位置在，定位条没读到）
+                            remain = ("%d:%02d | 时长未知"
+                                      % (int(played) // 60, int(played) % 60)
+                                      if played > 0 else "时长未知")
+                        else:
+                            played = min(d, played)
+                            frac = min(1.0, played / d)
+                            rem = max(0, int(d - played))
+                            remain = ("%d:%02d | %d:%02d"
+                                      % (int(played) // 60, int(played) % 60,
+                                         rem // 60, rem % 60))
         if self.ctrl is not None and not self.ctrl.busy:
             self._banner_keep = (now, color, nxt, remain, frac)
         self._banner(now, color, nxt, remain)
