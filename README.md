@@ -1,3 +1,21 @@
+> [!IMPORTANT]
+> **本 fork 已构建 iOS / iPadOS（兼容 iPhone）版 Cube Remote，但目前无法上传 TestFlight。**
+>
+> 原因：没有付费 Apple Developer Program 账号；免费 Apple ID 的 Personal Team 只能做 7 天真机调试，不能创建 App Store Connect 记录，也不能上传 TestFlight。
+>
+> 新增 / 改动路径：
+> - [`ios/`](ios/) — SwiftUI App、`CubeRemoteCore` SwiftPM 包、已生成的 `CubeRemote.xcodeproj`
+> - [`docs/ios.md`](docs/ios.md) — 构建、Simulator / 真机运行、能力边界
+> - [`docs/testflight.md`](docs/testflight.md) — 付费账号就绪后的 archive / upload 流程
+> - `web_auth.py`、`tests/test_web_auth.py` — Host 白名单与可选配对令牌
+> - `requirements.txt`、`requirements-dev.txt`、`pyproject.toml` — 依赖清单
+>
+> 分支：[`feat/ios-hardening`](https://github.com/KNGTNPT/CubeSetlistManager/tree/feat/ios-hardening)；详细差异见文末[「本 fork 的改动」](#本-fork-的改动kngtnpt)。
+>
+> 以下为原作者 README 原文（未改动）。
+
+---
+
 <div align="center">
 
 <img src="docs/logo.png" width="128" alt="Cube Setlist Manager Logo"/>
@@ -22,11 +40,6 @@
 </div>
 
 ---
-
-> **Fork 说明**：本仓库是 [KNGTNPT](https://github.com/KNGTNPT) 的 fork。
-> 上游 README 原文完整保留；本 fork 新增 iOS/iPadOS 客户端并做了三项加固，
-> 差异与验证状态见文末 [「本 fork 的改动」](#本-fork-的改动kngtnpt)。
-> 工作分支：[`feat/ios-hardening`](https://github.com/KNGTNPT/CubeSetlistManager/tree/feat/ios-hardening)
 
 
 演出自动化套装：Windows 主程序 **Cube Setlist Manager**（Cubase / Studio One 双底座）+ 安卓遥控 APP **Cube Remote**。演出时一条流走完：素材库编排播放列表 → 一键切换 DAW 工程 → 播完自动切下一首 → JUNO-DS 音色跟着工程走。深色大字界面，演出暗场可读；全程本地通信，不经互联网。
