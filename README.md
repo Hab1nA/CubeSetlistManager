@@ -61,11 +61,11 @@
 | 产品 | 端 / 底座 | 定位 |
 |---|---|---|
 | **Cube Setlist Manager** | Windows · Cubase / Studio One 7 Pro | 演出主程序：歌单编排、切歌、走带、自动推进、音色/踩钉/VJ 全联动；设置页选底座，切换重启生效 |
-| **Cube Remote** | Android 8.0+ | 遥控/翻谱 APP：控制页 + 谱面自动翻页（详见下文「移动端遥控 / 谱面自动翻页」） |
+| **Cube Remote** | Android 8.0+ / iOS 16+ | 遥控/翻谱 APP：控制页 + 谱面翻页；Android 走无障碍手势/媒体键，iOS 走 CoreMIDI（详见「移动端遥控 / 谱面自动翻页」与 [docs/ios.md](docs/ios.md)） |
 
 对应 Release 资产：`CubeSetlistManager-Setup-x.y.z.exe` /
-`CubeRemote-vX.Y.apk`
-（APP 亦可装好电脑端后连热点经网页「下载 APP」获取）。
+`CubeRemote-vX.Y.apk`；iOS 版随源码提供 Xcode 工程（`ios/`），需自行签名编译，
+暂无 ipa 资产。
 
 `config.json`、`playlist.json` 放 exe 同目录（安装根目录）。
 
@@ -95,7 +95,8 @@
 - DAW 二选一：Steinberg Cubase 13–15（实测 13.0.40 / 15）
   或 PreSonus Studio One 7 Pro（实测 7.2）；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、MIDI 踩钉；
-- 移动端遥控（可选）：安卓平板/手机 8.0+ 安装 Cube Remote，或任意现代浏览器。
+- 移动端遥控（可选）：安卓平板/手机 8.0+ 安装 Cube Remote，或 iPhone/iPad
+  （iOS 16+，自行编译 `ios/`），或任意现代浏览器。
 
 ### 开发 / 构建
 
@@ -107,7 +108,11 @@
   winrt-Windows.Devices.Enumeration winrt-Windows.Devices.Midi winrt-Windows.Storage.Streams`，
   键盘自动化走蓝牙 MIDI 用，包缺失自动降级纯 winmm）；MIDI/OBS 协议为
   标准库手写，不依赖第三方 MIDI 库；
+- 依赖清单：`requirements.txt` / `requirements-dev.txt`（`pip install -r requirements-dev.txt`）；
 - 安卓 APP：Kotlin + Gradle（`mobile/` 工程，`gradlew assembleDebug`）；
+- iOS APP：Xcode 16+（iOS 16 部署目标）；`open ios/CubeRemote.xcodeproj` 选
+  Team 后编译，纯逻辑测试 `cd ios/CubeRemoteCore && swift test`，详见
+  [docs/ios.md](docs/ios.md)；
 - 改码后重打包：`build.bat`（备份 dist 真实数据 → PyInstaller → 还原；装了
   Inno Setup 6 会顺带出按用户安装包并拷入最新 APK，版本取最近 git tag）；
 - 离线自检：`py tests\test_bridge.py`，或 `py -m pytest tests\test_bridge.py`
@@ -211,7 +216,14 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   本机方法自动翻页，翻谱推送走持久连接，网页被冻结翻页照常。
 - **翻谱音符协议**：C2/C#2（36/37）=上一/下一页，C4–A4=选设备槽位；推送语义
   指令到各设备，互不阻塞。
-- 首次配置顺序：APP 控制页认领设备 → 选翻页方法 → 手机系统设置里开启无障碍授权。
+- **iOS 版**（`ios/`，iOS 16+）：加载同一张 APP 页；翻页改由 CoreMIDI 虚拟源
+  「Cube Remote」发音符（默认 C2/C#2，可在 APP 设置页改），在 forScore 等
+  谱面 App 里学习该音符即可；踩钉支持 USB/蓝牙 MIDI 踏板 → Wi-Fi 转发
+  （映射 F13–F24）。iOS 不能模拟触摸/全局媒体键、不能枚举/切回其它 App，
+  且后台不能常驻监听（可选静音音频保活，仅延长存活）；完整差异与限制见
+  [docs/ios.md](docs/ios.md)。
+- 首次配置顺序：APP 控制页认领设备 → 选翻页方法（Android）→ 手机系统设置里
+  开启无障碍授权（Android）。
 
 ### 设置页
 
@@ -264,6 +276,7 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | pedal | remoteEnabled | 允许平板转发踩钉（踩钉控制页开关持久化；APP 侧另有「踩钉转发」开关，双开生效） |
 | webRemote | enabled / mode / ip / serverPort / appPort / taskerPort | 移动端遥控总开关 / 服务网络（hotspot=自动开热点 / lan=用现有局域网）/ lan 模式服务网卡 IP / 网页 8765 / APP 8767 / 翻谱 8766 |
 | webRemote | midiIn / devices | 翻谱信号 loopMIDI 端口名；已认领翻谱设备表（APP 网页认领自动维护，翻页方法存 APP 本机，勿手改） |
+| webRemote | authToken / hosts | 可选配对令牌（空=旧行为；非空时非回环请求需带 `X-Cube-Token`/Bearer/`?t=`/Cookie；`/pedal/event`、`/diag` 为兼容旧安卓客户端豁免）；额外可信 Host 列表（默认只认 IP 字面量/localhost，防 DNS 重绑定） |
 | autoAdvance | （顶层） | 「播完自动切换」勾选持久化（默认开） |
 | autoPlay / switchConfirm | （顶层） | 连续播放（默认关）/ 切换工程需确认（默认开），设置页可改 |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
@@ -283,9 +296,11 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 ├─ ui_text.py            跨窗复用文案唯一来源（配套 docs/UI文案与信息设计规范.md）
 ├─ stallguard.py         主线程停摆黑匣子（看门狗 stall.log + 栈哨兵 stall_stack.log）+ 指令队列治理
 ├─ kbd_auto.py / pedal.py    键盘音色自动化 / CC+HID 踩钉
-├─ web_remote.py / hotspot.py   移动端遥控（网页服务+语义推送+设备表）/ Windows 热点（WinRT）+ 本机网卡枚举
+├─ web_remote.py / web_auth.py  移动端遥控（网页服务+语义推送+设备表）/ Host 白名单+可选配对令牌（纯函数）
+├─ hotspot.py            Windows 热点（WinRT）+ 本机网卡枚举
 ├─ cpr_meta.py / song_meta.py   .cpr 与 .song 工程时长解析（RIFF 定位条 / ZIP+XML 事件终点）
 ├─ mobile\               Cube Remote 安卓工程（Kotlin：WebView 壳+无障碍手势+NanoHTTPD 接收器+踩钉转发）
+├─ ios\                  Cube Remote iOS/iPadOS 工程（SwiftUI+WKWebView+CoreMIDI+NWListener；Core 为 SwiftPM 纯逻辑包）
 ├─ app.ico               应用图标（exe 内嵌 + 窗口/任务栏）
 ├─ Cube Setlist Manager.spec / build.bat / installer.iss   打包 + 安装包
 ├─ tests\                test_bridge（离线自检）/ test_webapp / test_points / test_mtc / test_sysex_out / test_stability / test_pedal_wire（线级黑盒）/ test_dialog_drain / test_manual_adopt / pedal_sim / e2e_test（真机分阶段）

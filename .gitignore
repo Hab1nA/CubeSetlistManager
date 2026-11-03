@@ -46,3 +46,10 @@ out/ui_shots/crops/
 out/ui_shots/review_crops/
 out/ui_shots/_audit/
 out/ui_shots/stills/
+
+# iOS 本机构建产物（Xcode/SwiftPM）
+ios/.build/
+ios/**/.build/
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+.DS_Store
