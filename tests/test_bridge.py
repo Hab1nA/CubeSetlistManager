@@ -804,9 +804,10 @@ def test_midi_ble():
 
     # 正常打开 + 事件派发：注册的处理器解析字节后调 on_msg（winmm 同语义）
     p = _Port()
-    orig_buf = midi_ble._buf_bytes
+    orig_buf, orig_flag = midi_ble._buf_bytes, midi_ble._HAS_WINRT
     midi_ble._open_raw_in = lambda dev_id: p
     midi_ble._buf_bytes = lambda b: b"\x90\x3c\x40"
+    midi_ble._HAS_WINRT = True                     # 同口径打桩：不赌真环境装没装 winrt
     got = []
     try:
         port, err = midi_ble.open_in("DEV", lambda *a: got.append(a),
@@ -824,11 +825,14 @@ def test_midi_ble():
     finally:
         midi_ble._buf_bytes = orig_buf
         midi_ble._open_raw_in = orig_raw_in
+        midi_ble._HAS_WINRT = orig_flag
 
     # 枚举缓存：_refresh_once 写缓存（CI 无后台线程，同步驱动）；
     # 扫描异常保旧清单（last-good）。本机有真刷新线程并发扫同一缓存——
     # 在途位被占时 _refresh_once 会早退，故清位重驱至生效为止
     orig_scan_raw = midi_ble._scan_raw
+    orig_flag = midi_ble._HAS_WINRT
+    midi_ble._HAS_WINRT = True          # in_devices 门在 flag 上，同口径打桩
     fake_id = r"\\?\SWD#MMDEVAPI#MIDII_1.BLE10#{" + midi_ble.IN_GUID + "}"
     midi_ble._scan_raw = lambda g: [
         _D(fake_id, "JUNO-DS")]
@@ -849,6 +853,7 @@ def test_midi_ble():
         assert midi_ble.in_devices() == devs        # 扫描异常保旧清单
     finally:
         midi_ble._scan_raw = orig_scan_raw
+        midi_ble._HAS_WINRT = orig_flag
         with midi_ble._cache_lock:
             midi_ble._cache = {"in": [], "out": []}
             midi_ble._cache_at = {"in": 0.0, "out": 0.0}
