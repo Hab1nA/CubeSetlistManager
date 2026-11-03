@@ -19,8 +19,7 @@ py -c "import winrt.runtime" 2>nul || (
 rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never overwritten
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
-rem 两产品各自独立产物目录，数据备份/还原也各自对应。
-rem 完整版：dist\Cube Setlist Manager（缺省回退仓库根恢复源）
+rem dist\Cube Setlist Manager（缺省回退仓库根恢复源）
 if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\config.json" dist\_config.bak >nul
   copy /y "dist\Cube Setlist Manager\playlist.json" dist\_playlist.bak >nul
@@ -29,27 +28,16 @@ if exist "dist\Cube Setlist Manager\config.json" (
   copy /y config.json dist\_config.bak >nul
   copy /y playlist.json dist\_playlist.bak >nul
 )
-rem 简化版：dist\Cube Automator Studio One（缺省回退预置）
-if exist "dist\Cube Automator Studio One\config.json" (
-  copy /y "dist\Cube Automator Studio One\config.json" dist\_auto_config.bak >nul
-) else (
-  echo dist\Cube Automator Studio One missing config, fallback to preset copy
-  copy /y config.automator.json dist\_auto_config.bak >nul
-)
 pyinstaller "Cube Setlist Manager.spec" --noconfirm || goto :err
 copy /y dist\_config.bak "dist\Cube Setlist Manager\config.json" >nul
 copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul
-pyinstaller "Cube Automator Studio One.spec" --noconfirm || goto :err
-copy /y dist\_auto_config.bak "dist\Cube Automator Studio One\config.json" >nul
-del dist\_config.bak dist\_playlist.bak dist\_auto_config.bak >nul
+del dist\_config.bak dist\_playlist.bak >nul
 rem smoke: boot packed exe, assert /app loads+nav+no JS error (guards silent Tk fallback)
 py out\_smoke_dist.py || goto :err
 rem APK for /app.apk download endpoint
 if exist "mobile\app\build\outputs\apk\debug\app-debug.apk" (
   copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^
     "dist\Cube Setlist Manager\CubeRemote.apk" >nul
-  copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^
-    "dist\Cube Automator Studio One\CubeRemote.apk" >nul
   echo APK included
 ) else (
   echo no APK found: run "cd mobile ^&^& gradlew assembleDebug" first
@@ -66,10 +54,7 @@ if not exist "%ISCC%" (
 )
 "%ISCC%" /DAppVer=%APPVER% installer.iss || goto :err
 echo installer done: dist\CubeSetlistManager-Setup-%APPVER%.exe
-rem Cube Automator Studio One（简化版自动化集线器：独立 exe，预置 automator 配置）
-"%ISCC%" /DAppVer=%APPVER% /Dauto installer.iss || goto :err
-echo installer done: dist\CubeAutomator-StudioOne-Setup-%APPVER%.exe
 exit /b 0
 :err
-echo BUILD FAILED (backups kept at dist\_config.bak / _playlist.bak / _auto_config.bak)
+echo BUILD FAILED (backups kept at dist\_config.bak / _playlist.bak)
 exit /b 1

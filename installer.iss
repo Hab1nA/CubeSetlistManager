@@ -1,26 +1,16 @@
 ; Cube Setlist Manager 安装包（Inno Setup 6）
-; 由 build.bat 调用：ISCC /DAppVer=X installer.iss（常规=完整版）；
-; /Dauto =Cube Automator Studio One（简化版自动化集线器，独立 exe）。
-; 两产品独立 AppId/安装目录/快捷方式，可并存安装；完整版首装不预置
-; config.json（缺失时程序按默认值起），已装过的保留用户配置。
+; 由 build.bat 调用：ISCC /DAppVer=X installer.iss。
+; 首装不预置 config.json（缺失时程序按默认值起），已装过的保留用户配置。
 ; 按用户安装（免管理员）：config.json/playlist.json 写 exe 同目录，
 ; 装到 Program Files 会因权限写不进去，故必须 {localappdata}。
 
-#if defined(auto)
-#define AppName "Cube Automator Studio One"
-#define AppDirName "CubeAutomatorStudioOne"
-#define AppId "6F2B9D41-8C57-4A30-9E7B-D48C2F5A31E7"
-#define PkgBase "CubeAutomator-StudioOne-Setup"
-#define SrcDir "Cube Automator Studio One"
-#else
 #define AppName "Cube Setlist Manager"
 #define AppDirName "CubeSetlistManager"
 #define AppId "C8F2EC15-371F-4C34-B8DB-9824E24E602A"
 #define PkgBase "CubeSetlistManager-Setup"
 #define SrcDir "Cube Setlist Manager"
-#endif
-; PyInstaller 产物目录/exe 名=AppName（两产品各一个产物目录）；完整版
-; AppId 沿用旧 Cubase 版=已装用户原地升级，目录名变化仅影响新装默认路径。
+; PyInstaller 产物目录/exe 名=AppName；AppId 沿用旧 Cubase 版=已装用户
+; 原地升级，目录名变化仅影响新装默认路径。
 #ifndef AppVer
 #define AppVer "0.0.0"
 #endif
@@ -57,11 +47,6 @@ Source: "dist\{#SrcDir}\_internal\*"; \
     Excludes: ".mimosa"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
-#if defined(auto)
-; Automator 版首装预置 config.json（daw=studioone+三端口联动）；升级不覆盖
-Source: "config.automator.json"; DestDir: "{app}"; DestName: "config.json"; \
-    Flags: onlyifdoesntexist ignoreversion
-#endif
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
 Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}"; \

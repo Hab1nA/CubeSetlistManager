@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""打包前运行时数据快照：各产品 dist 目录的 config/playlist 追加到
-_bak_dist（带时间戳，永不覆盖）。Automator 无歌单，只有 config。"""
+"""打包前运行时数据快照：dist\Cube Setlist Manager 的 config/playlist
+追加到 _bak_dist（带时间戳，永不覆盖）。"""
 import os
 import shutil
 import time
@@ -8,7 +8,6 @@ import time
 # (dist 子目录, 数据文件)
 PRODUCTS = (
     ("Cube Setlist Manager", ("config.json", "playlist.json")),
-    ("Cube Automator Studio One", ("config.json",)),
 )
 
 

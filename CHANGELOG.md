@@ -4,6 +4,43 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [0.16.0] - 2026-11-03
+
+### 新增
+
+- **设置页底座切换（双底座合一 v2）**：Cubase / Studio One 底座在设置页
+  下拉切换，「应用并重启」一键生效——DAW 程序路径与工程库根目录按底座
+  分存（切换即换显对应路径），单实例互斥与配置按底座隔离，两底座设置
+  互不串扰；继任实例继承窗口尺寸与状态。
+- **一键重启**：设置页新增「应用并重启」，底座或路径改动原地重启即时
+  生效，不再手动关开。
+
+### 变更
+
+- **安装包收敛**：Cube Setlist Manager 收敛为**单一安装包**（原 Cubase /
+  Studio One 双安装包时代结束）——AppId 沿用旧 Cubase 版可原地升级；
+  旧 Studio One 双版本用户先卸旧再装新，首启后设置页把底座切到
+  Studio One 重启即可。
+- **Cubase 走带/全停/关工程迁移 MIDI Remote 直控**：不再模拟键盘（不再
+  抢焦点），App 经 loopMIDI「CubeSetlist Remote」口发 CC、Cubase 内
+  driver 脚本转键令，全程后台直达；Studio One 底座不受影响。**部署前提
+  （一次性三步）**：loopMIDI 建端口 `CubeSetlist Remote`、拷 driver 脚本到
+  Cubase MIDI Remote 目录、MIDI Remote Manager 确认自动连接——详见
+  docs/MIDIRemote直控部署.md；未部署时走带/全停/关工程动作失败并日志
+  报错。定位点 GOTO（MMC）与打开工程（CLI 转交）不变。
+
+### 移除
+
+- **Cube Automator Studio One 停止发行**：自本版起不再提供安装包与
+  Release 资产，其场景由完整版 Studio One 底座覆盖（设置页切底座）；
+  源码入口 `automator_gui.py` 保留可源码运行。
+
+### 修复
+
+- **底座重启链收口**：继任实例宽高解析跳过 `--wait-parent` 旗标（否则
+  启动即崩）；重启钮门控与联动换显修正（用户验收五条）；重启链三处
+  P1 终审收口。
+
 ## [0.15.0] - 2026-10-29
 
 ### 新增
