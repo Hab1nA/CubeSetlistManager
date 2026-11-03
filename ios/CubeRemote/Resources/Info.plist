@@ -20,14 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>需要访问局域网内的电脑，以显示遥控页并接收翻谱与踩钉信号。</string>
-	<key>NSCameraUsageDescription</key>
-	<string>用于扫描电脑端「网页遥控」页的二维码，快速填入地址。</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>用于接收蓝牙 MIDI 踏板的按键并转发给电脑。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -35,14 +31,20 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>用于接收蓝牙 MIDI 踏板的按键并转发给电脑。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于扫描电脑端「网页遥控」页的二维码，快速填入地址。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>需要访问局域网内的电脑，以显示遥控页并接收翻谱与踩钉信号。</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
