@@ -1,0 +1,49 @@
+name: CubeRemote
+options:
+  bundleIdPrefix: com.kngtnpt
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.1.0"
+packages:
+  CubeRemoteCore:
+    path: CubeRemoteCore
+targets:
+  CubeRemote:
+    type: application
+    platform: iOS
+    sources:
+      - path: CubeRemote
+        excludes:
+          - Resources/Info.plist
+    resources:
+      - path: CubeRemote/Resources/Assets.xcassets
+      - path: CubeRemote/Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kngtnpt.cuberemote
+        INFOPLIST_FILE: CubeRemote/Resources/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    dependencies:
+      - package: CubeRemoteCore
+        product: CubeRemoteCore
+
+schemes:
+  CubeRemote:
+    build:
+      targets:
+        CubeRemote: all
+    run:
+      config: Debug
+    archive:
+      config: Release

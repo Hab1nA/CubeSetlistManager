@@ -1,0 +1,11 @@
+# Cube Setlist Manager 运行时依赖（Windows 10/11, Python 3.14）
+# 安装：py -m pip install -r requirements.txt
+pywebview>=5.0
+sv-ttk>=2.6
+# BLE MIDI（kbd_auto 的蓝牙琴）走 pywinrt；缺失时自动降级为纯 winmm
+winrt-runtime>=3.2.1
+winrt-Windows.Foundation>=3.2.1
+winrt-Windows.Foundation.Collections>=3.2.1
+winrt-Windows.Devices.Enumeration>=3.2.1
+winrt-Windows.Devices.Midi>=3.2.1
+winrt-Windows.Storage.Streams>=3.2.1
