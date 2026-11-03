@@ -492,7 +492,8 @@ def test_daw_settings_compat():
     import setlist_gui as sg
     s = sg.daw_settings({"cubase": {"cubaseExe": "C:/x.exe",
                                     "projectsRoot": "P"}}, "cubase")
-    assert s["dawExe"] == "C:/x.exe" and s["projectsRoot"] == "P"
+    # 「/」输入读出统一成本机反斜杠（显示/落库一口径）
+    assert s["dawExe"] == "C:\\x.exe" and s["projectsRoot"] == "P"
     # 子段优先；平铺旧键只迁给活跃底座（daw 键所指）——迁给另一底座
     # = Cubase exe 泄漏给 S1（真机事故：S1 自检拉起 Cubase）
     s = sg.daw_settings({"daw": "cubase",

@@ -181,6 +181,9 @@ def daw_settings(cfg, daw):
                 s.setdefault("dawExe", legacy)
     s.setdefault("dawExe", DAW_DEFAULTS[daw]["exe"])
     s.setdefault("projectsRoot", DAW_DEFAULTS[daw]["root"])
+    # 分隔符统一成本机反斜杠（tk 对话框/手输都出「/」，显示与落库一口径）
+    s["dawExe"] = os.path.normpath(s["dawExe"])
+    s["projectsRoot"] = os.path.normpath(s["projectsRoot"])
     return s
 
 if getattr(sys, "frozen", False):   # PyInstaller exe：数据文件放 exe 同目录
@@ -2238,7 +2241,7 @@ class App:
             path = filedialog.askdirectory(parent=parent, title="选择目录")
         except Exception as e:
             return {"error": _err(e)}
-        return {"path": path or ""}
+        return {"path": os.path.normpath(path) if path else ""}
 
     def _pickfile_web(self):
         """/pickdir kind=file：原生文件选择对话框（如 Cubase 程序）。"""
@@ -2248,7 +2251,7 @@ class App:
                                               title="选择程序")
         except Exception as e:
             return {"error": _err(e)}
-        return {"path": path or ""}
+        return {"path": os.path.normpath(path) if path else ""}
 
     def _monitor_web(self):
         """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
@@ -2435,6 +2438,8 @@ class App:
             daw_new = ""
         target = daw_new or self.daw
         proj = str(p.get("projectsRoot") or "") if "projectsRoot" in p else ""
+        if proj:
+            proj = os.path.normpath(proj)   # 手输「/」落库前归一（同 pickdir）
         rescan = (bool(proj) and target == self.daw
                   and proj != self.ccfg.get("projectsRoot"))
         if proj and target == self.daw:
@@ -2505,7 +2510,7 @@ class App:
                     if proj:
                         sub["projectsRoot"] = proj
                     if "dawExe" in p and p.get("dawExe"):
-                        sub["dawExe"] = str(p["dawExe"])
+                        sub["dawExe"] = os.path.normpath(str(p["dawExe"]))
                 if sub:
                     new_ds[d] = sub
             cfg["dawSettings"] = new_ds

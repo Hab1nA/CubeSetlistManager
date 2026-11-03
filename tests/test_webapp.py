@@ -1117,9 +1117,10 @@ def test_daw_setting_persist(monkeypatch):
     assert disk["daw"] == "studioone"
     ds = disk["dawSettings"]
     assert set(ds) == {"cubase", "studioone"}          # 平铺键已清
-    assert ds["cubase"] == {"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"}
-    assert ds["studioone"]["projectsRoot"] == "D:/songs"
-    assert ds["studioone"]["dawExe"] == "D:/S1.exe"
+    # 路径「/」归一成本机反斜杠（POST 落库与 daw_settings 读出同一口径）
+    assert ds["cubase"] == {"projectsRoot": "C:\\cb", "dawExe": "C:\\cb.exe"}
+    assert ds["studioone"]["projectsRoot"] == "D:\\songs"
+    assert ds["studioone"]["dawExe"] == "D:\\S1.exe"
     # 归属≠生效底座：运行态 ccfg/重扫不动（重启后按新底座起）
     assert fake.ccfg["projectsRoot"] == "C:/cb"
     assert rescans == []
@@ -1153,9 +1154,9 @@ def test_settings_get_web_daw_fields(monkeypatch):
     d = sg.App._settings_get_web(fake)
     assert d["daw"] == "cubase"           # 落盘值优先（回填用）
     assert d["dawActive"] == "studioone"  # 生效值（重启生效语义）
-    assert d["projectsRoot"] == "C:/cb"   # 表单随落盘底座（非生效 ccfg）
-    assert d["dawSettings"]["cubase"] == {"projectsRoot": "C:/cb",
-                                          "dawExe": "C:/cb.exe"}
+    assert d["projectsRoot"] == "C:\\cb"  # 表单随落盘底座（非生效 ccfg）
+    assert d["dawSettings"]["cubase"] == {"projectsRoot": "C:\\cb",
+                                          "dawExe": "C:\\cb.exe"}
     # 平铺 cubase 键不外溢：studioone 记忆=本底座默认
     assert d["dawSettings"]["studioone"]["projectsRoot"] == \
         sg.DAW_DEFAULTS["studioone"]["root"]
