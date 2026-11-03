@@ -144,21 +144,34 @@ def test_watchdog_silent_when_healthy(tmp_path):
 
 
 def test_native_probe_logs_foreground_stack_and_recovery(tmp_path):
-    """停摆原生取证探针：首条=前台窗口+py-spy 原生栈；hwnd=0 跳过 WM_NULL
-    探针不崩；恢复行闭环。证据链断裂（如 py-spy 缺失）也要有占位文本。"""
+    """停摆原生取证探针：首条=前台窗口+栈落盘；hwnd=0 跳过 WM_NULL
+    探针不崩；恢复行闭环。py-spy 打桩：真附着耗时秒级不可控，混入本
+    测试的恢复观察窗（0.4s）必成 flake（见 test_pyspy_dump_produces_evidence）。"""
     import stallguard
     hb = {"t": time.monotonic()}
     log = tmp_path / "stall_native.log"
     p = stallguard.StallNativeProbe(
         heartbeat=lambda: hb["t"], main_hwnd=lambda: 0, path=log,
-        threshold=0.2, poke=0.15, period=0.05).start()
+        threshold=0.2, poke=0.15, period=0.05)
+    p._pyspy_dump = lambda: "Thread 0x7f (native)"      # 桩：只验落盘与状态机
+    p.start()
     time.sleep(0.5)                     # 心跳冻结=停摆窗口
     hb["t"] = time.monotonic()          # 恢复
     time.sleep(0.4)
     p.stop()
     text = log.read_text(encoding="utf-8")
     assert "停摆" in text and "前台=" in text and "恢复" in text
-    assert "Thread" in text             # py-spy 原生栈落了盘
+    assert "Thread" in text             # 栈文本落了盘
+
+
+def test_pyspy_dump_produces_evidence(tmp_path):
+    """真 py-spy 附着本进程一次（无时序断言）：产出原生栈或失败占位，
+    不许返回空——取证链断也必须留痕。"""
+    import stallguard
+    p = stallguard.StallNativeProbe(
+        heartbeat=lambda: 0.0, main_hwnd=lambda: 0, path=tmp_path / "x.log")
+    out = p._pyspy_dump()
+    assert "Thread" in out or "py-spy" in out, out
 
 
 def test_native_probe_silent_when_healthy(tmp_path):
