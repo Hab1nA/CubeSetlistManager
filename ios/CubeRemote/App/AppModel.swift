@@ -19,10 +19,12 @@ final class AppModel: ObservableObject {
     let store = SettingsStore.shared
     private weak var webView: WKWebView?
     private let turnServer = TurnHTTPServer()
-    private let midiOut = MIDITurnService()
-    private let pedalIn = PedalMIDIService()
+    // CoreMIDI / AVAudioEngine 首次创建可能要几百毫秒，延后到真正用到时，
+    // 避免启动画面被拖成白屏。
+    private lazy var midiOut = MIDITurnService()
+    private lazy var pedalIn = PedalMIDIService()
     private let forwarder = PedalForwarder()
-    private let audio = AudioKeepAlive()
+    private lazy var audio = AudioKeepAlive()
 
     init() {
         turnPort = store.turnPort
@@ -32,8 +34,6 @@ final class AppModel: ObservableObject {
         keepAlive = store.keepAlive
         connection = store.connection
         wireServices()
-        midiOut.start()
-        pedalIn.start()
         if connection != nil {
             turnServer.start(port: turnPort)
             if pedalForward { startForwarder() }
@@ -103,6 +103,7 @@ final class AppModel: ObservableObject {
         turnServer.stop()
         audio.stop()
         midiOut.stop()
+        pedalIn.stop()
         store.connection = nil
         connection = nil
         webError = nil
@@ -112,6 +113,7 @@ final class AppModel: ObservableObject {
     // MARK: - 翻谱 / 踩钉
 
     private func handleTurn(_ direction: TurnDirection) {
+        midiOut.start()
         let note = direction == .next ? store.nextNote : store.prevNote
         midiOut.send(note: note, on: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
@@ -138,6 +140,10 @@ final class AppModel: ObservableObject {
 
     private func startForwarder() {
         guard let connection else { return }
+        pedalIn.onEvent = { [weak self] note, down in
+            Task { @MainActor in self?.handlePedal(note: note, down: down) }
+        }
+        pedalIn.start()
         forwarder.start(connection: connection)
     }
 
@@ -234,9 +240,6 @@ final class AppModel: ObservableObject {
         }
         turnServer.onTurn = { [weak self] direction in
             Task { @MainActor in self?.handleTurn(direction) }
-        }
-        pedalIn.onEvent = { [weak self] note, down in
-            Task { @MainActor in self?.handlePedal(note: note, down: down) }
         }
         forwarder.onDisabled = { [weak self] message in
             Task { @MainActor in

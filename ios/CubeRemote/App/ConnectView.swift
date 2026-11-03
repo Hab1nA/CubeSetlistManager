@@ -78,7 +78,7 @@ struct ConnectView: View {
                       keyboard: .numberPad)
                 Divider().overlay(Color.white.opacity(0.08))
                 field("配对令牌（可选）", text: $token,
-                      placeholder: "与电脑端 authToken 一致",
+                      placeholder: "电脑端 authToken",
                       keyboard: .asciiCapable)
             }
             .background(
@@ -123,13 +123,23 @@ struct ConnectView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.white.opacity(0.55))
                 .frame(width: 116, alignment: .leading)
-            TextField(placeholder, text: text)
-                .font(.system(size: 16, design: .monospaced))
-                .foregroundStyle(.white)
-                .keyboardType(keyboard)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .multilineTextAlignment(.trailing)
+            ZStack(alignment: .trailing) {
+                if text.wrappedValue.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: 16, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: text)
+                    .font(.system(size: 16, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .tint(accent)
+                    .keyboardType(keyboard)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .multilineTextAlignment(.trailing)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 15)

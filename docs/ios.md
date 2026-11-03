@@ -97,7 +97,38 @@ xcodebuild -project ios/CubeRemote.xcodeproj -scheme CubeRemote \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-### 3.3 纯逻辑测试
+### 3.3 在 macOS 虚拟机 / iOS Simulator 里测试（无需签名）
+
+没有付费开发者账号也能验证界面与网络链路，前提是 macOS 虚拟机里装了 Xcode 和 iOS Simulator runtime：
+
+```bash
+xcodebuild -downloadPlatform iOS   # 首次，下载 Simulator runtime
+xcodebuild -project ios/CubeRemote.xcodeproj -scheme CubeRemote \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -derivedDataPath build/DerivedData build CODE_SIGNING_ALLOWED=NO
+xcrun simctl boot "iPhone 16"
+open -a Simulator
+xcrun simctl install booted build/DerivedData/Build/Products/Debug-iphonesimulator/CubeRemote.app
+xcrun simctl launch booted com.kngtnpt.cuberemote
+```
+
+网络：
+
+- 虚拟机网络设为 **桥接（Bridged）**，让虚拟机和 Windows 电脑在同一网段；NAT 模式默认到不了宿主机的 8767。
+- 先在虚拟机里 `curl http://<电脑IP>:8767/` 或浏览器打开，确认能拿到 APP 页；Windows 防火墙放行 TCP 8767（浏览器页 8765 也放行）。
+- 连不上时看 App 顶部错误 banner（超时 / 拒绝连接）。
+
+Simulator 的能力边界：
+
+- **没有 Bluetooth MIDI、也没有 USB MIDI 透传**，踩钉和真实琴的 MIDI 不能在这里验证；
+- CoreMIDI 虚拟源「Cube Remote」只在 Simulator 内部可见，Simulator 里没有 forScore 等谱面 App，翻谱只能验证“请求到达 + 发出 note”；
+- 相机扫码依赖 Mac 摄像头权限，可能不可用，直接手输 IP 即可；
+- 后台音频保活在 Simulator 只能粗略验证，锁屏/切后台行为与真机不同。
+
+在正常 Xcode GUI 里直接选 Simulator 跑即可，不需要命令行。
+
+### 3.4 纯逻辑测试
 
 ```bash
 cd ios/CubeRemoteCore && swift test
@@ -181,9 +212,11 @@ cd ios/CubeRemoteCore && swift test
   并配有 XCTest；在装有完整 Xcode 的机器上 `swift test` 即可复跑。
 - App 层（SwiftUI + WKWebView + CoreMIDI + NWListener）已通过
   `swiftc -typecheck`（iPhoneSimulator SDK，iOS 16 target）。
-- **本仓库的开发环境未接受 Xcode 许可协议，`xcodebuild` 被系统拦下**，
-  因此没有在本机产出 `.app`；首次在 Xcode 打开时请按 3.1 选 Team 后编译。
-  这属于本机许可限制，不是工程缺文件。
+- 本机已用 `xcodebuild` 产出未签名 device archive，并在
+  **iPhone 18 Pro / iOS 27.2 Simulator** 完成编译、安装、启动与界面截图；
+  启动页底色已改为深色，避免舞台环境里白屏闪一下。
+- 未做真机签名与 TestFlight 上传：需要付费 Apple Developer Team，
+  本机没有签名身份。
 - 真机验收清单：连接、翻谱（前台）、踩钉转发、令牌、扫码、iPad 分屏/旋转。
 
 ## 7. 故障排查
