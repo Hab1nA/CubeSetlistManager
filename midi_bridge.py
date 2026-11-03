@@ -41,9 +41,12 @@ NOTE_MAP = {n: "%d.mp4" % (n - 59) for n in range(60, 90)}
 NOTE_MAP[90] = None  # F#6 → 熄屏
 
 _winmm = ctypes.WinDLL("winmm")
+_MIM_CLOSE = 0x3C2        # 端口被驱动关闭（设备拔出/驱动卸载）：旧版误当
+                          #   LONGERROR，拔出时把句柄当地址解析=潜在崩溃源
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
 _MIM_LONGDATA = 0x3C4     # SysEx 缓冲收满（须先 AddBuffer 投缓冲，否则 SysEx 被静默丢弃）
-_MIM_LONGERROR = 0x3C2    # SysEx 接收错误（缓冲同样要回收重投）
+_MIM_ERROR = 0x3C5        # 短消息接收错误（无缓冲可回收，忽略）
+_MIM_LONGERROR = 0x3C6    # SysEx 接收错误（缓冲同样要回收重投）
 _CALLBACK_FUNC = 0x30000
 _Proc = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, ctypes.c_uint,
                            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t)
@@ -450,13 +453,27 @@ class MidiIn:
     POOL_N = 4          # longdata 缓冲池：全帧稀疏（定位/停止时才有），
     POOL_SIZE = 256     # 4×256B 足够；池尽=新 SysEx 被驱动丢弃（无损降级）
 
+    REOPEN_RETRY = 2.0      # 设备拔出后按名字重连的轮询间隔（秒）
+    REOPEN_LOG_EVERY = 30.0 # 长时间找不到设备时，日志最小间隔（防刷屏）
+
     def __init__(self, name_sub, on_note, on_mtc=None, on_f8=None,
-                 on_sysex=None):
+                 on_sysex=None, on_state=None):
         found = _pick(_in_devices(), name_sub)
         if found is None:
             sys.exit("没找到 %s 端口：请先安装并运行 loopMIDI 建一个虚拟端口"
                      % name_sub)
         idx, self.name = found
+        self._name_sub = name_sub
+        self._on_state = on_state          # 可选：("lost"/"reopened"/"failed", 说明)
+        self._closing = threading.Event()
+        self._reopen_lock = threading.Lock()
+        self._h_lock = threading.Lock()
+        self._reopening = False
+        self._reopen_count = 0
+        self._last_reopen_err = None
+        self._stale_hdrs = []              # 旧句柄的 longdata 头：不 Unprepare，
+        #   只持引用到进程退出（设备已拔，驱动仍可能持有 lpData，提前释放=
+        #   use-after-free；每丢一次口只泄漏 4×256B，可接受）
         self._on_note = on_note
         self._on_mtc = on_mtc
         self._on_f8 = on_f8
@@ -479,6 +496,8 @@ class MidiIn:
     def _setup_pool(self, h):
         """prepare+投递缓冲池。个别失败只缩池不致命：4 缓冲对稀疏全帧
         足够；全部失败=longdata 静默停摆（QF 主路径不受影响）。"""
+        if self._closing.is_set() or self._h is not h:
+            return                          # 投递前已 close/又换了口
         for _ in range(self.POOL_N):
             buf = (ctypes.c_ubyte * self.POOL_SIZE)()
             hdr = _MIDIHDR()
@@ -495,8 +514,12 @@ class MidiIn:
             self._hdrs.append((hdr, buf))
 
     def _dispatch(self, h, msg, inst, p1, p2):
-        # 回调线程零重活：longdata 只入队+按需派工，取字节/重投在专线
-        if msg == _MIM_DATA:
+        # 回调线程零重活：longdata 只入队+按需派工，取字节/重投在专线。
+        # MIM_CLOSE 必须单列：p1 是句柄而非 MIDIHDR 地址，旧版把它归进
+        # LONGERROR 分支会对句柄做 from_address=未定义行为（设备拔出即触发）。
+        if msg == _MIM_CLOSE:
+            self._port_closed()
+        elif msg == _MIM_DATA:
             status = p1 & 0xFF
             if status == 0xF1:
                 if self._on_mtc:
@@ -508,6 +531,74 @@ class MidiIn:
                 self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
         elif msg in (_MIM_LONGDATA, _MIM_LONGERROR) and p1:
             self._done_push(int(p1), msg == _MIM_LONGERROR)
+        elif msg == _MIM_ERROR:
+            pass                            # 短消息错误：无缓冲/无动作
+
+    # -- 端口热插拔自愈（设备拔出 → 按名字重连，演出中无人值守）--
+
+    def _port_closed(self):
+        """MIM_CLOSE：驱动已替我们关掉句柄，不能再 close（数值可能被
+        系统复用）。置空句柄让 _refeed 只消费不重投，再起单条重连线程。"""
+        if self._closing.is_set():
+            return                          # 正常 close() 触发的 MIM_CLOSE
+        with self._reopen_lock:
+            if self._reopening:
+                return
+            self._reopening = True
+        with self._h_lock:
+            self._h = None
+        with self._done_lock:
+            if self._hdrs:
+                self._stale_hdrs.extend(self._hdrs)
+                self._hdrs = []
+        threading.Thread(target=self._reopen_loop,
+                         name="MidiIn-reopen", daemon=True).start()
+
+    def _reopen_loop(self):
+        """按名字重连到（可能换了序号的）同名端口。设备拔着就每 2 秒
+        重试；重连成功重投 longdata 缓冲池。close() 随时可打断。"""
+        last_log = 0.0
+        err = None
+        try:
+            while not self._closing.is_set():
+                found = _pick(_in_devices(), self._name_sub)
+                if found is not None:
+                    h, err = open_in(found[0], self._cb)
+                    if h is not None:
+                        # 与 close() 互斥：要么句柄交给 close 收，要么在
+                        # 这里关掉——绝不两边都 close（winmm 句柄会被复用）
+                        with self._h_lock:
+                            install = not self._closing.is_set()
+                            if install:
+                                self._h = h
+                        if not install:
+                            close_in(h)
+                            return
+                        self._last_reopen_err = None
+                        self._reopen_count += 1
+                        if self._on_sysex is not None:
+                            post_io(lambda hh=h: self._setup_pool(hh))
+                        self._emit_state("reopened",
+                                         "%s 已重连（第 %d 次）"
+                                         % (self.name, self._reopen_count))
+                        return
+                now = time.monotonic()
+                if now - last_log >= self.REOPEN_LOG_EVERY:
+                    last_log = now
+                    self._last_reopen_err = err or "未找到端口"
+                    self._emit_state("failed", self._last_reopen_err)
+                self._closing.wait(self.REOPEN_RETRY)
+        finally:
+            with self._reopen_lock:
+                self._reopening = False
+
+    def _emit_state(self, kind, detail):
+        cb = self._on_state
+        if cb is not None:
+            try:
+                cb(kind, detail)
+            except Exception:
+                pass                        # 状态回调失败不得杀死重连线程
 
     def _done_push(self, addr, errored):
         with self._done_lock:
@@ -558,9 +649,12 @@ class MidiIn:
         → [longdata 头 Unprepare] → Close。裸 Close 在回调密集时与回调
         执行存在竞态窗口，且 Win11 的 close 走进程级锁，最坏挂死后续
         open/close。在 winmm 专线上 fire-and-forget：调用方（含主线程）
-        即刻返回，收尾排队迟到完成；幂等（二次 close 无操作）。"""
-        h = self._h
-        self._h = None
+        即刻返回，收尾排队迟到完成；幂等（二次 close 无操作）。
+        _closing 先置位：close 自身会触发 MIM_CLOSE，不能把它当拔出。"""
+        self._closing.set()
+        with self._h_lock:
+            h = self._h
+            self._h = None
         if h:
             # teardown 按「要求过 sysex」判（_hdrs 由专线异步填充，此刻可能
             # 还空）；专线串行保证 close job 前池已投完，逐头 Unprepare
