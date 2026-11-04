@@ -632,8 +632,9 @@ class App:
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
-        # 启动连带开被控软件（DAW/OBS/loopMIDI，与退出关闭对等）；默认开=
-        # 保持历史行为（此前启动序列无条件拉起）
+        # 启动连带开被控软件（DAW/OBS，与退出关闭对等；loopMIDI 不受此闸
+        # 管：启动无条件保活、退出随 DAW 定去留）；默认开=保持历史行为
+        # （此前启动序列无条件拉起）
         self.launch_apps = bool(cfg.get("launchAppsOnStart", True))
         # OBS 自动拉起独立配置（config obs.autoStart，默认开）：生效值=
         # 它 ∧ 总闸 ∧ 已配投屏位置，见 _obs_autostart_effective
@@ -1097,14 +1098,19 @@ class App:
             pass
         if self.exit_close_apps:
             self._close_controlled()
+        # loopMIDI 退出判定（11-04 定案）：DAW 底座仍在运行=不关（如用户
+        # 在 DAW 退出弹窗按了「取消」，不能把伺候它的 loopMIDI 抽走）；
+        # 退净=关。必须放在「退出时关闭被控软件」行为之后——先关 DAW 再
+        # 判定，否则 DAW 恒在运行，判定恒「留」无效。
+        if not find_processes_by_prefix(self.facts["proc_prefix"]):
+            close_loopmidi()
 
     def _close_controlled(self):
-        """三个被控软件**同时**发出关闭请求（先前是串行等待，Cubase 退出
-        本身要几十秒，OBS/loopMIDI 白等）。Cubase 的保存弹窗仍由本线程
-        照看到退完；OBS/loopMIDI 在子线程各自等待/兜底（loopMIDI 只缩
-        托盘时到点终止）。"""
-        for fn in (close_obs_app, close_loopmidi):
-            threading.Thread(target=fn, daemon=True).start()
+        """两个被控软件**同时**发出关闭请求（先前是串行等待，Cubase 退出
+        本身要几十秒，OBS 白等）。Cubase 的保存弹窗仍由本线程照看到退完；
+        OBS 在子线程等待/兜底。loopMIDI 不在此列：去留看 DAW 底座脸色，
+        判定在 _exit_worker 关完 DAW 后进行。"""
+        threading.Thread(target=close_obs_app, daemon=True).start()
         daw_ctrl.close_app(log=lambda *_: None)
 
     def _restart(self):
@@ -1187,34 +1193,33 @@ class App:
 
     def _startup(self):
         """后台启动：按依赖分组逐项降级——一组失败只废该组功能并记红字，
-        其余服务照常起（缺什么补什么，不再一票否决）。三大后端
-        （Cubase/OBS/loopMIDI）未运行会在此阶段自动拉起，受「启动时自动
-        打开被控软件」总闸控制（关闭=三个都不拉，对齐退出关闭的关闭面）。"""
+        其余服务照常起（缺什么补什么，不再一票否决）。DAW/OBS 未运行会在
+        此阶段自动拉起，受「启动时自动打开被控软件」总闸控制；loopMIDI
+        例外——无条件保活（11-04 定案）：Cubase 工程引用它的端口，不在场
+        每次载入弹「未找到端口」，与总闸解耦。"""
         try:
             if not self.launch_apps:
-                self.q.put("启动时不打开被控软件：DAW/OBS/"
-                           "loopMIDI 均未拉起，需要时请手动打开")
+                self.q.put("启动时不打开被控软件：DAW/OBS 未拉起"
+                           "（loopMIDI 照常保活），需要时请手动打开")
             else:
                 self._ensure_daw()   # 最慢的后端最先拉起（冷启动约 30 秒）
-            if self.launch_apps:
-                try:
-                    hint = self.vj_hint or self.kb_hint or self.clock_hint
-                    if hint:
-                        mb.ensure_loopmidi(hint)
-                        self.q.put("loopMIDI 端口就绪")
-                    elif not find_processes_by_prefix("loopmidi"):
-                        # 停用联动也要 loopMIDI 在场：Cubase 工程引用它的
-                        # 端口，不在则每次载入弹「未找到端口」。只拉起，
-                        # 不等端口。
-                        exe = mb._loopmidi_exe()
-                        if exe is None:
-                            raise SystemExit("找不到 loopMIDI.exe")
-                        if launch_detached(exe) <= 32:
-                            raise SystemExit("拉起 loopMIDI 失败")
-                        self.q.put("loopMIDI 已拉起，端口联动已停用")
-                except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
-                    self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
-                               % e)
+            # loopMIDI 无条件保活：未运行就拉起；配置了联动口名时再等端口
+            # （VJ 触发/走带跟随依赖端口，同样与总闸解耦）
+            try:
+                hint = self.vj_hint or self.kb_hint or self.clock_hint
+                if hint:
+                    mb.ensure_loopmidi(hint)   # 端口缺时拉起+等端口（≤15s）
+                    self.q.put("loopMIDI 端口就绪")
+                elif not find_processes_by_prefix("loopmidi"):
+                    exe = mb._loopmidi_exe()
+                    if exe is None:
+                        raise SystemExit("找不到 loopMIDI.exe")
+                    if launch_detached(exe) <= 32:
+                        raise SystemExit("拉起 loopMIDI 失败")
+                    self.q.put("loopMIDI 已拉起")
+            except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
+                self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
+                           % e)
             try:                         # OBS 未运行时连接循环会自动拉起，
                 if not find_processes_by_prefix("obs64"):   # 这里只补状态
                     # 与三重门口径一致（此处 ctl 未建，按同源配置组合判）
@@ -4709,7 +4714,7 @@ class SettingsWindow(tk.Toplevel):
         row("%s 工程库" % app.facts["display_name"], self.proj_var, browse=True)
         row("VJ 视频目录", self.vid_var, browse=True)
         self.closeapps_var = tk.BooleanVar(value=app.exit_close_apps)
-        ttk.Checkbutton(body, text="退出时关闭被控软件（%s/OBS/loopMIDI）"
+        ttk.Checkbutton(body, text="退出时关闭被控软件（%s/OBS）"
                         % app.facts["display_name"],
                         variable=self.closeapps_var).pack(anchor="w",
                                                           pady=(pad, 1))

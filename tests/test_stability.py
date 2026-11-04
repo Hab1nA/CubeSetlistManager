@@ -829,6 +829,71 @@ def test_exit_stops_watchdog():
         assert "self._stack_sent.stop()" in src, name
 
 
+def test_loopmidi_lifecycle_independent_of_gates():
+    """loopMIDI 生命周期与两开关解耦（11-04 定案）：启动无条件保活
+    （_startup 的保活块不得位于 launch_apps 分支内），退出随 DAW 底座
+    定去留——判定必须在「退出时关闭被控软件」行为之后、DAW 退净才关；
+    并行关闭列表里不得再出现 loopMIDI。"""
+    src = _src("setlist_gui.py")
+    startup = _slice(src, "def _startup", "def _web_status_loop")
+    # 启动保活块与总闸解耦：无条件分支直接出现在 launch_apps 分支之前
+    unconditional = _slice(startup, "# loopMIDI 无条件保活",
+                           "try:                         # OBS 未运行时连接循环")
+    assert "if hint:" in unconditional
+    assert "mb.ensure_loopmidi(hint)" in unconditional
+    assert "close_loopmidi()" not in startup
+    exitw = _slice(src, "def _exit_worker", "def _close_controlled")
+    gate = exitw.index("if self.exit_close_apps:")
+    daw_check = exitw.index('find_processes_by_prefix(self.facts["proc_prefix"])')
+    assert exitw.rindex("if self.exit_close_apps:") < daw_check   # 先关 DAW 再判定
+    assert "close_loopmidi()" in exitw[daw_check:]                # 退净才关
+    close_ctl = _slice(src, "def _close_controlled", "def _restart")
+    assert "close_loopmidi" not in close_ctl                      # 不随闸并行关
+
+
+def test_loopmidi_exit_rule_functional(monkeypatch):
+    """退出判定功能级回归（11-04 定案）：exitCloseApps 行为后按 DAW 底座
+    存活定 loopMIDI 去留——闸开+DAW 退净=关；闸开+DAW 未退净=留；闸关
+    +DAW 在=留；闸关+DAW 不在=关。"""
+    import setlist_gui
+    closed = []
+
+    class Fake:
+        pass
+
+    def fake_find(prefix):
+        # DAW 前缀→按用例返回；loopmidi 前缀→恒空（不真杀进程）
+        return PROC.get(prefix, [])
+
+    PROC = {}
+    monkeypatch.setattr(setlist_gui, "find_processes_by_prefix", fake_find)
+    monkeypatch.setattr(setlist_gui, "close_loopmidi",
+                        lambda: closed.append(1))
+    app = Fake()
+    app.web = None
+    app.ctl = Fake()
+    app.facts = {"proc_prefix": "fakedaw"}
+    app.q = []
+    app._close_controlled = lambda: None   # 闸开分支打桩：不碰真 DAW 窗口
+
+    def run_case(daw_alive, gate, expect_closed):
+        closed.clear()
+        app.exit_close_apps = gate
+        PROC["fakedaw"] = [("1", "fakedaw.exe")] if daw_alive else []
+        setlist_gui.App._exit_worker(app)
+        assert bool(closed) is expect_closed, (daw_alive, gate, expect_closed)
+
+    run_case(daw_alive=False, gate=True,  expect_closed=True)
+    run_case(daw_alive=False, gate=False, expect_closed=True)
+    run_case(daw_alive=True,  gate=True,  expect_closed=False)
+    run_case(daw_alive=True,  gate=False, expect_closed=False)
+
+    # 并行关闭列表不再含 loopMIDI（_close_controlled 只关 OBS+DAW）
+    close_ctl = _slice(_src("setlist_gui.py"), "def _close_controlled",
+                       "def _restart")
+    assert "close_loopmidi" not in close_ctl
+
+
 def test_pedal_window_page_mute():
     """踩钉控制页存活期整体静音：打开即 mute（页面期踩钉不触发任何动作，
     学习/调整绑定不误触发演出动作），唯一恢复点=关页 unmute+try_open；
