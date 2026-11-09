@@ -7,6 +7,7 @@ import pathlib
 import queue
 import sys
 import time
+import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -446,3 +447,142 @@ def test_now_entry_display_matrix():
     assert f(e_bare, "工程A", None) == "工程A"           # 裸条目无时码同
     assert f(e_other, "工程A", 5.0) is None              # 指针在他曲
     assert f(None, "工程A", 5.0) is None                 # 无指针（置空/游离）
+
+
+class _FakeCtrl:
+    def __init__(self, stop_ok=True):
+        self.calls = []
+        self.stop_ok = stop_ok
+
+    def transport(self, action, live=None):
+        self.calls.append(action)
+        return self.stop_ok or action != "stop"
+
+
+def _play_app(monkeypatch, stop_ok=True, cur_song_path="/pA"):
+    """_point_play 行为桩：当前歌=工程A 的定位点段 [30, 90]。"""
+    app = _pt_app(pl=("pt:A#1",),
+                  pts={"A": _pts([{"id": 1, "name": "定位点1", "start": 30.0,
+                                   "end": 90.0}])},
+                  cur=0)
+    app.cur_song_path = cur_song_path
+    app.ctrl = _FakeCtrl(stop_ok)
+    app.mmc_out = 7
+    app.mtc = None
+    app._goto_ack = None
+    app._transport_state = lambda: "stopped"
+    app._cur_point_entry = lambda: setlist_gui.App._cur_point_entry(app)
+    app._goto_send = lambda start, label: \
+        setlist_gui.App._goto_send(app, start, label)
+    sent = []
+    monkeypatch.setattr(setlist_gui.mb, "send_sysex_h",
+                        lambda h, data, timeout=1.0: sent.append((h, data))
+                        or None)
+    monkeypatch.setattr(setlist_gui.time, "sleep", lambda s: None)
+    return app, sent
+
+
+def test_point_play_starts_at_segment(monkeypatch):
+    """定位点歌的「开始」：不发回零、GOTO 段起点后原地起播。"""
+    app, sent = _play_app(monkeypatch)
+    assert setlist_gui.App._point_play(app) is True
+    assert sent == [(7, setlist_gui.points.mmc_goto_bytes(30.0))]
+    assert app.ctrl.calls == ["resume"]          # 无 stop/无 play=回零路径
+
+
+def test_point_play_stops_first_when_live(monkeypatch):
+    """时码活跃（含盲停态兜底）：先停再 GOTO——播放中 GOTO 被忽略。"""
+    app, sent = _play_app(monkeypatch)
+    app._transport_state = lambda: "paused"
+    assert setlist_gui.App._point_play(app) is True
+    assert app.ctrl.calls == ["stop", "resume"]
+
+
+def test_point_play_stop_fail_no_start(monkeypatch):
+    """停止未送达：整单放弃（回 False 交通用路径，起播防半截）。"""
+    app, sent = _play_app(monkeypatch, stop_ok=False)
+    app._transport_state = lambda: "paused"
+    assert setlist_gui.App._point_play(app) is True
+    assert sent == [] and app.ctrl.calls == ["stop"]
+
+
+def test_point_play_falls_back_when_not_point_mode(monkeypatch):
+    """整曲歌/工程不对位/无指针：回 False 走通用 play（回零从头播）。"""
+    app, sent = _play_app(monkeypatch, cur_song_path="/other")
+    assert setlist_gui.App._point_play(app) is False
+    app2, _ = _play_app(monkeypatch)
+    app2.pl_keys = ["A"]                          # 裸条目
+    app2.cur = 0
+    assert setlist_gui.App._point_play(app2) is False
+    app3, _ = _play_app(monkeypatch)
+    app3.cur = None                               # 无指针
+    assert setlist_gui.App._point_play(app3) is False
+    assert sent == []
+
+
+def test_point_play_skips_goto_when_already_at_start(monkeypatch):
+    """停泊位已是段起点（切换链路刚 GOTO 过/再次按开始）：不再发 GOTO
+    ——同位 GOTO 时码不变会触发「工程未响应定位」误报。"""
+    app, sent = _play_app(monkeypatch)
+    app.mtc = types.SimpleNamespace(position=lambda: 30.04)
+    assert setlist_gui.App._point_play(app) is True
+    assert sent == [] and app.ctrl.calls == ["resume"]
+    # 停在中途：正常 GOTO 回段起点
+    app.mtc.position = lambda: 61.0
+    assert setlist_gui.App._point_play(app) is True
+    assert len(sent) == 1 and app.ctrl.calls == ["resume", "resume"]
+
+
+def test_point_rewind_goes_to_segment_start(monkeypatch):
+    """定位点歌的「回零」：GOTO 回段起点而非工程头（通用 RTZ 落工程头会
+    让位置对位判空档→指针置空）。已在段起点时不再定位（免同位误报）。"""
+    app, sent = _play_app(monkeypatch)
+    assert setlist_gui.App._point_rewind(app) is True
+    assert sent == [(7, setlist_gui.points.mmc_goto_bytes(30.0))]
+    assert app.ctrl.calls == [] and app.watch.resets == 1
+    app.mtc = types.SimpleNamespace(position=lambda: 30.02)
+    assert setlist_gui.App._point_rewind(app) is True
+    assert len(sent) == 1 and app.watch.resets == 2  # 已在起点：不重发
+    app2, _ = _play_app(monkeypatch, cur_song_path="/other")
+    assert setlist_gui.App._point_rewind(app2) is False   # 他曲：走通用回零
+
+
+def test_sync_watch_span_reanchors_after_edit(monkeypatch):
+    """定位点定义变更后段坐标重锚：指针在编辑工程=按新段重设；停用=还原
+    整曲时长（left 归 0，未知时长=0 推进暂闭）；他曲不动。"""
+    app, _ = _play_app(monkeypatch)
+    app.durations = {"A": 500.0}
+    setlist_gui.App._sync_watch_span(app)
+    assert app.watch.durs == [60.0] and app.watch.lefts == [30.0]
+    app.pl_keys = ["A"]                     # 停用后的裸条目
+    app.cur = 0
+    setlist_gui.App._sync_watch_span(app)
+    assert app.watch.durs == [60.0, 500.0]
+    assert app.watch.lefts == [30.0, 0.0]   # 旧段 left 不许带进整曲
+    app.cur_song_path = "/other"            # 指针在他曲：不再动
+    app.pl_keys = ["A"]
+    setlist_gui.App._sync_watch_span(app)
+    assert len(app.watch.durs) == 2
+
+
+def test_open_kbd_resolves_point_entry(monkeypatch):
+    """键盘自动化窗能从 pt: 条目解析宿主工程（映射槽按工程路径装载）。"""
+    app, _ = _play_app(monkeypatch)
+    real_set = {}
+
+    class _W:
+        def winfo_exists(self):
+            return True
+
+        def set_song(self, song):
+            real_set["song"] = song
+
+        def lift(self):
+            pass
+
+    app.kbd_win = None
+    app._sel_target = lambda: (None, None, "pt:A#1")
+    monkeypatch.setattr(setlist_gui.kbd_auto, "KeyboardAutoWindow",
+                        lambda self: _W())
+    setlist_gui.App._open_kbd(app)
+    assert real_set["song"] == {"name": "工程A", "path": "/pA"}

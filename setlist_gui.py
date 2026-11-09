@@ -1978,8 +1978,11 @@ class App:
                     entry["point"]["start"])
             self._refresh()
             if play_after:
+                # resume 而非 play：光标已被上面的 GOTO 放在段起点，通用
+                # play 的回零会打回工程头；play 也不走 _point_play 二次
+                # GOTO（免重复定位与「未响应」误报）
                 threading.Thread(target=self._transport_thread,
-                                 args=("play",), daemon=True).start()
+                                 args=("resume",), daemon=True).start()
         self.calls.put(finish)
 
     def _goto_send(self, start, label):
@@ -2091,6 +2094,7 @@ class App:
         else:
             self.pl_keys = points.collapse_restore(old_keys, lib_key)
         self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
+        self._sync_watch_span()
         if self._pending_switch is not None:
             # 排队切换以 key 记账：宿主被 toggle 时跟随家族首键；它端删掉则弃
             k = self._pending_switch
@@ -2110,6 +2114,7 @@ class App:
             self.pl_keys = old_keys
             self.cur = points.remap_cur(self.pl_keys, old_keys,
                                         self.cur, lib_key)
+            self._sync_watch_span()
             self._refresh()
             self.q.put("定位点保存失败：%s" % e)
             return
@@ -2138,6 +2143,26 @@ class App:
 
     # ---- 新前端（webui/平板 /app 页）命令面：主线程执行，经 calls 投递 ----
 
+    def _sync_watch_span(self):
+        """定位点定义变更/启停后的段坐标重锚：remap_cur 挪指针不改 watch
+        坐标——旧段照旧计时（缩短→晚切、放长→早切、停用→段坐标当整曲用
+        提前杀歌）。指针条目不属已装载工程时不动（坐标归装载路径负责）。
+        ponytail: 还原整曲分支 left 取 0（左定位条未读）——自动切换最多
+        提前左定位条秒数触发；要精确需 read_locators 预取。"""
+        i = self.cur
+        if i is None or not (0 <= i < len(self.pl_keys)) or self.watch is None:
+            return
+        entry = self._resolve_entry(self.pl_keys[i])
+        if entry is None or self.cur_song_path != entry["path"]:
+            return
+        p = entry["point"]
+        self.watch.reset()
+        if p is not None:
+            self.watch.set_duration(p["end"] - p["start"], p["start"])
+        else:
+            self.watch.set_duration(
+                self.durations.get(entry["lib_key"], 0.0) or 0.0, 0.0)
+
     def _points_sync_list(self, lib_key):
         """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
         持久化刷新。PointsWindow._sync_list 与 /ptcmd 共用。"""
@@ -2159,6 +2184,7 @@ class App:
                                         points.pt_keys_for(lib_key, data))
             self.pl_keys = new
             self.cur = points.remap_cur(old, new, self.cur, lib_key)
+            self._sync_watch_span()
         self._persist()
         self._refresh()
         return None
@@ -3591,11 +3617,71 @@ class App:
     def _transport_thread(self, action):
         # 焦点收口在 daw_ctrl.transport 内（还原操作前前台，不再事后
         # 收回本软件——踩钉/手机触发时用户原窗口可能不是本软件）
+        if action == "play" and self._point_play():
+            return
+        if action == "rewind" and self._point_rewind():
+            return
         if self.ctrl.transport(action, live=self._transport_state() == "playing") \
                 and action == "rewind" \
                 and self.watch is not None:
             self.watch.reset()      # 回零=停在零点：纪元复位让显示立即归零，
                                     # 不等下一条时码（播放/暂停无需复位——位置自证）
+
+    def _cur_point_entry(self):
+        """指针条目解析：属定位点模式且正是已装载工程时返回 entry，否则
+        None（整曲歌/工程未对位/无指针/库缺项）——点感知走带的共用闸。"""
+        i = self.cur
+        if i is None or not (0 <= i < len(self.pl_keys)):
+            return None
+        entry = self._resolve_entry(self.pl_keys[i])
+        if entry is None or entry["point"] is None \
+                or self.cur_song_path != entry["path"]:
+            return None
+        return entry
+
+    def _point_play(self):
+        """定位点歌曲的「开始」：停→GOTO 段起点→原地起播。通用 play 的
+        键序是停→回零→播（mr_ctrl.SEQ），回零把光标打回工程头——整曲模式
+        即「从头播」，定位点模式必须改走段起点。按钮/_auto_play/_goto_worker
+        的 play_after 三路都汇到 _transport_thread，在此收口一次全适配。
+        非定位点情形回 False 走通用路径；mmc 未就绪时 GOTO 告警降级为
+        原地起播（不回通用路径——回零到工程头更错）。"""
+        entry = self._cur_point_entry()
+        if entry is None:
+            return False
+        if self._transport_state() != "stopped" \
+                and self.ctrl.transport("stop") is False:
+            return True     # 停止未送达：不起播（GOTO 在播放中被 DAW 忽略）；
+                            # 已停态不发停止——S1 停止键是开关，停了再停反起播
+        pre = self.mtc.position() if self.mtc is not None else None
+        if pre is None or abs(pre - entry["point"]["start"]) > 0.1:
+            # 已停/定位会补发全帧时码：pre 即停泊位——已在段起点（切换/
+            # 自动播放链路刚 GOTO 过）就不再定位，免同位 GOTO 的「未响应」
+            # 误报（位置不变≠链路断）
+            self._goto_send(entry["point"]["start"], entry["display"])
+            time.sleep(0.15)   # GOTO 落地缓冲：START 抢在 DAW 处理 MMC 前
+                               # 会从旧光标位起播，定位白做（宁稳勿快）
+        self.ctrl.transport("resume")
+        return True
+
+    def _point_rewind(self):
+        """定位点歌曲的「回零」：回段起点（GOTO）而非工程头。通用回零的
+        RTZ 落工程头后，位置对位会把位置判成段前空档→指针置空（NOW 退化
+        裸工程名、进度冻结、后续「继续」从段前素材起播）。按钮走 _transport，
+        踩钉/网页/APP 的回零同径在此收口。"""
+        entry = self._cur_point_entry()
+        if entry is None:
+            return False
+        if self._transport_state() != "stopped" \
+                and self.ctrl.transport("stop") is False:
+            return True     # 停止未送达：不定位（播放中 GOTO 被 DAW 忽略）
+        pre = self.mtc.position() if self.mtc is not None else None
+        if pre is None or abs(pre - entry["point"]["start"]) > 0.1:
+            self._goto_send(entry["point"]["start"], entry["display"])
+        if self.watch is not None:
+            self.watch.reset()  # 显示立即归段零（同通用回零的纪元复位；
+                                # 段坐标 duration/left 原样保留）
+        return True
 
     def _toggle_auto(self):
         # 回写属性：watch 建立时按它恢复；踩钉可在 watch 存在前翻转
@@ -3659,10 +3745,13 @@ class App:
 
     def _open_kbd(self):
         t = self._sel_target()
-        song = self.by_key.get(t[2]) if t else None
-        if song is None and self.cur is not None \
-                and self.cur < len(self.pl_keys):
-            song = self.by_key.get(self.pl_keys[self.cur])
+        key = t[2] if t else (self.pl_keys[self.cur]
+                              if self.cur is not None
+                              and self.cur < len(self.pl_keys) else None)
+        song = None
+        if key:      # pt: 条目按宿主工程解析（映射槽本就按工程路径装载）
+            pt = points.parse_pt_key(key)
+            song = self.by_key.get(pt[0] if pt else key)
         if song is None:
             self.q.put("先在素材库或播放列表选中一首再配置键盘自动化")
             return
