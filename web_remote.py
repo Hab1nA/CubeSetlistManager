@@ -27,9 +27,9 @@ import obs_ctrl
 import points
 import ui_text
 
-CMD_PREV = 36                # C2 → 上一页命令族（屏幕左半区）
-CMD_NEXT = 37                # C#2 → 下一页命令族（屏幕右半区）
-DEV_NOTES = tuple(range(60, 70))   # C4–A4 → 设备槽位 1–10
+CMD_PREV = 48                # C2 → 上一页命令族（屏幕左半区）
+CMD_NEXT = 49                # C#2 → 下一页命令族（屏幕右半区）
+DEV_NOTES = tuple(range(72, 82))   # C4–A4 → 设备槽位 1–10
 _WATCHED = frozenset((CMD_PREV, CMD_NEXT) + DEV_NOTES)
 
 if getattr(sys, "frozen", False):
@@ -1657,8 +1657,8 @@ class _Handler(BaseHTTPRequestHandler):
     # -- 新前端（/app）数据与命令端点 --
 
     def _h_vjmap(self):
-        """VJ 音符 ↔ 视频对应表：NOTE_MAP 固定规则（音符 N → N-59.mp4，
-        F#6=熄屏）+ 视频库实际文件宽松匹配（精确 basename 或「编号+空格」
+        """VJ 音符 ↔ 视频对应表：NOTE_MAP 固定规则（音符 N → N-71.mp4，
+        102=熄屏）+ 视频库实际文件宽松匹配（精确 basename 或「编号+空格」
         前缀）。只读快照，无 App 状态，HTTP 线程直出。"""
         app = self.server.app
         if getattr(app, "lite", False):
@@ -1676,12 +1676,10 @@ class _Handler(BaseHTTPRequestHandler):
             m = _re.match(r"(\d+)\s", b)
             if m:
                 by_num.setdefault(m.group(1), rel)
-        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
-                 "A#", "B")
         rows = []
-        for n in range(60, 91):
+        for n in range(72, 103):
             f = __import__("midi_bridge").NOTE_MAP[n]
-            nm = names[n % 12] + str(n // 12 - 1)
+            nm = kbd_auto.note_name(n)
             if f is None:
                 rows.append({"note": n, "name": nm, "file": "熄屏",
                              "blackout": True, "hit": None})

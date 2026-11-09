@@ -1819,7 +1819,8 @@ let kbData = null, kbPortsInit = false;
 let recTimer = null;
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A",
                     "A#", "B"];
-const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+// 与后端 kbd_auto.note_name 同口径：DAW 显示约定 60=C3、72=C4
+const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 2);
 
 // 端口下拉：value=候选序号（保存时映射回 name+dev）。选项层随签名刷新
 // （设备上电/掉电即反映，幽灵项自动清除），选中值按「端口名+同名序」
@@ -2232,8 +2233,8 @@ async function refreshKbdDetail() {
     const es = es0;
     // 仅异常态提示（装载中/不可用）；正常态不显计数（画蛇添足已删）
     $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…" : "";
-    buildSlots($("#dt-slots"), es.slots, 60, 69, "juno");
-    buildSlots($("#dt-axslots"), es.axSlots, 72, 77, "ax");
+    buildSlots($("#dt-slots"), es.slots, 72, 81, "juno");
+    buildSlots($("#dt-axslots"), es.axSlots, 84, 89, "ax");
     updateDtBadge();
     // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
     if (es.loading && pageOn("setlist"))

@@ -294,7 +294,7 @@ def test_pedal_learn_cancel_endpoint():
 
 
 def test_vjmap_endpoint(tmp_path):
-    """/vjmap：音符↔视频对应表——固定规则 31 行（60-89 视频音 + 90 熄屏），
+    """/vjmap：音符↔视频对应表——固定规则 31 行（72-101 视频音 + 102 熄屏），
     视频库宽松匹配（精确 basename / 「编号+空格」前缀）；简化版拒绝。"""
     app = _FakeWebApp()
     vroot = tmp_path / "videos"
@@ -310,13 +310,15 @@ def test_vjmap_endpoint(tmp_path):
         d = _get(port, "/vjmap")
         assert d["videoRoot"] == str(vroot) and d["files"] == 1
         assert len(d["rows"]) == 31
-        r60 = next(r for r in d["rows"] if r["note"] == 60)
-        assert r60["name"] == "C4" and r60["file"] == "1 开场钢琴.mp4"
-        assert r60["hit"] and r60["blackout"] is False
-        r2 = next(r for r in d["rows"] if r["note"] == 61)
-        assert r2["file"] == "2.mp4" and r2["hit"] is None   # 库里没有
-        r90 = next(r for r in d["rows"] if r["note"] == 90)
-        assert r90["blackout"] is True and r90["file"] == "熄屏"
+        r72 = next(r for r in d["rows"] if r["note"] == 72)
+        assert r72["name"] == "C4" and r72["file"] == "1 开场钢琴.mp4"
+        assert r72["hit"] and r72["blackout"] is False
+        r2 = next(r for r in d["rows"] if r["note"] == 73)
+        assert r2["name"] == "C#4" and r2["file"] == "2.mp4"
+        assert r2["hit"] is None   # 库里没有
+        r102 = next(r for r in d["rows"] if r["note"] == 102)
+        assert r102["name"] == "F#6" and r102["blackout"] is True
+        assert r102["file"] == "熄屏"
         app.lite = True
         code, _b = _req("GET", port, "/vjmap")
         assert code == 403
@@ -550,19 +552,19 @@ def test_kbd_web_song_slots_and_validation(tmp_path):
     fake._kbd_song_cache = {"B/歌二": ({}, {})}
     # 未装载目标曲也能保存（song_key 定向）
     assert sg.App._slots_save_web(
-        fake, "ax", {"72": {"pc": 5, "msb": 87}}, song_key="B/歌二") is None
+        fake, "ax", {"84": {"pc": 5, "msb": 87}}, song_key="B/歌二") is None
     loaded = kbd_auto.load_slots(str(b_cpr), "ax")
-    assert loaded[72]["msb"] == 87
+    assert loaded[84]["msb"] == 87
     assert fake.ax_slots == {}            # 非装载曲：live 映射不动
     assert "B/歌二" not in fake._kbd_song_cache   # 脏缓存已失效
     # 装载曲保存：热更新 live
     assert sg.App._slots_save_web(
-        fake, "juno", {"60": {"pc": 63}}, song_key="A/歌一") is None
-    assert fake.slots == {60: {"pc": 63}}
-    assert kbd_auto.load_slots(str(a_cpr))[60]["pc"] == 63
+        fake, "juno", {"72": {"pc": 63}}, song_key="A/歌一") is None
+    assert fake.slots == {72: {"pc": 63}}
+    assert kbd_auto.load_slots(str(a_cpr))[72]["pc"] == 63
     # D5 校验：PC/MSB/LSB 越界拒绝
-    for bad in ({"60": {"pc": 128}}, {"60": {"pc": 5, "msb": 128}},
-                {"60": {"pc": 5, "lsb": -1}}, {"60": {"pc": True}}):
+    for bad in ({"72": {"pc": 128}}, {"72": {"pc": 5, "msb": 128}},
+                {"72": {"pc": 5, "lsb": -1}}, {"72": {"pc": True}}):
         assert sg.App._slots_save_web(fake, "juno", bad) is not None, bad
     assert sg.App._slots_save_web(fake, "juno", {},
                                   song_key="X/不在库") == "曲目不在素材库"
@@ -578,7 +580,7 @@ def test_kbd_test_web_song_key(tmp_path, monkeypatch):
     a_cpr.write_text("", encoding="utf-8")
     b_cpr = tmp_path / "b.cpr"
     b_cpr.write_text("", encoding="utf-8")
-    kbd_auto.save_slots(str(b_cpr), {60: {"pc": 70, "msb": 87}}, "slots")
+    kbd_auto.save_slots(str(b_cpr), {72: {"pc": 70, "msb": 87}}, "slots")
 
     class _Sw:
         def __init__(self):
@@ -591,7 +593,7 @@ def test_kbd_test_web_song_key(tmp_path, monkeypatch):
     fake = types.SimpleNamespace(
         by_key={"B/歌二": {"key": "B/歌二", "team": "B", "name": "歌二",
                            "path": str(b_cpr)}},
-        cur_song_path=str(a_cpr), slots={60: {"pc": 63}}, ax_slots={},
+        cur_song_path=str(a_cpr), slots={72: {"pc": 63}}, ax_slots={},
         switcher=sw, ax_switcher=None, _kbd_song_key=lambda: None,
         jcfg=dict(kbd_auto.DEFAULT_JUNO),
         axcfg=dict(kbd_auto.DEFAULT_AX))
@@ -599,16 +601,16 @@ def test_kbd_test_web_song_key(tmp_path, monkeypatch):
     monkeypatch.setattr(kbd_auto, "_all_out_devices",
                         lambda: [(0, "JUNO-DS")])
     # 未装载曲：按旁挂文件发（pc 70），不是装载曲的 pc 63
-    assert sg.App._kbd_test_web(fake, "juno", 60, song_key="B/歌二") is None
+    assert sg.App._kbd_test_web(fake, "juno", 72, song_key="B/歌二") is None
     assert sw.sent == [{"pc": 70, "msb": 87}]
     # 无 song_key：走 live（装载曲映射）
     fake._kbd_song_key = lambda: None
-    assert sg.App._kbd_test_web(fake, "juno", 60) is None
+    assert sg.App._kbd_test_web(fake, "juno", 72) is None
     assert sw.sent[-1] == {"pc": 63}
     # 未配置槽位：明确报错
-    assert "未配置" in sg.App._kbd_test_web(fake, "juno", 61,
+    assert "未配置" in sg.App._kbd_test_web(fake, "juno", 73,
                                             song_key="B/歌二")
-    assert "不在素材库" in sg.App._kbd_test_web(fake, "juno", 60,
+    assert "不在素材库" in sg.App._kbd_test_web(fake, "juno", 72,
                                                 song_key="X/无")
 
 

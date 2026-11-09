@@ -36,9 +36,9 @@ PORT_HINT = "loopMIDI Port"   # 默认端口全名；不能宽匹配 loopMIDI，
 CLOCK_TIMEOUT = 0.25   # 这么久没有走带时码（QF）就视为暂停/停止
 POLL_SEC = 0.1         # 看门狗轮询间隔
 NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸对齐音符起播时，切换归音符管）
-# C4=60 → 1.mp4，向上每个音顺延：C#4=61 → 2.mp4 … D6=89 → 30.mp4
-NOTE_MAP = {n: "%d.mp4" % (n - 59) for n in range(60, 90)}
-NOTE_MAP[90] = None  # F#6 → 熄屏
+# C4(72) → 1.mp4，向上每个音顺延：C#4(73) → 2.mp4 … F6(101) → 30.mp4
+NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
+NOTE_MAP[102] = None  # F#6 → 熄屏
 
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
@@ -658,6 +658,8 @@ def note_handler(ctl, sync, report=print):
         if note in NOTE_MAP:
             sync.note_seen()
             q.put(note)
+        elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
+            report("音符 %d 不在 VJ 映射：触发音已整体升八度，请检查工程" % note)
 
     def worker():
         while True:

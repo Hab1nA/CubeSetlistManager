@@ -582,10 +582,11 @@ def test_load_slots_rejects_bad_types(tmp_path):
                  encoding="utf-8")
     import kbd_auto
     slots = kbd_auto.load_slots(str(tmp_path / "x.cpr"))
-    # pc 类型洞全弃；msb:null 视为未提供（保留条目，映射语义=无 MSB）
-    assert set(slots) == {60, 63}
-    assert slots[60] == {"pc": 3, "msb": 87, "lsb": 0}
-    assert slots[63] == {"pc": 1}
+    # pc 类型洞全弃；msb:null 视为未提供（保留条目，映射语义=无 MSB）；
+    # 旧号（60-69）读入升八度（2026-11-09 触发音锚点 +12）
+    assert set(slots) == {72, 75}
+    assert slots[72] == {"pc": 3, "msb": 87, "lsb": 0}
+    assert slots[75] == {"pc": 1}
 
 
 def test_tone_switcher_loop_survives_exception(monkeypatch):

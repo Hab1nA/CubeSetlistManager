@@ -13,11 +13,11 @@ GM→GM1）先发模式 SysEx（DT1 写 Setup:Sound Mode，地址 01 00 00 00，
 AX-09 只能经 USB COMPUTER 口接收（DIN 口 OUT-only），无模式概念：
 BS(MSB 恒 87)+PC 直接寻址 144 个常规音色（1-128 号 LSB=0，129-144 号
 LSB=1）；Favorite/Special Tone 不在 PC 映射表里，MIDI 不可直达。
-另有 JUNO 全局移调触发键（C2=36 起：↓半音/↑半音/↓八度/↑八度）：按官方
+另有 JUNO 全局移调触发键（C2=48 起：↓半音/↑半音/↓八度/↑八度）：按官方
 MIDI Implementation，GM 通用 SysEx Master Coarse Tuning 写 SYSTEM Master
 Key Shift（±24 半音，全局、模式无关），连按累加（软件记累计值，反向键
 抵消）。
-另有 AX-09 全局移调触发键（F2=41 起：同款四个方向）：真机实测（2026-10-18）
+另有 AX-09 全局移调触发键（F2=53 起：同款四个方向）：真机实测（2026-10-18）
 AX-09 不收 SysEx，调音 RPN 与 CC64 都进不了本地发声路径，唯弯音进——
 发 RPN 0,0 弯音灵敏度=12 后用弯音钉位（灵敏度设 24 被钳回 12，故限
 ±12）；连按累加，切音色不掉，弯音杆一碰即覆盖。
@@ -39,23 +39,21 @@ import midi_ble
 import midi_bridge as mb
 
 KB_PORT_HINT = "Keyboard Automation"
-SLOT_NOTES = list(range(60, 70))            # JUNO：C4 起十个半音
-AX_NOTES = list(range(72, 78))              # AX-09：C5 起六个半音
-SHIFT_NOTES = {36: -1, 37: 1, 38: -12, 39: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
-AX_SHIFT_NOTES = {41: -1, 42: 1, 43: -12, 44: 12}  # AX-09 移调：F2↓半音 F#2↑半音 G2↓八度 G#2↑八度
-SHIFT_DESC = {36: "降1半音", 37: "升1半音", 38: "降1八度", 39: "升1八度",
-              41: "降1半音", 42: "升1半音", 43: "降1八度", 44: "升1八度"}
+SLOT_NOTES = list(range(72, 82))            # JUNO：C4 起十个半音
+AX_NOTES = list(range(84, 90))              # AX-09：C5 起六个半音
+SHIFT_NOTES = {48: -1, 49: 1, 50: -12, 51: 12}   # JUNO 移调：C2↓半音 C#2↑半音 D2↓八度 D#2↑八度
+AX_SHIFT_NOTES = {53: -1, 54: 1, 55: -12, 56: 12}  # AX-09 移调：F2↓半音 F#2↑半音 G2↓八度 G#2↑八度
+SHIFT_DESC = {48: "降1半音", 49: "升1半音", 50: "降1八度", 51: "升1八度",
+              53: "降1半音", 54: "升1半音", 55: "降1八度", 56: "升1八度"}
 # ↑↑↓ 箭头字形竖线长箭头头小，暗场远距两行几乎同形（初看像 I1）——
 # 升/降改汉字直读，四行同款文案风格
 SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围 ±24 半音
 AX_SHIFT_LIMIT = 12                         # AX-09 弯音灵敏度真机钳在 12（设 24 无效）
 PAGE_NAMES = ("JUNO DS-88", "AX-09 Lucina")     # 配置窗口的乐器分页
-NOTE_NAMES = {36: "C2", 37: "C#2", 38: "D2", 39: "D#2",
-              41: "F2", 42: "F#2", 43: "G2", 44: "G#2",
-              60: "C4", 61: "C#4", 62: "D4", 63: "D#4", 64: "E4",
-              65: "F4", 66: "F#4", 67: "G4", 68: "G#4", 69: "A4",
-              72: "C5", 73: "C#5", 74: "D5", 75: "D#5", 76: "E5", 77: "F5"}
+_NOTE_CHR = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 MSG_GAP = 0.05                              # BS→PC 间隔
+_OLD_ANCHORS = {"slots": frozenset(range(60, 70)),
+                "ax": frozenset(range(72, 78))}
 SYSEX_GAP = 0.1                             # 模式 SysEx→BS 间隔
 SLOT_FILE = "keyboard_automation.json"      # 存在工程（歌）文件夹里
 WHDR_DONE = 0x1
@@ -92,7 +90,8 @@ BANK_MAP = {
 
 
 def note_name(note):
-    return NOTE_NAMES.get(note, str(note))
+    """音名与 DAW 底座界面同口径：60=C3、72=C4（Cubase/Studio One 显示约定）。"""
+    return "%s%d" % (_NOTE_CHR[note % 12], note // 12 - 2)
 
 
 def mode_for_msb(msb):
@@ -270,6 +269,12 @@ def load_slots(cpr_path, key="slots"):
                 slot[f] = x
             if slot is not None:
                 out[int(k)] = slot
+        # 2026-11-09 触发音锚点整体升八度（对齐 Cubase 显示口径）；旧工程
+        # 槽位文件读入自动迁移，段落独立判别（旧 JUNO 60-69/旧 AX 72-77 与
+        # 新锚点区间不相交，检测到旧号即整段 +12）
+        old = _OLD_ANCHORS.get(key, frozenset())
+        if old and any(k in old for k in out):
+            out = {(k + 12 if k in old else k): v for k, v in out.items()}
         return out
     except (OSError, ValueError):
         return {}
@@ -1116,9 +1121,11 @@ if __name__ == "__main__":
     assert ax_shift_msgs(12, 1)[-1][1] == 0xE0 | 0x7F << 8 | 0x7F << 16  # 满舵
     assert ax_shift_msgs(99, 1) == ax_shift_msgs(12, 1)      # 越界钳位
     assert ax_shift_msgs(1, 16)[-1][1] & 0x0F == 15          # ch 1 基换算
-    assert note_name(69) == "A4" and note_name(72) == "C5"
-    assert note_name(36) == "C2" and note_name(39) == "D#2"
-    assert note_name(41) == "F2" and note_name(44) == "G#2"
+    assert note_name(69) == "A3" and note_name(72) == "C4"
+    assert note_name(60) == "C3" and note_name(84) == "C5"
+    assert note_name(48) == "C2" and note_name(51) == "D#2"
+    assert note_name(53) == "F2" and note_name(56) == "G#2"
+    assert note_name(102) == "F#6"
     # 同名多口消歧（两只同型号无线盒）：dev 序号落位/越界收敛/互不误配
     dv = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
     assert _pick_hit(dv, "USB-Midi") == (1, "USB-Midi")
@@ -1144,11 +1151,13 @@ if __name__ == "__main__":
         ("B · 第1个", "B", 0), ("B · 第2个", "B", 1)]
     with tempfile.TemporaryDirectory() as td:
         cpr = os.path.join(td, "s.cpr")
-        save_slots(cpr, {60: {"msb": 85, "pc": 1}}, "slots")
-        save_slots(cpr, {72: {"msb": 87, "lsb": 1, "pc": 0}}, "ax")
-        assert load_slots(cpr)[60]["msb"] == 85
-        assert load_slots(cpr, "ax")[72]["lsb"] == 1
+        save_slots(cpr, {72: {"msb": 85, "pc": 1}}, "slots")
+        save_slots(cpr, {84: {"msb": 87, "lsb": 1, "pc": 0}}, "ax")
+        assert load_slots(cpr)[72]["msb"] == 85
+        assert load_slots(cpr, "ax")[84]["lsb"] == 1
         save_slots(cpr, {}, "slots")           # 清空 JUNO 段不得动 AX 段
         assert load_slots(cpr) == {} and len(load_slots(cpr, "ax")) == 1
+        save_slots(cpr, {60: {"msb": 85, "pc": 1}}, "slots")
+        assert load_slots(cpr) == {72: {"msb": 85, "pc": 1}}  # 旧号读入升八度
     print("kbd_auto self-check OK")
 
