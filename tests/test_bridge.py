@@ -990,7 +990,7 @@ def test_midi_ble():
             hdr = getattr(ph, "_obj", ph)
             # 从结构体偏移直取指针：hdr.lpData 属性访问会转成遇 NUL 截断的
             # bytes，SysEx 里的 0x00 地址字节读不全
-            ptr = ctypes.c_void_p.from_buffer(hdr, kbd_auto._MIDIHDR.lpData.offset)
+            ptr = ctypes.c_void_p.from_buffer(hdr, mb._MIDIHDR.lpData.offset)
             self.longs.append(ctypes.string_at(ptr.value, hdr.dwBufferLength))
 
         def midiOutUnprepareHeader(self, h, ph, sz):
@@ -1022,6 +1022,15 @@ def test_midi_ble_architecture():
     src = pathlib.Path(kbd_auto.__file__).read_text(encoding="utf-8")
     assert "winrt" not in src
     assert "_winmm = mb._winmm" not in src
+
+
+def test_midihdr_single_source():
+    """回归锚：kbd_auto 曾另立 _MIDIHDR 并覆写 winmm argtypes，两类互斥、
+    后导入方生效——定位点 GOTO（send_sysex_h 传 mb 侧头）即 TypeError。"""
+    for fn in ("midiOutPrepareHeader", "midiOutLongMsg",
+               "midiOutUnprepareHeader"):
+        assert getattr(mb._winmm, fn).argtypes[1]._type_ is mb._MIDIHDR
+    assert not hasattr(kbd_auto, "_MIDIHDR")
 
 
 def test_pedal():

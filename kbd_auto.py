@@ -33,7 +33,6 @@ import threading
 import time
 import tkinter as tk
 import tkinter.ttk as ttk
-from ctypes import wintypes
 
 import dpi
 import midi_ble
@@ -418,32 +417,13 @@ class RawMidiIn:
             mb.close_in(h)   # 官方收尾序，见 midi_bridge.close_in
 
 
-class _MIDIHDR(ctypes.Structure):
-    _fields_ = [("lpData", ctypes.c_char_p),
-                ("dwBufferLength", wintypes.DWORD),
-                ("dwBytesRecorded", wintypes.DWORD),
-                ("dwUser", ctypes.c_size_t),
-                ("dwFlags", wintypes.DWORD),
-                ("lpNext", ctypes.c_void_p),
-                ("reserved", ctypes.c_size_t),
-                ("dwOffset", ctypes.c_size_t),
-                ("dwReserved", ctypes.c_size_t * 4)]
-
-
-for _fn in ("midiOutPrepareHeader", "midiOutLongMsg", "midiOutUnprepareHeader"):
-    # 不留模块级别名（下划线 _winmm 直绑 import 时本体）：别名让测试
-    # monkeypatch mb._winmm 打不进来（test_stability 已知坑）；
-    # argtypes 在 import 时一次性设到真实 DLL 上即可
-    getattr(mb._winmm, _fn).argtypes = (wintypes.HANDLE,
-                                        ctypes.POINTER(_MIDIHDR),
-                                        wintypes.DWORD)
-
-
 def _send_long(h, data):
-    """SysEx 走 midiOutLongMsg；缓冲在驱动标 DONE 前必须保持有效。"""
+    """SysEx 走 midiOutLongMsg；缓冲在驱动标 DONE 前必须保持有效。
+    头结构复用 mb._MIDIHDR：曾在此另立同名类并覆写 winmm argtypes——
+    两类互斥使后导入方生效，send_sysex_h 传 mb 侧头即 TypeError。"""
     buf = ctypes.create_string_buffer(bytes(data), len(data))
-    hdr = _MIDIHDR()
-    hdr.lpData = ctypes.cast(buf, ctypes.c_char_p)
+    hdr = mb._MIDIHDR()
+    hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
     hdr.dwBufferLength = len(data)
     if mb._winmm.midiOutPrepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
         return True
