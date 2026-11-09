@@ -2380,6 +2380,43 @@ class App:
             # 配置了显示器=保持投影（仅显式改「无」才关，上方分支已覆盖）；
             # 此处不得 close——否则保存任意 VJ 配置都会打灭投影
 
+    def _set_video_loop(self, note, on):
+        """VJ 槽位循环开关（Tk 线程执行，/vjloop 端点经 _run_on_app 投递）：
+        改运行时 cfg（琴键触发热路径即时读）→ obs 段单键合并落盘（不整段
+        替换，防洗掉 host/port 等）→ 在播槽位热应用（OBS 网络动作走工作
+        线程，不占主线程——与 panic/settings 同纪律）。None=成功（_run_on_app
+        约定），str=错误文案。"""
+        if self.ctl is None:
+            return "OBS 控制器未就绪"
+        loops = dict(self.ctl.cfg.get("videoLoops") or {})
+        n = str(note - 71)
+        if on:
+            loops[n] = True
+        else:
+            loops.pop(n, None)
+        self.ctl.cfg["videoLoops"] = loops
+        try:
+            cfg = _load_config()
+            obs = cfg.get("obs") or {}
+            obs["videoLoops"] = loops
+            cfg["obs"] = obs
+            _save_config(cfg)
+        except (ValueError, OSError) as e:
+            self.q.put("循环设置保存失败：%s" % e)
+            return "保存失败：%s" % e
+        cur = getattr(self.sync, "current_video", None) \
+            if self.sync is not None else None
+        if cur and self.sync.video_state in ("playing", "paused"):
+            m = re.match(r"(\d+)", os.path.basename(str(cur)))
+            if m and str(int(m.group(1))) == n:
+                ctl = self.ctl
+
+                def _apply():
+                    if not ctl.set_looping(on):
+                        self.q.put("循环热应用未生效：%s" % ctl.last_error)
+                threading.Thread(target=_apply, daemon=True).start()
+        return None
+
     def _settings_apply_web(self, p):
         """设置页保存（SettingsWindow._save 的 headless 镜像）：同一段
         热应用链（端口/工程库/OBS/遥控/持久化），取值来自 payload。

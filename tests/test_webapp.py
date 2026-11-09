@@ -13,6 +13,7 @@ import types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import kbd_auto
+import obs_ctrl
 import setlist_gui as sg
 import web_remote
 
@@ -295,12 +296,14 @@ def test_pedal_learn_cancel_endpoint():
 
 def test_vjmap_endpoint(tmp_path):
     """/vjmap：音符↔视频对应表——固定规则 31 行（72-101 视频音 + 102 熄屏），
-    视频库宽松匹配（精确 basename / 「编号+空格」前缀）；简化版拒绝。"""
+    视频库宽松匹配（精确 basename / 「编号+空格」前缀）；行带 loop 循环
+    标记（videoLoops 槽位口径）；简化版拒绝。"""
     app = _FakeWebApp()
     vroot = tmp_path / "videos"
     vroot.mkdir()
     (vroot / "1 开场钢琴.mp4").write_bytes(b"x")
-    app.ctl = types.SimpleNamespace(cfg={"videoRoot": str(vroot)})
+    app.ctl = obs_ctrl.ObsController(
+        {"videoRoot": str(vroot), "videoLoops": {"1": True}})
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
                                lambda: 0, page="")
     port = srv.server_address[1]
@@ -313,17 +316,73 @@ def test_vjmap_endpoint(tmp_path):
         r72 = next(r for r in d["rows"] if r["note"] == 72)
         assert r72["name"] == "C4" and r72["file"] == "1 开场钢琴.mp4"
         assert r72["hit"] and r72["blackout"] is False
+        assert r72["loop"] is True                    # 槽位1 已标循环
         r2 = next(r for r in d["rows"] if r["note"] == 73)
         assert r2["name"] == "C#4" and r2["file"] == "2.mp4"
-        assert r2["hit"] is None   # 库里没有
+        assert r2["hit"] is None and r2["loop"] is False   # 库里没有
         r102 = next(r for r in d["rows"] if r["note"] == 102)
         assert r102["name"] == "F#6" and r102["blackout"] is True
         assert r102["file"] == "熄屏"
+        assert r102["loop"] is False                  # 熄屏无循环语义
         app.lite = True
         code, _b = _req("GET", port, "/vjmap")
         assert code == 403
     finally:
         srv.shutdown()
+
+
+def test_vjloop_endpoint():
+    """/vjloop：格子点击切换循环——合法载荷经 calls 投递到 App 方法；
+    熄屏音符/非布尔 on 400；简化版 403。"""
+    app = _FakeWebApp()
+    got = []
+    app._set_video_loop = lambda note, on: got.append((note, on)) or None
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    threading.Thread(target=_drain, args=(app,), daemon=True).start()
+    try:
+        assert _post(port, "/vjloop", {"note": 74, "on": True})["ok"] is True
+        assert got == [(74, True)]
+        assert _post(port, "/vjloop", {"note": 101, "on": False})["ok"] is True
+        assert got == [(74, True), (101, False)]
+        code, _b = _req("POST", port, "/vjloop", {"note": 102, "on": True})
+        assert code == 400                            # 熄屏无循环语义
+        code, _b = _req("POST", port, "/vjloop", {"note": 74, "on": "yes"})
+        assert code == 400                            # on 必须布尔
+        code, _b = _req("POST", port, "/vjloop", {"note": 71, "on": True})
+        assert code == 400                            # 音域外
+        app.lite = True
+        code, _b = _req("POST", port, "/vjloop", {"note": 74, "on": True})
+        assert code == 403
+    finally:
+        srv.shutdown()
+
+
+def test_set_video_loop_method(monkeypatch):
+    """App._set_video_loop：改运行时 cfg（琴键热路径即时读）+ obs 段单键
+    合并落盘（不洗 host 等既有键）；sync 缺席=无热应用分支。"""
+    import obs_ctrl as _oc
+    store = {"obs": {"host": "127.0.0.1", "port": 4455,
+                     "videoLoops": {"2": True}}}
+    monkeypatch.setattr(sg, "_load_config",
+                        lambda: json.loads(json.dumps(store)))
+    saved = []
+    monkeypatch.setattr(sg, "_save_config", lambda cfg: saved.append(cfg))
+    app = types.SimpleNamespace(
+        ctl=_oc.ObsController({"videoLoops": {"2": True}}),
+        q=_Q(), sync=None)
+    assert sg.App._set_video_loop(app, 76, True) is None   # 槽位5 开循环
+    assert app.ctl.cfg["videoLoops"] == {"2": True, "5": True}
+    assert saved[-1]["obs"]["host"] == "127.0.0.1"          # 单键合并不洗段
+    assert saved[-1]["obs"]["videoLoops"] == {"2": True, "5": True}
+    assert sg.App._set_video_loop(app, 73, False) is None   # 槽位2 关循环
+    assert app.ctl.cfg["videoLoops"] == {"5": True}         # 关=删键
+    assert saved[-1]["obs"]["videoLoops"] == {"5": True}
+    app2 = types.SimpleNamespace(ctl=None, q=_Q(), sync=None)
+    assert isinstance(sg.App._set_video_loop(app2, 74, True), str)  # 无 ctl
 
 
 def test_checkpath_endpoint(tmp_path):

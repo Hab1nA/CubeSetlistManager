@@ -102,6 +102,57 @@ def test_numbered_match():
         obs_ctrl.scan_videos = orig
 
 
+def test_loop_for_parsing():
+    """槽位循环标记解析：前导数字归一（与 /vjmap 行、_abs_path 同口径），
+    无编号/无标记/缺 cfg = 播一遍停。"""
+    ctl = ObsController({"videoLoops": {"3": True, "10": True}})
+    assert ctl.loop_for("3.mp4") is True
+    assert ctl.loop_for("03.mp4") is True          # 前导零归一
+    assert ctl.loop_for("3 描述.mp4") is True
+    assert ctl.loop_for("VR/sub/3.mp4") is True    # 带路径取 basename
+    assert ctl.loop_for("30.mp4") is False
+    assert ctl.loop_for("x.mp4") is False          # 无编号
+    assert ctl.loop_for(None) is False
+    assert ObsController({}).loop_for("3.mp4") is False   # cfg 无键
+
+
+def test_note_loop_flag():
+    """音符触发按槽位 videoLoops 取循环标记（曾写死 set_media(target, False)
+    的回归锚）。逐个喂音符：worker 会倒掉积压只执行最新，连发=竞态。"""
+
+    class _Ctl:
+        def __init__(self):
+            self.cfg = {"videoLoops": {"3": True}}
+            self.sets = []
+            self.last_error = None
+
+        def loop_for(self, f):                     # 借真实现（只摸 self.cfg）
+            return ObsController.loop_for(self, f)
+
+        def set_media(self, f, loop):
+            self.sets.append((f, loop))
+            return True
+
+        def stop_media(self):
+            return True
+
+    ctl = _Ctl()
+    sync = mb.TransportSync(ctl)
+    lines = []
+    on_note = mb.note_handler(ctl, sync, report=lines.append)
+
+    def fire(note, want):
+        on_note(note, 100)
+        deadline = time.time() + 2
+        while time.time() < deadline and ctl.sets[-1:] != [want]:
+            time.sleep(0.01)
+        assert ctl.sets[-1] == want
+
+    fire(74, ("3.mp4", True))                      # 槽位3 → 循环
+    fire(73, ("2.mp4", False))                     # 槽位2 → 播一遍停
+    fire(74, ("3.mp4", True))                      # 再触发同位仍循环
+
+
 def test_natural_sort():
     assert sorted(["10 a", "2 a", "1 a"], key=natural_key) == \
         ["1 a", "2 a", "10 a"]
@@ -617,10 +668,10 @@ def test_kbd_auto():
         cpr = os.path.join(d, "x.cpr")
         pathlib.Path(cpr).write_bytes(b"")
         assert kbd_auto.load_slots(cpr) == {}
-        kbd_auto.save_slots(cpr, {60: {"msb": 85, "lsb": 64, "pc": 3},
-                                  63: {"pc": 5}})
+        kbd_auto.save_slots(cpr, {72: {"msb": 85, "lsb": 64, "pc": 3},
+                                  75: {"pc": 5}})
         s = kbd_auto.load_slots(cpr)
-        assert s[60] == {"msb": 85, "lsb": 64, "pc": 3} and s[63] == {"pc": 5}
+        assert s[72] == {"msb": 85, "lsb": 64, "pc": 3} and s[75] == {"pc": 5}
         assert "keyboard_automation.json" in os.listdir(d)
 
     # 展示

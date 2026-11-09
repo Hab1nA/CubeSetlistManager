@@ -681,6 +681,14 @@ input.invalid { border-color: var(--err) !important; }
   text-overflow: ellipsis; white-space: nowrap; }
 .vj-cell.live { border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent); }
+/* 循环开关：非熄屏格整格可点，∞ 角标=循环档（与 .tgl.on 同族绿色语义；
+   与 .live 在播 ring 可叠加——ring=正在播，∞=循环档，语义不撞） */
+.vj-cell:not(.blackout) { cursor: pointer; }
+.vj-cell.loop { border-color: var(--ok-line); }
+/* ∞ 角标内距与卡内容同源（.slot padding 10px var(--s3)）：右上=左上音符名同款 */
+.vj-cell.loop::after { content: "∞"; position: absolute; top: 10px;
+  right: var(--s3); color: var(--ok); font-weight: 700;
+  font-size: var(--f-md); line-height: 1; }
 .vj-cell.miss { border-style: dashed; }
 .vj-cell.miss .s-pc { color: var(--warn); }
 .vj-cell.blackout .s-pc { color: var(--err); }

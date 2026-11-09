@@ -1646,7 +1646,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_kbd_test, "/kbdtest"),
                           (self._h_kbd_record, "/kbdrecord"),
                           (self._h_checkpath, "/checkpath"),
-                          (self._h_slot_set, "/slotset")):
+                          (self._h_slot_set, "/slotset"),
+                          (self._h_vjloop, "/vjloop")):
                 if path == p:
                     fn(body, ip)
                     return
@@ -1682,16 +1683,31 @@ class _Handler(BaseHTTPRequestHandler):
             nm = kbd_auto.note_name(n)
             if f is None:
                 rows.append({"note": n, "name": nm, "file": "熄屏",
-                             "blackout": True, "hit": None})
+                             "blackout": True, "hit": None, "loop": False})
                 continue
             base = os.path.basename(f)
             num = _re.match(r"(\d+)", base)
             hit = by_base.get(base) or (by_num.get(num.group(1))
                                         if num else None)
             rows.append({"note": n, "name": nm, "file": hit or base,
-                         "blackout": False, "hit": hit})
+                         "blackout": False, "hit": hit,
+                         "loop": bool(ctl.loop_for(f)) if ctl else False})
         self._json(200, {"videoRoot": root, "files": len(files),
                          "rows": rows})
+
+    def _h_vjloop(self, body, _ip):
+        """VJ 槽位循环开关（webapp 格子点击）：note 72..101（102=熄屏无循环
+        语义，拒绝）、on 布尔；执行在 Tk 线程（含落盘与热应用）。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无 VJ 联动"})
+            return
+        note, on = body.get("note"), body.get("on")
+        if not isinstance(note, int) or not 72 <= note <= 101 \
+                or not isinstance(on, bool):
+            self._json(400, {"error": "参数应为 note(72..101) 与 on(布尔)"})
+            return
+        self._run_on_app(lambda: app._set_video_loop(note, on))
 
     def _h_playlist(self):
         """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+

@@ -277,6 +277,22 @@ class ObsController:
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
         return self._act(file_rel + ("（循环）" if loop else ""), do)
 
+    def loop_for(self, file_rel):
+        """槽位编号查循环标记：basename 前导数字（与 _abs_path 宽松匹配、
+        /vjmap 行同编号口径）；无标记/无编号 = False（播一遍停）。"""
+        m = re.match(r"(\d+)", os.path.basename(str(file_rel or "")))
+        loops = self.cfg.get("videoLoops") or {}
+        return bool(m and loops.get(str(int(m.group(1)))))
+
+    def set_looping(self, on):
+        """热应用循环标记到在播媒体源（仅合并 looping，不 RESTART——正在播
+        的画面零中断；ENDED 定格不会因合并复活，语义=下次触发生效）。"""
+        def do(ws):
+            ws.request("SetInputSettings", {
+                "inputName": self.cfg.get("mediaInput", "舞台视频"),
+                "inputSettings": {"looping": bool(on)}, "overlay": True})
+        return self._act("循环%s" % ("开" if on else "关"), do)
+
     def _stop_and_forget(self, ws):
         """停媒体源并清空其文件。OBS 媒体源只要存着文件，随场景激活就会
         自动播（没有「启动不自动播放」开关），忘掉文件才能根治下次启动

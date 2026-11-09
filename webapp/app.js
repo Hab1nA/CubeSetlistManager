@@ -2289,16 +2289,31 @@ async function refreshVjMap(root, force) {
           + "先在下方「视频联动」里选择</div>";
       return;
     }
-    // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列
+    // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
+    // 非熄屏格点击=切换循环/播一遍停（乐观更新，失败回滚）
     d.rows.forEach(row => {
       const cell = document.createElement("div");
       cell.className = "slot vj-cell"
           + (row.blackout ? " blackout" : "")
-          + (row.hit || row.blackout ? "" : " miss");
+          + (row.hit || row.blackout ? "" : " miss")
+          + (!row.blackout && row.loop ? " loop" : "");
       cell.dataset.file = row.file || "";
-      cell.title = row.blackout ? "F#6：熄灭投影画面"
-          : (row.hit ? "视频库：" + row.hit
-             : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录");
+      if (!row.blackout) {
+        cell.dataset.note = row.note;
+        cell.setAttribute("role", "button");
+        cell.setAttribute("aria-pressed", row.loop ? "true" : "false");
+        cell.tabIndex = 0;
+        cell.title = (row.hit ? "视频库：" + row.hit
+            : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录")
+            + " · 点击切换" + (row.loop ? "循环" : "播一遍停");
+        const flip = () => toggleVjLoop(cell, row);
+        cell.addEventListener("click", flip);
+        cell.addEventListener("keydown", e => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
+        });
+      } else {
+        cell.title = row.name + "：熄灭投影画面";
+      }
       const n = document.createElement("span");
       n.className = "s-note";
       n.textContent = row.name;
@@ -2314,6 +2329,25 @@ async function refreshVjMap(root, force) {
       box.appendChild(cell);
     });
   } catch { /* 瞬断 */ }
+}
+
+// VJ 循环开关：整格点击切换，乐观更新（同格在途忽略；post 失败自带
+// toast，此处只回滚视觉态）。成功回写行数据，5s 重建保真。
+const vjLoopBusy = new Set();
+async function toggleVjLoop(cell, row) {
+  if (vjLoopBusy.has(row.note)) return;
+  vjLoopBusy.add(row.note);
+  const on = !row.loop;
+  const paint = v => {
+    cell.classList.toggle("loop", v);
+    cell.setAttribute("aria-pressed", v ? "true" : "false");
+  };
+  paint(on);
+  try {
+    const j = await post("/vjloop", {note: row.note, on});
+    if (j.ok) row.loop = on; else paint(row.loop);
+  } catch { paint(row.loop); }
+  finally { vjLoopBusy.delete(row.note); }
 }
 
 async function refreshVj(force) {

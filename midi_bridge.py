@@ -677,7 +677,7 @@ def note_handler(ctl, sync, report=print):
                         sync.set_state("stopped")
                         sync.current_video = None
                 else:
-                    ok = ctl.set_media(target, False)
+                    ok = ctl.set_media(target, ctl.loop_for(target))
                     if ok:
                         sync.set_state("playing")
                         sync.current_video = target
