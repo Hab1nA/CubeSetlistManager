@@ -1670,9 +1670,10 @@ async function refreshPedal(force) {
       pdFormInit = true;
     }
     // MIDI 踩钉口是学习 CC 时自动记录的内部端口名：只读展示，不可手填
-    $("#pd-midiport").textContent = d.hint
-        ? "MIDI 踩钉口：" + d.hint + " · 学习时自动记录"
-        : "MIDI 踩钉口：未记录，学习时自动写入";
+    const mp = $("#pd-midiport");
+    mp.hidden = !d.hint;    // 无 MIDI 口记录不占位：HID 踩钉用户用不上
+    mp.textContent = d.hint ? "MIDI 踩钉口：" + d.hint + " · 学习时自动记录"
+                            : "";
     drawBinds(d);
     if (!$("#pd-dev").options.length) refreshPedalDevices();
   } catch { /* 瞬断 */ }

@@ -173,7 +173,7 @@ input:focus-visible, select:focus-visible {
    对齐）。field=「label+控件」两段结构且在网格行内 stretch，开关用
    center+下移补偿定位到控件行中线；19px 为 CDP 实测值（拨杆中心−输入
    框中心=0），缩放环境变化时以此断言回归 */
-.grid2 .switch.end { align-self: center; margin-top: 19px; }
+.grid2 .switch.end { align-self: center; }   /* 间距走 grid 行距，同 VJ 静音 */
 .field-row { display: flex; gap: var(--s3); }
 .field-row .field { flex: 1; }
 input.invalid { border-color: var(--err) !important; }
