@@ -623,6 +623,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         self._dev_vars = {}         # 每乐器页×每方向的设备下拉（key:(页,方向)）
         self._dev_menus = {}
         self._dev_items = {}        # 与各下拉 values 平行：(端口名, 同名序 0 基)
+        self._dev_sig = {}          # 每页端口清单签名（_poll_ports 变更检测用）
         for key, groups in (
                 ("juno", (("── 音色槽（C4 起 10 键）──", SLOT_NOTES),
                           ("── 全局移调（C2 起 4 键）──", list(SHIFT_NOTES)))),
@@ -659,7 +660,7 @@ class KeyboardAutoWindow(tk.Toplevel):
                               "%s；「当前不可用」即设备未接入" % hint)
                 ref = ttk.Button(
                     devrow, text="刷新", width=6,
-                    command=lambda k=key: self._rebuild_device_menu(k))
+                    command=self._refresh_page)
                 dpi.bind_hint(ref, self._hint, "重新枚举设备并复核端口状态")
                 ref.pack(side="left", padx=(6, 0))
             grid = ttk.Frame(page)
@@ -991,6 +992,14 @@ class KeyboardAutoWindow(tk.Toplevel):
         outs = _all_out_devices()
         for key, cfg, cfg_key in (("juno", self.app.jcfg, "juno"),
                                   ("ax", self.app.axcfg, "ax09")):
+            # 清单签名：设备上下线（winmm 现查/BLE 缓存换新）或改选落盘
+            # 即变——变了才重建下拉。点「刷新」invalidate 后 BLE 后台重扫
+            # 的结果由此落进菜单，用户不必点第二次
+            sig = (ins, outs, cfg["inHint"], _in_dev(cfg),
+                   cfg["outHint"], cfg.get("dev", 0))
+            if sig != self._dev_sig.get(key):
+                self._dev_sig[key] = sig
+                self._rebuild_device_menu(key)
             ti, oki = self._side_line(ins, cfg["inHint"], _in_dev(cfg),
                                       cfg_key, "inHint")
             to, oko = self._side_line(outs, cfg["outHint"], cfg.get("dev", 0),
@@ -1013,8 +1022,11 @@ class KeyboardAutoWindow(tk.Toplevel):
             self._present()
 
     def _refresh_page(self):
-        """乐器行「刷新」：重枚举当前页设备下拉并复核端口状态——与页内
-        设备行刷新同效（设备插回时一键复核，不必切页/滚动）。"""
+        """「刷新」（页顶乐器行+页内设备行共用）：重枚举当前页设备下拉并
+        复核端口状态（设备插回时一键复核，不必切页/滚动）。BLE 端点走
+        TTL 缓存——点按即 invalidate 强制后台重扫，扫描异步，结果由
+        _poll_ports 的清单签名守卫自动落进下拉，无需二次点按。"""
+        midi_ble.invalidate()
         self._rebuild_device_menu(self._page_key)
         self._poll_ports()
 
