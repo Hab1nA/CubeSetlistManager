@@ -670,27 +670,6 @@ class MainActivity : Activity() {
             "?"
         }
 
-        @android.webkit.JavascriptInterface
-        fun batteryWhitelisted(): Boolean {
-            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
-            return pm.isIgnoringBatteryOptimizations(packageName)
-        }
-
-        @android.webkit.JavascriptInterface
-        fun requestBatteryWhitelist() {
-            runOnUiThread {
-                try {
-                    startActivity(Intent(
-                        android.provider.Settings
-                            .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        android.net.Uri.parse("package:$packageName")))
-                } catch (e: Exception) {
-                    startActivity(Intent(
-                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                }
-            }
-        }
-
         /** APP 误连网页端口时的自动纠正：改存地址并加载正确端口（同主机）。 */
         @android.webkit.JavascriptInterface
         fun switchToAppPort(port: String) {

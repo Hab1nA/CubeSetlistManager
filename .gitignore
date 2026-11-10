@@ -46,3 +46,7 @@ out/ui_shots/crops/
 out/ui_shots/review_crops/
 out/ui_shots/_audit/
 out/ui_shots/stills/
+
+# 安卓 release 签名（密钥与口令不入库；模板见 keystore.properties.example）
+mobile/keystore/
+mobile/keystore.properties
