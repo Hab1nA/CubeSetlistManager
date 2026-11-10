@@ -314,8 +314,8 @@ class DeviceRegistry:
         if self.on_change is not None:
             try:
                 self.on_change()
-            except Exception:
-                pass
+            except Exception as e:
+                self._report("配置变更回调异常：%s" % e)
 
     def snapshot(self):
         with self._lock:
@@ -1557,9 +1557,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._h_log()
         elif path == "/vjmap":
             self._h_vjmap()
-        elif path == "/monitor":
-            self._run_on_app(lambda: None, result_fn=lambda: dict(
-                self.server.app._monitor_web()))
         elif path == "/settings":
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._settings_get_web)
@@ -2384,13 +2381,16 @@ class WebRemote:
     def try_reopen_midi(self):
         """翻谱 MIDI 口自愈（App 联动端口自愈轮 10s 调用）：启动早于
         loopMIDI 的同族受害场景（口未开→翻谱推送永久失效）补开口。
-        已启用且口未开才尝试；失败静默（成功才记日志，10s 节奏防刷屏）。
-        非阻塞抢 _lock：设置页 apply 重建期间让路，下轮再来。"""
-        if not (self.enabled and self.midi_hint and self.midi_port is None):
+        已启用才尝试（口未开或热拔掉线 dead 旗标）；失败静默（成功才
+        记日志，10s 节奏防刷屏）。非阻塞抢 _lock：设置页 apply 重建期间
+        让路，下轮再来；dead 收尾也在锁内（与 apply 互斥，不走锁外窗口）。"""
+        if not (self.enabled and self.midi_hint):
             return False
         if not self._lock.acquire(blocking=False):
             return False
         try:
+            if self.midi_port is not None and self.midi_port.dead:
+                self._stop_midi()     # 热拔掉线：收尾并入「未打开」重开
             if self.midi_port is not None:
                 return False          # 双检：抢锁间隙已被 apply 起好
             try:

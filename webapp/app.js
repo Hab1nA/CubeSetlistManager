@@ -2464,6 +2464,14 @@ function stDawNote() {
   const btn = $("#st-daw-restart");
   btn.disabled = !changed;            // 未改底座=灰不可点；改动=红可点
   btn.classList.toggle("danger", changed);
+  // S1 数据安全提示（11-11）：表单所选底座=Studio One 时恒显——S1 切歌
+  // 不弹保存框，未保存修改被静默丢弃；数据安全优先于切换重启提示。
+  if ($("#st-daw").value === "studioone") {
+    $("#st-daw-note").hidden = false;
+    $("#st-daw-note").textContent =
+      "S1 切歌不弹保存框：未保存修改会被丢弃，切换前请先保存工程";
+    return;
+  }
   $("#st-daw-note").hidden = !changed;
   if (changed) $("#st-daw-note").textContent = "重启以实现切换";
 }

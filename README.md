@@ -257,11 +257,13 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | obs | obsExe / autoStart | OBS 未运行时自动拉起 |
 | obs | mediaInput / videoRoot | 媒体源名（缺源自动补建「舞台视频」）/ 视频库根目录 |
 | obs | vjMute | VJ 静音播放：勾选=静音+关监听；不勾=开监听「监视器并输出」（设置页可改，默认勾选） |
+| obs | healthSec | OBS 探活周期秒（默认 30；只影响断线发现速度，一般勿改） |
+| obs | videoLoops | VJ 视频循环标记表（程序自动维护，勿手改） |
 | obs | projectorMonitor | VJ 显示位置屏名（空=不投影），设置页可改 |
 | daw | （顶层） | 底座选择：`cubase`（默认）或 `studioone` |
 | dawSettings | dawExe / projectsRoot | DAW 路径、工程库根目录（`<队伍>/<歌>/<歌>.cpr`，Studio One 为 `.song`）。切歌时 Cubase 经保存对话框恒保存、Studio One 丢弃未存修改，切歌前自行保存 |
-| juno | inHint / outHint / dev / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道；dev=同名端口序号（两台同型号无线 MIDI 盒时在「键盘自动化」窗下拉选择，0 基，一般勿手改） |
-| ax09 | inHint / outHint / ch / dev | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK 连按 4 次到 Ch 页可查改）；dev 同 juno |
+| juno | inHint / outHint / inDev / dev / patchCh / perfCh / deviceId | JUNO-DS MIDI 端口提示与通道；dev=同名端口序号（两台同型号无线 MIDI 盒时在「键盘自动化」窗下拉选择，0 基，一般勿手改）；inDev=录制输入口（键盘自动化窗选过才落键，勿手改） |
+| ax09 | inHint / outHint / inDev / ch / dev / ax | AX-09 USB MIDI 端口提示与接收通道（默认 1；琴上 SHIFT+V-LINK 连按 4 次到 Ch 页可查改）；dev/inDev 同 juno；ax=程序内部后端分派标记（勿手改） |
 | pedal | deviceHint / bindings / hidBindings / hidDeviceHint / intercept / gestures / doubleWindow | 踩钉：MIDI 设备名提示与动作→CC、HID 动作→虚拟键码、所选设备身份与拦截开关、动作→手势（single/double，「学习」时踩出即自动分类）与双踩窗（默认 0.35s） |
 | pedal | remoteEnabled | 允许平板转发踩钉（踩钉控制页开关持久化；APP 侧另有「踩钉转发」开关，双开生效） |
 | webRemote | enabled / mode / ip / serverPort / appPort / taskerPort | 移动端遥控总开关 / 服务网络（hotspot=自动开热点 / lan=用现有局域网）/ lan 模式服务网卡 IP / 网页 8765 / APP 8767 / 翻谱 8766 |
@@ -270,6 +272,8 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 | autoPlay / switchConfirm | （顶层） | 连续播放（默认关）/ 切换工程需确认（默认开），设置页可改 |
 | vjPortHint / kbPortHint | （顶层） | VJ 与键盘自动化的 loopMIDI 端口名提示（设置页可改，保存即热切换监听；空串=停用该联动） |
 | clockPortHint | （顶层） | MTC 时码接收端口；空串=停用（走带三态/已播/自动推进不可用）。DAW 侧勾选与部署见 docs/MTC时码部署.md |
+| mrPortHint | （顶层） | MIDI Remote 直控口名提示（仅 Cubase 底座；默认「CubeSetlist Remote」） |
+| launchAppsOnStart | （顶层） | 「启动时自动打开被控软件」勾选持久化 |
 | exitCloseApps | （顶层） | 「退出时关闭被控软件（DAW/OBS/loopMIDI）」勾选持久化 |
 
 ## 文件架构

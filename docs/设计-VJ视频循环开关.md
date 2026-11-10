@@ -25,7 +25,6 @@
 | 走带暂停跟随对 looping 源天然兼容（循环源恒 PLAYING，不进 ENDED 不复活分支） | midi_bridge.py:639-647 |
 | 同音符重按=从头重播（两种模式语义一致）；连发取最新音符 | midi_bridge.py:666-681 |
 | 熄屏=stop_media 清空文件，独立路径，与循环无交集 | midi_bridge.py:672-676、obs_ctrl.py:280-295 |
-| 预热 prime_videos 用 loop=False，不受影响 | obs_ctrl.py:360 |
 | 唯一格子渲染处：webapp `refreshVjMap`，纯展示无点击、`cursor:default` | webapp/app.js:2276-2316、app.css:672-686 |
 | 格子 5 秒 force 重建（即放即扫），`.live` 在播高亮由 500ms 轮询靶向补挂 | app.js:2939-2940、2365-2374 |
 | `/vjmap` 只读快照：rows[{note,name,file,blackout,hit}]，行内已解析编号 | web_remote.py:1659-1696 |

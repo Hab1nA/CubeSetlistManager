@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import traceback
 import time
 from ctypes import wintypes
 
@@ -97,7 +98,8 @@ class StallWatchdog:
                     self._notify("主线程曾停摆 %.1f 秒（详见 stall.log）"
                                  % total)
                 except Exception:
-                    pass
+                    if sys.stderr is not None:  # pythonw 无 stderr
+                        traceback.print_exc()
 
 
 class StackSentinel:

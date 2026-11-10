@@ -16,7 +16,9 @@
 纪元（epoch）：reset() 把位置清为未知、弃装配组——切歌/换口/回零时调用，
 三态与进度随之回「未播放/0」；qf/f8 计数不清（端口内容统计与 F8-only 提示
 用，跟口不跟歌）。"""
+import sys
 import threading
+import traceback
 
 # 速率码 → 帧率（小时字段 bit5-6：0=24fps 1=25 2=30 drop-frame 3=30）
 _FPS = (24.0, 25.0, 30.0, 30.0)
@@ -169,4 +171,6 @@ class Decoder:
         try:
             fn(*a)
         except Exception:
-            pass
+            if sys.stderr is not None:  # pythonw 无 stderr，print_exc 会再抛
+                traceback.print_exc()   # 订阅方异常留痕（回调线程不死语义不变）
+            #   （回调线程不死语义不变；dist 窗口态 stderr 不可见=与旧一致）

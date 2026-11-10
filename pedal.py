@@ -28,7 +28,9 @@ intercept=拦截开关）。热插拔：MIDI 口
 import ctypes
 import re
 import threading
+import sys
 import time
+import traceback
 import tkinter as tk
 import tkinter.ttk as ttk
 import winreg
@@ -514,7 +516,8 @@ class GestureEngine:
             if self.on_event:
                 self.on_event(msg)
         except Exception:
-            pass
+            if sys.stderr is not None:  # pythonw 无 stderr，print_exc 会再抛
+                traceback.print_exc()   # 上报通道自身失败留痕（通道=唯一出口）
 
 
 # ---- Raw Input 设备桥 ----
@@ -840,7 +843,8 @@ class DeviceBridge:
             if self.on_event:
                 self.on_event(msg)
         except Exception:
-            pass
+            if sys.stderr is not None:  # pythonw 无 stderr，print_exc 会再抛
+                traceback.print_exc()   # 上报通道自身失败留痕（通道=唯一出口）
 
     def _run(self):
         try:
@@ -1245,8 +1249,11 @@ class PedalListener:
             if self.hid_binds or self.device_hint:
                 self.sync_bridge()
                 self.bridge.start()
-            if self.port:
+            if self.port is not None and not self.port.dead:
                 return True
+            if self.port is not None:      # 热拔掉线：旧句柄收尾重开
+                self.port.close()
+                self.port = None
             if not self.hint:
                 return False
             try:
@@ -1259,7 +1266,7 @@ class PedalListener:
 
     @property
     def connected(self):
-        return self.port is not None
+        return self.port is not None and not self.port.dead
 
     @property
     def hid_active(self):

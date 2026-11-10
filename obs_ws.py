@@ -17,7 +17,7 @@ import socket
 import struct
 
 OP_HELLO, OP_IDENTIFY, OP_IDENTIFIED = 0, 1, 2
-OP_EVENT, OP_REQUEST, OP_REQUEST_RESPONSE = 5, 6, 7
+OP_REQUEST, OP_REQUEST_RESPONSE = 6, 7
 
 
 class ObsError(Exception):

@@ -237,7 +237,6 @@ class ObsController:
         self._stop = threading.Event()
         self._thread = None
         self.last_error = ""
-        self.connected_at = 0.0
 
     # ---- 生命周期 ----
 
@@ -342,10 +341,6 @@ class ObsController:
         时也会同步一次）。"""
         return self._act("VJ静音", self._set_mute)
 
-    def file_exists(self, file_rel):
-        """预加载核对：cue 里的文件名/路径能否落到真实文件。"""
-        return self._abs_path(file_rel) is not None
-
     def _ensure_media_input(self, ws):
         """OBS 里缺配置的媒体源时，在当前活动场景自动补建（等比铺满画布），
         连接后即可用，无需手动摆源。幂等：已存在直接返回。"""
@@ -366,17 +361,6 @@ class ObsController:
                 "position": {"x": 0, "y": 0}, "alignment": 5,
                 "boundsType": "OBS_BOUNDS_SCALE_INNER",
                 "bounds": {"x": vid["baseWidth"], "y": vid["baseHeight"]}}})
-
-    def prime_videos(self, files, on_progress=lambda f, i, n: None):
-        """预热：把每个视频快速过一遍媒体源（各 ~0.6s），暖 OS 文件缓存，
-        结束恢复调用方指定的幕间。必须在线程里跑（阻塞式）。"""
-        n = len(files)
-        for i, f in enumerate(files):
-            on_progress(f, i, n)
-            if not self.set_media(f, loop=False):
-                continue  # 失败（含未连接）直接跳过，不阻塞预加载
-            self._stop.wait(0.6)
-        return True
 
     def media_state(self):
         """查媒体源实况（OBS_MEDIA_STATE_* 字符串），连不上返回 None。"""
@@ -510,13 +494,12 @@ class ObsController:
                     pass
                 with self._lock:
                     self._ws = ws
-                    self.connected_at = time.time()
                     self.last_error = ""
                 if self.on_connected and not was_connected:
                     try:
                         self.on_connected()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self.last_error = "连接通知回调异常: %s" % e
                 was_connected = True
                 # 挂起等断线/停用：socket 读超时也不重连，靠动作失败触发
                 self._stop.wait(self.cfg.get("healthSec", 30))

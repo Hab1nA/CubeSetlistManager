@@ -396,11 +396,6 @@ def _save_config(cfg):
     _atomic_write(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
-def _clip(s, n=26):
-    """监控栏单元格防溢出：超长截断加省略号。"""
-    return s if len(s) <= n else s[:n - 1] + "…"
-
-
 def _err(e):
     """异常进日志的统一格式：不用 repr（会带 Python 引号转义），
     消息为空时退回异常类名，保证始终有可读信息。"""
@@ -688,9 +683,6 @@ class App:
         # seq/rate 同为线程池并发的非原子读改写（淘汰+写回交错会漏删/多删
         # 一格）：与 gwin 各持小锁，不共用以免限流窗被去重表拖住
         self._pedal_dedup_lock = threading.Lock()
-        self._rclock_note = ("单踏板设计：bridge._rclock 为全体转发源共享，"
-                             "多平板同开时 et 互跳会频繁重锚、安全退化为"
-                             "到达时刻锚定（无锚定收益但不产生错误动作）")
         # 监听器在构造期立即创建：设备桥的 LL 钩子安装必须发生在进程内任何
         # MIDI 口打开之前（实测在 MIDI 口活动后安装有概率挂死）
         self.pedal = pedal.PedalListener(
@@ -726,8 +718,8 @@ class App:
         self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
         self._sel_lock = False          # 双列表互斥选中的防重入标记
         self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
-        self.slots = {}                 # 已加载工程：JUNO 映射（音符 60-69）
-        self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 72-77）
+        self.slots = {}                 # 已加载工程：JUNO 映射（音符 72-81）
+        self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 84-89）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
         self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
         self._load_lock = threading.Lock()  # 装载代际守卫的校验+写原子化
@@ -1724,9 +1716,9 @@ class App:
             time.sleep(mb.POLL_SEC)
 
     def _on_kb_msg(self, status, d1, d2):
-        """Keyboard Automation 端口音符：36-39→JUNO 全局移调（连按累加）、
-        41-44→AX-09 全局移调（弯音钉位，连按累加）、60-69→JUNO、
-        72-77→AX-09 查映射切音色。"""
+        """Keyboard Automation 端口音符：48-51→JUNO 全局移调（连按累加）、
+        53-56→AX-09 全局移调（弯音钉位，连按累加）、72-81→JUNO、
+        84-89→AX-09 查映射切音色。"""
         st = status & 0xF0
         if st == 0x90 and d2 == 0:
             st = 0x80                   # Note On vel=0 等价 Note Off
@@ -1999,7 +1991,9 @@ class App:
         pre = self.mtc.position() if self.mtc is not None else None
         err = mb.send_sysex_h(self.mmc_out, points.mmc_goto_bytes(start))
         if err:
-            self.q.put("定位发送失败：%s" % err)
+            self.q.put("定位发送失败：%s，输出口已弃，10 秒内自愈重开" % err)
+            mb.close_out(self.mmc_out)   # 输出口无热拔通知，发送失败即弃口，
+            self.mmc_out = None          #   自愈循环按「未打开」重开（11-11）
         else:
             self._goto_ack = (pre, time.time(), label)
 
@@ -2289,12 +2283,6 @@ class App:
         except Exception as e:
             return {"error": _err(e)}
         return {"path": os.path.normpath(path) if path else ""}
-
-    def _monitor_web(self):
-        """监控栏全部单元格（名称→[文本, 颜色]）：四页状态区的数据源。"""
-        return {"/".join(k): list(v.cget("text") and
-                                  (v.cget("text"), v.cget("foreground")))
-                for k, v in self.rows.items()}
 
     def _settings_get_web(self):
         """设置页数据：当前生效值 + 可选列表（显示器/网卡/在线端口）。"""
@@ -3588,17 +3576,24 @@ class App:
         """联动端口自愈（_tick 主线程执行，与 _apply_ports 同线程天然串行）：
         只补开「已配置但当前未打开」的监听口（VJ 触发/时码/MMC 输出/键盘/
         翻谱），已在场的口绝不动（不做扰动性关开）。失败静默等下一轮
-        （10s，monotonic 计时防墙钟回退暂停），成功才记日志——本软件启动
-        早于 loopMIDI、端口迟到时自动接上，无需重启。
-        边界（已知，接受）：只治「从未打开」；loopMIDI 中途被杀重启后
-        旧句柄仍在但不通（winmm 无热拔插通知），时码断流仍需重开本软件。
-        单轮 2s 预算：winmm 专线被毒化时枚举/开口各吃 1-3s 上限，超预算
-        弃轮防主线程停摆（对抗复审 P2）。"""
+        （10s，monotonic 计时防墙钟回退暂停）。热拔掉线（MIM_CLOSE→dead
+        旗标）一并重开——设备拔出/loopMIDI 中途被杀重启（虚拟口删除=
+        设备移除，同一通知路径），「已掉线」并入「未打开」重开，时码
+        断流不再需要重启本软件。
+        失败静默等下一轮，成功才记日志；单轮 2s 预算：winmm 专线被毒化时
+        枚举/开口各吃 1-3s 上限，超预算弃轮防主线程停摆（对抗复审 P2）。"""
         if not self._startup_done:
             return
         _t0 = time.monotonic()
         try:
-            # VJ 触发口
+            # VJ 触发口（热拔掉线先收尾并入「未打开」重开）
+            if self.port is not None and self.port.dead:
+                self.q.put("VJ 触发口已掉线，自动重开")
+                try:
+                    self.port.close()
+                except Exception:
+                    pass
+                self.port = None
             if (self.ctl is not None and self.sync is not None
                     and self.vj_hint and self.port is None):
                 try:
@@ -3611,7 +3606,19 @@ class App:
                     pass
             if time.monotonic() - _t0 > 2.0:
                 return
-            # 时码口（启动失败路径会清掉 mtc 解码器：先重建再开口）
+            # 时码口（热拔掉线先收尾并入「未打开」重开；启动失败路径
+            #   会清掉 mtc 解码器：先重建再开口）
+            if self.clock_port is not None and self.clock_port.dead:
+                self.q.put("时码口已掉线，自动重开（走带基线复位）")
+                try:
+                    self.clock_port.close()
+                except Exception:
+                    pass
+                self.clock_port = None
+                self.sync.reset()
+                self.watch.reset()
+                if self.mtc is not None:    # 不变量：clock_port 非 None⇒三件套在，
+                    self.mtc.reset()        #   守护是防未来新路径破坏（红队 P2-1）
             if (self.ctl is not None and self.sync is not None
                     and self.watch is not None and self.clock_hint
                     and self.clock_port is None):
@@ -3638,6 +3645,14 @@ class App:
                 self._open_mmc_out(quiet=True)
             # 键盘自动化口（switcher 门：收发器没起来时键盘口开了也没人
             # 消费——理论边界，ToneSwitcher 构造几乎不失败）
+            if self.kb_port is not None and self.kb_port.dead:
+                self.q.put("键盘自动化口已掉线，自动重开")
+                try:
+                    self.kb_port.close()
+                except Exception:
+                    pass
+                self.kb_port = None
+                self.kb_err = ""
             if (self.kb_hint and self.kb_port is None
                     and self.switcher is not None):
                 try:

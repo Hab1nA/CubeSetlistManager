@@ -43,7 +43,8 @@ NOTE_MAP[102] = None  # F#6 → 熄屏
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
 _MIM_LONGDATA = 0x3C4     # SysEx 缓冲收满（须先 AddBuffer 投缓冲，否则 SysEx 被静默丢弃）
-_MIM_LONGERROR = 0x3C2    # SysEx 接收错误（缓冲同样要回收重投）
+_MIM_LONGERROR = 0x3C6    # SysEx 接收错误（缓冲同样要回收重投；旧值 0x3C2 是 MIM_CLOSE，错装）
+_MIM_CLOSE = 0x3C2        # 口关闭=设备被移除/loopMIDI 端口被删（winmm 热拔通知，11-11 修正）
 _CALLBACK_FUNC = 0x30000
 _Proc = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, ctypes.c_uint,
                            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t)
@@ -378,18 +379,6 @@ def send_cc_h(h, ch, cc, val, timeout=1.0):
     return result.get("err")
 
 
-def send_cc(idx, ch, cc, val, timeout=None):
-    """一次性打开 OUT 口发一条 CC 再关闭（探针/命令行用；App 常驻口走
-    send_cc_h——MIDI Remote 直控）。返回 None 或错误文案。"""
-    h, err = open_out(idx, timeout)
-    if h is None:
-        return err
-    try:
-        return send_cc_h(h, ch, cc, val, timeout)
-    finally:
-        close_out(h)
-
-
 def _in_devices():
     # 用 A 版查询：W 版对 teVirtualMIDI/Rubix 等驱动返回 INVALPARAM，名字拿不到
     def job():
@@ -466,11 +455,12 @@ class MidiIn:
         if h is None:
             sys.exit(err)
         self._h = h
+        self._closing = False        # 本方 close 中：MIM_CLOSE 回调不算死亡
+        self._dead = False           # MIM_CLOSE（非本方 close）=口已掉线
         self._done = collections.deque()   # 已完成的缓冲头地址 (addr, errored)
         self._done_lock = threading.Lock()
         self._scheduled = False
         self._hdrs = []                    # (hdr, buf) 同持：ctypes 不保活 buf
-        self._refeed_fails = 0             # 重投失败计数（池慢性耗尽的可观测线索）
         if on_sysex is not None:
             post_io(lambda hh=h: self._setup_pool(hh))   # 专线投递：不在调用
             #   线程直呼 winmm（挂死/毒化时陪葬）；开窗几毫秒内的 SysEx 被
@@ -508,6 +498,8 @@ class MidiIn:
                 self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
         elif msg in (_MIM_LONGDATA, _MIM_LONGERROR) and p1:
             self._done_push(int(p1), msg == _MIM_LONGERROR)
+        elif msg == _MIM_CLOSE and not self._closing:
+            self._dead = True            # 设备移除/端口被删：GUI 自愈循环据此重开
 
     def _done_push(self, addr, errored):
         with self._done_lock:
@@ -547,11 +539,18 @@ class MidiIn:
                         hh, ctypes.byref(hdr), ctypes.sizeof(hdr))
                 else:
                     # 重投失败=该缓冲永久出局，池只缩不涨（STILLPLAYING/
-                    # 错误风暴时全帧通道慢性耗尽）。不抛（专线绝不忘），
-                    # 计数留可观测线索。
-                    self._refeed_fails += 1
+                    # 错误风暴时全帧通道慢性耗尽）。不抛（专线绝不死），
+                    # 静默缩池是既有语义。
+                    pass
             except Exception:
-                self._refeed_fails += 1
+                pass
+
+    @property
+    def dead(self):
+        """口已掉线（MIM_CLOSE 送达且非本方 close）：设备拔出/loopMIDI
+        端口被删。GUI 联动端口自愈循环据此把「已掉线」并入「未打开」
+        重开；物理拔线与虚拟口删除走同一通知路径。"""
+        return self._dead
 
     def close(self):
         """官方收尾序（微软/JUCE 口径）：Stop 切断本句柄投递 → Reset 兜底
@@ -561,6 +560,7 @@ class MidiIn:
         即刻返回，收尾排队迟到完成；幂等（二次 close 无操作）。"""
         h = self._h
         self._h = None
+        self._closing = True   # 自己的 close 也会收到 MIM_CLOSE 回调，别误标死亡
         if h:
             # teardown 按「要求过 sysex」判（_hdrs 由专线异步填充，此刻可能
             # 还空）；专线串行保证 close job 前池已投完，逐头 Unprepare

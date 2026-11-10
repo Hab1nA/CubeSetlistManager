@@ -60,6 +60,7 @@ def _reset(fake):
     mb._winmm = fake
 
     def _clear():
+        mr_ctrl.set_alive_probe(None)   # 防前序用例构造 DawController 残留探针
         with mr_ctrl._lock:
             mr_ctrl._out = None
             mr_ctrl._next_try = 0.0
@@ -136,6 +137,60 @@ def test_port_missing_cooldown_then_reenum():
         assert fake.enum_calls > n
     finally:
         undo()
+
+
+def test_send_dead_daw_probe_blocks_send():
+    """存活探针（Phase 2）拦截用例：探针 False=口在而 DAW 死——不发任何
+    CC，报错+弃口+进冷却；DAW 恢复后冷却未到仍拦，不再假成功。"""
+    fake = _FakeWinmm()
+    undo_w = _reset(fake)
+    undo_g = _fast()
+    saved = mr_ctrl._alive_probe
+    probe = [True]
+    mr_ctrl.set_alive_probe(lambda: probe[0])
+    try:
+        assert mr_ctrl.send("stop") is None     # 先开好口（口在）
+        n = len(fake.shorts)
+        probe[0] = False                        # DAW 死（进程或界面不在）
+        err = mr_ctrl.send("stop")
+        assert err and "Cubase 不在线" in err
+        assert len(fake.shorts) == n            # 一条 CC 都没发
+        with mr_ctrl._lock:
+            assert mr_ctrl._out is None         # 已弃口
+        for _ in range(200):                    # 弃口 close 走专线异步
+            if fake.closed:
+                break
+            time.sleep(0.01)
+        assert fake.closed == 1
+        probe[0] = True                         # DAW 恢复，冷却未到仍拦
+        assert mr_ctrl.send("stop") == "输出口暂不可用，稍后自动重试"
+        assert len(fake.shorts) == n            # 冷却期内零发送
+    finally:
+        mr_ctrl.set_alive_probe(saved)
+        undo_g()
+        undo_w()
+
+
+def test_send_alive_probe_passes_send():
+    """存活探针（Phase 2）放行用例：探针 True=DAW 在场，send 照常发 CC，
+    口不弃不关（探针只拦「口在而 DAW 死」，健康路径与无探针时一致）。"""
+    fake = _FakeWinmm()
+    undo_w = _reset(fake)
+    undo_g = _fast()
+    saved = mr_ctrl._alive_probe
+    mr_ctrl.set_alive_probe(lambda: True)
+    try:
+        assert mr_ctrl.send("stop") is None
+        trip = [(w & 0xFF, (w >> 8) & 0x7F, (w >> 16) & 0x7F)
+                for w in fake.shorts]
+        assert trip == [(0xB0, 103, 127), (0xB0, 103, 0)]
+        with mr_ctrl._lock:
+            assert mr_ctrl._out is not None     # 健康路径不弃口
+        assert fake.closed == 0
+    finally:
+        mr_ctrl.set_alive_probe(saved)
+        undo_g()
+        undo_w()
 
 
 def test_send_failure_midway_drops_port():

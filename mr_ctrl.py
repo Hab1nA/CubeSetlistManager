@@ -3,9 +3,13 @@
 哑协议：一条 CC=一条命令，动作序列语义在本模块。driver=mr_driver/Local/
 CubeSetlistManager/CubeSetlistRemote/（部署 docs/MIDIRemote直控部署.md），
 端口=loopMIDI「CubeSetlist Remote」单口双向。完整迁移：Cubase 无键盘
-回落，口不在或发送失败=动作失败报错；效果核验沿用 MTC 三态。
-ponytail: v1 无在线心跳——driver 死而口在=CC 无人受理且不报错，Phase 2
-加 feedback 绑定。"""
+回落，口不在、发送失败或 Cubase 不在线=动作失败报错；效果核验沿用
+MTC 三态。存活探针（Phase 2，11-11 落地）：纯回声方案被实证作废——
+loopMIDI 同缆自听使回声无法区分 driver 反馈，且实测 driver 对外来 CC
+不回发 feedback（活/死 Cubase 收到的字节完全一致）。改为 send 前查
+Cubase 进程+界面在场（daw_ctrl 注入探针）：Cubase 已退出/退出空壳时
+报错弃口进冷却，不再假成功；残留边界（Cubase 运行中驱动脚本被删）由
+tools/probe_mr_echo.py 部署核验兜住。"""
 import threading
 import time
 
@@ -34,6 +38,14 @@ _lock = threading.Lock()      # send/口管理互斥（GUI 主线与切歌工作
 _port_hint = PORT_HINT_DEFAULT
 _out = None                   # mb.open_out 常驻句柄（None=未开/已弃）
 _next_try = 0.0               # 开口失败冷却截止（RETRY_AFTER 内不再枚举）
+_alive_probe = None           # Cubase 存活探针（daw_ctrl 注入：进程+界面在场）
+
+def set_alive_probe(fn):
+    """注入 Cubase 存活探针（进程+界面在场）。send 发送前先查探针，
+    不在线=动作失败报错弃口——「口在而 DAW 死」的静默失效根修；
+    available() 语义=口可开，不查探针（探针 False 时仍 True）。"""
+    global _alive_probe
+    _alive_probe = fn
 
 
 def set_port_hint(hint):
@@ -86,7 +98,12 @@ def send(action):
     seq = SEQ.get(action)
     if seq is None:
         return "未知动作 %r" % action
+    global _next_try   # 失败路径写冷却截止；此前缺 global=写局部，冷却从未生效
     with _lock:
+        if _alive_probe is not None and not _alive_probe():
+            _drop_locked()
+            _next_try = time.time() + RETRY_AFTER
+            return "Cubase 不在线：进程或界面不在（口在而 DAW 死，拒绝发送）"
         h, err = _ensure_locked()
         if h is None:
             return err

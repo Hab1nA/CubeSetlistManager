@@ -22,11 +22,6 @@ import zipfile
 
 import cpr_meta
 
-# S1 内置节拍器/用户自建 Click 采样轨的默认轨名；是否排除由真机对表定案
-# （S1 停表语义=全部轨播完，默认不排除；对表若证实 Click 远端残段不参与
-# 停表，再把该名单交给 read_duration 启用）
-CLICK_TRACKS = frozenset(("Click",))
-
 _TRACK = re.compile(r'(?=<MediaTrack\b)')       # lookahead 分块：开标签（含轨名）留在块内
 _ELEM = re.compile(r'<([A-Za-z][\w]*)\b([^>]*?)/?>', re.S)
 _TEMPO_SEG = re.compile(
@@ -113,6 +108,5 @@ def read_duration(path):
     return _beats_to_sec(max(ends), segs)
 
 
-# fmt_mmss / parse_mmss 与 .cpr 共用同一套显示换算
+# fmt_mmss 与 .cpr 共用同一套显示换算
 fmt_mmss = cpr_meta.fmt_mmss
-parse_mmss = cpr_meta.parse_mmss

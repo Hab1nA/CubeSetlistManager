@@ -29,7 +29,6 @@ import mr_ctrl
 from obs_ctrl import find_processes_by_prefix, launch_detached
 
 WM_CLOSE = 0x0010
-GW_OWNER = 4
 GWL_STYLE = -16
 WS_POPUP = 0x80000000
 WS_THICKFRAME = 0x00040000
@@ -42,9 +41,7 @@ ENTER_HOLD = 0.12       # 仿人回车按下保持时长（零间隔连发会被
 
 # 键名 → 虚拟键码；值=tuple 时第二位为扩展键标志（NumEnter 等小键盘键
 # 须带 KEYEVENTF_EXTENDEDKEY，否则宿主收到的是主键盘同码键，语义可能不同）
-VK = {"ESC": 0x1B, "MENU": 0x12, "RETURN": 0x0D, "SPACE": 0x20,
-      "NUM0": 0x60, "NUM1": 0x61, "NUMDOT": 0x6E,
-      "NUMENTER": (0x0D, True)}
+VK = {"MENU": 0x12, "RETURN": 0x0D, "SPACE": 0x20, "NUMDOT": 0x6E}
 ACTION_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
                 "rewind": "回零", "stop": "停止"}   # 日志用中文动作名
 
@@ -107,7 +104,10 @@ STUDIOONE = dict(
     # 真机取证 2026-09-29：S1 保存框是系统标准类 #32770（Cubase 全自绘类），
     # 弹窗候选须额外收这个类；它全系统共用，_dialogs 的 pid 过滤负责只认
     # 本进程。默认按钮=「是」（保存）。
-    dialog_classes=("#32770",),
+    # 11-11 真机采样：S1 自绘弹窗（登录框/激活框）类=CCLDialogClass
+    #   （style=0x96C80004 popup）——旧表只收 #32770，自绘弹窗全漏；pid
+    #   过滤负责只认本进程。Song 文档窗类仍待采样（登录/激活墙）。
+    dialog_classes=("#32770", "CCLDialogClass"),
     # S1 的 TaskDialog 收不到合成回车（真机实测两连败），确认动作改点
     # 默认按钮（BS_DEFPUSHBUTTON=「是」，BM_CLICK 跨进程有效）。
     confirm_action="click_default",
@@ -392,6 +392,12 @@ class DawController:
     def __init__(self, facts, exe, log=print):
         self.facts = facts
         set_active(facts)       # 模块级函数跟随本控制器的底座
+        if facts.get("name") == "cubase":
+            # MR 直控存活探针：进程+界面在场（口在而 DAW 死的静默失效根修；
+            # 纯回声方案被实证作废，见 mr_ctrl 模块头）
+            mr_ctrl.set_alive_probe(
+                lambda: bool(find_processes_by_prefix(facts["proc_prefix"]))
+                and ui_alive())
         self.exe = exe
         self._log = log
         self.busy = False

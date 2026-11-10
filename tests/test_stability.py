@@ -416,6 +416,22 @@ def test_midiin_open_and_idempotent_close(monkeypatch):
     assert port._h is None
 
 
+def test_midiin_mim_close_dead_flag(monkeypatch):
+    """热拔检测锚（11-11）：MIM_CLOSE（非本方 close）→ dead 旗标置位，
+    GUI 自愈循环据此把「已掉线」并入「未打开」重开；本方 close 先置
+    _closing，收尾期的 MIM_CLOSE 回调不误标死亡。"""
+    fake = _FakeWinmm()
+    monkeypatch.setattr(mb, "_winmm", fake)
+    port = mb.MidiIn("FakePort", lambda n, v: None)
+    assert port.dead is False
+    port._dispatch(42, mb._MIM_CLOSE, 0, 0, 0)     # 外部移除（设备拔出）
+    assert port.dead is True
+    port2 = mb.MidiIn("FakePort", lambda n, v: None)
+    port2.close()                                   # 本方 close 置 _closing
+    port2._dispatch(42, mb._MIM_CLOSE, 0, 0, 0)    # 收尾期回调到达
+    assert port2.dead is False
+
+
 class _FakeWinmmSysex(_FakeWinmm):
     """带头函数记账的桩：prepare/unprepare/add 记日志，供 longdata 生命周期用例。"""
 

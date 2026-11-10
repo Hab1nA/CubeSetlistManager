@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""键盘音色自动化：监听 loopMIDI「Keyboard Automation」端口，C4(=60)起十个
-音符按当前工程映射向 JUNO-DS、C5(=72)起六个音符向 AX-09 Lucina 发
+"""键盘音色自动化：监听 loopMIDI「Keyboard Automation」端口，C4(=72)起十个
+音符按当前工程映射向 JUNO-DS、C5(=84)起六个音符向 AX-09 Lucina 发
 Bank Select+Program Change 切音色。
 映射来自「录制」：JUNO 按面板 Favorite（V2 固件会 TX 出 BS/PC）、AX-09 在
 面板选中音色（需先把 MIDI 设置 Bn 开为 ON，否则只发 PC）时软件从各自 MIDI
@@ -395,6 +395,8 @@ class RawMidiIn:
         self._on_msg = on_msg
         self._ble = None
         self._h = None
+        self._closing = False        # 本方 close 中：MIM_CLOSE 分支不算死亡
+        self._dead = False           # MIM_CLOSE（非本方 close）=口已掉线
         if isinstance(tok, str):    # BLE 端点：设备号是端点 id 字符串
             port, err = midi_ble.open_in(tok, on_msg)
             if port is None:
@@ -410,6 +412,13 @@ class RawMidiIn:
     def _dispatch(self, h, msg, inst, p1, p2):
         if msg == mb._MIM_DATA:
             self._on_msg(p1 & 0xFF, (p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
+        elif msg == mb._MIM_CLOSE and not self._closing:
+            self._dead = True        # 设备移除/端口被删：自愈循环据此重开
+
+    @property
+    def dead(self):
+        """口已掉线（MIM_CLOSE 送达且非本方 close）。自愈/try_open 据此重开。"""
+        return self._dead
 
     def close(self):
         if self._ble is not None:
@@ -418,6 +427,7 @@ class RawMidiIn:
             return
         h = self._h
         self._h = None
+        self._closing = True   # 自己的 close 也会收到 MIM_CLOSE 回调，别误标死亡
         if h:
             mb.close_in(h)   # 官方收尾序，见 midi_bridge.close_in
 
@@ -586,8 +596,8 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
         self.app = app
         self.song = None
-        self.slots = {}             # JUNO 映射（音符 60-69）
-        self.ax_slots = {}          # AX-09 映射（音符 72-77）
+        self.slots = {}             # JUNO 映射（音符 72-81）
+        self.ax_slots = {}          # AX-09 映射（音符 84-89）
         self._cap = None            # (note, SlotCapture, RawMidiIn, deadline)
         self.title("键盘自动化")
         # 录制态按钮的警示字色（录制中=红字「停止」；本窗局部注册——
@@ -765,7 +775,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         self.geometry("%dx%d" % (w, h))
 
     def _store(self, note):
-        """音符归属的映射表：72 起归 AX-09，其余归 JUNO。"""
+        """音符归属的映射表：84-89 归 AX-09，其余（72-81）归 JUNO。"""
         return self.ax_slots if note in AX_NOTES else self.slots
 
     def _describe(self, note):

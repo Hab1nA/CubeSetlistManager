@@ -10,7 +10,8 @@
     "videoRoot": "C:\\Users\\你\\Videos\\StageVideos",
     "projectorMonitor": "",
     "vjMute": true,
-    "retrySec": 5
+    "retrySec": 5,
+    "healthSec": 30
   },
   "dawSettings": {
     "dawExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
