@@ -747,6 +747,10 @@ class App:
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
         self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self._pedal_learner = None   # web 学习会话 (action, Learner, deadline)
+        self._pedal_learn_gen = 0    # 学习启动世代（取消/重启即作废在途构造）
+        self._pedal_learn_starting = False   # 后台构造中（轮询回 starting 态）
+        self._pedal_learn_start_err = None   # 构造失败一次性错误（轮询消费）
+        self._pedal_learn_start_t = 0.0      # 构造起步时刻（卡死防护计时）
         self.start_err = ""
         self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
         self._build()
@@ -2627,11 +2631,26 @@ class App:
         return {"devices": devs}
 
     def _pedal_learn_start_web(self, action):
-        """web 学习启动（镜像 PedalWindow._learn）：页面静音须已开（进页置位，
-        静音已让出 MIDI 口给学习器）。"""
+        """web 学习启动：Learner 构造（逐口 midiInOpen，被占用的 BLE 口
+        实测卡 3 秒）放后台线程，主线程只做瞬时状态翻转——武装时刻回主
+        线程挂载（deadline 从武装起算，输入可读与「剩 X 秒」显示同步）。
+        页面静音须已开（进页置位，静音已让出 MIDI 口给学习器）。"""
         if action not in dict(pedal.ACTIONS):
             return "未知动作"
         self._pedal_learn_cancel_web()
+        self._pedal_learn_gen += 1
+        gen = self._pedal_learn_gen
+        self._pedal_learn_starting = True
+        self._pedal_learn_start_err = None
+        self._pedal_learn_start_t = time.time()
+        threading.Thread(target=self._pedal_learn_build_web,
+                         args=(gen, action), daemon=True,
+                         name="pedal-learn-start").start()
+        return None
+
+    def _pedal_learn_build_web(self, gen, action):
+        """后台构造学习器（winmm 开口阻塞数秒不碰 Tk），结果回主线程
+        挂载或按世代作废就地关闭。"""
         try:
             learner = pedal.Learner(
                 self.pedal_hint, self.pedal_device_hint, self.pedal.bridge,
@@ -2641,13 +2660,28 @@ class App:
                           (self.axcfg["inHint"],
                            kbd_auto._in_dev(self.axcfg))))
         except BaseException:
-            return "学习启动失败（口被占用？）"
+            learner = None
+        self.calls.put(
+            lambda: self._pedal_learn_arm_web(gen, action, learner))
+
+    def _pedal_learn_arm_web(self, gen, action, learner):
+        if gen != self._pedal_learn_gen:
+            if learner is not None:
+                learner.close()     # 启动途中被取消：构造结果就地关闭
+            return
+        self._pedal_learn_starting = False
+        if learner is None:
+            self._pedal_learn_start_err = "学习启动失败（口被占用？）"
+            return
         self._pedal_learner = (action, learner,
                                time.time() + pedal.LEARN_TIMEOUT)
-        return None
 
     def _pedal_learn_cancel_web(self):
-        """取消学习：关学习器 + 桥配置回灌（保持页面静音，离页才恢复）。"""
+        """取消学习：关学习器 + 桥配置回灌（保持页面静音，离页才恢复）。
+        在途的后台构造按世代一并作废（完成回调就地关闭）。"""
+        self._pedal_learn_gen += 1
+        self._pedal_learn_starting = False
+        self._pedal_learn_start_err = None
         tup = getattr(self, "_pedal_learner", None)
         if tup is None:
             return
@@ -2664,6 +2698,18 @@ class App:
         在 Tk 线程一次完成，回前端展示包。"""
         tup = getattr(self, "_pedal_learner", None)
         if tup is None:
+            if getattr(self, "_pedal_learn_starting", False):
+                if time.time() - self._pedal_learn_start_t > 15.0:
+                    # winmm 开口卡死防护（实测被占 BLE 口 3 秒超时，15 秒
+                    # 必死）：作废在途构造，按启动失败收口
+                    self._pedal_learn_cancel_web()
+                    return {"active": False, "done": True,
+                            "error": "学习启动超时（输入口无响应）"}
+                return {"active": True, "starting": True}
+            err = getattr(self, "_pedal_learn_start_err", None)
+            if err:
+                self._pedal_learn_start_err = None
+                return {"active": False, "done": True, "error": err}
             return {"active": False}
         action, learner, deadline = tup
         res = learner.result()

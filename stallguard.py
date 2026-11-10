@@ -229,7 +229,10 @@ class StallNativeProbe:
             r = subprocess.run(
                 [exe, "dump", "--pid", str(os.getpid()), "--native"],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=20)
+                errors="replace", timeout=20,
+                # 无窗口：GUI 进程 spawn 控制台子进程会在前台闪黑窗
+                # （学习开口阻塞触发取证时用户实测看到）
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             out = (r.stdout or "").rstrip("\n")
             if (r.stderr or "").strip():
                 out += "\n[stderr] " + r.stderr.strip()

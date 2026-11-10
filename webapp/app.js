@@ -1724,8 +1724,9 @@ $("#pd-long").addEventListener("change", () => {
 });
 
 async function startLearn(action) {
-  // 乐观进入学习态：后端 Learner 构造（开原生口/枚举设备）在主线程要
-  // 秒级时间——先红框+「学习中」给即时反馈，启动失败回弹（时序红队：
+  // 乐观进入学习态：后端 Learner 构造在后台线程逐口开 MIDI（被占用的
+  // 口实测卡数秒）——先红框+「学习中」给即时反馈，轮询切「启动输入口…
+  // →剩 X 秒」反映真实就绪；启动失败经轮询 error 回弹（时序红队：
   // 点击后无任何动效=用户以为没点上）
   if (learnAction === null) {
     learnAction = action;
@@ -1780,7 +1781,11 @@ function pollLearn() {
       const d = await r.json();
       if (d.active) {
         const bd = bindEl();
-        if (bd) bd.textContent = "学习中 · 剩 " + Math.ceil(d.remain) + " 秒";
+        // starting=后端还在逐口开 MIDI（被占用的口实测卡数秒）：
+        // 此时踏板输入尚未被捕获，「剩 X 秒」出现才是真正可踩
+        if (bd) bd.textContent = d.starting
+            ? "学习中 · 启动输入口…"
+            : "学习中 · 剩 " + Math.ceil(d.remain) + " 秒";
         pollLearn();
       } else if (d.done && d.result) {
         const act = learnAction;

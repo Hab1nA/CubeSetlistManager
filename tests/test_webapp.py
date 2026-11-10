@@ -14,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import kbd_auto
 import obs_ctrl
+import pedal
 import setlist_gui as sg
 import web_remote
 
@@ -508,12 +509,23 @@ class _PedalStub:
         return False
 
 
+class _SyncCalls:
+    """calls 队列替身：立即执行（生产为主线程队列，逻辑同构）。"""
+
+    def put(self, job):
+        job()
+
+
 class _PedalApp:
     """挂真方法的最小 app：mute→learn_cancel→apply 跨方法互调可解析。"""
 
     _pedal_apply_web = sg.App._pedal_apply_web
     _pedal_learn_cancel_web = sg.App._pedal_learn_cancel_web
     _pedal_mute_web = sg.App._pedal_mute_web
+    _pedal_learn_start_web = sg.App._pedal_learn_start_web
+    _pedal_learn_build_web = sg.App._pedal_learn_build_web
+    _pedal_learn_arm_web = sg.App._pedal_learn_arm_web
+    _pedal_learn_poll_web = sg.App._pedal_learn_poll_web
 
     def __init__(self):
         self.pedal = _PedalStub()
@@ -527,6 +539,11 @@ class _PedalApp:
         self.pedal_long = 0.45
         self.pedal_remote_enabled = False
         self._pedal_learner = None
+        self._pedal_learn_gen = 0
+        self._pedal_learn_starting = False
+        self._pedal_learn_start_err = None
+        self._pedal_learn_start_t = 0.0
+        self.calls = _SyncCalls()
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self._persist_config = lambda **k: None
@@ -595,6 +612,74 @@ def test_pedal_web_validation_and_learn():
     # 尾序：apply（学习取消回灌）、unmute、try_open
     assert fake.pedal.calls[-2][0] == "unmute"
     assert fake.pedal.calls[-1][0] == "try_open"
+
+
+def test_pedal_learn_async_start():
+    """学习启动异步化：starting 态 → 武装挂载（deadline 从武装起算）→
+    构造途中取消作废（迟到构造就地关闭）→ 构造失败经轮询一次性回传。"""
+    fake = _PedalApp()
+    assert sg.App._pedal_learn_start_web(fake, "xx") == "未知动作"
+    real_learner = pedal.Learner
+    made = []
+
+    class _Stub:
+        delay = 0.0
+        boom = False
+
+        def __init__(self, *a, **k):
+            made.append(self)
+            self.closed = False
+            time.sleep(_Stub.delay)
+            if _Stub.boom:
+                raise OSError("口被占用")
+
+        def close(self):
+            self.closed = True
+
+        def result(self):
+            return None
+
+    pedal.Learner = _Stub
+    try:
+        # 正常武装：轮询 starting → 武装后 active+remain
+        assert sg.App._pedal_learn_start_web(fake, "pause") is None
+        for _ in range(150):
+            if fake._pedal_learner is not None:
+                break
+            time.sleep(0.02)
+        assert fake._pedal_learner is not None
+        assert fake._pedal_learner[0] == "pause"
+        assert not fake._pedal_learn_starting
+        d = sg.App._pedal_learn_poll_web(fake)
+        assert d["active"] and not d.get("starting") \
+            and 0 < d["remain"] <= pedal.LEARN_TIMEOUT
+        sg.App._pedal_learn_cancel_web(fake)
+        assert fake._pedal_learner is None and made[-1].closed
+        # 构造途中取消：starting 态可见、迟到构造就地关闭不挂载
+        _Stub.delay = 0.3
+        assert sg.App._pedal_learn_start_web(fake, "next") is None
+        assert sg.App._pedal_learn_poll_web(fake) == {"active": True,
+                                                      "starting": True}
+        sg.App._pedal_learn_cancel_web(fake)
+        for _ in range(150):
+            if made and made[-1].closed:
+                break
+            time.sleep(0.02)
+        assert made[-1].closed and fake._pedal_learner is None
+        assert sg.App._pedal_learn_poll_web(fake) == {"active": False}
+        # 构造失败：轮询一次性回传错误，其后回到 inactive
+        _Stub.delay = 0.0
+        _Stub.boom = True
+        assert sg.App._pedal_learn_start_web(fake, "play") is None
+        for _ in range(150):
+            d = sg.App._pedal_learn_poll_web(fake)
+            if not d.get("active") and d.get("done"):
+                break
+            time.sleep(0.02)
+        assert d["done"] and "失败" in d["error"]
+        assert sg.App._pedal_learn_poll_web(fake) == {"active": False}
+    finally:
+        pedal.Learner = real_learner
 
 
 def test_kbd_web_song_slots_and_validation(tmp_path):

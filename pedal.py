@@ -1482,6 +1482,8 @@ class PedalWindow(tk.Toplevel):
         self.withdraw()     # 幕后建窗：Toplevel 创建即上屏，建完再显形
         self.app = app
         self.learner = None
+        self._learn_gen = 0       # 学习启动世代（取消/关窗即作废在途构造）
+        self._learn_build = None  # 在途后台构造 {gen, action, res, done}
         self._transient_until = 0.0  # 结果类反馈展示窗（_set_transient）
         self._transient = ("", dpi.MUT)
         self._hover = None           # 悬停提示（bind_hint→_hint）
@@ -1795,24 +1797,38 @@ class PedalWindow(tk.Toplevel):
 
     def _learn(self, action):
         self._cancel_learn("已取消上一次学习")
-        # 页面级静音已让出 MIDI 口（__init__ mute）；学习器直接开候选口
-        try:
-            learner = Learner(self.app.pedal_hint,
-                              self.app.pedal_device_hint,
-                              self.app.pedal.bridge,
-                              double_window=self.app.pedal_double,
-                              long_press=self.app.pedal_long,
-                              kb_ports=((self.app.jcfg["inHint"],
-                                         _in_dev(self.app.jcfg)),
-                                        (self.app.axcfg["inHint"],
-                                         _in_dev(self.app.axcfg))))
-        except BaseException:
-            self._set_transient("学习启动失败（口被占用？）", dpi.C_WARN)
-            return
-        self.learner = (action, learner, time.time() + LEARN_TIMEOUT)
+        # 页面级静音已让出 MIDI 口（__init__ mute）；学习器构造放后台线程
+        # （逐口 midiInOpen，被占用的 BLE 口实测卡 3 秒——主线程构造会
+        # 冻结整个 UI 并触发停摆探针），_tick_once 收割武装
+        self._learn_gen += 1
+        gen = self._learn_gen
+        build = {"gen": gen, "action": action, "res": None, "done": False}
+        self._learn_build = build
+        self._set_transient("学习启动中…（正在打开输入口）", dpi.MUT)
+        threading.Thread(target=self._learn_build_worker,
+                         args=(gen, build), daemon=True).start()
         self._present()
 
+    def _learn_build_worker(self, gen, build):
+        try:
+            lr = Learner(self.app.pedal_hint,
+                         self.app.pedal_device_hint,
+                         self.app.pedal.bridge,
+                         double_window=self.app.pedal_double,
+                         long_press=self.app.pedal_long,
+                         kb_ports=((self.app.jcfg["inHint"],
+                                    _in_dev(self.app.jcfg)),
+                                   (self.app.axcfg["inHint"],
+                                    _in_dev(self.app.axcfg))))
+        except BaseException:
+            lr = None
+        build["res"] = lr
+        build["done"] = True
+        if gen != self._learn_gen and lr is not None:
+            lr.close()     # 构造途中被取消/关窗：就地关闭，不等收割
+
     def _cancel_learn(self, msg):
+        self._learn_gen += 1     # 在途后台构造一并作废（worker 自关）
         if self.learner is None:
             return
         self.learner[1].close()
@@ -1863,6 +1879,18 @@ class PedalWindow(tk.Toplevel):
             pass                    # 窗口销毁竞态：轮询自然终结
 
     def _tick_once(self):
+        build = self._learn_build
+        if build is not None and build["done"]:
+            self._learn_build = None
+            if build["gen"] != self._learn_gen:
+                if build["res"] is not None:
+                    build["res"].close()   # 取消后的迟到构造：就地关闭
+            elif build["res"] is None:
+                self._set_transient("学习启动失败（口被占用？）", dpi.C_WARN)
+            else:
+                self.learner = (build["action"], build["res"],
+                                time.time() + LEARN_TIMEOUT)
+                self._set_transient("学习就绪，请踩踏", dpi.MUT)
         if self.learner is not None:
             action, learner, deadline = self.learner
             res = learner.result()
