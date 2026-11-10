@@ -1575,7 +1575,8 @@ async function refreshPedalDevices() {
 }
 
 function bindText(d, action) {
-  const g = {single: "", double: " · 双踩"}[d.gestures[action] || "single"];
+  const g = {single: "", double: " · 双踩",
+             long: " · 长踩"}[d.gestures[action] || "single"];
   const parts = [];
   if (d.binds[action] !== undefined)
     parts.push("CC " + d.binds[action] + g);
@@ -1663,6 +1664,7 @@ async function refreshPedal(force) {
     // 各自点击后置 force 刷新基线
     if (force || !pdFormInit) {
       $("#pd-win").value = d.doubleWindow || 0.35;
+      $("#pd-long").value = d.longPress || 0.45;
       $("#pd-intercept").checked = !!d.intercept;
       setTgl($("#pd-remote"), !!d.remoteEnabled);
       pdFormInit = true;
@@ -1710,6 +1712,15 @@ $("#pd-win").addEventListener("change", () => {
     return;
   }
   pedalApply({doubleWindow: v}, "双踩窗已应用");
+});
+$("#pd-long").addEventListener("change", () => {
+  const v = parseFloat($v("#pd-long"));
+  if (isNaN(v)) {          // 脏输入回滚为当前生效值（后端夹取 0.15-2.0）
+    toast("长踩阈值须为数字，单位秒", "err");
+    refreshPedal(true);
+    return;
+  }
+  pedalApply({longPress: v}, "长踩阈值已应用");
 });
 
 async function startLearn(action) {

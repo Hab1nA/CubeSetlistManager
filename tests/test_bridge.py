@@ -1313,7 +1313,7 @@ def test_pedal():
     pending2 = [h for h in spawned if not h.dead][-1]
     pending2.cb()                               # 本序列窗到期 → 单踩
     assert hitsg == ["next", "play", "play", "play"]
-    # 按住不放：长踩手势已废除——松脚前零动作、零定时器（连长踩窗都不挂）
+    # 按住不放（无长踩绑的键）：松脚前零动作、零定时器（连长踩窗都不挂）
     n0 = len(spawned)
     eng.feed(("hid", 0xB1), True, 300.0)
     eng.feed(("hid", 0xB1), True, 300.2)            # 固件按住重发：忽略
@@ -1443,11 +1443,145 @@ def test_pedal():
     eng7b.feed(("hid", 0xB0), True, 970.14)         # 40ms 后：真双踩
     assert hitsg7b == ["next"]
 
+    # 长踩：实时路=按住满阈值定时器到点即发；拦截开的合成对路=up 沿按压
+    # 时长判定；短按早松=单踩即时结算且停表无残留
+    hitsg9 = []
+    eng9 = pedal.GestureEngine(hitsg9.append, spawn_timer=fake_spawn)
+    eng9.configure({(("hid", 0xB3), "long"): "panic",
+                    (("hid", 0xB3), "single"): "play"})
+    eng9.feed(("hid", 0xB3), True, 600.0)
+    lt = [h for h in spawned if not h.dead][-1]
+    assert lt.delay == pedal.LONG_PRESS              # down 即武装长踩定时器
+    eng9.feed(("hid", 0xB3), True, 600.2)            # 按住重发：忽略，不重排表
+    assert [h for h in spawned if not h.dead][-1] is lt
+    lt.cb()                                          # 满阈值 → 仍按住即发长踩
+    assert hitsg9 == ["panic"]
+    eng9.feed(("hid", 0xB3), False, 600.8)           # held 归位：无输出
+    assert hitsg9 == ["panic"]
+    eng9.feed(("hid", 0xB3), True, 610.0)
+    eng9.feed(("hid", 0xB3), False, 610.1)           # 短按=单踩即发（无窗）
+    assert hitsg9 == ["panic", "play"]
+    assert spawned[-1].dead                          # 长踩表随早松停掉
+    # 拦截开的合成按压对：down backdate 到热键回执时刻，两条同时喂入，
+    # up 沿按压时长≥阈值=长踩（定时器刚武装即被停表，不双发）
+    eng9.feed(("hid", 0xB3), True, 700.0)
+    eng9.feed(("hid", 0xB3), False, 700.5)
+    assert hitsg9 == ["panic", "play", "panic"]
+    for h in spawned:                                # 残余定时器 token 静默
+        if not h.dead:
+            h.cb()
+    assert hitsg9 == ["panic", "play", "panic"]
+    # 长踩+双踩同键共存：短踩两下=双踩、按住=长踩，互不误触
+    hitsg11 = []
+    eng11 = pedal.GestureEngine(hitsg11.append, spawn_timer=fake_spawn)
+    eng11.configure({(("hid", 0xB4), "long"): "panic",
+                     (("hid", 0xB4), "double"): "next"})
+    eng11.feed(("hid", 0xB4), True, 800.0)
+    eng11.feed(("hid", 0xB4), False, 800.1)          # 短踩：停长踩表进双踩窗
+    eng11.feed(("hid", 0xB4), True, 800.25)          # 窗内第二踩=双踩
+    assert hitsg11 == ["next"]
+    eng11.feed(("hid", 0xB4), False, 800.4)          # held 归位
+    eng11.feed(("hid", 0xB4), True, 810.0)           # 再按住：满阈值=长踩
+    lt11 = [h for h in spawned if not h.dead][-1]
+    assert lt11.delay == pedal.LONG_PRESS
+    lt11.cb()
+    assert hitsg11 == ["next", "panic"]
+    eng11.feed(("hid", 0xB4), False, 810.7)
+
+    # 持续模式脉冲串（TurnerPro 真机实测波形：脉冲宽 14-15ms、周期
+    # ~82ms、双踩间隔 240ms）：窄脉冲续判折叠——长踩串只发一次长踩
+    # （不因第二脉冲误判双踩、尾随脉冲被 held 吸收不追加结算），单/双
+    # 踩照常。只对绑长踩的键折叠（eng4 的 8ms 旧固件路径零变化）
+    hitsg12 = []
+    eng12 = pedal.GestureEngine(hitsg12.append, spawn_timer=fake_spawn)
+    eng12.configure({(("hid", 0xB5), "single"): "play",
+                     (("hid", 0xB5), "double"): "next",
+                     (("hid", 0xB5), "long"): "panic"})
+    t = 2000.0
+    for k in range(6):                               # 长踩=6 脉冲（0.43s）
+        eng12.feed(("hid", 0xB5), True, t)
+        if k == 4:                                   # 第 5 脉冲续判后到阈：
+            lt12 = [h for h in spawned if not h.dead][-1]
+            assert abs(lt12.delay                    #   长踩表按剩余时长重挂
+                       - (pedal.LONG_PRESS - 0.328)) < 1e-9
+            lt12.cb()                                # 满阈值 → 长踩即发
+            assert hitsg12 == ["panic"]
+        eng12.feed(("hid", 0xB5), False, t + 0.014)
+        t += 0.082
+    for h in list(spawned):                          # 尾随脉冲全被 held
+        if not h.dead:                               #   吸收，推进静默表无输出
+            h.cb()
+    assert hitsg12 == ["panic"]
+    # 单踩=孤立窄脉冲：续判窗平静 → 双踩窗平静 → 单踩（两级延迟为持续
+    # 模式固有代价）
+    eng12.feed(("hid", 0xB5), True, 2100.0)
+    eng12.feed(("hid", 0xB5), False, 2100.014)
+    w = [h for h in spawned if not h.dead][-1]
+    w.cb()                                           # 续判窗到期 → 进双踩窗
+    w = [h for h in spawned if not h.dead][-1]
+    assert abs(w.delay - pedal.DOUBLE_WINDOW) < 1e-9
+    w.cb()
+    assert hitsg12 == ["panic", "play"]
+    # 双踩=两窄脉冲间隔 240ms：窗外先结算上一段、本踩即窗内第二踩
+    eng12.feed(("hid", 0xB5), True, 2200.0)
+    eng12.feed(("hid", 0xB5), False, 2200.014)
+    eng12.feed(("hid", 0xB5), True, 2200.254)
+    assert hitsg12 == ["panic", "play", "next"]
+    eng12.feed(("hid", 0xB5), False, 2200.268)       # held：窄沿+长踩绑 →
+    for h in list(spawned):                          #   静默表吸收不归位即漏
+        if not h.dead:
+            h.cb()
+    assert hitsg12 == ["panic", "play", "next"]
+
+    # 学习器折叠（实测波形）：长踩串→long；孤立脉冲→single；240ms 双脉
+    # 冲→double；续判窗内双脉冲短按→single（不误判双踩）
+    ln7 = object.__new__(pedal.Learner)
+    ln7.cc = None
+    ln7.events = []
+    ln7.double_window = pedal.DOUBLE_WINDOW
+    ln7.long_press = pedal.LONG_PRESS
+    for k in range(6):
+        ln7._raw_capture(0xB0, True, 3000.0 + k * 0.082)
+        ln7._raw_capture(0xB0, False, 3000.0 + k * 0.082 + 0.014)
+    ln7._clock = lambda: 3000.5
+    assert ln7.result() == ("hid", "下一曲", 0xB0, "long")
+    ln8 = object.__new__(pedal.Learner)
+    ln8.cc = None
+    ln8.events = []
+    ln8.double_window = pedal.DOUBLE_WINDOW
+    ln8.long_press = pedal.LONG_PRESS
+    ln8._raw_capture(0xB0, True, 3100.0)
+    ln8._raw_capture(0xB0, False, 3100.014)          # 孤立脉冲
+    ln8._clock = lambda: 3100.5
+    assert ln8.result() == ("hid", "下一曲", 0xB0, "single")
+    ln9 = object.__new__(pedal.Learner)
+    ln9.cc = None
+    ln9.events = []
+    ln9.double_window = pedal.DOUBLE_WINDOW
+    ln9.long_press = pedal.LONG_PRESS
+    ln9._raw_capture(0xB0, True, 3200.0)             # 240ms 双脉冲=双踩
+    ln9._raw_capture(0xB0, False, 3200.014)
+    ln9._raw_capture(0xB0, True, 3200.254)
+    ln9._clock = lambda: 3200.4
+    assert ln9.result() == ("hid", "下一曲", 0xB0, "double")
+    ln10 = object.__new__(pedal.Learner)
+    ln10.cc = None
+    ln10.events = []
+    ln10.double_window = pedal.DOUBLE_WINDOW
+    ln10.long_press = pedal.LONG_PRESS
+    ln10._raw_capture(0xB0, True, 3300.0)            # 66ms 间隔双脉冲=同脚
+    ln10._raw_capture(0xB0, False, 3300.014)         #   短按 → 单踩
+    ln10._raw_capture(0xB0, True, 3300.08)
+    ln10._raw_capture(0xB0, False, 3300.094)
+    ln10._clock = lambda: 3300.5
+    assert ln10.result() == ("hid", "下一曲", 0xB0, "single")
+
     # 示范式学习分类（双踩/单踩/超窗二踩/MIDI 通道）
     ln = object.__new__(pedal.Learner)              # 绕过 __init__ 不开真端口
     ln.cc = None
     ln.events = []
     ln.double_window = pedal.DOUBLE_WINDOW
+    ln.long_press = pedal.LONG_PRESS
     ln._clock = lambda: 300.2                       # 假钟：按下后 0.2s
     ln._raw_capture(0xB0, True, 300.0)
     assert ln.result() is None                      # 还按着：等松脚再判
@@ -1458,7 +1592,7 @@ def test_pedal():
     ln.cc = None
     ln.events = [(("hid", 0x0D), True, 400.0)]      # 只按住未松
     ln._clock = lambda: 400.55
-    assert ln.result() is None                # 长踩已废除：按住不产生手势
+    assert ln.result() is None                # 按住期间不出结果：等松脚定时长
     ln.cc = None
     ln.events = [(("hid", 0x0D), True, 500.0),
                  (("hid", 0x0D), False, 500.1),
@@ -1472,20 +1606,42 @@ def test_pedal():
     ln._midi_name = "Rubix USB"
     ln._clock = lambda: 600.3
     assert ln.result() == ("midi", "Rubix USB", 4, "double")  # MIDI 同款
+    # 长踩学习：首踩按压时长≥阈值 → long（合成对/实时边沿/MIDI 同款）
+    ln.cc = None
+    ln.events = [(("hid", 0xB0), True, 700.0),
+                 (("hid", 0xB0), False, 700.6)]
+    ln._clock = lambda: 700.7
+    assert ln.result() == ("hid", "下一曲", 0xB0, "long")
+    ln.cc = None
+    ln.events = [(("midi", 4), True, 800.0),
+                 (("midi", 4), False, 800.5)]
+    ln._midi_name = "Rubix USB"
+    ln._clock = lambda: 800.6
+    assert ln.result() == ("midi", "Rubix USB", 4, "long")
+    ln.cc = None
+    ln.events = [(("hid", 0xB0), True, 810.0),
+                 (("hid", 0xB0), False, 810.1)]
+    ln._clock = lambda: 810.6
+    assert ln.result() == ("hid", "下一曲", 0xB0, "single")  # 短按不越长踩阈
 
     # 手势配置加载：只认真动作名/手势名；阈值夹区间
-    g, dw = pedal.load_gestures(
+    g, dw, lp = pedal.load_gestures(
         {"pedal": {"gestures": {"next": "double", "bad": "double",
                                 "next2": "triple"},
                    "longPress": 0.6, "doubleWindow": "junk"}})
     assert g == {"next": "double"} and dw == pedal.DOUBLE_WINDOW
-    assert pedal.load_gestures({}) == ({}, pedal.DOUBLE_WINDOW)
-    # 已废除的长踩：手势与绑定一并作废（降级成单踩会演出误触发）
+    assert lp == 0.6
+    assert pedal.load_gestures({}) == ({}, pedal.DOUBLE_WINDOW,
+                                       pedal.LONG_PRESS)
+    # 长踩恢复合法：手势与绑定照常装载（超界阈值夹回区间）
     assert pedal.load_hid({"pedal": {"hidBindings": {"panic": 0xB1},
-                                     "gestures": {"panic": "long"}}}) == {}
+                                     "gestures": {"panic": "long"}}}) \
+        == {"panic": 0xB1}
     assert pedal.load_binding({"pedal": {"bindings": {"panic": 7},
                                          "gestures": {"panic": "long"}}}) \
-        == ("", {})
+        == ("", {"panic": 7})
+    assert pedal.load_gestures({"pedal": {"longPress": 99.0}})[2] \
+        == pedal.LONG_PRESS
     # 同码去重按 (码, 手势) 身份：同键不同手势共存是特性
     binds_g = {"play": 0xB0, "next": 0xB0}
     assert pedal.load_hid({"pedal": {"hidBindings": binds_g,
@@ -1560,6 +1716,7 @@ def test_pedal():
     ln2.cc = None
     ln2.events = []
     ln2.double_window = pedal.DOUBLE_WINDOW
+    ln2.long_press = pedal.LONG_PRESS
     ln2._clock = lambda: 800.4
     ln2._raw_capture(0xB0, True, 800.0)
     ln2._raw_capture(0xB0, False, 800.008)          # 假 up：闸掉
@@ -1572,6 +1729,7 @@ def test_pedal():
     ln3.cc = None
     ln3.events = []
     ln3.double_window = pedal.DOUBLE_WINDOW
+    ln3.long_press = pedal.LONG_PRESS
     ln3._raw_capture(0xB0, True, 950.0)
     ln3._raw_capture(0xB0, False, 950.10)
     ln3._raw_capture(0xB0, True, 950.103)           # 3ms 回弹重压：闸掉
@@ -1584,6 +1742,7 @@ def test_pedal():
     ln4.cc = None
     ln4.events = []
     ln4.double_window = pedal.DOUBLE_WINDOW
+    ln4.long_press = pedal.LONG_PRESS
     ln4._raw_capture(0xB0, True, 1000.0)
     ln4._raw_capture(0xB0, True, 1000.0308)         # 迟到弹跳重压：按住重发
     ln4._raw_capture(0xB0, False, 1000.053)         # 真 up（距武装 53ms）
@@ -1594,6 +1753,7 @@ def test_pedal():
     ln5.cc = None
     ln5.events = []
     ln5.double_window = pedal.DOUBLE_WINDOW
+    ln5.long_press = pedal.LONG_PRESS
     ln5._raw_capture(0xB0, False, 1100.0)           # 游离首 up：不入账
     ln5._raw_capture(0xB0, True, 1100.2)
     ln5._raw_capture(0xB0, False, 1100.3)
@@ -1605,6 +1765,7 @@ def test_pedal():
     ln6.cc = None
     ln6.events = []
     ln6.double_window = pedal.DOUBLE_WINDOW
+    ln6.long_press = pedal.LONG_PRESS
     f = ln6._make("T")
     f(0xB0, 4, 70)                                  # 按下
     for v in (60, 70, 60, 70):                      # 44-63 悬停振荡

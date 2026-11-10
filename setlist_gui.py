@@ -673,7 +673,8 @@ class App:
         self.pedal_hint, self.pedal_binds = pedal.load_binding(cfg)
         self.pedal_hid = pedal.load_hid(cfg)     # 蓝牙键盘型踩钉（HID 按键）
         self.pedal_device_hint, self.pedal_intercept = pedal.load_device_cfg(cfg)
-        self.pedal_gestures, self.pedal_double = pedal.load_gestures(cfg)
+        self.pedal_gestures, self.pedal_double, self.pedal_long = \
+            pedal.load_gestures(cfg)
         _ped = cfg.get("pedal")                  # 手改配置非 dict 时不炸启动
         _ped = _ped if isinstance(_ped, dict) else {}
         self.pedal_remote_enabled = bool(_ped.get("remoteEnabled"))
@@ -698,7 +699,8 @@ class App:
             on_event=lambda m: self.q.put("踩钉桥：%s" % m))
         self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
                          self.pedal_device_hint, self.pedal_intercept,
-                         self.pedal_gestures, self.pedal_double)
+                         self.pedal_gestures, self.pedal_double,
+                         self.pedal_long)
         self.pedal.try_open()
         self._pedal_retry = 0.0
         self._link_heal_at = 0.0    # 联动端口自愈下轮时间（_tick 挂钩，10s 一轮）
@@ -2607,6 +2609,7 @@ class App:
                 "gestures": self.pedal_gestures,
                 "intercept": self.pedal_intercept,
                 "doubleWindow": self.pedal_double,
+                "longPress": self.pedal_long,
                 "remoteEnabled": self.pedal_remote_enabled,
                 "connected": bool(getattr(p, "connected", False)),
                 "hidActive": bool(getattr(p, "hid_active", False)),
@@ -2633,6 +2636,7 @@ class App:
             learner = pedal.Learner(
                 self.pedal_hint, self.pedal_device_hint, self.pedal.bridge,
                 double_window=self.pedal_double,
+                long_press=self.pedal_long,
                 kb_ports=((self.jcfg["inHint"], kbd_auto._in_dev(self.jcfg)),
                           (self.axcfg["inHint"],
                            kbd_auto._in_dev(self.axcfg))))
@@ -2653,7 +2657,7 @@ class App:
             self.pedal.apply(self.pedal_hint, self.pedal_binds,
                              self.pedal_hid, self.pedal_device_hint,
                              self.pedal_intercept, self.pedal_gestures,
-                             self.pedal_double)
+                             self.pedal_double, self.pedal_long)
 
     def _pedal_learn_poll_web(self):
         """web 学习轮询（镜像 _tick_once 学习分支）：分类/改绑迁移/应用/落盘
@@ -2759,13 +2763,16 @@ class App:
             # 带着哑窗口撑到重启
             self.pedal_double = min(1.0, max(
                 0.12, float(p.get("doubleWindow", self.pedal_double))))
+            self.pedal_long = min(2.0, max(
+                0.15, float(p.get("longPress", self.pedal_long))))
         except (TypeError, ValueError):
             pass
         self.pedal_remote_enabled = bool(p.get("remoteEnabled",
                                                self.pedal_remote_enabled))
         self.pedal.apply(self.pedal_hint, self.pedal_binds, self.pedal_hid,
                          self.pedal_device_hint, self.pedal_intercept,
-                         self.pedal_gestures, self.pedal_double)
+                         self.pedal_gestures, self.pedal_double,
+                         self.pedal_long)
         self.pedal.try_open()
         # 键名对齐启动加载器（load_binding/load_hid/load_device_cfg）与
         # PedalWindow._save：deviceHint=MIDI 口名、hidDeviceHint=设备身份
@@ -2777,6 +2784,7 @@ class App:
                    "intercept": self.pedal_intercept,
                    "gestures": self.pedal_gestures,
                    "doubleWindow": self.pedal_double,
+                   "longPress": self.pedal_long,
                    "remoteEnabled": self.pedal_remote_enabled})
         return None
 

@@ -524,6 +524,7 @@ class _PedalApp:
         self.pedal_intercept = True
         self.pedal_gestures = {"pause": "double"}
         self.pedal_double = 0.35
+        self.pedal_long = 0.45
         self.pedal_remote_enabled = False
         self._pedal_learner = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
@@ -558,6 +559,9 @@ def test_pedal_web_validation_and_learn():
     # 双踩窗运行期夹取（load_gestures 同区间 0.12-1.0）
     assert sg.App._pedal_apply_web(fake, {"doubleWindow": 5.0}) is None
     assert fake.pedal_double == 1.0
+    # 长踩阈值运行期夹取（load_gestures 同区间 0.15-2.0）
+    assert sg.App._pedal_apply_web(fake, {"longPress": 0.01}) is None
+    assert fake.pedal_long == 0.15
     # 清空最后一个绑定能落下去（`or` 回退会让末位清除静默失败）；
     # 显式 JSON null 与缺席同义（不得把整表写成 None）
     assert sg.App._pedal_apply_web(

@@ -18,12 +18,14 @@ cfg = json.load(open(CFG, encoding="utf-8"))
 p = cfg.get("pedal") or {}
 device = sys.argv[1] if len(sys.argv) > 1 else (p.get("hidDeviceHint") or "")
 double_t = p.get("doubleWindow", pedal.DOUBLE_WINDOW)
+long_t = p.get("longPress", pedal.LONG_PRESS)
 if not device:
     print("config 未选输入设备：请把设备身份子串作为参数传入")
     sys.exit(2)
 
 print("设备：%s（%s）" % (pedal.device_display(device), device))
-print("当前阈值：双踩窗 %.2fs / 抖动闸 30ms" % double_t)
+print("当前阈值：双踩窗 %.2fs / 长踩 %.2fs / 抖动闸 30ms"
+      % (double_t, long_t))
 print("-" * 60)
 
 state = {"learner": None, "rearm_at": 0.0}
@@ -41,7 +43,8 @@ def show(msg):
 
 def rearm():
     state["learner"] = pedal.Learner("__calib__", device, bridge,
-                                     double_window=double_t)
+                                     double_window=double_t,
+                                     long_press=long_t)
     # 包一层打印：学习器实际入账的每条边沿（含被闸滤掉的）都可见
     raw_cap = state["learner"]._raw_capture
 
@@ -76,7 +79,7 @@ try:
         r = lr.result()
         if r is not None:
             kind, dev, code, gesture = r
-            zh = {"single": "单踩", "double": "双踩"}[gesture]
+            zh = {"single": "单踩", "double": "双踩", "long": "长踩"}[gesture]
             show("★ 软件判定：%s（%s VK 0x%02X）" % (zh, kind, code))
             lr.close()
             state["learner"] = None

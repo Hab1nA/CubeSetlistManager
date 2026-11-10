@@ -219,18 +219,22 @@
               <div class="input-row suf">
                 <input id="pd-win" class="num" inputmode="decimal">
                 <span class="suf-txt dim">秒</span></div></div>
+            <div class="field"><label for="pd-long">长踩判定阈值</label>
+              <div class="input-row suf">
+                <input id="pd-long" class="num" inputmode="decimal">
+                <span class="suf-txt dim">秒</span></div></div>
             <label class="switch end" title="被绑定的按键经系统热键截留，不送达其它软件">
               <input type="checkbox" id="pd-intercept"><i></i>
               <span>拦截硬件原键</span></label>
           </div>
           <p class="dim sm-txt" id="pd-midiport"></p>
         </div>
-        <div class="card"><h3>功能绑定<span class="h3-note">点行开始学习；踩一下=单踩，快踩两下=双踩</span></h3>
+        <div class="card"><h3>功能绑定<span class="h3-note">点行开始学习；踩一下=单踩，快踩两下=双踩，踩住约半秒=长踩</span></h3>
           <div id="pd-binds" class="bind-list"></div>
         </div>
       </div>
       <div class="page-foot">
-        <span class="dim sm-txt">即改即生效：设备 / 双踩窗 / 拦截 / 转发 / 绑定</span>
+        <span class="dim sm-txt">即改即生效：设备 / 双踩窗 / 长踩阈值 / 拦截 / 转发 / 绑定</span>
         <button id="pd-reload" class="btn ghost">刷新</button>
       </div>
       <p class="page-note">本页打开期间踩钉临时静音，关闭本页恢复</p>

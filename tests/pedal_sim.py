@@ -414,6 +414,46 @@ def main():
     else:
         case.skip("T6 连踩压力", "raw 管道死")
 
+    # ---- T7 持续模式脉冲串（真注入时序：14ms 脉冲、~82ms 周期，真机
+    #      实测波形）：长踩串=一次长踩（不误双踩、尾随脉冲不追加结算），
+    #      孤立窄脉冲=单踩、240ms 双脉冲=双踩 ----
+    if env_raw:
+        fired = []
+        eng = pedal.GestureEngine(fired.append)
+        br = SimBridge(fired.append)
+        br.configure(binds={}, device_hint="SIMFACE", engine=eng,
+                     temporal={VK_NEXT})
+        eng.configure({(("hid", VK_NEXT), "single"): "play",
+                       (("hid", VK_NEXT), "double"): "next",
+                       (("hid", VK_NEXT), "long"): "panic"})
+        br.spoof = frozenset((VK_NEXT,))
+        br.start()
+        wait_running(br)
+        for _ in range(6):                          # 长踩=6 脉冲串（0.43s）
+            send_key(VK_NEXT)
+            time.sleep(0.015)
+            send_key(VK_NEXT, up=True)
+            time.sleep(0.067)
+        time.sleep(0.3)                             # 覆盖尾随吸收静默窗
+        case.run("T7 长踩脉冲串只发长踩", fired == ["panic"], str(fired))
+        fired.clear()
+        send_key(VK_NEXT)                           # 单踩=孤立窄脉冲
+        time.sleep(0.015)
+        send_key(VK_NEXT, up=True)
+        time.sleep(0.7)                             # 续判窗+双踩窗全过
+        case.run("T7 孤立窄脉冲=单踩", fired == ["play"], str(fired))
+        fired.clear()
+        for _ in range(2):                          # 双踩=两脉冲间隔 240ms
+            send_key(VK_NEXT)
+            time.sleep(0.015)
+            send_key(VK_NEXT, up=True)
+            time.sleep(0.240)
+        time.sleep(0.2)
+        case.run("T7 双脉冲 240ms=双踩", fired == ["next"], str(fired))
+        br.stop()
+    else:
+        case.skip("T7 持续模式脉冲串", "raw 管道死")
+
     fails = [r for r in case.results if r[1] == "FAIL"]
     skips = [r for r in case.results if r[1] == "SKIP-ENV"]
     summary = {
