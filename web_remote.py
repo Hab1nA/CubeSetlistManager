@@ -26,6 +26,7 @@ import kbd_auto
 import obs_ctrl
 import points
 import ui_text
+import web_auth
 
 CMD_PREV = 48                # C2 → 上一页命令族（屏幕左半区）
 CMD_NEXT = 49                # C#2 → 下一页命令族（屏幕右半区）
@@ -52,6 +53,8 @@ DEFAULT_WEB_REMOTE = {
     "taskerPort": 8766,        # 翻谱接收端口：所有设备统一，APP 内可改需两端同步
     "midiIn": "",              # 翻谱信号 loopMIDI 端口名（设置页下拉选择）
     "devices": [],             # {slot,name,ip,enabled,screen:{w,h}（仅诊断）}
+    "authToken": "",           # 可选配对令牌：非空时非回环请求必须携带
+    "hosts": [],               # 额外可信 Host（默认只认 IP 字面量/localhost）
 }
 
 
@@ -188,7 +191,8 @@ def push_turn(dev, dir_, tasker_port, test=False):
         name, dir_, int((time.monotonic() - t0) * 1000))
 
 
-def _bind_web(app, registry, tport, ip, port, page, report=None):
+def _bind_web(app, registry, tport, ip, port, page, report=None,
+              allowed_hosts=(), auth_token=""):
     """热点刚（重）开时适配器 IPv4 可能尚未就位（PowerShell 拿到 IP 早于
     系统完成地址配置/DAD），立刻 bind 报 WinError 10049：限期重试兜底。
     地址配置通常 1–3 秒完成——只报一次等待，不逐次刷屏。"""
@@ -196,7 +200,9 @@ def _bind_web(app, registry, tport, ip, port, page, report=None):
     reported = False
     while True:
         try:
-            return WebServer((ip, port), app, registry, tport, page=page)
+            return WebServer((ip, port), app, registry, tport, page=page,
+                             allowed_hosts=allowed_hosts,
+                             auth_token=auth_token)
         except OSError as e:
             if time.monotonic() >= deadline:
                 raise
@@ -1058,13 +1064,19 @@ DEV_PANEL_APP = """
         </div>
         <div class="grp">
           <div class="sub">翻谱设置</div>
-      <div class="sub" style="margin-top:8px">认领本机并按谱面 App 支持情况
+          <div class="sub" id="ios-note" style="display:none;margin-top:8px">
+            iOS 版通过 CoreMIDI 虚拟源「Cube Remote」发送音符翻页：先在谱面
+            App 的 MIDI 翻页设置里学习“下一页 / 上一页”音符（本 APP 原生设置页
+            可改，默认 C2=36 下一页、C#2=37 上一页）。电脑端推来的翻谱信号会
+            写入本机 CoreMIDI。iOS 不允许模拟触摸或无全局媒体键，因此不再提供
+            “翻页方法 / 谱面 App 选择”。</div>
+      <div class="sub android-only" style="margin-top:8px">认领本机并按谱面 App 支持情况
         选择翻页方法（存在本机，立即生效）。无障碍未开启时点按/滑动不可用
         （仅媒体键可用）。</div>
-          <div class="sub" style="margin-top:6px">提高服务存活：建议开启系统
+          <div class="sub android-only" style="margin-top:6px">提高服务存活：建议开启系统
             「无障碍快捷方式」，并允许本 APP 的电池优化豁免（首次启动会请求）。</div>
-      <div id="dev-own" style="margin-top:10px"></div>
-      <div class="fld" style="margin-top:10px"><label>翻页方法</label>
+      <div id="dev-own" class="android-only" style="margin-top:10px"></div>
+      <div class="fld android-only" style="margin-top:10px"><label>翻页方法</label>
         <div id="m-method" class="btns" style="flex:1;margin-top:0;gap:6px">
           <button class="btn m-opt" data-v="tap"
             style="flex:1;text-align:center;padding:9px 0">点按</button>
@@ -1084,20 +1096,20 @@ DEV_PANEL_APP = """
             style="flex:1;text-align:center;padding:9px 0">开</button>
         </div>
       </div>
-      <div class="sub" style="margin-top:8px">踏板用 USB-C 线连本机时，把按键
+      <div class="sub" id="pedal-desc" style="margin-top:8px">踏板用 USB-C 线连本机时，把按键
         经 Wi-Fi 转发给电脑（蓝牙路径的备份）。电脑端「踩钉」页的「平板转发
         链路」卡需先点「启用」。APP 升级后若踩下无反应，请到系统设置把本 APP
         的无障碍关闭再开启（按键捕获能力在升级后可能需重开生效）。电脑端
         未开启时踏板键会透传给前台谱面 App。</div>
-      <div class="fld" style="margin-top:10px"><label>谱面 App</label>
+      <div class="fld android-only" style="margin-top:10px"><label>谱面 App</label>
             <span id="t-target" class="mono">自动检测</span>
             <button class="btn" id="t-pick" style="margin-left:auto;flex:none;padding:9px 12px">选择</button>
           </div>
           <div class="sub" style="margin-top:8px">翻页测试会自动切回指定的谱面
             APP，并执行翻页手势。</div>
-          <div class="sub" id="usage-tip" style="margin-top:6px;color:var(--warn)"
+          <div class="sub android-only" id="usage-tip" style="margin-top:6px;color:var(--warn)"
             >未授权「使用情况访问」——无法自动切回谱面 App，将退回切到桌面。</div>
-          <div class="btns" id="usage-btns" style="margin-top:8px">
+          <div class="btns android-only" id="usage-btns" style="margin-top:8px">
             <button class="btn" id="usage-grant">去授权使用情况访问</button>
           </div>
           <div class="fld fld-addr" style="margin-top:10px"><label>翻谱地址</label>
@@ -1139,21 +1151,35 @@ DEV_PANEL_APP = """
 
 DEV_JS_APP = """
 /* ---- 设置面板（仅 APP 版页面）：连接设置 + 翻谱设置 ---- */
+var CUBE_IOS = !!(window.CubeApp && window.CubeApp.platform
+                  && window.CubeApp.platform()==="ios");
+function applyPlatform(){
+  if(!CUBE_IOS)return;
+  var els=document.querySelectorAll(".android-only");
+  for(var i=0;i<els.length;i++)els[i].style.display="none";
+  var n=$("ios-note");if(n)n.style.display="block";
+  var pd=$("pedal-desc");
+  if(pd)pd.textContent="踏板用 USB 或蓝牙 MIDI 连本机时，把按键经 Wi-Fi 转发给"
+    +"电脑。电脑端「踩钉」页的「平板转发链路」卡需先点「启用」；音符按音高"
+    +"类映射为 F13–F24，电脑端学习到的就是这些键。";
+  var t=$("t-ip");if(t)t.textContent="本机 http://"+location.hostname+":";
+}
 function updateAcc(){
   if(!window.CubeApp)return;
   var i=$("acc-ind");if(!i)return;
+  if(CUBE_IOS){i.textContent="MIDI 翻页";i.className="ind ok";return}
   var ok=CubeApp.accEnabled()===true;
   i.textContent=ok?"无障碍开":"无障碍关";
   i.className="ind"+(ok?" ok":" bad");
 }
 function refreshUsageTip(){
-  if(!window.CubeApp)return;
+  if(!window.CubeApp||CUBE_IOS)return;
   var tip=$("usage-tip"),btns=$("usage-btns");if(!tip)return;
   if(CubeApp.usageAccess()===true){tip.style.display="none";btns.style.display="none"}
   else{tip.style.display="block";btns.style.display="flex"}
 }
 function refreshTarget(){
-  if(!window.CubeApp)return;
+  if(!window.CubeApp||CUBE_IOS)return;
   var t=$("t-target");if(!t)return;
   var name=CubeApp.turnTarget();
   t.textContent=name||"自动检测（最近使用的第三方应用）";
@@ -1246,6 +1272,7 @@ function openDev(){
       function(){toast("取设备列表失败")});
 }
 
+applyPlatform();
 function setInd(ok,text){var i=$("t-ind");i.textContent=text;
   i.className="ind"+(ok?" ok":" bad")}
 
@@ -1457,11 +1484,14 @@ class WebServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, app, registry, tasker_port, page=PAGE_BROWSER):
+    def __init__(self, addr, app, registry, tasker_port, page=PAGE_BROWSER,
+                 allowed_hosts=(), auth_token=""):
         self.app = app
         self.registry = registry
         self.tasker_port = tasker_port      # 函数：取当前翻谱接收端口
         self.page = page
+        self.allowed_hosts = tuple(allowed_hosts or ())
+        self.auth_token = str(auth_token or "")
         super().__init__(addr, _Handler)
 
     def handle_error(self, request, client_address):
@@ -1482,8 +1512,42 @@ class _Handler(BaseHTTPRequestHandler):
     # 这个超时。WebServer.handle_error 已静音 TimeoutError。
     timeout = 30
 
+    _cookie = None
+
     def log_message(self, fmt, *args):
         pass                                # /state 每秒轮询，不能刷 GUI 日志
+
+    # -- 边界校验（Host 白名单 + 可选令牌）--
+
+    def _guard(self, path):
+        self._cookie = None
+        provided = web_auth.extract_token(
+            self.headers, urllib.parse.urlsplit(self.path).query)
+        verdict = web_auth.check_request(
+            self.headers.get("Host"),
+            getattr(self.server, "allowed_hosts", ()),
+            getattr(self.server, "auth_token", ""),
+            self.client_address[0], path, provided)
+        if verdict == "ok":
+            return True
+        self.close_connection = True
+        if verdict == "host":
+            self._json(403, {"error": "Host 不被信任（疑似 DNS 重绑定）"})
+        else:
+            self._json(401, {"error": "需要配对令牌：用带 ?t= 的链接打开",
+                             "needToken": True})
+        return False
+
+    def _cookie_from_query(self):
+        """页面 URL 带 ?t=<token> 时种 HttpOnly Cookie，后续 fetch 自动带。"""
+        token = getattr(self.server, "auth_token", "")
+        if not token:
+            return
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        raw = (q.get("t") or q.get("token") or [""])[0]
+        if raw and web_auth.token_ok(raw, token):
+            self._cookie = "%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" % (
+                web_auth.COOKIE_NAME, urllib.parse.quote(raw, safe=""))
 
     # -- 应答小工具 --
 
@@ -1494,6 +1558,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", dispo)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        if self._cookie:
+            self.send_header("Set-Cookie", self._cookie)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         try:
@@ -1539,6 +1605,8 @@ class _Handler(BaseHTTPRequestHandler):
         # 兜底与 do_POST 对称：handler 异常回 500 JSON，而非无响应掐断
         # 连接被前端当断连（曾因 /log /points 迭代竞态 RuntimeError 实发）
         try:
+            if not self._guard(path):
+                return
             self._do_get(path)
         except Exception as e:
             self._json(500, {"error": _err(e)})
@@ -1555,9 +1623,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无设置/踩钉/键盘遥控"})
             return
         if path == "/":
+            self._cookie_from_query()
             self._send(200, "text/html; charset=utf-8",
                        self.server.page.encode("utf-8"))
         elif path == "/app" or path.startswith("/app/"):
+            self._cookie_from_query()
             self._h_app_asset(path)
         elif path == "/playlist":
             self._h_playlist()
@@ -1616,6 +1686,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if not self._guard(path):
+            return
         try:
             n = min(int(self.headers.get("Content-Length") or 0), 1 << 20)
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -2208,7 +2280,8 @@ class _Handler(BaseHTTPRequestHandler):
 _ATTR = {"enabled": "enabled", "serverPort": "server_port",
          "appPort": "app_port",
          "taskerPort": "tasker_port", "midiIn": "midi_hint",
-         "mode": "mode", "ip": "lan_ip"}
+         "mode": "mode", "ip": "lan_ip",
+         "authToken": "auth_token", "hosts": "allowed_hosts"}
 
 
 class WebRemote:
@@ -2226,6 +2299,8 @@ class WebRemote:
         self.app_port = _port(cfg.get("appPort"), 8767)
         self.tasker_port = _port(cfg.get("taskerPort"), 8766)
         self.midi_hint = str(cfg.get("midiIn") or "")
+        self.auth_token = str(cfg.get("authToken") or "")
+        self.allowed_hosts = tuple(cfg.get("hosts") or ())
         self.registry = DeviceRegistry(cfg.get("devices") or [], app.q.put)
         self.registry.on_change = self._persist
         self.server = None
@@ -2334,7 +2409,9 @@ class WebRemote:
             self.server = _bind_web(self.app, self.registry,
                                     lambda: self.tasker_port, ip,
                                     self.server_port, page_web,
-                                    self._report)
+                                    self._report,
+                                    allowed_hosts=self.allowed_hosts,
+                                    auth_token=self.auth_token)
         except OSError as e:
             self._report("网页服务在 %s:%d 启动失败：%s"
                          % (ip, self.server_port, _err(e)))
@@ -2348,7 +2425,9 @@ class WebRemote:
         try:
             self.app_server = _bind_web(self.app, self.registry,
                                         lambda: self.tasker_port, ip,
-                                        self.app_port, page_app, self._report)
+                                        self.app_port, page_app, self._report,
+                                        allowed_hosts=self.allowed_hosts,
+                                        auth_token=self.auth_token)
         except OSError as e:
             self._report("APP 页面服务在 %s:%d 启动失败：%s"
                          % (ip, self.app_port, _err(e)))

@@ -1,3 +1,21 @@
+> [!IMPORTANT]
+> **本 fork 已构建 iOS / iPadOS（兼容 iPhone）版 Cube Remote，但目前无法上传 TestFlight。**
+>
+> 原因：没有付费 Apple Developer Program 账号；免费 Apple ID 的 Personal Team 只能做 7 天真机调试，不能创建 App Store Connect 记录，也不能上传 TestFlight。
+>
+> 新增 / 改动路径：
+> - [`ios/`](ios/) — SwiftUI App、`CubeRemoteCore` SwiftPM 包、已生成的 `CubeRemote.xcodeproj`
+> - [`docs/ios.md`](docs/ios.md) — 构建、Simulator / 真机运行、能力边界
+> - [`docs/testflight.md`](docs/testflight.md) — 付费账号就绪后的 archive / upload 流程
+> - `web_auth.py`、`tests/test_web_auth.py` — Host 白名单与可选配对令牌
+> - `requirements.txt`、`requirements-dev.txt`、`pyproject.toml` — 依赖清单
+>
+> 分支：[`feat/ios-hardening`](https://github.com/KNGTNPT/CubeSetlistManager/tree/feat/ios-hardening)；详细差异见文末[「本 fork 的改动」](#本-fork-的改动kngtnpt)。
+>
+> 以下为原作者 README 原文（未改动）。
+
+---
+
 <div align="center">
 
 <img src="docs/logo.png" width="128" alt="Cube Setlist Manager Logo"/>
@@ -22,6 +40,7 @@
 </div>
 
 ---
+
 
 演出自动化套装：Windows 主程序 **Cube Setlist Manager**（Cubase / Studio One 双底座）+ 安卓遥控 APP **Cube Remote**。演出时一条流走完：素材库编排播放列表 → 一键切换 DAW 工程 → 播完自动切下一首 → JUNO-DS 音色跟着工程走。深色大字界面，演出暗场可读；全程本地通信，不经互联网。
 
@@ -345,6 +364,71 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
   （不是文档里的 `TetheringCapability`，那个在投影类型上不存在）；热点需本机有
   已连接的网络作共享来源；热点空闲一段时间会被 Windows 自动关闭；HTTP 服务
   首次监听会弹防火墙放行（一次即可）
+
+## 本 fork 的改动（KNGTNPT）
+
+上游：[Hab1nA/CubeSetlistManager](https://github.com/Hab1nA/CubeSetlistManager)。
+本 fork 从上游 `main`（`95b41ca`）拉出
+[`feat/ios-hardening`](https://github.com/KNGTNPT/CubeSetlistManager/tree/feat/ios-hardening)，
+只做增量，不改变原有 Windows 端的使用方式；未列出的功能与操作说明以上游文档为准。
+
+### 1. iOS / iPadOS 客户端（新增）
+
+- 位置 `ios/`：SwiftUI + WKWebView 外壳，直接加载电脑端的 APP 页（8767），
+  document-start 注入与 Android 同名的 `window.CubeApp` 桥，页面无需分叉。
+- 翻页：电脑推送的 `/turn` 由 `NWListener` 接收，经 CoreMIDI 虚拟源
+  「Cube Remote」发 note。默认 C2=36 下一页、C#2=37 上一页，可在 APP 设置页改；
+  在 forScore / Newzik 等支持 MIDI 翻页的谱面 App 里学习该音符即可。
+- 踩钉：CoreMIDI 监听 USB / 蓝牙 MIDI 踏板，按 `note % 12 → LKC 183..194`
+  （F13–F24）转发到电脑 `/pedal/event`，带 seq 去重、5s 心跳、403 停机。
+- 扫码连接、连接记忆、令牌、前台恢复时重启监听、可选静音音频保活。
+- 纯逻辑在 `ios/CubeRemoteCore`（SwiftPM），可 `swift test`；工程由
+  `ios/project.yml`（XcodeGen）生成。
+- 构建：Xcode 16+，`open ios/CubeRemote.xcodeproj` 选 Team 后编译；详见
+  [docs/ios.md](docs/ios.md)。
+
+**iOS 平台限制**（不是实现偷懒）：不能像 Android 那样做全局触摸/媒体键注入，
+不能枚举或切回其它 App，后台不能常驻监听。因此 iOS 的翻页只对支持 MIDI 的
+谱面 App 生效；`/turn` 监听与踩钉转发只在前台保证（可选音频保活仅延长存活，
+且上架审核有风险）。
+
+### 2. MIDI 输入口热插拔自愈
+
+`midi_bridge.py` 原先把 `MIM_CLOSE (0x3C2)` 误标为 `MIM_LONGERROR`，演出中
+拔掉 MIDI 线会让回调把已关闭句柄当 `MIDIHDR` 解析，输入不再恢复。现在正确
+分派 `MIM_CLOSE`，摘掉死句柄后按设备名每 2s 重开，并重投 long-message 缓冲；
+`close()` 与重连共用锁，避免同一 winmm 句柄被关两次。
+
+### 3. 局域网命令面加固（默认兼容旧行为）
+
+- **Host 白名单**：只接受 IP 字面量、localhost 或 `webRemote.hosts` 中显式
+  列出的域名，挡住 DNS rebinding（原来的 `Origin == Host` 挡不住）。
+- **可选配对令牌**：`config.json` 的 `webRemote.authToken` 非空时，非回环
+  请求必须带 `X-Cube-Token`、`Authorization: Bearer`、`?t=` 或 Cookie；
+  页面用 `?t=` 打开时服务端种 `HttpOnly; SameSite=Strict` Cookie。
+  默认空 = 与旧版完全一致，不影响现有手机/平板。
+- `/pedal/event`、`/diag` 为兼容现有 Android 原生转发保持免令牌（仍限私网 +
+  限流）。
+- 纯函数在 `web_auth.py`，测试 `tests/test_web_auth.py`。
+
+### 4. 依赖与 CI
+
+- 新增 `requirements.txt` / `requirements-dev.txt` / `pyproject.toml`。
+- CI 增加 macOS job：`swift test` + 无签名模拟器 `xcodebuild`；compileall
+  纳入 `web_auth.py`。
+
+### 验证状态
+
+- Python：`py_compile` 全通过；`tests/test_web_auth.py` 本机 6 passed /
+  3 skipped（handler 用例需 Windows）。
+- iOS：Core 逻辑 151 项断言通过；App 源码 `swiftc -typecheck` 通过；
+  本机未接受 Xcode 许可，未产出 `.app`，真机/签名未验收。
+- Windows 全量 pytest 与 GitHub Actions 尚未在本分支实际跑过。
+
+### 未做
+
+God Object 拆分、`out/` 历史清理、切歌取消/演出前自检/撤销、APK 与 exe
+代码签名。这些要么大范围改原功能，要么需要证书/真机环境，留作后续。
 
 ## 版本历史
 

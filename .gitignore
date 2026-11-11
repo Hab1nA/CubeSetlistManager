@@ -50,3 +50,11 @@ out/ui_shots/stills/
 # 安卓 release 签名（密钥与口令不入库；模板见 keystore.properties.example）
 mobile/keystore/
 mobile/keystore.properties
+
+# iOS 本机构建产物（Xcode/SwiftPM）
+ios/.build/
+ios/**/.build/
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+.DS_Store
+ios/build/

@@ -4,6 +4,34 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [未发布]
+
+### 新增
+
+- **iOS / iPadOS 遥控端**（`ios/`）：SwiftUI + WKWebView 加载同一张 APP 页，
+  `window.CubeApp` 同步桥对齐安卓；翻谱改为 CoreMIDI 虚拟源「Cube Remote」
+  发音符（默认 C2/C#2，可改），踩钉支持 USB/蓝牙 MIDI 踏板经 Wi-Fi 转发；
+  支持扫码连接、配对令牌、可选的静音音频保活。纯逻辑独立为
+  `ios/CubeRemoteCore`（SwiftPM，`swift test`）。平台限制与构建步骤见
+  [docs/ios.md](docs/ios.md)。
+- **可选配对令牌 + Host 白名单**（`webRemote.authToken` / `webRemote.hosts`，
+  新增 `web_auth.py`）：默认空=保持旧行为；配置后控制面需带
+  `X-Cube-Token` / Bearer / `?t=` / Cookie，页面首次带 `?t=` 打开会种
+  `HttpOnly; SameSite=Strict` Cookie；Host 只认 IP 字面量/localhost/显式配置，
+  挡 DNS 重绑定。`/pedal/event`、`/diag` 为兼容旧安卓客户端豁免令牌。
+- `requirements.txt` / `requirements-dev.txt` / `pyproject.toml`，补齐运行时与
+  测试依赖清单。
+
+### 修复
+
+- APP 页在 iOS 下隐藏安卓专属的「翻页方法 / 谱面 App / 使用情况访问 / 无障碍」
+  区块，改为 CoreMIDI 说明；踏板说明按平台切换。
+
+### 工程
+
+- CI 增加 macOS job：`ios/CubeRemoteCore` 的 `swift test` 与无签名模拟器编译。
+- `compileall` 纳入 `web_auth.py`。
+
 ## [0.16.3] - 2026-11-11
 
 ### 新增
