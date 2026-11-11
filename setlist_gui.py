@@ -610,6 +610,7 @@ class App:
         self._switch_key = None         # 进行中切换的 key 快照
         self._kb_warned = set()         # 未配置音色音符的告警去重
         self.kb_err = ""                # 键盘自动化停用原因（监控栏显示）
+        self._lib_query = ""        # 编排页搜索词（_lib_view 过滤）
         self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
         self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 72-81）
@@ -1151,6 +1152,23 @@ class App:
         self._probe_durations(songs)
         self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
+
+    def _lib_view(self):
+        """素材库视图（编排页 /playlist 数据源）：启用定位点的工程原位
+        展开为点条目（裸条目隐藏）。"""
+        q = self._lib_query
+        out = []
+        for s in self.songs:
+            data = self.points.get(s["key"])
+            if data and data["enabled"] and data["points"]:
+                for p in data["points"]:
+                    entry = dict(s, key=points.pt_key(s["key"], p["id"]),
+                                 name=points.display_name(s["name"], p["name"]))
+                    if not q or q in entry["name"].lower()                             or q in s["team"].lower():
+                        out.append(entry)
+            elif not q or q in s["name"].lower() or q in s["team"].lower():
+                out.append(s)
+        return out
 
     def _probe_durations(self, songs):
         """全量重探自动来源的工程时长并持久化（后台线程；65 首/66MB 实测
