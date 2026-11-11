@@ -892,15 +892,6 @@ def test_load_playlist_poison_filter(tmp_path, monkeypatch):
     assert cpr_meta.safe_dur(1e12) == 0.0
 
 
-class _Var:
-    def __init__(self, v):
-        self.v = v
-
-    def get(self):
-        return self.v
-
-    def set(self, v):
-        self.v = v
 
 
 def test_dpapi_roundtrip_and_migration(monkeypatch):
@@ -947,7 +938,7 @@ def test_state_snapshot_daw_alive():
     fake = types.SimpleNamespace(
         pl_keys=[], songs=[], cur=None, switch_confirm=False,
         exit_close_apps=False, launch_apps=True, top_most=True,
-        cont_play=True, auto_var=_Var(True), watch=None)
+        cont_play=True, auto_advance=True, watch=None)
     snap = web_remote.build_snapshot(fake, False, None)
     assert "dawAlive" in snap and snap["dawAlive"] is False
 
@@ -1127,7 +1118,7 @@ def test_launch_apps_setting_persist(monkeypatch):
                         lambda cfg: disk.clear() or disk.update(cfg))
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
-        cont_play=True, auto_var=_Var(True), top_most=True,
+        cont_play=True, auto_advance=True, top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
         _obs_autostart_cfg=True, daw="cubase", ccfg={"projectsRoot": "C:/x"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
@@ -1164,7 +1155,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     calls = []
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
-        cont_play=True, auto_var=_Var(True), top_most=True,
+        cont_play=True, auto_advance=True, top_most=True,
         switch_confirm=True, exit_close_apps=False,
         daw="cubase",
         ccfg={"projectsRoot": "C:/x", "dawExe": "e"},
@@ -1246,7 +1237,7 @@ def test_daw_setting_persist(monkeypatch):
     rescans = []
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="CK1", clock_hint="CK1",
-        cont_play=True, auto_var=_Var(True), top_most=True,
+        cont_play=True, auto_advance=True, top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
         _obs_autostart_cfg=True, daw="cubase",
         ccfg={"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"},

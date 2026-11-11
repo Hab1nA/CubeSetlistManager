@@ -917,7 +917,7 @@ class App:
         self.tgt_lbl = Marquee(g4, max_chars=24,
                                font=("Microsoft YaHei UI", 10))
         self.tgt_lbl.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self.auto_var = tk.BooleanVar(value=self.auto_advance)  # 设置页/踩钉共用
+        self.auto_var = tk.BooleanVar(value=self.auto_advance)  # 旧设置窗残余，随窗体类同删
         ttk.Label(g4, text="时长", style="Dim.TLabel").pack(
             side="left", padx=(4, 0))
         self.dur_var = tk.StringVar()
@@ -2479,13 +2479,12 @@ class App:
             cont = (bool(p["autoPlay"]) if "autoPlay" in p
                     else self.cont_play)
             auto = (bool(p["autoAdvance"]) if "autoAdvance" in p
-                    else self.auto_var.get()) or cont
+                    else self.auto_advance) or cont
             self.cont_play = cont
-            self.auto_var.set(auto)
+            self.auto_advance = auto
             self._toggle_auto()
-        if "topMost" in p:
+        if "topMost" in p:      # 只落盘：置顶由演出模式 js_api 承担
             self.top_most = bool(p["topMost"])
-            self.root.attributes("-topmost", self.top_most)
         if "switchConfirm" in p:
             self.switch_confirm = bool(p["switchConfirm"])
         if "exitCloseApps" in p:
@@ -2529,7 +2528,7 @@ class App:
             cfg = _load_config()
             flags = {}
             if "autoAdvance" in p or "autoPlay" in p:
-                flags.update({"autoAdvance": self.auto_var.get(),
+                flags.update({"autoAdvance": self.auto_advance,
                               "autoPlay": self.cont_play})
             if "topMost" in p:
                 flags["topMost"] = self.top_most
@@ -3786,13 +3785,13 @@ class App:
         return True
 
     def _toggle_auto(self):
-        # 回写属性：watch 建立时按它恢复；踩钉可在 watch 存在前翻转
-        self.auto_advance = self.auto_var.get()
+        # 生效 self.auto_advance（调用方先写属性再调用）：watch 建立时按它
+        # 恢复；踩钉可在 watch 存在前翻转
         if self.watch is not None:
-            self.watch.set_armed(self.auto_var.get())
+            self.watch.set_armed(self.auto_advance)
             self.q.put("自动切换工程%s" % ("已开启，播完自动切下一首"
-                                        if self.auto_var.get() else "已关闭"))
-        self._persist_config(autoAdvance=bool(self.auto_var.get()))
+                                        if self.auto_advance else "已关闭"))
+        self._persist_config(autoAdvance=bool(self.auto_advance))
 
     def _persist_config(self, **kv):
         try:
