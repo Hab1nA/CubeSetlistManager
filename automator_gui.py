@@ -524,7 +524,9 @@ class App:
     # ---- 后台启动 ----
 
     def _on_obs_connected(self):
-        """OBS 连上（含重连）后回调（连接线程）：报状态，按设置恢复投影。"""
+        """OBS 连上（含重连）后回调（连接线程）：报状态，按设置恢复投影。
+        静音不由回调重放：连接循环在回调前已 _set_mute 同步过（obs_ctrl
+        「静音偏好随每次连接同步」），回调再发=重复 RPC+失败级联。"""
         self.q.put("OBS 已连接")
         if self.ctl.cfg.get("projectorMonitor", "") not in ("", None, -1) \
                 and not self.ctl.apply_projector():
@@ -1529,6 +1531,11 @@ class SettingsWindow(tk.Toplevel):
         except (ValueError, AssertionError):
             app_p = 8767
             app.q.put("APP 连接地址端口非法，按 8767 处理")
+        # 端口互异（完整版 Tk/web 两路径同款）：同值会让两服务在
+        # SO_REUSEADDR 下双绑随机接客，保存时就地拒绝、窗口留待改值
+        if srv == app_p:
+            app.q.put("网页端口与 APP 端口不能相同，未保存")
+            return
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
         # 下拉存的是网卡名；候选来自本机在线网卡，映射外的一律按自动
@@ -1550,7 +1557,7 @@ class SettingsWindow(tk.Toplevel):
             # 串行化：连续两次保存的两个 apply_obs 线程不许交错（完整版同款）
             with app._obs_apply_lock:
                 ctl.cfg["vjMute"] = mute
-                if vid:
+                if vid is not None:
                     ctl.cfg["videoRoot"] = vid
                 ctl.cfg["projectorMonitor"] = mon
                 if ctl.is_connected() and not ctl.apply_mute():
@@ -1577,7 +1584,7 @@ class SettingsWindow(tk.Toplevel):
             cfg.update({"vjPortHint": vj, "kbPortHint": kb,
                         "clockPortHint": ck})
             obs = cfg.get("obs") or {}
-            if vid:
+            if vid is not None:   # 空串=显式清空（与完整版/web 路径同口径）
                 obs["videoRoot"] = vid
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute

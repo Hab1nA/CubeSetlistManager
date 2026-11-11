@@ -14,8 +14,14 @@
     "healthSec": 30
   },
   "dawSettings": {
-    "dawExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
-    "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects"
+    "cubase": {
+      "dawExe": "C:\\Program Files\\Steinberg\\Cubase 15\\Cubase15.exe",
+      "projectsRoot": "C:\\Users\\你\\Documents\\Cubase Projects"
+    },
+    "studioone": {
+      "dawExe": "C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe",
+      "projectsRoot": "C:\\Users\\你\\Documents\\Studio One\\Songs"
+    }
   },
   "juno": {
     "inHint": "JUNO",
@@ -38,7 +44,8 @@
     "hidDeviceHint": "",
     "intercept": true,
     "gestures": {},
-    "doubleWindow": 0.35
+    "doubleWindow": 0.35,
+    "longPress": 0.35
   },
   "webRemote": {
     "enabled": false,

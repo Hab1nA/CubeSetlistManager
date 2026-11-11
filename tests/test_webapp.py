@@ -984,7 +984,6 @@ def test_config_backup_and_corrupt_isolation(monkeypatch, tmp_path):
     # 连续三次保存 → bak/bak2/bak3 各留前序版本
     for i in range(3):
         sg._save_config({"n": i})
-    assert (tmp_path / "config.json.bak").getjson if False else True
     import json as _json
     assert _json.loads((tmp_path / "config.json.bak").read_text())["n"] == 1
     assert _json.loads((tmp_path / "config.json.bak2").read_text())["n"] == 0
@@ -1356,3 +1355,65 @@ def test_webui_window_size_argv():
     assert webui._window_size(["--wait-parent"]) == (1280, 800)
     assert webui._window_size(["1440", "900"]) == (1440, 900)
     assert webui._window_size([]) == (1280, 800)
+
+
+def test_settings_port_conflict_web(monkeypatch):
+    """web 保存路径端口互异：serverPort 改成与 appPort 同值就地拒绝
+    （SO_REUSEADDR 下两服务会双绑随机接客）；不涉端口的部分载荷不触发。"""
+    fake = types.SimpleNamespace(
+        web_cfg={"serverPort": 8765, "appPort": 8767, "enabled": True})
+    err = sg.App._settings_apply_web(
+        fake, {"web": {"serverPort": 8767}})
+    assert err == "网页端口与 APP 端口不能相同"
+    err = sg.App._settings_apply_web(
+        fake, {"web": {"appPort": 8765}})
+    assert err == "网页端口与 APP 端口不能相同"
+    # 不动端口的载荷不触发校验，正常走完链（持久化打桩，fake 备齐后续
+    # 链所需——同 test_settings_partial_payload_no_wipe 手法）
+    disk = {"dawSettings": {}, "webRemote": dict(web_remote.DEFAULT_WEB_REMOTE)}
+    monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
+        json.dumps(disk)))
+    monkeypatch.setattr(sg, "_save_config",
+                        lambda cfg: disk.clear() or disk.update(cfg))
+    fake2 = types.SimpleNamespace(
+        daw="cubase", ccfg={"projectsRoot": "C:/x"},
+        vj_hint="V1", kb_hint="K1", clock_hint="C1", _clock_changed=False,
+        web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE),
+        _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f),
+        _apply_web=lambda: None, q=_Q())
+    assert sg.App._settings_apply_web(fake2, {"web": {"midiIn": "X"}}) is None
+    assert disk["webRemote"]["midiIn"] == "X"
+
+
+def test_lite_get_endpoints_blocked():
+    """lite（Automator）宿主 GET 门：设置/踩钉/键盘遥控六端点集中 403
+    （宿主无对应 _xxx_web 方法，解引用即 500）；/state 不在门内照常出。"""
+    app = _FakeWebApp()
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    app.lite = True
+    try:
+        for path in ("/settings", "/pedal", "/pedal/devices",
+                     "/pedal/learn", "/kbd", "/kbd/record"):
+            code, body = _req("GET", port, path)
+            assert code == 403, (path, code, body)
+        code, _body = _req("GET", port, "/kbd?song=A%2F%E6%AD%8C%E4%B8%80")
+        assert code == 403
+        code, _body = _req("GET", port, "/state")
+        assert code == 200
+    finally:
+        srv.shutdown()
+        app.lite = False
+
+
+def test_tk_settings_port_guard_present():
+    """Tk 设置窗端口互异校验（源码锚，test_stability 同款手法）：两个
+    Tk 保存路径都必须在落盘前拒绝同值端口——web 路径已有功能级测试
+    （test_settings_port_conflict_web），Tk 窗需真实交互才可功能测。"""
+    for mod in (sg, __import__("automator_gui")):
+        src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+        assert "网页端口与 APP 端口不能相同，未保存" in src, mod.__name__

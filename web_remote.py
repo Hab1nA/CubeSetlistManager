@@ -1543,7 +1543,17 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"error": _err(e)})
 
+    # lite（Automator）宿主不实现设置/踩钉/键盘遥控的 _xxx_web 方法，
+    # 路由层直接解引用 result_fn 会 500——集中 403（POST 侧各端点门同款）
+    _LITE_GET_BLOCKED = frozenset((
+        "/settings", "/pedal", "/pedal/devices", "/pedal/learn",
+        "/kbd", "/kbd/record"))
+
     def _do_get(self, path):
+        if path in self._LITE_GET_BLOCKED and \
+                getattr(self.server.app, "lite", False):
+            self._json(403, {"error": "简化版无设置/踩钉/键盘遥控"})
+            return
         if path == "/":
             self._send(200, "text/html; charset=utf-8",
                        self.server.page.encode("utf-8"))
@@ -2097,7 +2107,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif getattr(app, "_web_snap", {}).get("busy"):
             self._json(409, {"error": "切换中，稍候再操作"})
             return
-        elif action in ("play", "pause", "resume", "stop", "rewind"):
+        elif action in ("play", "pause", "resume", "rewind"):
             app.calls.put(lambda a=action: app._transport(a))
         elif action == "next":
             app.calls.put(app._next)

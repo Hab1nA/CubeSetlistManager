@@ -1132,7 +1132,9 @@ class App:
     # ---- 后台线程：起服务 + 扫素材库 + 探时长 ----
 
     def _on_obs_connected(self):
-        """OBS 连上（含重连）后回调（连接线程）：报状态，按设置恢复投影。"""
+        """OBS 连上（含重连）后回调（连接线程）：报状态，按设置恢复投影。
+        静音不由回调重放：连接循环在回调前已 _set_mute 同步过（obs_ctrl
+        「静音偏好随每次连接同步」），回调再发=重复 RPC+失败级联。"""
         self.q.put("OBS 已连接")
         if self.ctl.cfg.get("projectorMonitor", "") not in ("", None, -1) \
                 and not self.ctl.apply_projector():
@@ -3218,16 +3220,6 @@ class App:
                     elif i == self.cur:
                         self.cur = (min(self.cur, len(self.pl_keys) - 1)
                                     if self.pl_keys else None)
-            elif op in ("up", "down"):
-                j = i + (-1 if op == "up" else 1)
-                if not 0 <= j < len(self.pl_keys):
-                    return None
-                self.pl_keys[i], self.pl_keys[j] = \
-                    self.pl_keys[j], self.pl_keys[i]
-                if self.cur == i:
-                    self.cur = j
-                elif self.cur == j:
-                    self.cur = i
             else:
                 return "未知操作"
         self._persist()
@@ -5102,6 +5094,11 @@ class SettingsWindow(tk.Toplevel):
         except (ValueError, AssertionError):
             app_p = 8767
             app.q.put("APP 连接地址端口非法，按 8767 处理")
+        # 端口互异（与 web 路径同口径）：同值会让两服务在 SO_REUSEADDR
+        # 下双绑随机接客，保存时就地拒绝、窗口留待改值
+        if srv == app_p:
+            app.q.put("网页端口与 APP 端口不能相同，未保存")
+            return
         pg = raw(self.pg_var.get())
         pg = "" if pg == "无" else pg
         # 下拉存的是网卡名；候选来自本机在线网卡，映射外的一律按自动
