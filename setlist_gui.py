@@ -26,9 +26,6 @@ import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
-import tkinter.font as tkfont
-import tkinter.ttk as ttk
 from tkinter import messagebox, filedialog
 
 import advance
@@ -83,7 +80,6 @@ def transport_blocked(action, tstate):
     if action == "resume":
         return tstate == "playing"
     return False
-LOG_MAX = 2000       # 日志行数上限：长演出防列表无限增长拖慢刷新
 
 # 日志级别（新前端级别体系的唯一来源，产生端定级）：err=真实故障
 # （自检失败/启动失败/未恢复/不可用…）；「已停用/未启动」类有意停运
@@ -495,104 +491,6 @@ def _reprobe(songs, durations, dur_src):
     return out
 
 
-class Marquee(ttk.Entry):
-    """跑马灯：只读 Entry + xview 像素滚动（Tk 原生裁剪，经典做法）。
-    文本超宽才滚动、往返循环；文字未变化时重复 set 不打断滚动。
-    Entry 定宽（字符）兜底防撑破布局，实际宽度随布局伸展。
-    无边框、底色随所在面板的观感由 "Marquee*.TEntry" style 族承担
-    （dpi.apply_theme 注册）；状态色变化切 style，不碰 fg。"""
-
-    STEP_MS = 40
-    SPEED = 3.0             # 滚动速度：字符/秒（按字体像素精确换算）
-    PAUSE_TICKS = 8         # 滚到头/回到起点各停顿 ~0.3 秒
-
-    def __init__(self, master, max_chars=30, **kw):
-        kw.setdefault("justify", "left")
-        kw.setdefault("takefocus", False)
-        kw.setdefault("style", "Marquee.TEntry")
-        super().__init__(master, **kw)
-        self.max_chars = max_chars
-        self._full = ""
-        self._frac = 0.0
-        self._dir = 1
-        self._hold = 0
-        self._job = None
-        self._font = tkfont.Font(font=self["font"])
-        self.config(state="disabled")
-
-    def set(self, text, fg=None):
-        if text != self._full:              # 文字没变就不归零偏移（关键）
-            self._full = text
-            self.config(state="normal")
-            self.delete(0, "end")
-            self.insert(0, text)
-            self.config(state="disabled")
-            self.xview_moveto(0)
-            self._frac = 0.0
-            self._dir = 1
-            self._hold = self.PAUSE_TICKS   # 起始停一拍，先看清开头
-        if fg:
-            # 主文字色=族基样式（白字）；语义状态色→命名变体。fg 必须落
-            # widget 级（sv-ttk 下 TEntry 族 style fg 不参与绘制，见
-            # dpi.paint_tree 注）
-            self.config(style="Marquee.TEntry" if fg == dpi.FG
-                        else "Marquee%s.TEntry" % dpi.tone(fg),
-                        foreground=fg)
-        self._schedule()
-
-    def _overflow(self):
-        w = self.winfo_width()
-        if w <= 1:                          # 未布局：退回字符数判定
-            return len(self._full) > self.max_chars
-        return self._font.measure(self._full) > w - 8
-
-    def _schedule(self):
-        if self._overflow() and self._job is None:
-            self._job = self.after(self.STEP_MS, self._step)
-
-    def _step(self):
-        self._job = None
-        try:
-            cont = self._step_body()
-        except tk.TclError:
-            return                          # 组件销毁：跑马灯自然退场
-        except Exception:
-            return                          # 单步异常不断链：下个 set() 重挂
-        if cont:
-            self._job = self.after(self.STEP_MS, self._step)
-
-    def _step_body(self):
-        if not self._overflow():
-            self._cancel()
-            self.xview_moveto(0)
-            return False
-        total = max(1, self._font.measure(self._full))
-        span = max(0.0, 1.0 - self.winfo_width() / total)   # 可滚动比例
-        cpx = total / max(1, len(self._full))               # 平均字符像素
-        if self._hold > 0:                  # 到头/回起点停一拍，便于阅读
-            self._hold -= 1
-        else:
-            if self._frac >= span and self._dir == 1:
-                self._dir = -1              # 滚到尾：翻向并停一拍
-                self._hold = self.PAUSE_TICKS
-            elif self._frac <= 0 and self._dir == -1:
-                self._dir = 1               # 滚回头：翻向并停一拍
-                self._hold = self.PAUSE_TICKS
-            else:
-                self._frac = min(span, max(
-                    0.0, self._frac
-                    + self._dir * self.SPEED * cpx * self.STEP_MS / 1000
-                    / total))
-                self.xview_moveto(self._frac)
-        return True
-
-    def _cancel(self):
-        if self._job is not None:
-            try:
-                self.after_cancel(self._job)
-            except Exception:
-                pass
-            self._job = None
 
 
 class App:
@@ -704,7 +602,6 @@ class App:
         self.durations = pl["durations"]
         self.dur_src = pl["durSrc"]     # "manual"=手填；不在表=自动；无时长=未知
         self.songs = []                 # 素材库全量
-        self._lib_query = ""            # 素材库搜索词（小写）
         self.by_key = {}
         self.cur = None                 # 播放列表下标：已请求加载的项
         self._adopted_name = None       # 横幅已跟随的工程名（手动跟随去重）
@@ -714,7 +611,6 @@ class App:
         self._kb_warned = set()         # 未配置音色音符的告警去重
         self.kb_err = ""                # 键盘自动化停用原因（监控栏显示）
         self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
-        self._sel_lock = False          # 双列表互斥选中的防重入标记
         self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 72-81）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 84-89）
@@ -741,7 +637,6 @@ class App:
         self._pedal_learn_start_t = 0.0      # 构造起步时刻（卡死防护计时）
         self.start_err = ""
         self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
-        self._build()
         # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
         # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
         # HWND，窗口生命周期=进程生命周期，无需失效机制。GetParent 在窗口
@@ -775,262 +670,6 @@ class App:
         root.after(50, self._drain_calls)
 
     # ---- 界面 ----
-
-    def _build(self):
-        # ---- 顶：NOW/NEXT 横幅（演出中最重要的信息，全窗最醒目）----
-        banner = ttk.Frame(self.root)
-        banner.pack(fill="x", padx=12, pady=(10, 4))
-        banner.columnconfigure(0, weight=1, uniform="b")   # NOW/NEXT 平分宽度
-        banner.columnconfigure(1, weight=1, uniform="b")
-        ttk.Label(banner, text="NOW",
-                  font=("Microsoft YaHei UI", 10, "bold"), anchor="w",
-                  style="Dim.TLabel").grid(row=0, column=0, sticky="w")
-        self.now_lbl = Marquee(banner, max_chars=30,
-                               font=("Microsoft YaHei UI", 20, "bold"))
-        self.now_lbl.grid(row=1, column=0, sticky="ew")
-        ttk.Label(banner, text="NEXT",
-                  font=("Microsoft YaHei UI", 10, "bold"), anchor="w",
-                  style="Dim.TLabel").grid(row=0, column=1, sticky="w",
-                                           padx=(24, 0))
-        self.next_lbl = Marquee(banner, max_chars=30,
-                                font=("Microsoft YaHei UI", 13))
-        self.next_lbl.grid(row=1, column=1, sticky="ew", padx=(24, 0))
-        self.remain_lbl = ttk.Label(banner, text="",
-                                    font=("Microsoft YaHei UI", 14, "bold"),
-                                    anchor="e")
-        self.remain_lbl.grid(row=1, column=2, sticky="e")
-        # 歌曲进度条（横贯整个顶部、歌名行下方 4px 细条）：远距一眼读
-        # 进度，数字只是补充；无当前曲/无时长时隐藏（grid_remove 记住
-        # 布局，恢复即原位）
-        self.prog = tk.Canvas(banner, height=dpi.scale(self.root, 4),
-                              highlightthickness=0, bg=dpi.FIELD)
-        self.prog.grid(row=2, column=0, columnspan=3, sticky="ew",
-                       pady=(3, 0))
-        self.prog.grid_remove()
-        # ---- 上：素材库 / 播放列表 ----
-        pane = ttk.Frame(self.root)
-        pane.pack(fill="both", expand=True, padx=12, pady=4)
-        pane.columnconfigure(0, weight=1, uniform="p")
-        pane.columnconfigure(1, minsize=dpi.scale(self.root, 8))  # 组间距 8
-        pane.columnconfigure(2, weight=1, uniform="p")
-        pane.rowconfigure(1, weight=1)      # 列表随窗口纵向拉伸，不留空带
-        libtop = ttk.Frame(pane)
-        libtop.grid(row=0, column=0, sticky="ew")
-        ttk.Label(libtop, text="素材库", anchor="w",
-                  style="Dim.TLabel").pack(side="left")
-        self.lib_q = tk.StringVar()
-        q_ent = ttk.Entry(libtop, textvariable=self.lib_q, width=12)
-        q_ent.pack(side="right")
-        ttk.Label(libtop, text="搜索", style="Dim.TLabel").pack(
-            side="right", padx=(0, 4))
-        q_ent.bind("<FocusIn>", lambda _e: q_ent.select_range(0, "end"))
-        self.lib_q.trace_add("write", lambda *_: self._on_search())
-        ttk.Label(pane, text="播放列表", anchor="w",
-                  style="Dim.TLabel").grid(row=0, column=2, sticky="w")
-        # 双列表保留 classic Listbox：逐行 itemconfigure（时长状态色/
-        # 当前行底色）与 curselection 索引体系依赖 classic，配色显式
-        # 对齐 sv-ttk dark
-        self.lib = tk.Listbox(pane, height=8, activestyle="none",
-                              font=("Microsoft YaHei UI", 10),
-                              selectmode="extended", exportselection=False,
-                              bg=dpi.FIELD, fg=dpi.FG,
-                              selectbackground=dpi.SELECT,
-                              selectforeground=dpi.FG,
-                              highlightthickness=0)
-        self.lib.grid(row=1, column=0, sticky="nsew")
-        self.lib.bind("<Double-Button-1>", self._on_lib_dbl)
-        self.lib.bind("<<ListboxSelect>>", self._on_lib_sel)
-        self.pl = tk.Listbox(pane, height=8, activestyle="none",
-                             font=("Microsoft YaHei UI", 10),
-                             exportselection=False,
-                             bg=dpi.FIELD, fg=dpi.FG,
-                             selectbackground=dpi.SELECT,
-                             selectforeground=dpi.FG,
-                             highlightthickness=0)
-        self.pl.grid(row=1, column=2, sticky="nsew")
-        self.pl.bind("<Double-Button-1>", self._on_pl_dbl)
-        self.pl.bind("<<ListboxSelect>>", self._on_pl_sel)
-        self.pl_empty = tk.Label(pane, text="双击左侧歌曲加入",
-                                 fg=dpi.MUT, bg=dpi.FIELD)
-        # ---- 中：VJ 自动化 / 键盘自动化 监控栏（两栏同构：端口名称/
-        #      端口状态 + 各自专属状态；键 (栏标识, 名称) 防重名冲突）----
-        self.rows = {}
-        mons = ttk.Frame(self.root)
-        mons.pack(fill="x", padx=12, pady=4)
-        # 列几何与上方双列表完全同构（同权重 + 同 DPI 缩放间隔列），
-        # 两栏左右边缘与素材库/播放列表精确对齐
-        mons.columnconfigure(0, weight=1, uniform="m")
-        mons.columnconfigure(1, minsize=dpi.scale(self.root, 8))
-        mons.columnconfigure(2, weight=1, uniform="m")
-
-        def mon_grid(fid, frame, names, marquee=()):
-            # 非跑马灯普通 Label 显式同族同号字体（YaHei 10）：与 Marquee
-            # 同族同号，值列混排不齐
-            yh10 = {"font": ("Microsoft YaHei UI", 10)}
-            for i, name in enumerate(names):
-                r, c = divmod(i, 2)
-                ttk.Label(frame, text=name, width=10, anchor="w",
-                          style="Dim.TLabel", **yh10).grid(
-                    row=r, column=c * 2, padx=(6, 0), pady=1, sticky="w")
-                if name in marquee:
-                    lbl = Marquee(frame, max_chars=24,
-                                  font=("Microsoft YaHei UI", 10))
-                else:
-                    lbl = ttk.Label(frame, text="…", anchor="w", width=20,
-                                    style="Dim.TLabel", **yh10)
-                lbl.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="we")
-                frame.columnconfigure(c * 2 + 1, weight=1)
-                self.rows[(fid, name)] = lbl
-
-        vj = ttk.LabelFrame(mons, text="VJ 自动化")
-        vj.grid(row=0, column=0, sticky="nsew")
-        mon_grid("vj", vj, ("端口名称", "端口状态", "OBS 状态", "走带跟随"))
-        kb = ttk.LabelFrame(mons, text="键盘自动化")
-        kb.grid(row=0, column=2, sticky="nsew")
-        mon_grid("kb", kb, ("端口名称", "端口状态", "音色映射", "最近切换"),
-                 marquee=("音色映射", "最近切换"))
-        # ---- 日志栏（日志 Listbox 保留 classic：逐行标错/索引体系）----
-        logf = ttk.LabelFrame(self.root, text="日志")
-        logf.pack(fill="x", padx=12, pady=4)   # 固定高：纵向伸展全让给双列表
-        ttk.Button(logf, text="清空日志",
-                   command=lambda: self.log.delete(0, "end")).pack(
-            anchor="e", padx=6, pady=(2, 4))
-        self.log = tk.Listbox(logf, height=7, activestyle="none",
-                              font=("Microsoft YaHei UI", 10),
-                              bg=dpi.FIELD, fg=dpi.LOG_FG,
-                              selectbackground=dpi.SELECT,
-                              selectforeground=dpi.FG,
-                              highlightthickness=0)
-        self.log.pack(fill="both", expand=True, padx=6, pady=(0, 4))
-        # ---- 下：控制区两行——行1(上)=播放配置独占整行（准备性操作）；
-        #      行2(下)=演出中要按的 编排/播放/自动化（居中）+ 退出（靠右）----
-        g4 = ttk.LabelFrame(self.root, text="播放配置")
-        g4.pack(fill="x", padx=12, pady=4)
-        ttk.Label(g4, text="配置目标：", anchor="w",
-                  style="Dim.TLabel").pack(side="left", padx=(6, 0))
-        # 独占整行后宽度充裕（minsize 下也有 2 倍余量），跑马灯弹性吸收
-        # 中部剩余空间，右侧时长控件永不会被裁剪；行内间距统一 4
-        self.tgt_lbl = Marquee(g4, max_chars=24,
-                               font=("Microsoft YaHei UI", 10))
-        self.tgt_lbl.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        ttk.Label(g4, text="时长", style="Dim.TLabel").pack(
-            side="left", padx=(4, 0))
-        self.dur_var = tk.StringVar()
-        self.dur_ent = ttk.Entry(g4, textvariable=self.dur_var, width=7)
-        self.dur_ent.pack(side="left", padx=(4, 0))
-        self.dur_ent.bind(
-            "<FocusIn>",
-            lambda _e: self.dur_ent.select_range(0, "end"))  # 打字即覆盖预显示
-        ttk.Button(g4, text="写入时长", width=8,
-                   command=self._set_duration).pack(side="left", padx=(4, 0))
-        ttk.Button(g4, text="重新识别", width=8,
-                   command=self._redict).pack(side="left", padx=(4, 0))
-        ctl = ttk.Frame(self.root)
-        ctl.pack(fill="x", padx=12, pady=(4, 10))
-        ctl.columnconfigure(1, weight=1)
-        ctl.columnconfigure(3, weight=1)
-        # 播放状态指示：控件栏最左（独立列，不与按钮组挨着）；14 号粗体
-        # 与顶部「已播|剩余」同规格；grid 默认垂直居中=与同排按钮对齐；
-        # 颜色每 tick 跟走带状态切
-        self.state_lbl = ttk.Label(ctl, text="当前状态：未在播放",
-                                   font=("Microsoft YaHei UI", 14, "bold"),
-                                   style="Dim.TLabel")
-        self.state_lbl.grid(row=0, column=0, sticky="w", padx=(12, 10))
-        right = ttk.Frame(ctl)
-        right.grid(row=0, column=3, sticky="ens")   # 纵向拉满、贴右
-        # 左衬=状态列宽−退出列净宽（22/6=两侧 padx）→ 右固定翼与左固定翼
-        # （状态列+空列）等宽，两权重列均分剩余空间后 mid 恒对窗口居中：
-        # 旧方案以「状态右侧」为居中基准，状态列比退出列宽，按钮组整体
-        # 偏右半个状态标签（175% 下实测 +163px）。构造期先同步设一次
-        # （Configure 事件不投递于 update_idletasks，迟设会算小 minsize）；
-        # 状态文案等长（当前状态：××××），绑定仅作文案变长后的自愈
-        rpad = ttk.Frame(right)
-        rpad.pack(side="left")
-
-        def _rpad(_e=None):
-            rpad.config(width=max(0, self.state_lbl.winfo_reqwidth() + 22
-                                  - exit_btn.winfo_reqwidth() - 6))
-
-        # 退出=底栏动作按钮：宽度与编排/播放组一致（5字符），底边与各组
-        # 按钮同一基线（pady=3，不再整格垂直居中），右边距与上方「设置」
-        # 按钮一致（距容器内右缘 6px）
-        exit_btn = ttk.Button(right, text="退出", width=7,
-                              command=self._on_exit)
-        exit_btn.pack(side="bottom", padx=(0, 6), pady=3)
-        _rpad()
-        self.state_lbl.bind("<Configure>", _rpad)
-        mid = ttk.Frame(ctl)
-        mid.grid(row=0, column=2)
-        g1 = ttk.LabelFrame(mid, text="编排")
-        g1.pack(side="left", padx=(0, 8))
-        self.btn_add = ttk.Button(g1, text="加入", width=7,
-                                  command=self._add)
-        self.btn_add.pack(side="left", padx=3, pady=3)
-        self.btn_remove = ttk.Button(g1, text="移除", width=7,
-                                     command=self._remove)
-        self.btn_remove.pack(side="left", padx=3, pady=3)
-        self.btn_up = ttk.Button(g1, text="上移", width=7,
-                                 command=lambda: self._move(-1))
-        self.btn_up.pack(side="left", padx=3, pady=3)
-        self.btn_down = ttk.Button(g1, text="下移", width=7,
-                                   command=lambda: self._move(1))
-        self.btn_down.pack(side="left", padx=3, pady=3)
-        self.btn_clear = ttk.Button(g1, text="清空播放列表",
-                                    command=self._clear_pl)
-        self.btn_clear.pack(side="left", padx=3, pady=3)
-        g2 = ttk.LabelFrame(mid, text="播放")
-        g2.pack(side="left", padx=(0, 8))
-        self.tbtns = {}
-        for text, cmd in (("开始", lambda: self._transport("play")),
-                          ("暂停", lambda: self._transport("pause")),
-                          ("继续", lambda: self._transport("resume")),
-                          ("回零", lambda: self._transport("rewind")),
-                          ("上一首", self._prev),
-                          ("下一首", self._next)):
-            b = ttk.Button(g2, text=text, width=7, command=cmd)
-            b.pack(side="left", padx=3, pady=3)
-            self.tbtns[text] = b
-        self.tbtns["开始"].configure(style="Start.TButton")  # 主操作=绿底深字
-        self.btn_panic = ttk.Button(g2, text="全停", width=7,
-                                    style="Stop.TButton",
-                                    command=self._panic)
-        self.btn_panic.pack(side="left", padx=(10, 3), pady=3)
-        g3 = ttk.LabelFrame(mid, text="自动化")
-        g3.pack(side="left")
-        dpi.setup_window(self.root)
-        self.root.attributes("-topmost", self.top_most)
-        # 长歌名滚动：横幅 NOW/NEXT、配置目标、音色映射、最近切换
-        self.m_now = self.now_lbl
-        self.m_next = self.next_lbl
-        self.m_tgt = self.tgt_lbl
-        self.m_map = self.rows[("kb", "音色映射")]
-        self.m_last = self.rows[("kb", "最近切换")]
-        self.root.update_idletasks()   # 三组等高：以自然最高者为准补内边距
-        groups = (g1, g2, g3)
-        h = max(f.winfo_reqheight() for f in groups)
-        for f in groups:
-            pad = max(0, (h - f.winfo_reqheight()) // 2)
-            if pad:
-                f.config(padding=(0, pad))   # ttk.LabelFrame 无 pady
-        # 最小宽度=实际需求宽：窗口窄于它时 grid 压缩权重列，退出按钮被
-        # 压到几像素点不到；高度维持原值（纵向压列表可接受，横向不行）
-        self.root.update_idletasks()
-        self.root.minsize(self.root.winfo_reqwidth(),
-                          dpi.scale(self.root, 760))
-        self._update_buttons()
-
-    def _update_buttons(self):
-        """编排组按钮随标蓝状态启停：加入=素材库有选中；移除/上移/下移=
-        播放列表有选中（上移/下移还需不在顶/底边界）；清空=播放列表非空。"""
-        sel = self.pl.curselection()
-        i = sel[0] if sel else None
-        pl_has = i is not None and i < len(self.pl_keys)
-        for btn, on in ((self.btn_add, bool(self.lib.curselection())),
-                        (self.btn_remove, pl_has),
-                        (self.btn_up, pl_has and i > 0),
-                        (self.btn_down, pl_has and i < len(self.pl_keys) - 1),
-                        (self.btn_clear, bool(self.pl_keys))):
-            btn.config(state=tk.NORMAL if on else tk.DISABLED)
 
     def _on_exit(self):
         """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。
@@ -1510,7 +1149,6 @@ class App:
                 self.q.put("已恢复当前工程：《%s》" % name)
                 break
         self._probe_durations(songs)
-        self.calls.put(self._refresh)
         self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
 
@@ -1530,148 +1168,6 @@ class App:
                    % (len(fresh),
                       sum(1 for s in songs
                           if not self.durations.get(s["key"]))))
-
-    def _on_lib_sel(self, _e=None):
-        """双列表唯一选中：选素材库即清播放列表的标蓝。"""
-        if self._sel_lock:
-            return
-        self._sel_lock = True
-        try:
-            self.pl.selection_clear(0, "end")
-        finally:
-            self._sel_lock = False
-        self._update_dur_target()
-        self._update_buttons()
-
-    def _on_pl_sel(self, _e=None):
-        if self._sel_lock:
-            return
-        self._sel_lock = True
-        try:
-            self.lib.selection_clear(0, "end")
-        finally:
-            self._sel_lock = False
-        self._update_dur_target()
-        self._update_buttons()
-
-    def _lib_view(self):
-        """素材库视图：启用定位点的工程原位展开为点条目（裸条目隐藏），
-        其余按搜索词过滤；_refresh/_add/_sel_target 共用同一计算，保证
-        显示下标与数据下标一致。"""
-        q = self._lib_query
-        out = []
-        for s in self.songs:
-            data = self.points.get(s["key"])
-            if data and data["enabled"] and data["points"]:
-                for p in data["points"]:
-                    entry = dict(s, key=points.pt_key(s["key"], p["id"]),
-                                 name=points.display_name(s["name"], p["name"]))
-                    if not q or q in entry["name"].lower() \
-                            or q in s["team"].lower():
-                        out.append(entry)
-            elif not q or q in s["name"].lower() or q in s["team"].lower():
-                out.append(s)
-        return out
-
-    def _on_search(self):
-        self._lib_query = self.lib_q.get().strip().lower()
-        self.lib.selection_clear(0, "end")
-        self._refresh()
-
-    def _sel_target(self):
-        """当前标蓝项 → (来源, 下标, key)；两列表都没选返回 None。"""
-        sel = self.pl.curselection()
-        if sel and sel[0] < len(self.pl_keys):
-            return ("pl", sel[0], self.pl_keys[sel[0]])
-        view = self._lib_view()
-        sel = self.lib.curselection()
-        if sel and sel[0] < len(view):
-            return ("lib", sel[0], view[sel[0]]["key"])
-        return None
-
-    def _update_dur_target(self, *_):
-        """选中变化：配置目标标签（标蓝曲）+ 输入框预显示（自动时长/数值/未知）。"""
-        t = self._sel_target()
-        if t:
-            e = self._resolve_entry(t[2])
-            if e is not None:
-                self.m_tgt.set(e["display"], dpi.FG)
-                text, _c = self._dur_status(t[2], for_entry=True)
-                self.dur_var.set(text)
-                return
-        self.tgt_lbl.set("（未选中）", dpi.MUT)
-        self.dur_var.set("")
-
-    def _dur_status(self, key, for_entry=False):
-        """时长三态 → (显示文本, 颜色)：自动=绿/手动=数值黄/未知=红。
-        列表行里自动态直接显示时长数值（降噪）；输入框预显示用「自动时长」
-        占位（for_entry=True），其值不可直接覆盖，需清空后输入。
-        定位点条目显示段长（计算值，不走手动时长机制）。"""
-        pt = points.parse_pt_key(key)
-        if pt:
-            lib_key, pid = pt
-            p = points.get_point(self.points.get(lib_key)
-                                 or points.empty_data(), pid)
-            if p is not None and p["end"] > p["start"]:
-                return cpr_meta.fmt_mmss(p["end"] - p["start"]), dpi.C_OK
-            return "未知", dpi.C_ERR
-        d = self.durations.get(key, 0.0)
-        if not d:
-            return "未知", dpi.C_ERR
-        if self.dur_src.get(key) == "manual":
-            return cpr_meta.fmt_mmss(d), dpi.C_WARN
-        return ("自动时长" if for_entry else cpr_meta.fmt_mmss(d)), dpi.C_OK
-
-    def _refresh(self):
-        lib_sel = list(self.lib.curselection())
-        pl_sel = list(self.pl.curselection())
-        lib_scroll, pl_scroll = self.lib.yview()[0], self.pl.yview()[0]
-        lib_x, pl_x = self.lib.xview()[0], self.pl.xview()[0]
-        self.lib.delete(0, "end")
-        pl_set = set(self.pl_keys)
-        for i, s in enumerate(self._lib_view()):
-            text, color = self._dur_status(s["key"])
-            mark = " ·" if s["key"] in pl_set else ""
-            self.lib.insert("end", "[%s] %s%s（%s）" % (
-                s["team"], s["name"], mark, text))
-            self.lib.itemconfigure(i, foreground=color)
-        self.pl.delete(0, "end")
-        for i, key in enumerate(self.pl_keys):
-            e = self._resolve_entry(key)
-            if e is None:
-                continue
-            text, color = self._dur_status(key)
-            mark = " ←" if i == self.cur else ""
-            self.pl.insert("end", "%d. %s（%s）%s" % (
-                i + 1, e["display"], text, mark))
-            self.pl.itemconfigure(i, foreground=color)
-            if i == self.cur:               # 当前行底色：未选中也能一眼定位
-                self.pl.itemconfigure(i, background=dpi.CUR_BG)
-        # 重建后恢复用户选中（标蓝即时长/识别的目标，不能丢）；
-        # 没有用户选中才回落到当前曲行——两者并存会让配置目标读错行
-        self._sel_lock = True
-        try:
-            for i in lib_sel:
-                self.lib.selection_set(i)
-            if pl_sel:
-                for i in pl_sel:
-                    if i < self.pl.size():
-                        self.pl.selection_set(i)
-            elif self.cur is not None and self.cur < self.pl.size():
-                self.pl.selection_set(self.cur)
-        finally:
-            self._sel_lock = False
-        self.lib.yview_moveto(lib_scroll)       # 重建不丢滚动位置
-        self.pl.yview_moveto(pl_scroll)
-        self.lib.xview_moveto(lib_x)
-        self.pl.xview_moveto(pl_x)
-        if self.pl_keys:                    # 空状态提示：仅列表为空时出现
-            self.pl_empty.place_forget()
-        else:
-            self.pl_empty.place(in_=self.pl, relx=0.5, rely=0.5,
-                                anchor="center")
-        self._update_dur_target()
-        self._update_buttons()
 
     def _watch(self):
         f8_mark = None                 # F8-only 诊断：起见时刻与一次性闩锁
@@ -1779,109 +1275,6 @@ class App:
 
     # ---- 播放列表编排（主线程） ----
 
-    def _on_lib_dbl(self, _e):
-        self._add()
-
-    def _add(self):
-        sel = self.lib.curselection()
-        if not sel:
-            self.q.put("先在素材库里选中再加入")
-            return
-        view = self._lib_view()
-        added = []
-        for i in sel:
-            if i >= len(view):
-                continue
-            s = view[i]
-            if s["key"] in self.pl_keys:
-                continue
-            self.pl_keys.append(s["key"])
-            added.append(s["name"])
-        if not added:
-            self.q.put("所选歌曲均已在播放列表里")
-            return
-        self._persist()
-        self._refresh()
-        self.q.put("已加入播放列表：%s" %
-                   "、".join("《%s》" % n for n in added))
-
-    def _on_pl_dbl(self, _e):
-        sel = self.pl.curselection()
-        if not sel:
-            return
-        i = sel[0]
-        ws = daw_ctrl.current_project()
-        if (self.switch_confirm and 0 <= i < len(self.pl_keys)
-                and i != self.cur and ws):
-            # 双击是最易误触的手势、切歌会关掉当前工程：有工程在开时默认
-            # 确认（覆盖无时码工程——那种工程"在不在播"无从判断）；
-            # 无打开工程时双击=直接打开，没有可被关掉的东西，不弹确认。
-            # 「从」名取工程标题里的真实名字：当前工程可能不在播放列表里
-            # （cur 为 None 按歌名查不到，会显示成《？》误导）
-            cur = daw_ctrl.project_name_from_title(ws[1])
-            if not cur and self.cur is not None:
-                e = self._resolve_entry(self.pl_keys[self.cur])
-                cur = e["display"] if e else "？"
-            e = self._resolve_entry(self.pl_keys[i])
-            dst = e["display"] if e else "？"
-            if not messagebox.askyesno(
-                    "切换工程", "确定从《%s》切换到《%s》？\n"
-                    "当前工程将被关闭（自动保存）。" % (cur, dst)):
-                return
-        self._switch(i, "手动")
-
-    def _remove(self):
-        sel = self.pl.curselection()
-        if not sel:
-            self.q.put("先在播放列表里选中一项再移除")
-            return
-        i = sel[0]
-        key = self.pl_keys.pop(i)
-        if self.cur is not None:
-            if i < self.cur:
-                self.cur -= 1
-            elif i == self.cur:
-                # 删到列表空时 cur 归 None（-1 会以负下标炸掉轮询循环）
-                self.cur = (min(self.cur, len(self.pl_keys) - 1)
-                            if self.pl_keys else None)
-                if self.cur is not None:
-                    self.q.put("已移除当前歌曲，自动指向下一首，工程保持打开")
-        self._persist()
-        self._refresh()
-        e = self._resolve_entry(key)
-        self.q.put("已从播放列表移除：《%s》"
-                   % (e["display"] if e else key.split("/")[-1]))
-
-    def _clear_pl(self):
-        if not self.pl_keys:
-            return
-        if not messagebox.askyesno("清空播放列表",
-                                   "确定清空播放列表？（素材库不受影响）"):
-            return
-        self.pl_keys = []
-        self.cur = None
-        self._persist()
-        self._refresh()
-        self.q.put("播放列表已清空，素材库不受影响")
-
-    def _move(self, delta):
-        sel = self.pl.curselection()
-        if not sel:
-            return
-        i, j = sel[0], sel[0] + delta
-        if not (0 <= j < len(self.pl_keys)):
-            return
-        self.pl_keys[i], self.pl_keys[j] = self.pl_keys[j], self.pl_keys[i]
-        if self.cur == i:
-            self.cur = j
-        elif self.cur == j:
-            self.cur = i
-        self._persist()
-        self._refresh()
-        self.pl.selection_clear(0, "end")       # browse 模式下 set 会叠加，先清
-        self.pl.selection_set(j)
-        self._update_buttons()
-
     def _switch(self, i, via, play_after=False):
         """切到播放列表第 i 项；返回 False=没开始（越界/正忙/库缺项）。"""
         if not (0 <= i < len(self.pl_keys)):
@@ -1939,7 +1332,6 @@ class App:
             self.cur_song_path = None
             self._load_gen = getattr(self, "_load_gen", 0) + 1
         self._kb_warned = set()
-        self._refresh()
         self.q.put("切换到《%s》…：%s"
                    % (entry["display"], "已排队" if via == "排队" else via))
         return True
@@ -1962,7 +1354,6 @@ class App:
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])
-            self._refresh()
             if play_after:
                 # resume 而非 play：光标已被上面的 GOTO 放在段起点，通用
                 # play 的回零会打回工程头；play 也不走 _point_play 二次
@@ -2028,7 +1419,6 @@ class App:
 
     def _finish_switch_common(self, entry, play_after):
         """切换收尾公共段（_switch_done 工作线程）：音色映射装载+焦点/自动播。"""
-        self.calls.put(self._refresh)
         slots = kbd_auto.load_slots(entry["path"])
         ax_slots = kbd_auto.load_slots(entry["path"], "ax")
         with self._load_lock:       # 写回与 _switch 清空/后台装载同锁原子化
@@ -2103,11 +1493,9 @@ class App:
             self.cur = points.remap_cur(self.pl_keys, old_keys,
                                         self.cur, lib_key)
             self._sync_watch_span()
-            self._refresh()
             self.q.put("定位点保存失败：%s" % e)
             return
         self._persist()
-        self._refresh()
         self.q.put("《%s》定位点已%s"
                    % (song["name"], "启用" if on else "停用，条目已还原整曲"))
 
@@ -2163,7 +1551,6 @@ class App:
         except (OSError, ValueError) as e:
             data2, _ = points.load_points(os.path.dirname(song["path"]))
             self.points[lib_key] = data2          # 回读磁盘：放弃本次变更
-            self._refresh()
             return "保存失败：%s" % e
         if data["enabled"]:
             old = list(self.pl_keys)
@@ -2174,7 +1561,6 @@ class App:
             self.cur = points.remap_cur(old, new, self.cur, lib_key)
             self._sync_watch_span()
         self._persist()
-        self._refresh()
         return None
 
     def span_for(self, key):
@@ -3107,7 +2493,6 @@ class App:
             self.pl_keys = []
             self.cur = None
             self._persist()
-            self._refresh()
             return None
         if op == "setdur":        # 手动写入时长（秒数或 分:秒）
             if points.parse_pt_key(key):
@@ -3120,7 +2505,6 @@ class App:
             self.durations[key] = sec
             self.dur_src[key] = "manual"
             self._persist()
-            self._refresh()
             loaded = (self.pl_keys[self.cur] if self.cur is not None
                       and self.cur < len(self.pl_keys) else None)
             if key == loaded and self.watch is not None:
@@ -3149,7 +2533,6 @@ class App:
                 self._persist()
                 if key == loaded and self.watch is not None:
                     self.watch.set_duration(d, left)
-                self.calls.put(self._refresh)
                 self.q.put("已识别《%s》工程内原时长 %s"
                            % (name, cpr_meta.fmt_mmss(d)))
             threading.Thread(target=run, daemon=True).start()
@@ -3178,7 +2561,6 @@ class App:
                 elif to <= self.cur < frm:
                     self.cur += 1
             self._persist()
-            self._refresh()
             return None
         if op == "add":
             pt = points.parse_pt_key(key)
@@ -3212,7 +2594,6 @@ class App:
             else:
                 return "未知操作"
         self._persist()
-        self._refresh()
         return None
 
     def _auto_play(self):
@@ -3229,70 +2610,6 @@ class App:
             time.sleep(0.5)
         # 回主线程执行：本方法跑在后台线程，_transport 会摸 Tk 状态
         self.calls.put(lambda: self._transport("play"))
-
-    def _set_duration(self):
-        t = self._sel_target()
-        if t is None:
-            self.q.put("先在素材库或播放列表选中一首再写入时长")
-            return
-        _, _, key = t
-        if points.parse_pt_key(key):
-            self.q.put("定位点条目时长由起止点决定，不手填")
-            return
-        raw = self.dur_var.get().strip()
-        if raw in ("自动时长", "未知"):
-            self.q.put("请输入时长：秒数或 分:秒，如 213 或 3:33")
-            return
-        sec = cpr_meta.parse_mmss(raw)
-        if not sec:
-            self.q.put("请输入时长：秒数或 分:秒，如 213 或 3:33")
-            return
-        self.durations[key] = sec
-        self.dur_src[key] = "manual"
-        self._persist()
-        self._refresh()
-        loaded = (self.pl_keys[self.cur] if self.cur is not None
-                  and self.cur < len(self.pl_keys) else None)
-        if key == loaded:
-            if self.watch is not None:  # watch 缺席降级态同 _switch
-                self.watch.set_duration(sec)
-        self.q.put("《%s》手动时长已写为 %s" % (key.split("/")[-1],
-                                                cpr_meta.fmt_mmss(sec)))
-
-    def _redict(self):
-        """重新识别：清手填值，重读工程文件恢复工程内原时长设定
-        （读文件放后台线程——工程库在网络盘时主线程读会无界卡顿）。"""
-        t = self._sel_target()
-        if t is None:
-            self.q.put("先在素材库或播放列表选中一首再识别")
-            return
-        _, _, key = t
-        if points.parse_pt_key(key):
-            self.q.put("定位点条目时长由起止点决定，无需识别")
-            return
-        song = self.by_key.get(key)
-        if song is None:
-            self.q.put("歌单项不在素材库里：%s" % key)
-            return
-        loaded = (self.pl_keys[self.cur] if self.cur is not None
-                  and self.cur < len(self.pl_keys) else None)
-        path, name = song["path"], song["name"]
-
-        def run():
-            d, left = _read_span(path)
-            if not d:
-                self.q.put("《%s》工程内未设循环定位条，无法识别，保留现有值"
-                           % name)
-                return
-            self.durations[key] = d
-            self.dur_src.pop(key, None)     # 回归自动来源
-            self._persist()
-            if key == loaded and self.watch is not None:
-                self.watch.set_duration(d, left)  # watch 缺席降级态同 _switch
-            self.calls.put(self._refresh)
-            self.q.put("已识别《%s》工程内原时长 %s"
-                       % (name, cpr_meta.fmt_mmss(d)))
-        threading.Thread(target=run, daemon=True).start()
 
     def _persist(self):
         # 串行化：并发写会踩同一个临时文件（Windows 上报错或写出交错内容）
@@ -3822,36 +3139,21 @@ class App:
         except Exception:
             pass
 
-    # ---- 主线程轮询：状态 + 日志 + 跨线程调用 ----
-
-    DOT_CELLS = {("vj", "端口状态"), ("vj", "OBS 状态"),
-                 ("vj", "走带跟随"), ("kb", "端口状态")}
-
-    def _set(self, name, text, color=dpi.MUT):
-        # 状态格加圆点：色块先行、文字冗余（色弱友好、远距易辨识）；
-        # 名称/内容格不加，占位符不加（保持列节奏）。
-        # foreground 必须与 style 同写：sv-ttk 下 TLabel 族 style fg 不
-        # 参与绘制（dpi.paint_tree 注），widget 级 fg 是唯一渲染路径
-        if name in self.DOT_CELLS and text not in ("-", "", "—"):
-            text = "● " + text
-        self.rows[name].config(text=text, style=dpi.tone(color) + ".TLabel",
-                               foreground=color)
+    # ---- 主线程轮询：日志 + 跨线程调用 ----
 
     def _on_ui_error(self, exc, val, _tb):
         """Tk 回调异常统一进日志框：noconsole 下无 stderr，不接就"点了没反应"。"""
         self.q.put("界面异常：%s：%s" % (exc.__name__, val))
 
-    def _update_transport_buttons(self):
-        """暂停/继续随走带状态启停（仅工程发时码时状态可知）：
-        播放中禁「继续」（空格会停走带）、停止禁「暂停」（NUM0 会跳回
-        上次起播位置）；未发时码的工程无从判断，两键保持可用。"""
-        live = (self.watch.is_transport_live()
-                if self.sync is not None and self.sync.is_following()
-                and self.watch is not None else None)
-        self.tbtns["继续"].config(state=tk.DISABLED if live is True
-                                  else tk.NORMAL)
-        self.tbtns["暂停"].config(state=tk.DISABLED if live is False
-                                  else tk.NORMAL)
+    def _log_direct(self, msg):
+        """异常兜底直投：不经 self.q（排水链自身故障时再投 q 会自馈），
+        内存环形与文件日志双写。"""
+        try:
+            self.log_ring.append((time.time(), msg, _log_lv(msg)))
+            if _FILE_LOG is not None:
+                _FILE_LOG.put(msg, _log_lv(msg))
+        except Exception:
+            pass
 
     def _run_call(self, fn):
         """执行单个跨线程回调：tag 供看门狗取证；按 BaseException 捕——
@@ -3862,15 +3164,8 @@ class App:
         try:
             fn()
         except BaseException as e:
-            try:
-                self.log.insert("end", time.strftime("[%H:%M:%S] ")
-                                + "动作执行异常（已恢复）：%s: %s"
-                                % (type(e).__name__, _err(e)))
-                self.log.itemconfigure(self.log.size() - 1,
-                                       foreground=dpi.C_ERR)
-                self.log.see("end")
-            except Exception:
-                pass
+            self._log_direct("动作执行异常（已恢复）：%s: %s"
+                             % (type(e).__name__, _err(e)))
         self._hb_tag = ""
 
     def _drain_calls(self):
@@ -3889,8 +3184,7 @@ class App:
                 batch.append(self.calls.get_nowait())
             except queue.Empty:
                 break
-        for fn in stallguard.coalesce(
-                batch, {"_refresh", "_persist_web_remote"}):
+        for fn in stallguard.coalesce(batch, {"_persist_web_remote"}):
             self._run_call(fn)
         self.root.after(50, self._drain_calls)
 
@@ -3905,17 +3199,10 @@ class App:
         try:
             self._tick_body()
         except BaseException as e:
-            # 轮询循环绝不允许死（死一次=状态/队列全部冻结=界面假死）；按
+            # 轮询循环绝不允许死（死一次=状态/队列全部冻结）；按
             # BaseException 捕：SystemExit 在 py3.14 实测会冲出 mainloop
             # 终止进程（report_callback_exception 都不经过），必须就地吞掉
-            try:
-                self.log.insert("end", time.strftime("[%H:%M:%S] ")
-                                + "状态刷新异常（已自动恢复）：%s" % _err(e))
-                self.log.itemconfigure(self.log.size() - 1,
-                                       foreground=dpi.C_ERR)
-                self.log.see("end")
-            except Exception:
-                pass
+            self._log_direct("状态刷新异常（已自动恢复）：%s" % _err(e))
         self._hb_tag = ""
         self.root.after(400, self._tick)
 
@@ -3928,69 +3215,6 @@ class App:
                 self._switch(self.pl_keys.index(k), "排队")
                                             # busy 期间用户点的歌，完成后接续执行
         self._check_goto_ack()
-        if self.vj_hint:
-            # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：查询本身毫秒级，
-            # 但落在主线程且与 midiInOpen/Close 共进程级锁——挂死=主线程陪葬
-            if getattr(self, "_enum_n", 0) <= 0:
-                self._vj_hit = mb._pick(mb._in_devices(), self.vj_hint)
-                self._enum_n = 5
-            self._enum_n -= 1
-            hit = self._vj_hit
-            self._set(("vj", "端口名称"), hit[1] if hit else "未找到",
-                      dpi.C_OK if hit else dpi.C_ERR)
-            self._set(("vj", "端口状态"),
-                      "监听中" if self.port is not None else "未启动",
-                      dpi.C_OK if self.port is not None else dpi.C_ERR)
-        else:
-            self._set(("vj", "端口名称"), "—")
-            self._set(("vj", "端口状态"), "已停用")
-        if self.ctl is None:
-            # 启动中=过渡态用警示黄，只有真实错误文本才红（暗场里「正在
-            # 启动」标红会被误读成故障；与 995 行「未连接」黄同族）
-            self._set(("vj", "OBS 状态"), self.start_err or ui_text.STARTING,
-                      dpi.C_ERR if self.start_err else dpi.C_WARN)
-        else:
-            ok = self.ctl.is_connected()
-            extra = "（%s）" % self.ctl.last_error if self.ctl.last_error else ""
-            self._set(("vj", "OBS 状态"), "已连接" if ok else "未连接" + extra,
-                      dpi.C_OK if ok else dpi.C_WARN)
-        if self.sync is None:
-            self._set(("vj", "走带跟随"), "—")
-        elif not self.sync.is_following():
-            self._set(("vj", "走带跟随"), ui_text.FOLLOW_OFF, dpi.C_WARN)
-        else:
-            vs = self.sync.video_state
-            name = self.sync.current_video
-            text = FOLLOW.get(vs, "?")
-            if name and vs in ("playing", "paused"):
-                text = "%s：%s" % (text, name)
-            self._set(("vj", "走带跟随"), text,
-                      dpi.C_OK if vs == "playing"
-                      else dpi.C_WARN if vs == "paused" else dpi.MUT)
-        if self.kb_port is not None:
-            self._set(("kb", "端口名称"), self.kb_port.name, dpi.C_OK)
-            self._set(("kb", "端口状态"), "监听中", dpi.C_OK)
-        elif not self.kb_hint:
-            self._set(("kb", "端口名称"), "—")
-            self._set(("kb", "端口状态"), "已停用")
-        elif self.kb_err:
-            self._set(("kb", "端口名称"), "未找到", dpi.C_ERR)
-            self._set(("kb", "端口状态"), "未启动", dpi.C_ERR)
-        else:
-            self._set(("kb", "端口名称"), "…", dpi.MUT)
-            self._set(("kb", "端口状态"), ui_text.STARTING, dpi.MUT)
-        cur_key = (self.pl_keys[self.cur] if self.cur is not None
-                   and self.cur < len(self.pl_keys) else None)
-        cur_song = self.by_key.get(cur_key) if cur_key else None
-        if cur_song is None:
-            self.m_map.set(ui_text.MAP_EMPTY, dpi.MUT)
-        else:
-            n = len(self.slots)
-            a = len(self.ax_slots)
-            self.m_map.set("%s：JUNO %d/10 + AX %d/6" % (cur_song["name"], n, a),
-                           dpi.C_OK if n or a else dpi.C_WARN)
-        text, color = self._kb_last
-        self.m_last.set(text, color)
         ped = self.pedal
         if (ped is not None and not ped.muted
                 and ((ped.hint and not ped.connected)
@@ -4006,26 +3230,17 @@ class App:
         if time.monotonic() > self._link_heal_at:
             self._link_heal_at = time.monotonic() + 10
             self._heal_link_ports()
-        self._update_transport_buttons()
         self._tick_banner()
-        follow = self.log.yview()[1] > 0.99    # 上翻看历史时不强行滚回底部
+        # 日志排水（纯数据）：内存环形喂新前端日志页，异步线程落文件日志；
+        # 级别由产生端定级（_log_lv），消费端不重判
         while True:
             try:
                 msg = self.q.get_nowait()
             except queue.Empty:
                 break
-            self.log.insert("end", time.strftime("[%H:%M:%S] ") + msg)
             self.log_ring.append((time.time(), msg, _log_lv(msg)))
             if _FILE_LOG is not None:
                 _FILE_LOG.put(msg, _log_lv(msg))   # 文件日志（异步线程）
-            # 新前端日志级别体系唯一来源（产生端定级，UI 只消费不重判）
-            if msg.startswith("界面异常"):     # 日志整体降噪，异常行才标红
-                self.log.itemconfigure(self.log.size() - 1,
-                                       foreground=dpi.C_ERR)
-        if self.log.size() > LOG_MAX:      # 先裁剪再回底：删头部后 see 才准
-            self.log.delete(0, self.log.size() - LOG_MAX)
-        if follow:
-            self.log.see("end")
 
     def _transport_state(self):
         """走带三态：playing=时码 QF 活跃；paused=收过时码但已断流；
@@ -4066,7 +3281,6 @@ class App:
                     self.watch.set_duration(0, 0.0)  # 秒立即作废——装载 IO 窗
                     #   口（网络盘秒级）内不得拿旧位置参与新工程对位/显示
                 self._adopted_load(k, gen)
-                self._refresh()
                 self.q.put("已跟随手动打开：《%s》" % name)
                 return
         self.cur = None
@@ -4076,7 +3290,6 @@ class App:
         if self.watch is not None:
             self.watch.reset()
             self.watch.set_duration(0, 0.0)   # 游离歌坐标未知：左偏移一并清
-        self._refresh()
         self.q.put("《%s》不在播放列表：不自动推进，NEXT 置空" % name)
 
     def _adopted_load(self, key, gen):
@@ -4118,7 +3331,6 @@ class App:
                 self.slots = slots
                 self.ax_slots = ax
                 self.cur_song_path = path
-            self.calls.put(self._refresh)
         threading.Thread(target=run, daemon=True).start()
 
     def _repoint(self, j, e, why):
@@ -4128,7 +3340,6 @@ class App:
         self.cur = j
         self.watch.set_duration(e["point"]["end"] - e["point"]["start"],
                                 e["point"]["start"])
-        self._refresh()
         if not self.watch.is_transport_live():
             self.q.put("%s：《%s》" % (why, e["display"]))
 
@@ -4191,7 +3402,6 @@ class App:
             if j != self.cur:
                 self.cur = j
                 w.set_duration(0, 0.0)          # 空档：推进暂闭（注③）
-                self._refresh()
                 if not w.is_transport_live():
                     self.q.put("空档对位：《%s》" % e["display"])
                 return True
@@ -4201,7 +3411,6 @@ class App:
         if self.cur is not None:                # ④位置在全部起点之前
             self.cur = None
             w.set_duration(0, 0.0)
-            self._refresh()
             if not w.is_transport_live():
                 self.q.put("位置在《%s》全部定位点之前：指针置空" % name)
             return True
@@ -4321,21 +3530,6 @@ class App:
                                          rem // 60, rem % 60))
         if self.ctrl is not None and not self.ctrl.busy:
             self._banner_keep = (now, color, nxt, remain, frac)
-        self._banner(now, color, nxt, remain)
-        self._progress(frac)
-        # 播放状态指示（移动端 /state 的 tstate 与此同源同语义）
-        if self.ctrl is None:
-            st_t, st_c = ui_text.STARTING, dpi.C_WARN
-        elif self.ctrl.busy:
-            st_t, st_c = "切换中…", dpi.C_WARN
-        else:
-            ts = self._transport_state()
-            st_t = ui_text.FOLLOW[ts]       # 三态词唯一来源（ui_text）
-            st_c = {"playing": dpi.C_OK, "paused": dpi.C_WARN,
-                    "stopped": dpi.MUT}[ts]
-        self.state_lbl.config(text="当前状态：" + st_t,
-                              style=dpi.tone(st_c) + ".TLabel",
-                              foreground=st_c)
         # DAW 进程在场（供 /state 的 dawAlive：崩溃/误关后前端区分
         # 「已暂停」与「DAW 失联」）。枚举有成本，3s 节流（400ms 快照拍
         # 不每次都枚举）
@@ -4348,33 +3542,6 @@ class App:
             except Exception:
                 pass
         self._web_snap = web_remote.build_snapshot(self, has_proj, proj_name)
-
-    def _progress(self, frac):
-        """NOW 下方 4px 进度条：None=隐藏（grid_remove 记住原位）。
-        每 400ms 随 tick 重绘，窗口拉伸后下个 tick 自然跟上。"""
-        if frac is None:
-            self.prog.grid_remove()
-            return
-        self.prog.grid()
-        w = self.prog.winfo_width()
-        if w <= 1:                          # 刚恢复尚未布局：下个 tick 再画
-            return
-        self.prog.delete("all")
-        self.prog.create_rectangle(0, 0, max(2, int(w * frac)),
-                                   self.prog.winfo_height(),
-                                   fill=dpi.C_OK, width=0)
-
-    def _banner(self, now, color, nxt, remain):
-        """顶部 NOW/NEXT 大字横幅（演出第一眼信息）；长歌名跑马灯。"""
-        self.m_now.set(now, color)
-        self.m_next.set(nxt or "（无）", dpi.FG if nxt else dpi.MUT)
-        self.remain_lbl.config(
-            text=remain,
-            style="Warn.TLabel" if remain == "时长未知" else "TLabel",
-            foreground=dpi.C_WARN if remain == "时长未知" else dpi.FG)
-
-
-_MUTEX = None
 
 _MUTEX = None
 

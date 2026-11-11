@@ -526,11 +526,14 @@ def test_rawmidiin_timeout_raises_portnotfound(monkeypatch):
 
 
 def test_winmm_io_thread_wiring():
-    """双 GUI 枚举降频 + kbd_auto 走专线（源码锚）。"""
-    for name in ("setlist_gui.py", "automator_gui.py"):
-        src = _src(name)
-        assert "_enum_n" in src, name               # 枚举降频 ~2s
-        assert 'mb._pick(mb._in_devices(), self.vj_hint)' in src, name
+    """枚举降频 + kbd_auto 走专线（源码锚）。automator 仍在 Tk 主窗轮询
+    winmm（_enum_n 降频）；setlist 旧窗拆骨后 _tick_body 无 winmm 枚举。"""
+    src = _src("automator_gui.py")
+    assert "_enum_n" in src                    # 枚举降频 ~2s
+    assert 'mb._pick(mb._in_devices(), self.vj_hint)' in src
+    src = _src("setlist_gui.py")
+    tick = _slice(src, "def _tick_body", "def _transport_state")
+    assert "mb._in_devices()" not in tick      # 轮询体不再枚举 winmm
     ksrc = _src("kbd_auto.py")
     assert "mb.open_in(tok, self._cb)" in ksrc     # tok=int=winmm 序号
     assert "midi_ble.open_in(tok, on_msg)" in ksrc  # str=BLE 端点 id
@@ -546,7 +549,8 @@ def test_queue_governance_wiring():
         assert "stallguard.BoundedCallQueue(200)" in src, name
         assert "self.calls_urgent = collections.deque()" in src, name
         assert "def urgent(self, fn)" in src, name
-        assert 'stallguard.coalesce(\n                batch' in src, name
+        assert ('stallguard.coalesce(batch, {"_persist_web_remote"})' in src
+                or 'stallguard.coalesce(\n                batch' in src), name
         assert '"_persist_web_remote"}' in src, name
     src = _src("web_remote.py")
     assert "app.urgent(app._panic)" in src           # 全停走紧急通道
@@ -670,9 +674,8 @@ def test_title_load_off_main_thread():
     body = _slice(src, "def _adopt", "def _tick_banner")
     assert "_load_gen" in body
     assert "load_slots(path)" in body
-    redict = _slice(src, "def _redict", "def _persist(self)")
+    redict = _slice(src, 'if op == "redict"', 'if op == "move"')
     assert "threading.Thread(target=run" in redict
-    assert "        d = _read_duration(song[\"path\"])" not in redict
     src = _src("automator_gui.py")
     assert "_title_gen" in src
     assert "def _kbd_sync" in src
@@ -694,13 +697,13 @@ def test_settings_probe_off_marshalled_after():
 
 
 def test_marquee_step_guard():
-    """跑马灯单步异常不再断 after 链（TclError 退场、其余下个 set 重挂）。"""
-    for name in ("setlist_gui.py", "automator_gui.py"):
-        src = _src(name)
-        assert "def _step_body" in src, name
-        body = _slice(src, "def _step(self)", "def _step_body")
-        assert "except tk.TclError" in body, name
-        assert "except Exception" in body, name
+    """跑马灯单步异常不再断 after 链（TclError 退场、其余下个 set 重挂）。
+    跑马灯仅剩 automator 主窗在用（setlist 旧窗已拆）。"""
+    src = _src("automator_gui.py")
+    assert "def _step_body" in src
+    body = _slice(src, "def _step(self)", "def _step_body")
+    assert "except tk.TclError" in body
+    assert "except Exception" in body
 
 
 def test_tick_baseexception_aligned():
@@ -714,7 +717,7 @@ def test_tick_baseexception_aligned():
 def test_pedal_hid_retry_gated():
     """HID 桥泵死亡而 MIDI 口在连时，10s 重试门控也覆盖 HID 通道。"""
     src = _slice(_src("setlist_gui.py"), "ped = self.pedal",
-                 "self._update_transport_buttons")
+                 "self._link_heal_at = time.monotonic() + 10")
     assert "not ped.bridge.running" in src
 
 
