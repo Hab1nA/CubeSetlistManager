@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""报告三/四整改的几何验证（离线渲染，无真服务）：
-1) 同组按钮等宽、文字不裁剪；2) 列表间距>0；3) 截图五窗 PNG 供人工核对。"""
+"""automator 侧窗体几何验证（离线渲染，无真服务；setlist 主窗已拆骨无对象）：
+1) 同组按钮等宽、文字不裁剪；2) 列表间距>0；3) 截图 PNG 供人工核对。"""
 import pathlib
 import struct
 import sys
@@ -16,9 +16,6 @@ import setlist_gui as sg
 sg.dpi.enable()          # 与真机一致：DPI 感知后字体/像素按真实缩放渲染
 
 d = pathlib.Path(tempfile.mkdtemp(prefix="render_"))
-sg._HERE = d
-sg.CONFIG_PATH = d / "config.json"
-sg.PLAYLIST_PATH = d / "playlist.json"
 lib = d / "projects"
 
 
@@ -37,7 +34,6 @@ for t, s, du in (("TeamA", "SongA", 134.4), ("TeamA", "SongB", 240.0),
                  ("TeamD", "Drown out the noise", 200.0)):
     mkcpr(t, s, du)
 
-sg.App._startup = lambda self: None
 root = tk.Tk()
 sg.dpi.apply_theme(root)   # sv-ttk dark+命名 style（与真机 main() 同入口）
 root.geometry("+80+60")
@@ -191,8 +187,7 @@ except Exception as e:
     fails.append("automator 截图失败")
 
 # 截图清单：文件名 → 窗口中文名（人工核对索引）
-manifest = {"main": "setlist主窗",
-            "auto_main": "automator主窗", "auto_settings": "automator设置页"}
+manifest = {"auto_main": "automator主窗", "auto_settings": "automator设置页"}
 pathlib.Path("_render", "manifest.json").write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
     encoding="utf-8")

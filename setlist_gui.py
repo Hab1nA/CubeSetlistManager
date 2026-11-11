@@ -506,8 +506,6 @@ class App:
         self.daw = daw if daw in daw_ctrl.FACTS else "cubase"
         self.facts = daw_ctrl.FACTS[self.daw]
         daw_ctrl.set_active(self.facts)
-        root.title("Cube Setlist Manager" + self.facts["app_suffix"])
-        root.geometry(dpi.scale(root, 980, 840))
         # 最小尺寸不在构造期写死：底栏一行（状态+三组按钮+退出）比任何
         # 预估都宽，写死值窄于内容需求时 grid 会压缩权重列（退出列被压
         # 没）——__init__ 尾按实际需求宽设置
@@ -610,7 +608,7 @@ class App:
         self._kb_warned = set()         # 未配置音色音符的告警去重
         self.kb_err = ""                # 键盘自动化停用原因（监控栏显示）
         self._lib_query = ""        # 编排页搜索词（_lib_view 过滤）
-        self._kb_last = ("待机", dpi.MUT)  # 最近一次音色切换结果（监控栏显示）
+        self._kb_last = "待机"      # 最近一次音色切换结果（web 键盘页显示）
         self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 72-81）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 84-89）
@@ -644,7 +642,6 @@ class App:
         # 退回 widget 句柄本身兜底
         self._main_hwnd = ctypes.windll.user32.GetParent(
             self.root.winfo_id()) or self.root.winfo_id()
-        root.protocol("WM_DELETE_WINDOW", self._on_exit)
         # 主线程停摆黑匣子：心跳由 _tick/_drain_calls 每轮喂，专职守护线程
         # 发现停摆超 3 秒即把现场（正在执行的回调/队列深度）落盘 stall.log——
         # 黑面在用户侧是肉眼，日志侧必须有铁证（局限：卡在按钮 command 等
@@ -1285,11 +1282,10 @@ class App:
         switcher.submit(slot, why=kbd_auto.note_name(d1))
 
     def _on_kb_result(self, desc, err):
-        """ToneSwitcher 线程回调：最近一次音色切换结果（进监控栏，只写属性）。
+        """ToneSwitcher 线程回调：最近一次音色切换结果（只写属性）。
         失败也带动作名（音色描述/移调半音数），否则看不出哪个动作失败。"""
-        self._kb_last = (("%s失败：%s" % (desc, err)) if err
-                         else ("已发送：%s" % desc),
-                         dpi.C_ERR if err else dpi.C_OK)
+        self._kb_last = ("%s失败：%s" % (desc, err)) if err \
+            else ("已发送：%s" % desc)
 
     # ---- 播放列表编排（主线程） ----
 
@@ -2243,7 +2239,7 @@ class App:
                "songKey": loaded,
                "songs": [{"key": s["key"], "team": s["team"],
                           "name": s["name"]} for s in self.songs],
-               "lastResult": self._kb_last[0],
+               "lastResult": self._kb_last,
                "counts": {"juno": len(self.slots),
                           "ax": len(self.ax_slots)}}
         # 端口候选（含同名序号）与四口命中态（✔/❌ 与「第N个」）。
@@ -3448,106 +3444,67 @@ class App:
         return None
 
     def _tick_banner(self):
-        """顶部 NOW/NEXT 横幅：NOW=实际打开的工程（外部手动改工程自动
-        跟随对位播放列表，见 _adopt），右侧与歌名行对齐常显「已播 | 剩余」；
-        暂停保持已播值，未知显黄字。"""
-        now, color, remain, nxt = "…", dpi.MUT, "", ""
-        frac = None                         # None=不显示进度条
-        has_proj = False                    # 同步给网页 /state 快照
-        proj_name = None                    # 工程真实名（网页 NOW/弹窗用）
-        if self.ctrl is None:
-            now, color = ui_text.STARTING, dpi.C_WARN
-        elif self.ctrl.busy:
-            # NOW/NEXT/进度保持切歌前的画面不闪「切换中…」（当前状态标签
-            # 已提示，横幅不再重复）；首次启动即忙没有可保持的，才显示提示
-            has_proj = True
-            keep = getattr(self, "_banner_keep", None)
-            if keep is not None:
-                now, color, nxt, remain, frac = keep
+        """对位引擎与 /state 快照源（400ms 随 tick）：NOW=实际打开的工程
+        （外部手动改工程自动跟随对位播放列表，见 _adopt）；产出快照的
+        hasProj/projName 与 nextIdx，进度/剩余等由 build_snapshot 从业务态
+        独立计算。"""
+        has_proj = False
+        proj_name = None
+        if self.ctrl is not None:
+            if self.ctrl.busy:
+                has_proj = True      # 切歌中=过渡态（busy 标志本身上快照）
             else:
-                now, color = "切换中…", dpi.C_WARN
-        else:
-            ws = daw_ctrl.current_project()
-            has_proj = bool(ws)
-            if not ws:
-                now, color = "（无打开的工程）", dpi.MUT
-            else:
-                name = proj_name = daw_ctrl.project_name_from_title(ws[1])
+                ws = daw_ctrl.current_project()
+                has_proj = bool(ws)
+                if ws:
+                    name = daw_ctrl.project_name_from_title(ws[1])
 
-                def _want():
-                    return (self._resolve_entry(self.pl_keys[self.cur])
-                            if self.cur is not None
-                            and self.cur < len(self.pl_keys) else None)
+                    def _want():
+                        return (self._resolve_entry(self.pl_keys[self.cur])
+                                if self.cur is not None
+                                and self.cur < len(self.pl_keys) else None)
 
-                cur_e = _want()
-                want = cur_e["song_name"] if cur_e else None
-                # 手动跟随：标题变化或与指针漂移（人工在 DAW 开了别的歌、
-                # 播放列表被编辑）→ 按标题对位播放列表（_adopt），采纳后
-                # want 重取；busy 走上面的冻结分支，不会与切歌流程抢跑。
-                if name != self._adopted_name or (want is not None
-                                                  and want != name):
-                    self._adopted_name = name
-                    if want is None or want != name:
-                        self._adopt(name)
-                        cur_e = _want()
-                        want = cur_e["song_name"] if cur_e else None
-                # 定位点显示随位置对位：DAW 位置落在哪个点的区间里，指针
-                # /NEXT/进度就按哪个点算（含位置稳定锚+空档跟随+全部起点
-                # 之前置空，见 _repick_by_position 注）
-                pos = self.watch.position() \
-                    if self.watch is not None else None
-                if pos is not None and self._repick_by_position(name, pos):
                     cur_e = _want()
                     want = cur_e["song_name"] if cur_e else None
-                # 下一首目标（PC 按钮/移动/网页三面单一来源）：指针置空
-                # （位置对位④）时回当前打开工程的首个条目——与 _next 同
-                # 口径；找不到（游离）兜节目单头，与 _next 的回落一致
-                self._next_idx = None
-                if self.pl_keys:
-                    if self.cur is None:
-                        self._next_idx = 0
-                        for i, k in enumerate(self.pl_keys):
-                            e2 = self._resolve_entry(k)
-                            if e2 is not None and e2["song_name"] == name:
-                                self._next_idx = i
-                                break
-                    elif self.cur + 1 < len(self.pl_keys):
-                        self._next_idx = self.cur + 1
-                # NOW 与 NEXT/播放列表同一套名字：指针条目属当前工程且段
-                # 含位置（裸条目/无时码信指针）→「工程 · 点名」；空档=没
-                # 有定位点在播、指针不属本工程 → 裸工程名（不说谎）
-                disp = self._now_entry_display(cur_e, name, pos)
-                now = disp if disp is not None else "%s" % name
-                color = dpi.C_OK
-                proj_name = now     # 网页 NOW/确认弹窗与 PC 横幅同一套名字
-                if want and cur_e:
-                    nk = (self.pl_keys[self.cur + 1]
-                          if self.cur + 1 < len(self.pl_keys) else None)
-                    ne = self._resolve_entry(nk) if nk else None
-                    nxt = ne["display"] if ne else "（末尾）"
-                    if disp is not None:    # 进度/剩余只在段内（或无时码）
-                        if cur_e["point"] is not None:  # 定位点：段区间
-                            p = cur_e["point"]
-                            d = p["end"] - p["start"]
-                        else:
-                            d = self.durations.get(self.pl_keys[self.cur],
-                                                   0.0)
-                        played = max(0.0, self.watch.played()
-                                     if self.watch is not None else 0.0)
-                        if not d:
-                            # 时长未知也可显已播（时码位置在，定位条没读到）
-                            remain = ("%d:%02d | 时长未知"
-                                      % (int(played) // 60, int(played) % 60)
-                                      if played > 0 else "时长未知")
-                        else:
-                            played = min(d, played)
-                            frac = min(1.0, played / d)
-                            rem = max(0, int(d - played))
-                            remain = ("%d:%02d | %d:%02d"
-                                      % (int(played) // 60, int(played) % 60,
-                                         rem // 60, rem % 60))
-        if self.ctrl is not None and not self.ctrl.busy:
-            self._banner_keep = (now, color, nxt, remain, frac)
+                    # 手动跟随：标题变化或与指针漂移（人工在 DAW 开了别的
+                    # 歌、播放列表被编辑）→ 按标题对位播放列表（_adopt），
+                    # 采纳后 want 重取；busy 走上面的过渡分支，不与切歌
+                    # 流程抢跑。
+                    if name != self._adopted_name or (want is not None
+                                                      and want != name):
+                        self._adopted_name = name
+                        if want is None or want != name:
+                            self._adopt(name)
+                            cur_e = _want()
+                            want = cur_e["song_name"] if cur_e else None
+                    # 定位点随位置对位：DAW 位置落在哪个点的区间里，指针
+                    # /NEXT 就按哪个点算（含位置稳定锚+空档跟随+全部起点
+                    # 之前置空，见 _repick_by_position 注）
+                    pos = self.watch.position() \
+                        if self.watch is not None else None
+                    if pos is not None and self._repick_by_position(name, pos):
+                        cur_e = _want()
+                        want = cur_e["song_name"] if cur_e else None
+                    # 下一首目标（PC 按钮/移动/网页三面单一来源）：指针置空
+                    # （位置对位④）时回当前打开工程的首个条目——与 _next 同
+                    # 口径；找不到（游离）兜节目单头，与 _next 的回落一致
+                    self._next_idx = None
+                    if self.pl_keys:
+                        if self.cur is None:
+                            self._next_idx = 0
+                            for i, k in enumerate(self.pl_keys):
+                                e2 = self._resolve_entry(k)
+                                if e2 is not None \
+                                        and e2["song_name"] == name:
+                                    self._next_idx = i
+                                    break
+                        elif self.cur + 1 < len(self.pl_keys):
+                            self._next_idx = self.cur + 1
+                    # NOW 与 NEXT/播放列表同一套名字：指针条目属当前工程且
+                    # 段含位置（裸条目/无时码信指针）→「工程 · 点名」；空档
+                    # =没有定位点在播、指针不属本工程 → 裸工程名（不说谎）
+                    disp = self._now_entry_display(cur_e, name, pos)
+                    proj_name = disp if disp is not None else name
         # DAW 进程在场（供 /state 的 dawAlive：崩溃/误关后前端区分
         # 「已暂停」与「DAW 失联」）。枚举有成本，3s 节流（400ms 快照拍
         # 不每次都枚举）

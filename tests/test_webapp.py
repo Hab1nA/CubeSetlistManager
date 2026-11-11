@@ -768,7 +768,7 @@ def test_kbd_record_and_get_shape():
     fake = types.SimpleNamespace(
         jcfg=dict(kbd_auto.DEFAULT_JUNO), axcfg=dict(kbd_auto.DEFAULT_AX),
         juno_shift=0, ax_shift=0, cur_song_path=None, by_key={}, songs=[],
-        slots={}, ax_slots={}, _kb_last=("待机", None), _kbd_cap=None)
+        slots={}, ax_slots={}, _kb_last="待机", _kbd_cap=None)
     fake.jcfg["inHint"] = "不存在的测试口XYZ"   # 确定性：端口必不在场
     fake._kbd_song_key = lambda: None
     # 启动（端口不存在→报错）；停止（无会话→幂等）
@@ -790,6 +790,15 @@ def test_kbd_record_and_get_shape():
         assert k in out, k
     assert set(out["ports"]) == {"in", "out"}
     assert set(out["portStatus"]) == {"junoIn", "junoOut", "axIn", "axOut"}
+    # pt: 间接 key（播放列表定位点条目）不属素材库：空壳编辑面不装载
+    # ——web 键盘页从素材库选曲，pt: 解析职责已随旧 Tk kbd 窗移除
+    fake.by_key = {"A/歌一": {"name": "歌一", "path": "/p/a.cpr",
+                              "team": "A", "key": "A/歌一"}}
+    out = sg.App._kbd_get_web(fake, song_key="pt:A#1")
+    assert out["editSong"] == {"key": None, "loading": False,
+                               "slots": {}, "axSlots": {}}
+    out = sg.App._kbd_get_web(fake, song_key="A/歌一")
+    assert out["editSong"]["key"] == "A/歌一" and out["editSong"]["loading"]
 
 
 def test_snapshot_vj_block():
