@@ -194,6 +194,8 @@ cd ios/CubeRemoteCore && swift test
     其它设备无法再向手机伪造翻页。
 - `webRemote.hosts` 可加额外可信 Host（默认只认 IP 字面量 / localhost，
   防 DNS 重绑定）。
+- 令牌与 Host 经设置链（`/settings`、桌面设置页热应用）修改即刻生效、
+  不重建服务不断连接；直接改 config.json 仍需重启程序。
 - **已知折衷**：`/pedal/event` 与 `/diag` 对令牌豁免，以兼容未升级的
   Android 客户端；它们仍受「私网来源 + 频率限制 + seq 去重」保护。
   在不可信网络里请把 `authToken` 设上，并尽量只在可信 Wi-Fi / 电脑热点使用。

@@ -25,6 +25,11 @@
 
 ### 修复
 
+- **配对令牌/Host 热生效**：`WebRemote.auth_token` 收敛为属性唯一写口（赋值
+  即同步 `/turn` 推送镜像），HTTP 门改经活取回调逐请求读现值（沿 tasker_port
+  活引用惯例）——设置链（`/settings` 白名单纳入 authToken/hosts、桌面热应用
+  传参补全）改令牌即刻生效不重建服务；纯门参数变更 `apply()` 免整套重建。
+  此前改令牌只改了 WebRemote 一层，运行中的服务仍用构造时快照，需重启才生效。
 - **iOS 踏板输入回环**（PR 复审）：踏板监听接入了本 App 自己的 CoreMIDI 虚拟源，
   每次电脑翻页推送的 note on/off 会被当成踏板事件转发回电脑执行误动作——
   虚拟源记录 uniqueID、输入端按其排除。

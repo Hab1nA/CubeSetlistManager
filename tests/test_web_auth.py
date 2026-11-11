@@ -157,3 +157,37 @@ def test_turn_body_carries_token():
         {"dir": "prev", "test": 1, "t": "s"}
     # 镜像默认值：模块级 _turn_token 未配置=空
     assert json.loads(wr._turn_body("next", False)) == {"dir": "next"}
+
+
+def test_webremote_auth_hot_everywhere():
+    """令牌热生效的三件套：auth_token 属性是唯一写口（构造/apply/直接赋值
+    都过 setter），_turn_token 推送镜像随赋值即热，HTTP 门经 _auth_snapshot
+    逐请求活取。"""
+    wr = _server_module()
+    web = wr.WebRemote(_App(), {"authToken": "a1"})
+    try:
+        assert wr._turn_token == "a1"              # 构造即入镜像
+        assert web._auth_snapshot() == ((), "a1")
+        web.auth_token = "b2"
+        web.allowed_hosts = ("cube.lan",)
+        assert wr._turn_token == "b2"              # 推送体已切到新令牌
+        assert json.loads(wr._turn_body("next", False))["t"] == "b2"
+        assert web._auth_snapshot() == (("cube.lan",), "b2")  # 门同步活取
+    finally:
+        web.auth_token = ""                        # 还原模块级镜像
+
+
+def test_apply_auth_only_skips_rebuild():
+    """纯门参数变更（authToken/hosts）在服务在跑时不触发整套重建；其余
+    字段照旧走 rebuild。"""
+    wr = _server_module()
+    web = wr.WebRemote(_App(), {})
+    rebuilt = []
+    web._rebuild = lambda: rebuilt.append(1)
+    web.server = object()          # 哨兵：apply 只判服务存在与否
+    web.apply(authToken="x", hosts=("h.lan",))
+    assert rebuilt == []
+    assert wr._turn_token == "x"
+    web.apply(enabled=True)        # 非纯门参数 → 照常重建
+    assert rebuilt == [1]
+    web.auth_token = ""

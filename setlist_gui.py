@@ -2462,6 +2462,10 @@ class App:
             web_fields["mode"] = web_in.get("mode")
         if "ip" in web_in:
             web_fields["ip"] = str(web_in.get("ip") or "")
+        if "authToken" in web_in:
+            web_fields["authToken"] = str(web_in.get("authToken") or "")
+        if "hosts" in web_in:
+            web_fields["hosts"] = [str(h) for h in web_in.get("hosts") or []]
         web_changed = any(self.web_cfg.get(k) != v
                           for k, v in web_fields.items())
         # 端口互异：Windows SO_REUSEADDR 允许对活动端口二次 bind（两服务
@@ -3828,7 +3832,9 @@ class App:
                                taskerPort=wc.get("taskerPort"),
                                midiIn=str(wc.get("midiIn") or ""),
                                mode=wc.get("mode"),
-                               ip=str(wc.get("ip") or ""))
+                               ip=str(wc.get("ip") or ""),
+                               authToken=str(wc.get("authToken") or ""),
+                               hosts=tuple(wc.get("hosts") or ()))
             except Exception as e:
                 self.q.put("移动端遥控应用失败：%s" % _err(e))
 

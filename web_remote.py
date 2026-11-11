@@ -173,9 +173,10 @@ def _push_post(ip, port, body):
             return _err(e)
 
 
-# /turn 推送携带的配对令牌（webRemote.authToken 的镜像，WebRemote 起
-# 服务时刷新）：设备端监听口（iOS TurnHTTPServer）据此拒绝 LAN 任意主机
-# 的伪造翻页；未配置=空串=不携带（设备端也不校验，与旧安卓端兼容）。
+# /turn 推送携带的配对令牌（webRemote.authToken 的镜像，由 WebRemote
+# .auth_token setter 维护——赋值即热）：设备端监听口（iOS TurnHTTPServer）
+# 据此拒绝 LAN 任意主机的伪造翻页；未配置=空串=不携带（设备端也不校验，
+# 与旧安卓端兼容）。
 _turn_token = ""
 
 
@@ -208,8 +209,7 @@ def push_turn(dev, dir_, tasker_port, test=False):
         name, dir_, int((time.monotonic() - t0) * 1000))
 
 
-def _bind_web(app, registry, tport, ip, port, page, report=None,
-              allowed_hosts=(), auth_token=""):
+def _bind_web(app, registry, tport, ip, port, page, report=None, auth=None):
     """热点刚（重）开时适配器 IPv4 可能尚未就位（PowerShell 拿到 IP 早于
     系统完成地址配置/DAD），立刻 bind 报 WinError 10049：限期重试兜底。
     地址配置通常 1–3 秒完成——只报一次等待，不逐次刷屏。"""
@@ -218,8 +218,7 @@ def _bind_web(app, registry, tport, ip, port, page, report=None,
     while True:
         try:
             return WebServer((ip, port), app, registry, tport, page=page,
-                             allowed_hosts=allowed_hosts,
-                             auth_token=auth_token)
+                             auth=auth)
         except OSError as e:
             if time.monotonic() >= deadline:
                 raise
@@ -1502,13 +1501,21 @@ class WebServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, addr, app, registry, tasker_port, page=PAGE_BROWSER,
-                 allowed_hosts=(), auth_token=""):
+                 allowed_hosts=(), auth_token="", auth=None):
         self.app = app
         self.registry = registry
         self.tasker_port = tasker_port      # 函数：取当前翻谱接收端口
         self.page = page
-        self.allowed_hosts = tuple(allowed_hosts or ())
-        self.auth_token = str(auth_token or "")
+        # 门参数活取（与 tasker_port 同款惯例）：WebRemote 传 auth 回调，
+        # 改 authToken/hosts 即刻生效、不重建服务；直构服务（测试/探针）
+        # 落到构造快照兜底。回调返回 (allowed_hosts, auth_token)。
+        if auth is None:
+            hosts = tuple(allowed_hosts or ())
+            token = str(auth_token or "")
+
+            def auth():
+                return hosts, token
+        self.auth = auth
         super().__init__(addr, _Handler)
 
     def handle_error(self, request, client_address):
@@ -1540,10 +1547,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._cookie = None
         provided = web_auth.extract_token(
             self.headers, urllib.parse.urlsplit(self.path).query)
+        allowed_hosts, auth_token = self.server.auth()
         verdict = web_auth.check_request(
             self.headers.get("Host"),
-            getattr(self.server, "allowed_hosts", ()),
-            getattr(self.server, "auth_token", ""),
+            allowed_hosts,
+            auth_token,
             self.client_address[0], path, provided)
         if verdict == "ok":
             return True
@@ -1557,7 +1565,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _cookie_from_query(self):
         """页面 URL 带 ?t=<token> 时种 HttpOnly Cookie，后续 fetch 自动带。"""
-        token = getattr(self.server, "auth_token", "")
+        token = self.server.auth()[1]
         if not token:
             return
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -2327,6 +2335,25 @@ class WebRemote:
         self.hotspot_owner = False       # 热点是否本程序开的（退出时决定关不关）
         self._lock = threading.Lock()
 
+    _auth_token = ""
+
+    @property
+    def auth_token(self):
+        """配对令牌（唯一写口=本属性）：setter 同步 _turn_token 镜像，
+        /turn 推送体与 HTTP 门随改随热。"""
+        return self._auth_token
+
+    @auth_token.setter
+    def auth_token(self, value):
+        self._auth_token = str(value or "")
+        global _turn_token
+        _turn_token = self._auth_token
+
+    def _auth_snapshot(self):
+        """HTTP 门参数活取（服务持有本回调，逐请求读现值——与
+        tasker_port 活引用同惯例，改令牌不重建服务不断连接）。"""
+        return self.allowed_hosts, self.auth_token
+
     def _report(self, msg):
         self.app.q.put(msg)
 
@@ -2343,6 +2370,12 @@ class WebRemote:
             for k, v in fields.items():
                 if v is not None and k in _ATTR:
                     setattr(self, _ATTR[k], v)
+            # 纯门参数变更走活引用已即时生效，服务在跑就免整套重建
+            # （令牌轮换不断连接、不触发热点 PS 探测）
+            if (fields and set(fields) <= {"authToken", "hosts"}
+                    and (self.server is not None
+                         or self.app_server is not None)):
+                return
             self._rebuild()
 
     def shutdown(self):
@@ -2419,8 +2452,6 @@ class WebRemote:
                      else "热点关闭失败：%s" % r.get("err"))
 
     def _start_server(self, ip):
-        global _turn_token
-        _turn_token = self.auth_token        # /turn 推送体与监听口同源令牌
         page_web, page_app = ((PAGE_LITE_BROWSER, PAGE_LITE_APP)
                               if getattr(self.app, "lite", False)
                               else (PAGE_BROWSER, PAGE_APP))
@@ -2429,8 +2460,7 @@ class WebRemote:
                                     lambda: self.tasker_port, ip,
                                     self.server_port, page_web,
                                     self._report,
-                                    allowed_hosts=self.allowed_hosts,
-                                    auth_token=self.auth_token)
+                                    auth=self._auth_snapshot)
         except OSError as e:
             self._report("网页服务在 %s:%d 启动失败：%s"
                          % (ip, self.server_port, _err(e)))
@@ -2445,8 +2475,7 @@ class WebRemote:
             self.app_server = _bind_web(self.app, self.registry,
                                         lambda: self.tasker_port, ip,
                                         self.app_port, page_app, self._report,
-                                        allowed_hosts=self.allowed_hosts,
-                                        auth_token=self.auth_token)
+                                        auth=self._auth_snapshot)
         except OSError as e:
             self._report("APP 页面服务在 %s:%d 启动失败：%s"
                          % (ip, self.app_port, _err(e)))
