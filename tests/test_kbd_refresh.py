@@ -11,19 +11,20 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import automator_gui as ag  # noqa: E402  窗体类已迁 Automator 产品线
 import kbd_auto  # noqa: E402
 import midi_ble  # noqa: E402
 
 
 def _src():
-    return (ROOT / "kbd_auto.py").read_text(encoding="utf-8")
+    return (ROOT / "automator_gui.py").read_text(encoding="utf-8")
 
 
 class _StubWin:
     """离线窗壳：只装 _poll_ports/_refresh_page 碰到的件，其余录调用。"""
 
     # 类体内直接赋函数会变实例方法（self 多占一位），staticmethod 裹回
-    _side_line = staticmethod(kbd_auto.KeyboardAutoWindow._side_line)
+    _side_line = staticmethod(ag.KeyboardAutoWindow._side_line)
 
     def __init__(self):
         class App:
@@ -56,7 +57,7 @@ def test_refresh_page_wires_invalidate(monkeypatch):
     monkeypatch.setattr(kbd_auto.midi_ble, "invalidate",
                         lambda: calls.append(1))
     w = _StubWin()
-    kbd_auto.KeyboardAutoWindow._refresh_page(w)
+    ag.KeyboardAutoWindow._refresh_page(w)
     assert calls == [1]          # 不再是纯读缓存的假刷新
     assert w.rebuilt == ["juno"]
     assert w.polled == 1
@@ -79,7 +80,7 @@ def test_poll_ports_rebuilds_menu_only_on_change(monkeypatch):
         def _port_row(self, key, text, ok):
             pass
     w = W()
-    poll = kbd_auto.KeyboardAutoWindow._poll_ports
+    poll = ag.KeyboardAutoWindow._poll_ports
     poll(w)
     assert w.rebuilt == ["juno", "ax"]       # 首拍建基线
     poll(w)

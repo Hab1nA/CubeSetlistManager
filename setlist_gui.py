@@ -727,7 +727,7 @@ class App:
         self.mtc = None                 # 时码解码器（启动线程构造，_watch 读计数）
         self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
         self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
-        self.switcher = self.ax_switcher = self.kb_port = self.kbd_win = None
+        self.switcher = self.ax_switcher = self.kb_port = None
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
         self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
         self.points = {}                # lib_key → 定位点数据（_load_songs 装载）
@@ -997,8 +997,6 @@ class App:
         self.btn_panic.pack(side="left", padx=(10, 3), pady=3)
         g3 = ttk.LabelFrame(mid, text="自动化")
         g3.pack(side="left")
-        ttk.Button(g3, text="键盘自动化", width=9,
-                   command=self._open_kbd).pack(side="left", padx=3, pady=3)
         dpi.setup_window(self.root)
         self.root.attributes("-topmost", self.top_most)
         # 长歌名滚动：横幅 NOW/NEXT、配置目标、音色映射、最近切换
@@ -2931,7 +2929,7 @@ class App:
         return out
 
     def _kbd_record_web(self, inst, stop=False):
-        """录制（琴上捕获）：镜像 KeyboardAutoWindow 录制半程——开该琴
+        """录制（琴上捕获）：
         输入口持续跟踪最近一次 BS/PC；stop 关口保留最后捕获值。"""
         cap_old = getattr(self, "_kbd_cap", None)
         if cap_old is not None:
@@ -3823,23 +3821,6 @@ class App:
                 self.web.shutdown()
         except Exception:
             pass
-
-    def _open_kbd(self):
-        t = self._sel_target()
-        key = t[2] if t else (self.pl_keys[self.cur]
-                              if self.cur is not None
-                              and self.cur < len(self.pl_keys) else None)
-        song = None
-        if key:      # pt: 条目按宿主工程解析（映射槽本就按工程路径装载）
-            pt = points.parse_pt_key(key)
-            song = self.by_key.get(pt[0] if pt else key)
-        if song is None:
-            self.q.put("先在素材库或播放列表选中一首再配置键盘自动化")
-            return
-        if self.kbd_win is None or not self.kbd_win.winfo_exists():
-            self.kbd_win = kbd_auto.KeyboardAutoWindow(self)
-        self.kbd_win.set_song(song)          # 初开与再点统一：绑定所选曲
-        self.kbd_win.lift()
 
     # ---- 主线程轮询：状态 + 日志 + 跨线程调用 ----
 

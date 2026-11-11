@@ -563,26 +563,3 @@ def test_sync_watch_span_reanchors_after_edit(monkeypatch):
     app.pl_keys = ["A"]
     setlist_gui.App._sync_watch_span(app)
     assert len(app.watch.durs) == 2
-
-
-def test_open_kbd_resolves_point_entry(monkeypatch):
-    """键盘自动化窗能从 pt: 条目解析宿主工程（映射槽按工程路径装载）。"""
-    app, _ = _play_app(monkeypatch)
-    real_set = {}
-
-    class _W:
-        def winfo_exists(self):
-            return True
-
-        def set_song(self, song):
-            real_set["song"] = song
-
-        def lift(self):
-            pass
-
-    app.kbd_win = None
-    app._sel_target = lambda: (None, None, "pt:A#1")
-    monkeypatch.setattr(setlist_gui.kbd_auto, "KeyboardAutoWindow",
-                        lambda self: _W())
-    setlist_gui.App._open_kbd(app)
-    assert real_set["song"] == {"name": "工程A", "path": "/pA"}

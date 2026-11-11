@@ -938,8 +938,9 @@ def test_pedal_window_page_mute():
 
 def test_kbd_window_io_off_main_thread():
     """键盘自动化窗口的映射装载/落盘出主线程（网络盘部署下的停摆残留，
-    复审 R3 全量 ISSUE-1）：set_song 后台装载+代际守卫、保存走后台。"""
-    src = _src("kbd_auto.py")
+    复审 R3 全量 ISSUE-1）：set_song 后台装载+代际守卫、保存走后台。
+    窗体类已迁 automator_gui（setlist 侧入口删除），锚随迁。"""
+    src = _src("automator_gui.py")
     body = _slice(src, "def set_song", "def _refresh(self, note)")
     assert "threading.Thread(target=run" in body
     assert "_song_gen" in body
