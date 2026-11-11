@@ -101,12 +101,14 @@ def test_handler_dead_connection_timeout():
 
 def test_regain_focus_prefetched_hwnd():
     """winfo_id() 从 worker 调用会被 threaded Tcl 封送回主线程阻塞等待
-    （主线程停摆=整批 worker 挂起的放大器）。"""
+    （主线程停摆=整批 worker 挂起的放大器）。_regain_focus 旧 Tk 聚焦
+    分支已随 webui_mode 死模式皮移除（仅剩纯 Win32 枚举路径）；
+    _main_hwnd 仍预取供停摆探针用。"""
     src = _src("setlist_gui.py")
     assert "self._main_hwnd = ctypes.windll.user32.GetParent(" in src
     body = _slice(src, "def _regain_focus", "def _transport_thread")
     assert "self.root.winfo_id()" not in body      # 旧跨线程 Tk 调用不回归
-    assert "self._main_hwnd" in body
+    assert "_visible_own_window()" in body
 
 
 # ---- 修复6：主线程停摆黑匣子（stallguard） ----

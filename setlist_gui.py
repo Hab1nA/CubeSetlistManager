@@ -25,7 +25,7 @@ import subprocess
 import sys
 import threading
 import time
-from tkinter import messagebox, filedialog
+from tkinter import filedialog
 
 import advance
 import cpr_meta
@@ -666,22 +666,12 @@ class App:
         root.after(400, self._tick)
         root.after(50, self._drain_calls)
 
-    # ---- 界面 ----
+    # ---- 退出与收尾 ----
 
     def _on_exit(self):
-        """退出确认（busy 时文案含中断警示，恰弹一层）→ 关 MIDI 口/停后台线程。
-        webui_mode（pywebview 壳）跳过 Tk 弹窗：前端侧栏退出钮已两段式确认，
-        Tk 对话框跨窗口会沉底/触发 stallguard 误报（红队遗留）。"""
-        if getattr(self, "webui_mode", False):
-            ok = True
-        elif self.ctrl is not None and self.ctrl.busy:
-            ok = messagebox.askyesno(
-                "退出", "正在切换工程，退出会中断切换流程。确定退出？")
-        else:
-            ok = messagebox.askyesno(
-                "退出", "确定退出 Cube Setlist Manager？")
-        if not ok:
-            return
+        """退出收尾 → 关 MIDI 口/停后台线程。退出确认由前端侧栏退出钮
+        两段式承担（Tk 对话框跨窗口会沉底/触发 stallguard 误报，红队
+        遗留教训，随旧前端一并移除）。"""
         self._stall_wd.stop()       # 退出期心跳冻结不算停摆（假条目噪声）
         self._stack_sent.stop()     # 同理断掉栈哨兵计时窗
         self._stall_probe.stop()
@@ -1654,10 +1644,9 @@ class App:
     def _pickdir_web(self):
         """/pickdir：原生目录选择对话框（Tk 主线程执行；空串=取消）。"""
         try:
-            # webui 模式 Tk 主窗全程 withdraw：对话框挂它名下会跟着沉底
-            # （弹了也看不见）——无父对话框独立居中置前
-            parent = None if getattr(self, "webui_mode", False) else self.root
-            path = filedialog.askdirectory(parent=parent, title="选择目录")
+            # Tk 主窗全程 withdraw：对话框挂它名下会跟着沉底（弹了也看
+            # 不见）——无父对话框独立居中置前
+            path = filedialog.askdirectory(parent=None, title="选择目录")
         except Exception as e:
             return {"error": _err(e)}
         return {"path": os.path.normpath(path) if path else ""}
@@ -1665,9 +1654,7 @@ class App:
     def _pickfile_web(self):
         """/pickdir kind=file：原生文件选择对话框（如 Cubase 程序）。"""
         try:
-            parent = None if getattr(self, "webui_mode", False) else self.root
-            path = filedialog.askopenfilename(parent=parent,
-                                              title="选择程序")
+            path = filedialog.askopenfilename(parent=None, title="选择程序")
         except Exception as e:
             return {"error": _err(e)}
         return {"path": os.path.normpath(path) if path else ""}
@@ -2976,17 +2963,12 @@ class App:
         不保焦点——外部事件（单实例转交等）把 Cubase 顶到前台后，若不
         收回，用户接着打字会打进 Cubase（空格=停走带）。走带/全停/切歌
         已由 daw_ctrl 按「还原操作前前台」收口，本方法只管这类外部激活。
-        Tk 模式 hwnd 构造期主线程预取（工作线程直接调 winfo_id() 会被
-        threaded Tcl 封送回主线程事件循环阻塞等待）；WebUI 模式 Tk 根
-        全程隐藏、直接聚焦必失败——枚举本进程可见顶层窗（=pywebview
+        Tk 根全程隐藏、直接聚焦必失败——枚举本进程可见顶层窗（=pywebview
         主窗）代之。"""
         try:
-            if getattr(self, "webui_mode", False):
-                hwnd = self._visible_own_window()
-                if hwnd:
-                    daw_ctrl.focus(hwnd, tries=2)
-            elif self._main_hwnd:
-                daw_ctrl.focus(self._main_hwnd, tries=2)
+            hwnd = self._visible_own_window()
+            if hwnd:
+                daw_ctrl.focus(hwnd, tries=2)
         except Exception:
             pass
 
