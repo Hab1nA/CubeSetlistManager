@@ -496,10 +496,8 @@ def test_clock_port():
     src_auto = open(pathlib.Path(__file__).resolve().parents[1]
                     / "automator_gui.py", encoding="utf-8").read()
     for src in (src_set, src_auto):
-        # hint 读取 + 持久化 + 热切换 + 设置页行
+        # hint 读取 + 持久化 + 热切换
         assert 'cfg.get("clockPortHint")' in src
-        assert '"clockPortHint": ck' in src
-        assert 'menu_row("时码端口名称"' in src
         assert "self.clock_port = mb.MidiIn(" in src
         assert "self.sync.reset()" in src            # 换口走带基线复位
         # MTC 接线：解码器分髮（QF 活跃/位置/全帧三路），不直连 on_clock
@@ -507,6 +505,11 @@ def test_clock_port():
         assert "on_mtc=self.mtc.feed, on_f8=self.mtc.note_f8" in src
         assert "on_sysex=self.mtc.full_frame" in src
         assert "on_clock=lambda" not in src          # 旧脉冲直连已根除
+    # 持久化/设置页行：setlist 旧 Tk 设置窗已删，web 路径逐键落 flags；
+    # automator 保留 Tk 设置窗（字典字面量 + menu_row）
+    assert 'flags["clockPortHint"] = ck' in src_set
+    assert '"clockPortHint": ck' in src_auto
+    assert 'menu_row("时码端口名称"' in src_auto
     for f in ("config.example.json",):
         cfg = json.load(open(pathlib.Path(__file__).resolve().parents[1] / f,
                              encoding="utf-8"))

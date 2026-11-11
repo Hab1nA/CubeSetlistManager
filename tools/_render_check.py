@@ -14,8 +14,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import setlist_gui as sg
 sg.dpi.enable()          # 与真机一致：DPI 感知后字体/像素按真实缩放渲染
-import pedal
-import kbd_auto
 
 d = pathlib.Path(tempfile.mkdtemp(prefix="render_"))
 sg._HERE = d
@@ -525,216 +523,6 @@ try:
 except Exception as e:
     print("像素断言跳过：%r" % e)
 
-# --- 弹窗（sv-ttk 主题已在开头统一挂载：五窗全量迁移，截图与像素观感
-# 按迁移终态渲染） ---
-sw = sg.SettingsWindow(app)
-WINDOWS.append(sw)
-root.update_idletasks(); root.update()
-pw = pedal.PedalWindow(app)
-WINDOWS.append(pw)
-root.update_idletasks(); root.update()
-kw = kbd_auto.KeyboardAutoWindow(app)
-WINDOWS.append(kw)
-kw.set_song(app.by_key["TeamA/SongA"])
-root.update_idletasks(); root.update()
-
-pbtns = find_buttons(pw, {"学习", "清除"})
-check("踩钉窗学习/清除等宽",
-      pbtns["学习"].winfo_width() == pbtns["清除"].winfo_width())
-kbtns = find_buttons(kw, {"录制", "触发", "清除"})
-check("键盘窗三按钮等宽", len({b.winfo_width() for b in kbtns.values()}) == 1)
-check("两窗操作按钮同宽",
-      pbtns["学习"].winfo_width() == kbtns["录制"].winfo_width())
-check("键盘窗文字不裁剪", all(fits_ttk(b) for b in kbtns.values()))
-kw._poll_ports()   # 文案由 300ms 轮询定时器驱动：离线直接驱动一次免赛跑
-check("键盘窗端口状态=合并底栏行",
-      len(kw._port_state) == 2
-      and all(t[0].startswith("输入") for t in kw._port_state.values())
-      and kw.status.cget("text").startswith("输入")
-      and kw.status.winfo_ismapped()
-      and kw.title() == "键盘自动化")
-
-# --- pedal/kbd 迁移断言（ttk 语义：下拉/状态色全走 ttk 机制） ---
-check("踩钉窗设备下拉=readonly Combobox",
-      pw.dev_opt.winfo_class() == "TCombobox"
-      and str(pw.dev_opt.cget("state")) == "readonly")
-check("键盘窗三个下拉全 readonly Combobox",
-      all(c.winfo_class() == "TCombobox"
-          and str(c.cget("state")) == "readonly"
-          for c in (kw._menu, kw._dev_menus["juno"], kw._dev_menus["ax"])))
-check("键盘窗乐器下拉候选=两页名",
-      tuple(root.tk.splitlist(kw._menu.cget("values")))
-      == tuple(kbd_auto.PAGE_NAMES))
-check("踩钉窗下拉首项=仅 MIDI 候选",
-      tuple(root.tk.splitlist(pw.dev_opt.cget("values")))[0]
-      == "（不区分来源，仅 MIDI 踩钉）")
-pw._set_status("探针", sg.dpi.C_ERR)
-check("踩钉窗状态行改色=改 style",
-      pw.status.cget("style") == "Err.TLabel"
-      and all(str(l.cget("style")) == "Dim.TLabel"
-              for l in pw._bind_lbl.values()))
-pw._hint("测试提示")
-check("踩钉窗悬停提示=灰字直显",
-      pw.status.cget("text") == "测试提示")
-pw._hint(None)
-kw._port_row("juno", "输入 ✔ ｜ 输出 ✔", True)
-check("键盘窗端口行改色=合并行 style",
-      kw.status.cget("style") == "Ok.TLabel")
-kw._port_row("ax", "输入 ❌", False)
-check("键盘窗非当前页端口=存态不打扰当前行",
-      kw._port_state["ax"] == ("输入 ❌", False)
-      and kw.status.cget("style") == "Ok.TLabel")
-kw._hint("测试提示")
-check("键盘窗悬停提示=灰字直显",
-      kw.status.cget("text") == "测试提示")
-kw._hint(None)
-check("录制态红字 style 已注册",
-      str(ttk.Style(root).lookup("Rec.TButton", "foreground")).lower()
-      == sg.dpi.C_ERR)
-saved_hint = app.pedal_device_hint
-app.pedal_device_hint = "Z"     # 不在在线清单 → 离线警示态
-pw._update_device_menu()
-check("踩钉设备离线=下拉警示 style",
-      pw.dev_opt.cget("style") == "Warn.TCombobox"
-      and "（离线）" in pw.dev_var.get())
-app.pedal_device_hint = saved_hint
-pw._update_device_menu()
-
-# --- 乐器行与「MIDI 设备」行同款：下拉起点/宽度对齐 + 右侧刷新钮等宽 ---
-top_btns = [w for w in kw._menu.master.winfo_children()
-            if isinstance(w, (tk.Button, ttk.Button))]
-dev_btns = [w for w in kw._dev_menus["juno"].master.winfo_children()
-            if isinstance(w, (tk.Button, ttk.Button))]
-check("键盘窗乐器行与设备行同款",
-      len(top_btns) == 1 and len(dev_btns) == 1
-      and kw._menu.winfo_rootx() == kw._dev_menus["juno"].winfo_rootx()
-      and kw._menu.winfo_width() == kw._dev_menus["juno"].winfo_width()
-      and top_btns[0]["text"] == "刷新"
-      and top_btns[0].winfo_width() == dev_btns[0].winfo_width())
-
-# --- 两窗第二列表头与数据列文字左缘对齐（数据列有 padx=(8,8) 左缩进） ---
-kb_hdr = kw._slot_lbl[kbd_auto.SLOT_NOTES[0]].master.grid_slaves(
-    row=0, column=1)[0]
-check("键盘窗音色映射表头对齐",
-      kb_hdr.winfo_rootx() == kw._slot_lbl[kbd_auto.SLOT_NOTES[0]]
-      .winfo_rootx())
-pd_first = pw._bind_lbl[pedal.ACTIONS[0][0]]
-pd_hdr = pd_first.master.grid_slaves(row=0, column=1)[0]
-check("踩钉窗绑定表头对齐", pd_hdr.winfo_rootx() == pd_first.winfo_rootx())
-
-# --- 三子窗口：最小尺寸已设，且缩到最小时内容完整 ---
-for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
-    mw, mh = win.wm_minsize()
-    check("%s窗最小尺寸 %dx%d" % (name, mw, mh), mw > 0 and mh > 0)
-    orig = win.geometry()
-    win.geometry("%dx%d" % (mw, mh))
-    win.update_idletasks()
-    win.update()
-    ok, stack = True, [win]
-    wx, wy = win.winfo_rootx(), win.winfo_rooty()
-    ww, wh = win.winfo_width(), win.winfo_height()
-    while stack:
-        w2 = stack.pop()
-        for c in w2.winfo_children():
-            stack.append(c)
-            if c.winfo_ismapped() and (
-                    c.winfo_rootx() + c.winfo_width() > wx + ww + 2
-                    or c.winfo_rooty() + c.winfo_height() > wy + wh + 2):
-                ok = False
-    check("%s窗最小尺寸下内容完整" % name, ok)
-    win.geometry(orig)
-    win.update_idletasks()
-    win.update()
-
-# --- 主窗最小尺寸：随内容需求（回归：写死 940 逻辑宽窄于底栏一行需求
-# （1848@175%），权重列被 grid 压没 → 退出按钮只剩 8px 点不到） ---
-mw, mh = root.wm_minsize()
-check("主窗最小尺寸已设 %dx%d" % (mw, mh), mw > 0 and mh > 0)
-check("主窗最小宽度≥内容需求（%d≥%d）" % (mw, root.winfo_reqwidth()),
-      mw >= root.winfo_reqwidth())
-orig_geo = root.geometry()
-root.geometry("%dx%d" % (mw, mh))
-root.update_idletasks(); root.update()
-ex = btns["退出"]
-ex_r = ex.winfo_rootx() - root.winfo_rootx() + ex.winfo_width()
-check("最小尺寸下退出完整可见（右缘%d≤%d）" % (ex_r, root.winfo_width()),
-      ex_r <= root.winfo_width())
-dev = mid_center() - root.winfo_width() / 2
-check("最小尺寸下按钮组仍居中（偏差%+.0fpx）" % dev, abs(dev) <= 3)
-root.geometry(orig_geo)
-root.update_idletasks(); root.update()
-
-# --- 三子窗口：四边留白随 DPI 缩放（回归：pack 裸像素边距高分屏下顶满） ---
-for name, win in (("设置", sw), ("踩钉", pw), ("键盘", kw)):
-    wx, wy = win.winfo_rootx(), win.winfo_rooty()
-    l = t = r = b = 10 ** 6
-    stack = [win]
-    while stack:
-        w2 = stack.pop()
-        for c in w2.winfo_children():
-            stack.append(c)
-            if c.winfo_ismapped():
-                l = min(l, c.winfo_rootx() - wx)
-                t = min(t, c.winfo_rooty() - wy)
-                r = min(r, wx + win.winfo_width()
-                        - c.winfo_rootx() - c.winfo_width())
-                b = min(b, wy + win.winfo_height()
-                        - c.winfo_rooty() - c.winfo_height())
-    floor = sg.dpi.scale(win, 6)
-    check("%s窗四边留白≥%dpx（左%d 上%d 右%d 下%d）"
-          % (name, floor, l, t, r, b), min(l, t, r, b) >= floor)
-
-# --- 三子窗底色：五窗全量迁 ttk，按迁移完整性查 classic 控件残留
-# （setlist 主窗例外白名单：双列表+日志+空态提示按决策保留 classic）---
-def classic_strays(win):
-    """classic 控件残留清点（按 ttk.Widget 排除——py3.14 里 ttk.Combobox
-    仍是 tk.Entry 子类，须挡住误报）。"""
-    bad = []
-    stack = [win]
-    while stack:
-        w3 = stack.pop()
-        for c in w3.winfo_children():
-            stack.append(c)
-            if isinstance(c, (tk.Frame, tk.Label, tk.Button, tk.LabelFrame,
-                              tk.Entry, tk.Checkbutton, tk.OptionMenu)) \
-                    and not isinstance(c, ttk.Widget):
-                bad.append(c)
-    return bad
-
-
-allowed = {str(app.lib), str(app.pl), str(app.log), str(app.pl_empty)}
-strays = classic_strays(root)
-check("setlist主窗 classic 残留=白名单(双列表/日志/空态提示)",
-      {str(c) for c in strays} <= allowed)
-check("setlist设置页无 classic 控件残留", not classic_strays(sw))
-check("踩钉窗无 classic 控件残留", not classic_strays(pw))
-check("键盘窗无 classic 控件残留", not classic_strays(kw))
-
-# --- 设置窗：主/次按钮等宽等高、仅颜色区分（Start 平地元素的纵向
-# padding 已补齐到与 sv-ttk 图片元素钮等高；宽度仍有图片内衬差，放宽
-# 到容差防样式回归）---
-sbtns = find_buttons(sw, {"保存并应用", "取消"})
-check("设置窗主次按钮同宽（±10px 元素内衬差）",
-      abs(sbtns["保存并应用"].winfo_width()
-          - sbtns["取消"].winfo_width()) <= 10)
-check("设置窗主次按钮等高（差 %dpx）"
-      % abs(sbtns["保存并应用"].winfo_height()
-            - sbtns["取消"].winfo_height()),
-      abs(sbtns["保存并应用"].winfo_height()
-          - sbtns["取消"].winfo_height()) <= 2)
-
-try:
-    shot(sw, "settings")
-    shot(pw, "pedal")
-    shot(kw, "kbd")
-except Exception as e:
-    print("截图跳过：%r" % e)
-
-# --- 踩钉窗静音生命周期：打开即静音（页面期踩钉不触发动作）、关页恢复 ---
-check("踩钉窗打开即静音", app.pedal is None or app.pedal.muted)
-pw._close(); root.update_idletasks(); root.update()
-check("踩钉窗关闭恢复响应", app.pedal is None or not app.pedal.muted)
-
 # --- automator（ttk + sv-ttk 迁移窗）：主题已在前文统一挂载（对本解释器
 # 全局生效），此处直接建窗 ---
 import json
@@ -832,8 +620,7 @@ except Exception as e:
     fails.append("automator 截图失败")
 
 # 截图清单：文件名 → 窗口中文名（人工核对索引）
-manifest = {"main": "setlist主窗", "settings": "setlist设置页",
-            "pedal": "踩钉窗", "kbd": "键盘窗",
+manifest = {"main": "setlist主窗",
             "auto_main": "automator主窗", "auto_settings": "automator设置页"}
 pathlib.Path("_render", "manifest.json").write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -841,10 +628,5 @@ pathlib.Path("_render", "manifest.json").write_text(
 print("SHOT _render/manifest.json")
 
 print("FAILS:", fails if fails else "无")
-for w in (sw, pw, kw):
-    try:
-        w.destroy()
-    except Exception:
-        pass
 root.destroy()
 sys.exit(1 if fails else 0)

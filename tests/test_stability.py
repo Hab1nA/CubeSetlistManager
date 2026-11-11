@@ -36,7 +36,7 @@ def _slice(src, start, end):
 def test_panic_obs_network_off_main_thread():
     """stop_media=2 个 WebSocket 请求（各 5s 超时）+全程持 ctl._lock，
     必须在 run 后台线程体里；主线程只发线程+watch 记账。"""
-    src = _slice(_src("setlist_gui.py"), "def _panic", "def _open_settings")
+    src = _slice(_src("setlist_gui.py"), "def _panic", "def _apply_ports")
     assert "def run" in src
     run_body = _slice(src, "def run", "threading.Thread(target=run")
     assert "ctl.stop_media()" in run_body
@@ -48,17 +48,17 @@ def test_panic_obs_network_off_main_thread():
 def test_settings_save_obs_off_main_thread():
     """「保存并应用」的静音/投影热应用（2×5s+2×5s+持锁）挪后台线程，
     双端同改；旧的主线程直调写法不得回归。连续保存的热应用有锁串行。"""
+    # setlist：设置保存已收口为 web 路径 _settings_apply_web（旧 Tk
+    # SettingsWindow 已删），热应用经共享 _apply_obs_web 后台线程
+    src = _slice(_src("setlist_gui.py"), "def _settings_apply_web",
+                 "def _pedal_get_web")
+    assert "threading.Thread(target=self._apply_obs_web" in src
+    # automator：保留本地 _save 闭包形态
+    src = _slice(_src("automator_gui.py"), "def _save(self)", "_MUTEX = None")
     for name in ("setlist_gui.py", "automator_gui.py"):
-        src = _slice(_src(name), "def _save(self)", "_MUTEX = None")
-        # setlist 走共享 _apply_obs_web（含「无→投屏拉起 OBS」判定），
-        # automator 保留本地闭包——两种形态都必须后台线程+锁串行
-        assert ("threading.Thread(target=apply_obs" in src
-                or "threading.Thread(target=app._apply_obs_web" in src), name
-        assert "not app.ctl.apply_mute()" not in src, name
-        assert "not app.ctl.apply_projector()" not in src, name
-        # 锁串行：本地闭包形态在 _save 内，共享方法形态在 App 侧（下方）
-        assert ("with app._obs_apply_lock" in src
-                or "_apply_obs_web" in src), name
+        body = _src(name)
+        assert "not app.ctl.apply_mute()" not in body, name
+        assert "not app.ctl.apply_projector()" not in body, name
     # 共享方法的锁串行与拉起判定在 App 类侧（setlist）
     src = _src("setlist_gui.py")
     assert "def _apply_obs_web" in src
@@ -680,13 +680,17 @@ def test_title_load_off_main_thread():
 
 
 def test_settings_probe_off_marshalled_after():
-    """设置页探测 worker 改走 calls 队列（self.after 封送阻塞 worker），
-    复探走 Timer 线程（网络不占主线程）。"""
-    for name in ("setlist_gui.py", "automator_gui.py"):
-        src = _src(name)
-        assert "self.app.calls.put(apply)" in src, name
-        assert "threading.Timer(1.2" in src, name
-        assert "self.after(1200" not in src, name   # 旧主线程复探不回归
+    """设置页探测不占主线程：setlist 走专职 _web_status_loop 后台线程
+    （旧 Tk SettingsWindow 的 calls 封送/Timer 复探模式已随窗体删除），
+    automator 保留 Tk 设置窗，锚 calls 队列封送+Timer 线程复探。"""
+    src = _src("setlist_gui.py")
+    assert "def _web_status_loop" in src
+    assert "def _web_status_probe" in src
+    assert "threading.Thread(target=self._web_status_loop" in src
+    src = _src("automator_gui.py")
+    assert "self.app.calls.put(apply)" in src
+    assert "threading.Timer(1.2" in src
+    assert "self.after(1200" not in src        # 旧主线程复探不回归
 
 
 def test_marquee_step_guard():

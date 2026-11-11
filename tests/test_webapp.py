@@ -1402,9 +1402,9 @@ def test_lite_get_endpoints_blocked():
 
 
 def test_tk_settings_port_guard_present():
-    """Tk 设置窗端口互异校验（源码锚，test_stability 同款手法）：两个
-    Tk 保存路径都必须在落盘前拒绝同值端口——web 路径已有功能级测试
-    （test_settings_port_conflict_web），Tk 窗需真实交互才可功能测。"""
-    for mod in (sg, __import__("automator_gui")):
-        src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
-        assert "网页端口与 APP 端口不能相同，未保存" in src, mod.__name__
+    """端口互异校验源码锚（test_stability 同款手法）：automator 的 Tk
+    保存路径必须在落盘前拒绝同值端口；setlist 旧 Tk 设置窗已删，web
+    路径功能级测试 test_settings_port_conflict_web 已覆盖。"""
+    mod = __import__("automator_gui")
+    src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+    assert "网页端口与 APP 端口不能相同，未保存" in src, mod.__name__
