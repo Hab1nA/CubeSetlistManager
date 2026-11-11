@@ -164,8 +164,9 @@ def _set_video_loop(self, note, on):
 ## 7. 测试计划
 
 - tests/test_bridge.py：note_handler 尊重 videoLoops——假 ctl（cfg 带
-  {"3": true}）喂音符 62（→3.mp4）断言 set_media 收 loop=True，音符 61 断言
-  False；加源锚断言 midi_bridge.py:678 不再是字面 `set_media(target, False)`。
+  {"3": true}）喂音符 74（→3.mp4，0.16.2 锚点口径 72 起）断言 set_media 收
+  loop=True，音符 73 断言 False；加源锚断言 set_media 调用不再是字面
+  `set_media(target, False)`（现 midi_bridge.py:679）。
 - tests/test_webapp.py：`test_vjmap_endpoint` 扩断言行含 `loop` 且与
   videoLoops 对应；新 `POST /vjloop` 用例（200 切换+cfg 落点、400 note 90、
   403 lite）。

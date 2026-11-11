@@ -7,9 +7,10 @@
 （python-rtmidi 1.5.8 在本机 Python 3.14 下 import 即崩，实测）。
 用法：
   python midi_bridge.py               # 监听（自动拉起 OBS、断线重连）
-  python midi_bridge.py --send 60     # 不经 Cubase，向 loopMIDI 发测试音符
+  python midi_bridge.py --send 72     # 不经 Cubase，向 loopMIDI 发测试音符
 Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port，
-在触发位置画音符：C4→1.mp4、C#4→2.mp4 …（只认 Note On，音符长度无所谓）。
+在触发位置画音符：C5(72)→1.mp4、C#5(73)→2.mp4 …（只认 Note On，音符长度
+无所谓；0.16.2 起锚点对齐 Cubase 显示，72 起才是 VJ 区）。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
 暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“MIDI 时码输出”
