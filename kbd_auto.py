@@ -303,29 +303,29 @@ class PortNotFound(Exception):
     pass
 
 
-def _norm_dev(v):
+def norm_dev(v):
     """config 手编敌意值收敛：dev 只认 int（bool 是 int 子类须排除——
     true 会静默等于 1 错绑第 2 个同名口）；字符串/null/浮点一律回 0。
     配置值进门即校验、不在使用点炸（load_slots pc:null 事故同族口径）。"""
     return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
 
-def _in_dev(cfg):
+def in_dev(cfg):
     """IN 侧位次：inDev 是用户在「MIDI 输入」下拉里选的同名序（选过才落
     键，不进 DEFAULT——装载处强建会废掉旧配置的 dev 跟随语义）；无 inDev
     时 dev 只在 inHint 与 outHint 同名（同一台盒的一对口）时对 IN 组有
     意义；异名退回首命中——一个序号不跨两组用。"""
     if "inDev" in cfg:
-        return _norm_dev(cfg["inDev"])
+        return norm_dev(cfg["inDev"])
     return cfg["dev"] if cfg["inHint"] == cfg["outHint"] else 0
 
 
-def _pick_hit(devs, hint, dev=0):
+def pick_hit(devs, hint, dev=0):
     """名字命中第 dev 个端口（同名多口消歧）。hint 非字符串或空 → None
     （显式未配置态；"" 子串对一切口恒真，曾会打到第一个口）。全名精确
     命中优先——下拉存的是完整端口名，防止「USB-Midi」子串误配到
     「USB-Midi 2」这类前缀重名口；无精确命中再回退子串（兼容「JUNO」
-    这类手写宽 hint）。dev 脏类型经 _norm_dev 收敛，越界收敛到末位——
+    这类手写宽 hint）。dev 脏类型经 norm_dev 收敛，越界收敛到末位——
     选了「第2个」后拔掉一只，剩余选择仍落在真实端口上而不是报错。
     返回 (设备号, 端口名) 或 None。纯函数，发送/打开/状态行/下拉共用。"""
     if not isinstance(hint, str) or not hint:
@@ -334,16 +334,16 @@ def _pick_hit(devs, hint, dev=0):
             or [(i, n) for i, n in devs if hint in n])
     if not hits:
         return None
-    return hits[min(max(_norm_dev(dev), 0), len(hits) - 1)]
+    return hits[min(max(norm_dev(dev), 0), len(hits) - 1)]
 
 
-def _name_pos(devs, name, idx):
+def name_pos(devs, name, idx):
     """端口在同名端口中的位次与总数（1 基）——状态行与下拉标注「第N个」用。"""
     same = [i for i, n in devs if n == name]
     return same.index(idx) + 1, len(same)
 
 
-def _device_entries(names):
+def device_entries(names):
     """在线端口名清单 → 下拉项 [(显示名, 端口名, 同名序 0 基)]。唯一名字
     显示全名；同名 N 个逐项带 · 第N个。纯函数，UI 与测试共用。"""
     total = {}
@@ -358,7 +358,7 @@ def _device_entries(names):
     return out
 
 
-def _all_in_devices():
+def all_in_devices():
     """winmm 输入口 + BLE 端点（合成「名（BLE）」后缀，见 midi_ble.BLE_MARK）。
     winmm 恒在前：手写宽 hint（如「JUNO」）先落 USB 口，行为与旧版一致；
     BLE 追加使同名跨后端口以 dev 序号消歧——与两只同型号无线盒同款语义。
@@ -366,8 +366,8 @@ def _all_in_devices():
     return mb._in_devices() + midi_ble.in_devices()
 
 
-def _all_out_devices():
-    """winmm 输出口 + BLE 端点，同 _all_in_devices。"""
+def all_out_devices():
+    """winmm 输出口 + BLE 端点，同 all_in_devices。"""
     return mb._out_devices() + midi_ble.out_devices()
 
 
@@ -379,11 +379,11 @@ class RawMidiIn:
     id（走 midi_ble，一次性线程限时打开+弃单自回收）。"""
 
     def __init__(self, hint, on_msg, dev=0):
-        """dev：名字命中多个端口时取第 dev 个（见 _pick_hit）——录槽捕获
+        """dev：名字命中多个端口时取第 dev 个（见 pick_hit）——录槽捕获
         从 cfg["dev"] 传入，保证收发落在同一序号的那只盒子上；序号在
         合并清单（winmm 在前、BLE 在后）上统一编号。"""
-        devs = _all_in_devices()
-        hit = _pick_hit(devs, hint, dev)
+        devs = all_in_devices()
+        hit = pick_hit(devs, hint, dev)
         if hit is None:
             raise PortNotFound("未找到含「%s」的 MIDI 输入端口；现有：%s" % (
                 hint, "、".join(n for _, n in devs) or "无"))
@@ -452,8 +452,8 @@ def send_slot(slot, cfg, msgs=None):
     同锁同队列）——Win11 进程级锁挂死时发送线程限时失败不再陪葬。
     后端分派：命中设备的设备号 str=BLE 端点（_send_slot_ble，走 midi_ble
     输出），int=winmm 序号（原路径逐字节不动）。"""
-    devs = _all_out_devices()
-    hit = _pick_hit(devs, cfg["outHint"], cfg.get("dev", 0))
+    devs = all_out_devices()
+    hit = pick_hit(devs, cfg["outHint"], cfg.get("dev", 0))
     if hit is None:
         return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
             cfg["outHint"], "、".join(n for _, n in devs) or "无")
@@ -623,26 +623,26 @@ if __name__ == "__main__":
     assert note_name(102) == "F#6"
     # 同名多口消歧（两只同型号无线盒）：dev 序号落位/越界收敛/互不误配
     dv = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
-    assert _pick_hit(dv, "USB-Midi") == (1, "USB-Midi")
-    assert _pick_hit(dv, "USB-Midi", 1) == (2, "USB-Midi")
-    assert _pick_hit(dv, "USB-Midi", 5) == (2, "USB-Midi")      # 越界收敛末位
-    assert _pick_hit(dv, "JUNO-DS") == (3, "JUNO-DS")
-    assert _pick_hit(dv, "AX-09") is None
+    assert pick_hit(dv, "USB-Midi") == (1, "USB-Midi")
+    assert pick_hit(dv, "USB-Midi", 1) == (2, "USB-Midi")
+    assert pick_hit(dv, "USB-Midi", 5) == (2, "USB-Midi")      # 越界收敛末位
+    assert pick_hit(dv, "JUNO-DS") == (3, "JUNO-DS")
+    assert pick_hit(dv, "AX-09") is None
     # 前缀重名口（"USB-Midi" 与 "USB-Midi 2" 并存）：全名精确优先不误配
     pv = [(0, "USB-Midi 2"), (1, "USB-Midi")]
-    assert _pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
-    assert _pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
-    assert _pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")  # 宽 hint 回退
-    assert _norm_dev("1") == 0 and _norm_dev(True) == 0 and _norm_dev(2) == 2
-    assert _pick_hit(dv, "") is None and _pick_hit(dv, None) is None
-    assert _name_pos(dv, "USB-Midi", 2) == (2, 2)
+    assert pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
+    assert pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
+    assert pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")  # 宽 hint 回退
+    assert norm_dev("1") == 0 and norm_dev(True) == 0 and norm_dev(2) == 2
+    assert pick_hit(dv, "") is None and pick_hit(dv, None) is None
+    assert name_pos(dv, "USB-Midi", 2) == (2, 2)
     # IN 侧位次：无 inDev 走旧语义（同名跟随 dev、异名退 0），有则独立收敛
-    assert _in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
-    assert _in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
-    assert _in_dev({"inHint": "B", "outHint": "A", "dev": 1, "inDev": 2}) == 2
-    assert _in_dev({"inHint": "A", "outHint": "A", "dev": 1,
+    assert in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
+    assert in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+    assert in_dev({"inHint": "B", "outHint": "A", "dev": 1, "inDev": 2}) == 2
+    assert in_dev({"inHint": "A", "outHint": "A", "dev": 1,
                     "inDev": True}) == 0
-    assert _device_entries(["A", "B", "B"])[1:] == [
+    assert device_entries(["A", "B", "B"])[1:] == [
         ("B · 第1个", "B", 0), ("B · 第2个", "B", 1)]
     with tempfile.TemporaryDirectory() as td:
         cpr = os.path.join(td, "s.cpr")

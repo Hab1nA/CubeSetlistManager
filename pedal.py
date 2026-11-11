@@ -35,8 +35,8 @@ import winreg
 from ctypes import wintypes
 
 import midi_bridge as mb
-from kbd_auto import (RawMidiIn, PortNotFound, _device_entries, _in_dev,
-                      _pick_hit)
+from kbd_auto import (RawMidiIn, PortNotFound, device_entries, in_dev,
+                      pick_hit)
 
 u32 = ctypes.windll.user32
 k32 = ctypes.windll.kernel32
@@ -73,17 +73,17 @@ def learning_candidates(kb_ports=()):
     loopMIDI 虚拟口。返回 **[(设备号, 端口名, 同名内位次 0 基)]**——位次
     供重开 RawMidiIn(dev=…) 时原位落位（只按名重开+默认 0 会把位次排除
     原样打回，同名盒场景学习监听落回被排除的琴口）。kb_ports=(inHint,
-    dev) 对：在同一次枚举内经 kbd_auto._pick_hit 解析出琴口设备号**按
+    dev) 对：在同一次枚举内经 kbd_auto.pick_hit 解析出琴口设备号**按
     位次精确排除**——同名盒世界里按名字排除会把同名的真踩钉口一起误伤；
     解析不到（琴没上电/没接）自然无口可排。EXCLUDE 兜底名单继续按名滤
     JUNO/AX-09 系，覆盖 config 还是出厂缺省的旧接法。"""
     devs = mb._in_devices()
     bound = set()
     for hint, d in kb_ports:
-        hit = _pick_hit(devs, hint, d)
+        hit = pick_hit(devs, hint, d)
         if hit:
             bound.add(hit[0])
-    entries = _device_entries([n for _, n in devs])   # (显示名, 名, 同名位次)
+    entries = device_entries([n for _, n in devs])   # (显示名, 名, 同名位次)
     return [(i, n, k) for (i, n), (_lbl, _nm, k) in zip(devs, entries)
             if i not in bound and not _is_virtual(n)
             and not any(x in n for x in EXCLUDE)]
@@ -1337,7 +1337,7 @@ class Learner:
         self.ports = []
         if hint:
             devs = mb._in_devices()
-            entries = _device_entries([n for _, n in devs])
+            entries = device_entries([n for _, n in devs])
             cands = [(i, n, k) for (i, n), (_l, _nm, k) in zip(devs, entries)
                      if hint in n]      # 与 kb_ports 分支同款三元组：下游统一
                                         #   解包，位次语义（同名多口）也一致

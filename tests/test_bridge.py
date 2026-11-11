@@ -690,40 +690,40 @@ def test_kbd_auto():
     # 同名多口消歧：两只同型号无线 MIDI 盒在 winmm 是两个完全同名的口，
     # dev 序号决定落位（键盘自动化窗设备下拉选择即写此键）
     devs = [(0, "Rubix24"), (1, "USB-Midi"), (2, "USB-Midi"), (3, "JUNO-DS")]
-    assert kbd_auto._pick_hit(devs, "USB-Midi") == (1, "USB-Midi")
-    assert kbd_auto._pick_hit(devs, "USB-Midi", 1) == (2, "USB-Midi")
-    assert kbd_auto._pick_hit(devs, "USB-Midi", 5) == (2, "USB-Midi")   # 越界收敛
-    assert kbd_auto._pick_hit(devs, "USB-Midi", -1) == (1, "USB-Midi")  # 负数钳0
-    assert kbd_auto._pick_hit(devs, "JUNO-DS") == (3, "JUNO-DS")   # 有线全名不误配
-    assert kbd_auto._pick_hit(devs, "AX-09") is None
+    assert kbd_auto.pick_hit(devs, "USB-Midi") == (1, "USB-Midi")
+    assert kbd_auto.pick_hit(devs, "USB-Midi", 1) == (2, "USB-Midi")
+    assert kbd_auto.pick_hit(devs, "USB-Midi", 5) == (2, "USB-Midi")   # 越界收敛
+    assert kbd_auto.pick_hit(devs, "USB-Midi", -1) == (1, "USB-Midi")  # 负数钳0
+    assert kbd_auto.pick_hit(devs, "JUNO-DS") == (3, "JUNO-DS")   # 有线全名不误配
+    assert kbd_auto.pick_hit(devs, "AX-09") is None
     # 前缀重名口（"USB-Midi" 与 "USB-Midi 2" 并存）：下拉存的全名必须
     # 精确命中，不被子串语义抢到对方口上；宽 hint（JUNO）走子串回退
     pv = [(0, "USB-Midi 2"), (1, "USB-Midi")]
-    assert kbd_auto._pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
-    assert kbd_auto._pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
-    assert kbd_auto._pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")
+    assert kbd_auto.pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
+    assert kbd_auto.pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
+    assert kbd_auto.pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")
     # 手编 config 的敌意 dev 收敛：脏类型不炸、不静默错绑（bool 排除——
     # true 静默等于 1 会错绑第 2 个同名口）
-    assert kbd_auto._norm_dev("1") == 0 and kbd_auto._norm_dev(None) == 0
-    assert kbd_auto._norm_dev(True) == 0 and kbd_auto._norm_dev(0.5) == 0
-    assert kbd_auto._norm_dev(2) == 2
-    assert kbd_auto._pick_hit(devs, "USB-Midi", "1") == (1, "USB-Midi")
-    assert kbd_auto._pick_hit(devs, "USB-Midi", True) == (1, "USB-Midi")
+    assert kbd_auto.norm_dev("1") == 0 and kbd_auto.norm_dev(None) == 0
+    assert kbd_auto.norm_dev(True) == 0 and kbd_auto.norm_dev(0.5) == 0
+    assert kbd_auto.norm_dev(2) == 2
+    assert kbd_auto.pick_hit(devs, "USB-Midi", "1") == (1, "USB-Midi")
+    assert kbd_auto.pick_hit(devs, "USB-Midi", True) == (1, "USB-Midi")
     # 空/非字符串 hint = 显式未配置，不命中任何口（"" 子串恒真曾打到第一个口）
-    assert kbd_auto._pick_hit(devs, "") is None
-    assert kbd_auto._pick_hit(devs, None) is None
-    assert kbd_auto._name_pos(devs, "USB-Midi", 2) == (2, 2)
-    assert kbd_auto._name_pos(devs, "JUNO-DS", 3) == (1, 1)
-    es = kbd_auto._device_entries(["Rubix24", "USB-Midi", "USB-Midi"])
+    assert kbd_auto.pick_hit(devs, "") is None
+    assert kbd_auto.pick_hit(devs, None) is None
+    assert kbd_auto.name_pos(devs, "USB-Midi", 2) == (2, 2)
+    assert kbd_auto.name_pos(devs, "JUNO-DS", 3) == (1, 1)
+    es = kbd_auto.device_entries(["Rubix24", "USB-Midi", "USB-Midi"])
     assert [e[0] for e in es] == ["Rubix24", "USB-Midi · 第1个",
                                   "USB-Midi · 第2个"]
     assert [e[2] for e in es] == [0, 0, 1]
-    assert kbd_auto._device_entries([]) == []
+    assert kbd_auto.device_entries([]) == []
     # 默认值带 dev=0：旧 config 无此键时单设备行为不变
     assert kbd_auto.DEFAULT_JUNO["dev"] == 0 and kbd_auto.DEFAULT_AX["dev"] == 0
 
     # 踩钉学习候选按琴口位次精确排除（同名盒世界按名排除会连同名真踩钉
-    # 口一起误伤）：kb_ports=(inHint, dev) 在同一次枚举内经 _pick_hit
+    # 口一起误伤）：kb_ports=(inHint, dev) 在同一次枚举内经 pick_hit
     # 解析设备号排除；返回三元组（设备号, 名, 同名内位次）供 Learner
     # 重开 RawMidiIn 时原位落位——重开丢位次会把排除原样打回（R2-P2）；
     # EXCLUDE 兜底名单继续滤 JUNO/AX-09 系旧接法
@@ -739,19 +739,19 @@ def test_kbd_auto():
         assert pedal.learning_candidates(
             kb_ports=(("JUNO", 0),)) == \
             [(0, "USB-Midi", 0), (1, "USB-Midi", 1), (3, "踩钉CC", 0)]
-        # 位次与 RawMidiIn._pick_hit 精确命中闭合：候选 (1,"USB-Midi",1)
+        # 位次与 RawMidiIn.pick_hit 精确命中闭合：候选 (1,"USB-Midi",1)
         # 重开时落到同一设备号
-        assert kbd_auto._pick_hit(pedal.mb._in_devices(), "USB-Midi", 1) \
+        assert kbd_auto.pick_hit(pedal.mb._in_devices(), "USB-Midi", 1) \
             == (1, "USB-Midi")
     finally:
         pedal.mb._in_devices = orig_in
     # IN 侧位次：无 inDev 走旧语义（同名跟随 dev、异名退 0）；有 inDev =
-    # 「MIDI 输入」行选过的独立位次，脏值经 _norm_dev 收敛（R2-P3）
-    assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
-    assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
-    assert kbd_auto._in_dev({"inHint": "B", "outHint": "A", "dev": 1,
+    # 「MIDI 输入」行选过的独立位次，脏值经 norm_dev 收敛（R2-P3）
+    assert kbd_auto.in_dev({"inHint": "A", "outHint": "A", "dev": 1}) == 1
+    assert kbd_auto.in_dev({"inHint": "B", "outHint": "A", "dev": 1}) == 0
+    assert kbd_auto.in_dev({"inHint": "B", "outHint": "A", "dev": 1,
                              "inDev": 2}) == 2
-    assert kbd_auto._in_dev({"inHint": "A", "outHint": "A", "dev": 1,
+    assert kbd_auto.in_dev({"inHint": "A", "outHint": "A", "dev": 1,
                              "inDev": True}) == 0
 
 
@@ -962,12 +962,12 @@ def test_midi_ble():
     midi_ble.in_devices = lambda: [("SWD1", "JUNO-DS（BLE）")]
     midi_ble.out_devices = lambda: [("SWD2", "JUNO-DS（BLE）")]
     try:
-        dv = kbd_auto._all_in_devices()
+        dv = kbd_auto.all_in_devices()
         assert dv == [(0, "JUNO-DS"), ("SWD1", "JUNO-DS（BLE）")]
-        assert kbd_auto._pick_hit(dv, "JUNO-DS（BLE）") == \
+        assert kbd_auto.pick_hit(dv, "JUNO-DS（BLE）") == \
             ("SWD1", "JUNO-DS（BLE）")
-        assert kbd_auto._pick_hit(dv, "JUNO") == (0, "JUNO-DS")  # 宽 hint 恒先 USB
-        assert kbd_auto._pick_hit(dv, "JUNO", 1) == \
+        assert kbd_auto.pick_hit(dv, "JUNO") == (0, "JUNO-DS")  # 宽 hint 恒先 USB
+        assert kbd_auto.pick_hit(dv, "JUNO", 1) == \
             ("SWD1", "JUNO-DS（BLE）")                           # 第2个=BLE
 
         # RawMidiIn 后端分派：BLE 全名命中走 midi_ble.open_in，close 落句柄

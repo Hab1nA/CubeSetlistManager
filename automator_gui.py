@@ -290,10 +290,10 @@ class App:
         self.settings_win = None
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
-        self.jcfg["dev"] = kbd_auto._norm_dev(self.jcfg.get("dev"))
+        self.jcfg["dev"] = kbd_auto.norm_dev(self.jcfg.get("dev"))
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self.axcfg.update(cfg.get("ax09") or {})
-        self.axcfg["dev"] = kbd_auto._norm_dev(self.axcfg.get("dev"))
+        self.axcfg["dev"] = kbd_auto.norm_dev(self.axcfg.get("dev"))
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
         self.web_cfg.update(cfg.get("webRemote") or {})
         self.web = None
@@ -1972,7 +1972,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         ax = note in kbd_auto.AX_NOTES
         cfg = self.app.axcfg if ax else self.app.jcfg
         try:
-            port = kbd_auto.RawMidiIn(cfg["inHint"], cap.feed, dev=kbd_auto._in_dev(cfg))
+            port = kbd_auto.RawMidiIn(cfg["inHint"], cap.feed, dev=kbd_auto.in_dev(cfg))
         except kbd_auto.PortNotFound as e:
             self.set_status(str(e), dpi.C_ERR)
             return
@@ -2077,19 +2077,19 @@ class KeyboardAutoWindow(tk.Toplevel):
                             dpi.C_ERR)
 
     def _poll_ports(self):
-        ins = kbd_auto._all_in_devices()
-        outs = kbd_auto._all_out_devices()
+        ins = kbd_auto.all_in_devices()
+        outs = kbd_auto.all_out_devices()
         for key, cfg, cfg_key in (("juno", self.app.jcfg, "juno"),
                                   ("ax", self.app.axcfg, "ax09")):
             # 清单签名：设备上下线（winmm 现查/BLE 缓存换新）或改选落盘
             # 即变——变了才重建下拉。点「刷新」invalidate 后 BLE 后台重扫
             # 的结果由此落进菜单，用户不必点第二次
-            sig = (ins, outs, cfg["inHint"], kbd_auto._in_dev(cfg),
+            sig = (ins, outs, cfg["inHint"], kbd_auto.in_dev(cfg),
                    cfg["outHint"], cfg.get("dev", 0))
             if sig != self._dev_sig.get(key):
                 self._dev_sig[key] = sig
                 self._rebuild_device_menu(key)
-            ti, oki = self._side_line(ins, cfg["inHint"], kbd_auto._in_dev(cfg),
+            ti, oki = self._side_line(ins, cfg["inHint"], kbd_auto.in_dev(cfg),
                                       cfg_key, "inHint")
             to, oko = self._side_line(outs, cfg["outHint"], cfg.get("dev", 0),
                                       cfg_key, "outHint")
@@ -2099,10 +2099,10 @@ class KeyboardAutoWindow(tk.Toplevel):
     def _side_line(devs, hint, dev, cfg_key, hint_key):
         """单向（输入或输出）端口状态文案：✔（同名多口时标注实际绑定的
         「第N个」）或 ❌（主界面状态格同款极简式；含义见底栏行悬停提示）。"""
-        hit = kbd_auto._pick_hit(devs, hint, dev)
+        hit = kbd_auto.pick_hit(devs, hint, dev)
         if hit is None:
             return "❌", False
-        pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+        pos, total = kbd_auto.name_pos(devs, hit[1], hit[0])
         return ("✔ 第%d个" % pos) if total > 1 else "✔", True
 
     def _port_row(self, key, text, ok):
@@ -2138,14 +2138,14 @@ class KeyboardAutoWindow(tk.Toplevel):
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
         for direction, hint, dev, devs in (
                 ("out", cfg["outHint"], cfg.get("dev", 0),
-                 kbd_auto._all_out_devices()),
-                ("in", cfg["inHint"], kbd_auto._in_dev(cfg), kbd_auto._all_in_devices())):
-            hit = kbd_auto._pick_hit(devs, hint, dev)
-            entries = kbd_auto._device_entries([n for _, n in devs])
+                 kbd_auto.all_out_devices()),
+                ("in", cfg["inHint"], kbd_auto.in_dev(cfg), kbd_auto.all_in_devices())):
+            hit = kbd_auto.pick_hit(devs, hint, dev)
+            entries = kbd_auto.device_entries([n for _, n in devs])
             items = [(name, k) for _label, name, k in entries]
             labels = [label for label, _name, _k in entries]
             if hit is not None:
-                pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+                pos, total = kbd_auto.name_pos(devs, hit[1], hit[0])
                 shown = hit[1] if total == 1 else "%s · 第%d个" % (
                     hit[1], pos)
             else:                   # 幽灵项：已选设备当前不在场，可点回它
@@ -2167,7 +2167,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         现开，选完下个音符即生效，无需重连重启；落盘后两行下拉与状态行
         即时复核。config 按段整替落盘（与 pedal._save 同口径，单实例互斥
         下运行中外部手加的未知键会被内存快照覆盖——已知取舍）。同名序号
-        口径见 kbd_auto._in_dev；踩钉学习候选的 kb_ports 解析同此。"""
+        口径见 kbd_auto.in_dev；踩钉学习候选的 kb_ports 解析同此。"""
         cfg = self.app.jcfg if key == "juno" else self.app.axcfg
         if direction == "in":
             cfg["inHint"] = name
@@ -2175,7 +2175,7 @@ class KeyboardAutoWindow(tk.Toplevel):
         else:
             cfg["outHint"] = name
             cfg["dev"] = k
-            if name in [n for _, n in kbd_auto._all_in_devices()]:
+            if name in [n for _, n in kbd_auto.all_in_devices()]:
                 cfg["inHint"] = name    # 同名盒：输入行免重选
         self.app._persist_config(**({"juno": dict(cfg)} if key == "juno"
                                     else {"ax09": dict(cfg)}))

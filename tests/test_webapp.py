@@ -746,7 +746,7 @@ def test_kbd_test_web_song_key(tmp_path, monkeypatch):
         jcfg=dict(kbd_auto.DEFAULT_JUNO),
         axcfg=dict(kbd_auto.DEFAULT_AX))
     # 端口预检确定性：输出口恒在场
-    monkeypatch.setattr(kbd_auto, "_all_out_devices",
+    monkeypatch.setattr(kbd_auto, "all_out_devices",
                         lambda: [(0, "JUNO-DS")])
     # 未装载曲：按旁挂文件发（pc 70），不是装载曲的 pc 63
     assert sg.App._kbd_test_web(fake, "juno", 72, song_key="B/歌二") is None
@@ -783,7 +783,7 @@ def test_kbd_record_and_get_shape():
                          slot={"pc": 5, "msb": 87, "lsb": 0})}
     poll = sg.App._kbd_record_poll_web(fake)
     assert poll["active"] and poll["slot"]["desc"] == "USER:0506"
-    # GET shape（_pick_hit/_device_entries 为纯函数，端口枚举在本机跑）
+    # GET shape（pick_hit/device_entries 为纯函数，端口枚举在本机跑）
     out = sg.App._kbd_get_web(fake)
     for k in ("ports", "portStatus", "songs", "editSong", "lastResult",
               "songKey"):

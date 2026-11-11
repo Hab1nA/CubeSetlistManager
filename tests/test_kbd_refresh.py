@@ -70,8 +70,8 @@ def test_refresh_page_wires_invalidate(monkeypatch):
 def test_poll_ports_rebuilds_menu_only_on_change(monkeypatch):
     """签名守卫：清单/改选变了才重建下拉——BLE 重扫结果自动落进菜单。"""
     devs = [(0, "JUNO")]
-    monkeypatch.setattr(kbd_auto, "_all_in_devices", lambda: list(devs))
-    monkeypatch.setattr(kbd_auto, "_all_out_devices", lambda: list(devs))
+    monkeypatch.setattr(kbd_auto, "all_in_devices", lambda: list(devs))
+    monkeypatch.setattr(kbd_auto, "all_out_devices", lambda: list(devs))
 
     class W(_StubWin):
         def _poll_ports(self):

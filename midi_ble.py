@@ -68,7 +68,7 @@ def parse_short(raw):
 
 def _mark(name):
     """合成显示名：加（BLE）后缀（已带不重复）——后缀即后端标识，此后
-    kbd_auto 的 _pick_hit/_device_entries/状态行零改动。纯函数。"""
+    kbd_auto 的 pick_hit/device_entries/状态行零改动。纯函数。"""
     return name if name.endswith(BLE_MARK) else name + BLE_MARK
 
 

@@ -539,10 +539,10 @@ class App:
         self.mr_hint = str(cfg.get("mrPortHint") or "")
         self.jcfg = dict(kbd_auto.DEFAULT_JUNO)
         self.jcfg.update(cfg.get("juno") or {})
-        self.jcfg["dev"] = kbd_auto._norm_dev(self.jcfg.get("dev"))
+        self.jcfg["dev"] = kbd_auto.norm_dev(self.jcfg.get("dev"))
         self.axcfg = dict(kbd_auto.DEFAULT_AX)
         self.axcfg.update(cfg.get("ax09") or {})
-        self.axcfg["dev"] = kbd_auto._norm_dev(self.axcfg.get("dev"))
+        self.axcfg["dev"] = kbd_auto.norm_dev(self.axcfg.get("dev"))
         # 跨线程队列先于踩钉监听器创建：构造期就拉起设备桥（钩子须在 MIDI
         # 口打开前装），桥线程踩踏后立即入队——晚了就是 AttributeError 丢动作
         self.q = queue.Queue()          # 日志/事件
@@ -2022,9 +2022,9 @@ class App:
                 self.pedal_hint, self.pedal_device_hint, self.pedal.bridge,
                 double_window=self.pedal_double,
                 long_press=self.pedal_long,
-                kb_ports=((self.jcfg["inHint"], kbd_auto._in_dev(self.jcfg)),
+                kb_ports=((self.jcfg["inHint"], kbd_auto.in_dev(self.jcfg)),
                           (self.axcfg["inHint"],
-                           kbd_auto._in_dev(self.axcfg))))
+                           kbd_auto.in_dev(self.axcfg))))
         except BaseException:
             learner = None
         self.calls.put(
@@ -2218,9 +2218,9 @@ class App:
                "junoOut": self.jcfg.get("outHint", ""),
                "axIn": self.axcfg.get("inHint", ""),
                "axOut": self.axcfg.get("outHint", ""),
-               "junoInDev": kbd_auto._in_dev(self.jcfg),
+               "junoInDev": kbd_auto.in_dev(self.jcfg),
                "junoOutDev": self.jcfg.get("dev", 0),
-               "axInDev": kbd_auto._in_dev(self.axcfg),
+               "axInDev": kbd_auto.in_dev(self.axcfg),
                "axOutDev": self.axcfg.get("dev", 0),
                "junoShift": self.juno_shift, "axShift": self.ax_shift,
                "songKey": loaded,
@@ -2237,28 +2237,28 @@ class App:
         if snap and now - snap[0] < 3.0:
             out["ports"], out["portStatus"] = snap[1], snap[2]
         else:
-            ins = kbd_auto._all_in_devices()
-            outs = kbd_auto._all_out_devices()
+            ins = kbd_auto.all_in_devices()
+            outs = kbd_auto.all_out_devices()
 
             def entries(devs):
                 return [{"label": l, "name": n, "dev": k} for l, n, k
-                        in kbd_auto._device_entries([n for _, n in devs])]
+                        in kbd_auto.device_entries([n for _, n in devs])]
 
             def side(devs, hint, dev):
-                hit = kbd_auto._pick_hit(devs, hint, dev)
+                hit = kbd_auto.pick_hit(devs, hint, dev)
                 if hit is None:
                     return {"hit": False}
-                pos, total = kbd_auto._name_pos(devs, hit[1], hit[0])
+                pos, total = kbd_auto.name_pos(devs, hit[1], hit[0])
                 return {"hit": True, "name": hit[1], "pos": pos, "total": total}
 
             out["ports"] = {"in": entries(ins), "out": entries(outs)}
             out["portStatus"] = {
                 "junoIn": side(ins, self.jcfg.get("inHint", ""),
-                               kbd_auto._in_dev(self.jcfg)),
+                               kbd_auto.in_dev(self.jcfg)),
                 "junoOut": side(outs, self.jcfg.get("outHint", ""),
                                 self.jcfg.get("dev", 0)),
                 "axIn": side(ins, self.axcfg.get("inHint", ""),
-                             kbd_auto._in_dev(self.axcfg)),
+                             kbd_auto.in_dev(self.axcfg)),
                 "axOut": side(outs, self.axcfg.get("outHint", ""),
                               self.axcfg.get("dev", 0))}
             self._kbd_ports_snap = (now, out["ports"], out["portStatus"])
@@ -2334,7 +2334,7 @@ class App:
         cap = kbd_auto.SlotCapture()
         try:
             port = kbd_auto.RawMidiIn(cfg["inHint"], cap.feed,
-                                      dev=kbd_auto._in_dev(cfg))
+                                      dev=kbd_auto.in_dev(cfg))
         except kbd_auto.PortNotFound as e:
             self._kbd_cap = None
             return str(e)
@@ -2367,9 +2367,9 @@ class App:
         for cfg, ipfx, opfx in ((self.jcfg, "junoInDev", "junoOutDev"),
                                 (self.axcfg, "axInDev", "axOutDev")):
             if p.get(ipfx) is not None:
-                cfg["inDev"] = kbd_auto._norm_dev(p[ipfx])
+                cfg["inDev"] = kbd_auto.norm_dev(p[ipfx])
             if p.get(opfx) is not None:
-                cfg["dev"] = kbd_auto._norm_dev(p[opfx])
+                cfg["dev"] = kbd_auto.norm_dev(p[opfx])
         self._persist_config(juno=self.jcfg, ax=self.axcfg)
         kb_changed = True
         self._apply_ports_kbd(kb_changed)
@@ -2426,8 +2426,8 @@ class App:
             return "收发器未就绪"
         # 端口同步预检：输出口不在场时提交也是石沉大海，直接给明确报错
         cfg = self.axcfg if inst == "ax" else self.jcfg
-        devs = kbd_auto._all_out_devices()
-        hit = kbd_auto._pick_hit(devs, cfg.get("outHint", ""),
+        devs = kbd_auto.all_out_devices()
+        hit = kbd_auto.pick_hit(devs, cfg.get("outHint", ""),
                                  cfg.get("dev", 0))
         if hit is None:
             return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
