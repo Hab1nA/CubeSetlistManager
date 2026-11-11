@@ -916,20 +916,22 @@ def test_loopmidi_exit_rule_functional(monkeypatch):
 
 
 def test_pedal_window_page_mute():
-    """踩钉控制页存活期整体静音：打开即 mute（页面期踩钉不触发任何动作，
-    学习/调整绑定不误触发演出动作），唯一恢复点=关页 unmute+try_open；
-    学习启动失败/取消/成功分支都不得提前 unmute（此前只有学习期静音，
-    页面开着未学习时已绑动作照常触发=用户实测误触发）。"""
-    src = _src("pedal.py")
-    body = _slice(src, "class PedalWindow", "def pedal_list_devices_safe")
-    assert "p.mute()" in body                     # 打开即静音
-    assert body.count("p.unmute()") == 1          # 唯一恢复点=_close
-    close = _slice(src, "def _close(self)", "def pedal_list_devices_safe")
-    assert "p.unmute()" in close and "p.try_open()" in close
+    """踩钉控制页存活期整体静音（web 路径）：进页 mute（页面期踩钉不
+    触发任何动作，学习/调整绑定不误触发演出动作），离页 unmute+try_open
+    且先收学习会话；旧 Tk PedalWindow 已删，静音语义收口 _pedal_mute_web。"""
+    src = _src("setlist_gui.py")
+    body = _slice(src, "def _pedal_mute_web", "def _pedal_apply_web")
+    assert body.count("p.mute()") == 1        # 进页静音（在 cancel 之后）
+    assert body.count("p.unmute()") == 1      # 唯一恢复点=离页分支
+    off = _slice(body, "else:", "return None")
+    # 离页先收学习会话再 unmute+try_open（学习者占着候选 MIDI 口）
+    assert off.index("_pedal_learn_cancel_web") < off.index("p.unmute()")
+    assert "p.try_open()" in off
     # 静音与学习通道正交（学习器 end_capture 只动 learning，不得复活触发）
-    assert "if self.silent:" in src
-    assert "self.bridge.silent = True" in src \
-        and "self.bridge.silent = False" in src
+    psrc = _src("pedal.py")
+    assert "if self.silent:" in psrc
+    assert "self.bridge.silent = True" in psrc \
+        and "self.bridge.silent = False" in psrc
 
 
 # ---- R3 复审清单（R3-1/R3-2/R3-4/R3-5）回归 ----

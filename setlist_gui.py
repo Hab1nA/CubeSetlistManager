@@ -734,7 +734,6 @@ class App:
         self._goto_ack = None           # (发送前位置, 时戳, 标签)：GOTO 无回执告警
         self.mmc_out = None             # MMC 输出口句柄（定位点 GOTO）
         self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
-        self.pedal_win = None        # pedal 监听器已在上方构造期创建
         self._pedal_learner = None   # web 学习会话 (action, Learner, deadline)
         self._pedal_learn_gen = 0    # 学习启动世代（取消/重启即作废在途构造）
         self._pedal_learn_starting = False   # 后台构造中（轮询回 starting 态）
@@ -1000,8 +999,6 @@ class App:
         g3.pack(side="left")
         ttk.Button(g3, text="键盘自动化", width=9,
                    command=self._open_kbd).pack(side="left", padx=3, pady=3)
-        ttk.Button(g3, text="踩钉控制", width=9,
-                   command=self._open_pedal).pack(side="left", padx=3, pady=3)
         dpi.setup_window(self.root)
         self.root.attributes("-topmost", self.top_most)
         # 长歌名滚动：横幅 NOW/NEXT、配置目标、音色映射、最近切换
@@ -2742,9 +2739,9 @@ class App:
         return {"active": True, "remain": max(0.0, deadline - time.time())}
 
     def _pedal_mute_web(self, on):
-        """页面存活期静音（进页 on / 离页 off，镜像 PedalWindow 开关页）。
+        """页面存活期静音（进页 on / 离页 off）。
         off 先收学习会话再恢复——学习者占着候选 MIDI 口，不关则踩钉哑到
-        下次进页（旧窗 _close 同序）。"""
+        下次进页。"""
         p = self.pedal
         if p is None:
             return None
@@ -2805,7 +2802,7 @@ class App:
                          self.pedal_long)
         self.pedal.try_open()
         # 键名对齐启动加载器（load_binding/load_hid/load_device_cfg）与
-        # PedalWindow._save：deviceHint=MIDI 口名、hidDeviceHint=设备身份
+        # deviceHint=MIDI 口名、hidDeviceHint=设备身份
         self._persist_config(
             pedal={"deviceHint": self.pedal_hint,
                    "bindings": self.pedal_binds,
@@ -3399,11 +3396,6 @@ class App:
             dt = e.get("dt") or 0
             p.bridge.inject(vk, bool(e.get("down")), t_last - dt / 1000.0)
         return {"ok": True, "n": len(events)}
-
-    def _open_pedal(self):
-        if self.pedal_win is None or not self.pedal_win.winfo_exists():
-            self.pedal_win = pedal.PedalWindow(self)
-        self.pedal_win.lift()
 
     def _thread_exc(self, a):
         """threading.excepthook：一次性后台线程的未捕获异常统一进日志
