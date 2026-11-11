@@ -53,8 +53,10 @@ def test_settings_save_obs_off_main_thread():
     src = _slice(_src("setlist_gui.py"), "def _settings_apply_web",
                  "def _pedal_get_web")
     assert "threading.Thread(target=self._apply_obs_web" in src
-    # automator：保留本地 _save 闭包形态
+    # automator：保留本地 _save 闭包形态（热应用必须后台线程+锁串行）
     src = _slice(_src("automator_gui.py"), "def _save(self)", "_MUTEX = None")
+    assert "threading.Thread(target=apply_obs" in src
+    assert "with app._obs_apply_lock" in src
     for name in ("setlist_gui.py", "automator_gui.py"):
         body = _src(name)
         assert "not app.ctl.apply_mute()" not in body, name

@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 """Cube Setlist Manager：素材库选歌编排播放列表 + Cubase 工程"先关后开"切换 +
 播完自动推进 + 键盘自动化联动 + VJ 视频联动（桥文件零改动）。
-界面分上下两段：上方=素材库/播放列表 + VJ 自动化/键盘自动化监控栏 + 日志（固定高）；
-下方控制区两行——行1(上)=播放配置独占整行（配置目标=标蓝选中曲/时长设定/设置）；
-行2=编排（加入/移除/上移/下移/清空，随标蓝启停）+播放（开始=回零从头播/暂停/
-继续=从当前位置播/回零/上一首/下一首/全停）+自动化（键盘自动化/踩钉控制）居中，
-退出靠右。
+界面唯一入口=webapp 前端（webui.py 起隐藏 Tk 根承载业务栈 + pywebview 窗加载
+/app 六页）；本模块的 App 是无头业务宿主——Tk 根只跑 mainloop/after 双循环
+（日志排水、/state 快照、端口自愈、看门狗心跳），全部人机交互走
+web_remote.py 的 HTTP 端点。
 切歌=DawController.switch_to（关闭当前工程[自动保存]→打开下一个），
 只认播放列表里的歌；自动推进=MTC 时码位置−左定位条 ≥ 工程时长×99%（FINISH_RATIO）且
 时码断流。工程时长：启动时后台全量重探（自动来源；手动设定不覆盖）+
-打开工程时重测，持久化在 playlist.json，未设定位条的用「写入时长」手填。
-直接 `python setlist_gui.py` 运行，或 PyInstaller 打包 exe（config.json、
-playlist.json 与 exe 同目录）。"""
+打开工程时重测，持久化在 playlist.json，未设定位条的在编排页手填。
+直接 `python setlist_gui.py` 运行（转投 webui.main()），或 PyInstaller 打包 exe
+（config.json、playlist.json 与 exe 同目录）。"""
 import ctypes
 import faulthandler
 import json
@@ -630,7 +629,7 @@ class App:
         self.points = {}                # lib_key → 定位点数据（_load_songs 装载）
         self._goto_ack = None           # (发送前位置, 时戳, 标签)：GOTO 无回执告警
         self.mmc_out = None             # MMC 输出口句柄（定位点 GOTO）
-        self.cur_song_path = None       # 已装载音色映射的工程路径（kbd 窗热同步用）
+        self.cur_song_path = None       # 已装载音色映射的工程路径（web 键盘页装载判定用）
         self._pedal_learner = None   # web 学习会话 (action, Learner, deadline)
         self._pedal_learn_gen = 0    # 学习启动世代（取消/重启即作废在途构造）
         self._pedal_learn_starting = False   # 后台构造中（轮询回 starting 态）
@@ -1164,7 +1163,8 @@ class App:
                 for p in data["points"]:
                     entry = dict(s, key=points.pt_key(s["key"], p["id"]),
                                  name=points.display_name(s["name"], p["name"]))
-                    if not q or q in entry["name"].lower()                             or q in s["team"].lower():
+                    if not q or q in entry["name"].lower() \
+                            or q in s["team"].lower():
                         out.append(entry)
             elif not q or q in s["name"].lower() or q in s["team"].lower():
                 out.append(s)

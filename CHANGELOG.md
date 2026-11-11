@@ -49,7 +49,7 @@
 
 ### 工程
 
-- **旧 Tk 前端整轮移除（功能/UI 解耦重构）**：PointsWindow/SettingsWindow/PedalWindow 三窗体类删除（全部业务在 web 路径有等价或超集实现），KeyboardAutoWindow 迁入 automator_gui（唯一在用产品线），kbd_auto.py 收纯功能库；隐藏 Tk 主窗骨架（_build 显示件/双列表/监控栏/跑马灯/走带按钮）拆除，_tick/_drain_calls 轮询循环纯数据化（日志只喂 log_ring+文件日志、/state 快照照常），App 降为无头业务宿主；setlist_gui.py 5254→3576 行、累计净删约 2400 行，功能面零变化（web 六页为完整镜像）。
+- **旧 Tk 前端整轮移除（功能/UI 解耦重构）**：PointsWindow/SettingsWindow/PedalWindow 三窗体类删除（全部业务在 web 路径有等价或超集实现），KeyboardAutoWindow 迁入 automator_gui（唯一在用产品线），kbd_auto.py 收纯功能库；隐藏 Tk 主窗骨架（_build 显示件/双列表/监控栏/跑马灯/走带按钮）拆除，_tick/_drain_calls 轮询循环纯数据化（日志只喂 log_ring+文件日志、/state 快照照常），App 降为无头业务宿主；setlist_gui.py 5260→3626 行，产品代码净删约 2100 行（全区间含测试工具净删 2787 行），功能面零变化（web 六页为完整镜像）。
 - CI 增加 macOS job：`ios/CubeRemoteCore` 的 `swift test` 与无签名模拟器编译。
 - `compileall` 纳入 `web_auth.py`。
 

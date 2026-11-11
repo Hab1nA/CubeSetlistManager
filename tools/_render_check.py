@@ -73,7 +73,8 @@ def classic_strays(win):
         for c in w3.winfo_children():
             stack.append(c)
             if isinstance(c, (tk.Frame, tk.Label, tk.Button, tk.LabelFrame,
-                              tk.Entry, tk.Checkbutton, tk.OptionMenu))                     and not isinstance(c, ttk.Widget):
+                              tk.Entry, tk.Checkbutton, tk.OptionMenu)) \
+                    and not isinstance(c, ttk.Widget):
                 bad.append(c)
     return bad
 

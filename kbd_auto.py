@@ -31,10 +31,6 @@ import queue
 import tempfile
 import threading
 import time
-import tkinter as tk
-import tkinter.ttk as ttk
-
-import dpi
 import midi_ble
 import midi_bridge as mb
 

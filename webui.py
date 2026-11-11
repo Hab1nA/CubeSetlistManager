@@ -66,7 +66,7 @@ def main():
 
     def tk_main():
         try:
-            import tkinter as tk        # Tk 宿主自己持有（setlist_gui 已零 tkinter 依赖）
+            import tkinter as tk        # Tk 宿主自己持有（setlist_gui 仅按需导入 messagebox/filedialog）
             root = tk.Tk()
             root.withdraw()             # Tk 主窗全程隐藏：业务面在 Web
             sg.dpi.apply_theme(root)
