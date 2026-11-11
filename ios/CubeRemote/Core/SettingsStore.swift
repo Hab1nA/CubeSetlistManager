@@ -78,7 +78,7 @@ final class SettingsStore {
     var nextNote: UInt8 {
         get {
             let n = defaults.integer(forKey: Key.nextNote)
-            return n >= 0 && n <= 127 ? UInt8(n) : 36
+            return n >= 0 && n <= 127 ? UInt8(n) : TurnNotes.next
         }
         set { defaults.set(Int(newValue), forKey: Key.nextNote) }
     }
@@ -86,7 +86,7 @@ final class SettingsStore {
     var prevNote: UInt8 {
         get {
             let n = defaults.integer(forKey: Key.prevNote)
-            return n >= 0 && n <= 127 ? UInt8(n) : 37
+            return n >= 0 && n <= 127 ? UInt8(n) : TurnNotes.prev
         }
         set { defaults.set(Int(newValue), forKey: Key.prevNote) }
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import CubeRemoteCore
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
@@ -23,13 +24,16 @@ struct SettingsView: View {
 
                 Section("MIDI 翻页") {
                     Stepper(value: nextBinding, in: 0...127) {
-                        Text("下一页音符：\(model.nextNote)")
+                        Text("下一页音符：\(NoteNames.name(Int(model.nextNote)))"
+                             + "（\(model.nextNote)）")
                     }
                     Stepper(value: prevBinding, in: 0...127) {
-                        Text("上一页音符：\(model.prevNote)")
+                        Text("上一页音符：\(NoteNames.name(Int(model.prevNote)))"
+                             + "（\(model.prevNote)）")
                     }
-                    Text("虚拟 MIDI 源名称「Cube Remote」。在谱面 App 的翻页设置里"
-                         + "学习这两个音符即可；电脑端推来的 next/prev 会发出对应音符。")
+                    Text("虚拟 MIDI 源名称「Cube Remote」，音名与电脑端 DAW 显示"
+                         + "同口径（60=C3）。在谱面 App 的翻页设置里学习这两个音符"
+                         + "即可；电脑端推来的 next/prev 会发出对应音符。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

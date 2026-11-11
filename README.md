@@ -377,7 +377,8 @@ DAW 播到头不会自己停（Cubase 实测）：程序累计走带时钟已播
 - 位置 `ios/`：SwiftUI + WKWebView 外壳，直接加载电脑端的 APP 页（8767），
   document-start 注入与 Android 同名的 `window.CubeApp` 桥，页面无需分叉。
 - 翻页：电脑推送的 `/turn` 由 `NWListener` 接收，经 CoreMIDI 虚拟源
-  「Cube Remote」发 note。默认 C2=36 下一页、C#2=37 上一页，可在 APP 设置页改；
+  「Cube Remote」发 note。默认下一页=C2、上一页=C#2（48/49，与电脑端 DAW 显示
+  口径同锚），可在 APP 设置页改；
   在 forScore / Newzik 等支持 MIDI 翻页的谱面 App 里学习该音符即可。
 - 踩钉：CoreMIDI 监听 USB / 蓝牙 MIDI 踏板，按 `note % 12 → LKC 183..194`
   （F13–F24）转发到电脑 `/pedal/event`，带 seq 去重、5s 心跳、403 停机。

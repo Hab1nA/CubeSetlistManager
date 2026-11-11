@@ -13,7 +13,8 @@ public struct BridgeState: Equatable, Sendable {
 
     public init(version: String = "0.1.0", turnMethod: String = "midi",
                 pedalForward: Bool = false, turnPort: Int = 0,
-                nextNote: Int = 36, prevNote: Int = 37,
+                nextNote: Int = Int(TurnNotes.next),
+                prevNote: Int = Int(TurnNotes.prev),
                 listening: Bool = false) {
         self.version = version
         self.turnMethod = turnMethod

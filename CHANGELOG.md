@@ -10,8 +10,9 @@
 
 - **iOS / iPadOS 遥控端**（`ios/`）：SwiftUI + WKWebView 加载同一张 APP 页，
   `window.CubeApp` 同步桥对齐安卓；翻谱改为 CoreMIDI 虚拟源「Cube Remote」
-  发音符（默认 C2/C#2，可改），踩钉支持 USB/蓝牙 MIDI 踏板经 Wi-Fi 转发；
-  支持扫码连接、配对令牌、可选的静音音频保活。纯逻辑独立为
+  发音符（默认 C2/C#2=48/49，与电脑端 DAW 显示口径同锚，`NoteNames`/
+  `TurnNotes` 单源约定+测试锁定，可改），踩钉支持 USB/蓝牙 MIDI 踏板经
+  Wi-Fi 转发；支持扫码连接、配对令牌、可选的静音音频保活。纯逻辑独立为
   `ios/CubeRemoteCore`（SwiftPM，`swift test`）。平台限制与构建步骤见
   [docs/ios.md](docs/ios.md)。
 - **可选配对令牌 + Host 白名单**（`webRemote.authToken` / `webRemote.hosts`，

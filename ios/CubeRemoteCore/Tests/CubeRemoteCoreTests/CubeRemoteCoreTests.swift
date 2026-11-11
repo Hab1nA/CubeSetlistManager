@@ -1,6 +1,27 @@
 import XCTest
 @testable import CubeRemoteCore
 
+final class NoteConventionTests: XCTestCase {
+    func testNoteNamesMatchDesktopConvention() {
+        // 与 PC 端 kbd_auto.note_name 同锚：60=C3、72=C4（Cubase 显示口径）。
+        // 两端各自实现，改口径必须同步 kbd_auto.py 与此处。
+        XCTAssertEqual(NoteNames.name(60), "C3")
+        XCTAssertEqual(NoteNames.name(72), "C4")
+        XCTAssertEqual(NoteNames.name(48), "C2")
+        XCTAssertEqual(NoteNames.name(49), "C#2")
+        XCTAssertEqual(NoteNames.name(84), "C5")
+        XCTAssertEqual(NoteNames.name(127), "G8")
+    }
+
+    func testTurnNoteDefaultsAnchor() {
+        // 与 web_remote.CMD_NEXT/CMD_PREV 同号：48/49
+        XCTAssertEqual(TurnNotes.next, 48)
+        XCTAssertEqual(TurnNotes.prev, 49)
+        XCTAssertEqual(NoteNames.name(Int(TurnNotes.next)), "C2")
+        XCTAssertEqual(NoteNames.name(Int(TurnNotes.prev)), "C#2")
+    }
+}
+
 final class HTTPParserTests: XCTestCase {
     func testPostWithBody() throws {
         let raw = "POST /turn HTTP/1.1\r\nHost: 192.168.1.5:8766\r\n"

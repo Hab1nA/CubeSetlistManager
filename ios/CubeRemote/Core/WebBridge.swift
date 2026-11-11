@@ -55,8 +55,8 @@ enum WebBridge {
               return "restart";
             },
             switchToAppPort: function(){ return true; },
-            midiNextNote: function(){ return S.nextNote || 36; },
-            midiPrevNote: function(){ return S.prevNote || 37; },
+            midiNextNote: function(){ return S.nextNote || \(TurnNotes.next); },
+            midiPrevNote: function(){ return S.prevNote || \(TurnNotes.prev); },
             setMidiNotes: function(next, prev){
               next = parseInt(next,10); prev = parseInt(prev,10);
               if(!(next>=0&&next<=127) || !(prev>=0&&prev<=127)) return false;

@@ -1084,7 +1084,7 @@ DEV_PANEL_APP = """
           <div class="sub" id="ios-note" style="display:none;margin-top:8px">
             iOS 版通过 CoreMIDI 虚拟源「Cube Remote」发送音符翻页：先在谱面
             App 的 MIDI 翻页设置里学习“下一页 / 上一页”音符（本 APP 原生设置页
-            可改，默认 C2=36 下一页、C#2=37 上一页）。电脑端推来的翻谱信号会
+            可改，默认下一页=C2、上一页=C#2，与电脑端锚点同口径）。电脑端推来的翻谱信号会
             写入本机 CoreMIDI。iOS 不允许模拟触摸或无全局媒体键，因此不再提供
             “翻页方法 / 谱面 App 选择”。</div>
       <div class="sub android-only" style="margin-top:8px">认领本机并按谱面 App 支持情况
