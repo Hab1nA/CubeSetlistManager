@@ -5,14 +5,17 @@ public enum TurnDirection: String, Sendable, Equatable {
     case prev
 }
 
-/// 电脑端 push_turn 发来的 `{"dir":"next|prev","test":1}`。
+/// 电脑端 push_turn 发来的 `{"dir":"next|prev","test":1,"t":"令牌"}`。
 public struct TurnRequest: Equatable, Sendable {
     public let direction: TurnDirection
     public let isTest: Bool
+    public let token: String
 
-    public init(direction: TurnDirection, isTest: Bool = false) {
+    public init(direction: TurnDirection, isTest: Bool = false,
+                token: String = "") {
         self.direction = direction
         self.isTest = isTest
+        self.token = token
     }
 
     public init?(body: Data) {
@@ -28,5 +31,6 @@ public struct TurnRequest: Equatable, Sendable {
         } else {
             isTest = false
         }
+        token = obj["t"] as? String ?? ""
     }
 }

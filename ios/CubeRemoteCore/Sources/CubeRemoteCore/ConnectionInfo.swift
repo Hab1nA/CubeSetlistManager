@@ -45,8 +45,12 @@ public struct ConnectionInfo: Equatable, Sendable {
 
         if text.lowercased().hasPrefix("cube://") {
             guard let comps = URLComponents(string: text) else { return nil }
-            let q = Dictionary(uniqueKeysWithValues:
-                (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            // 恶意/损坏的二维码可带重复 query 键，Dictionary(uniqueKeysWithValues:)
+            // 会 trap：首个键生效，其余忽略
+            var q: [String: String] = [:]
+            for item in comps.queryItems ?? [] where q[item.name] == nil {
+                q[item.name] = item.value ?? ""
+            }
             let host = q["host"] ?? q["ip"] ?? ""
             guard !host.isEmpty else { return nil }
             let port = Int(q["port"] ?? "") ?? 8767

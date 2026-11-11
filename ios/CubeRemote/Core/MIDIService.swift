@@ -6,12 +6,22 @@ final class MIDITurnService {
     private var client = MIDIClientRef()
     private var source = MIDIEndpointRef()
     private(set) var running = false
+    /// 虚拟源的 CoreMIDI 唯一 ID：踏板输入端据此排除自己（否则每次翻页
+    /// 的 note on/off 会被当成踏板事件转发回电脑形成回环），stop 后归零。
+    private(set) var sourceUniqueID: MIDIUniqueID = 0
 
     func start() {
         guard !running else { return }
         var status = MIDIClientCreate("CubeRemote" as CFString, nil, nil, &client)
         guard status == noErr else { return }
         status = MIDISourceCreate(client, "Cube Remote" as CFString, &source)
+        if status == noErr {
+            var uid: MIDIUniqueID = 0
+            if MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID,
+                                            &uid) == noErr {
+                sourceUniqueID = uid
+            }
+        }
         running = status == noErr
     }
 
@@ -19,6 +29,7 @@ final class MIDITurnService {
         if source != 0 { MIDIEndpointDispose(source); source = 0 }
         if client != 0 { MIDIClientDispose(client); client = 0 }
         running = false
+        sourceUniqueID = 0
     }
 
     func send(note: UInt8, on: Bool) {
@@ -46,6 +57,8 @@ final class PedalMIDIService {
     private var connected = Set<MIDIUniqueID>()
     private(set) var running = false
     var onEvent: ((UInt8, Bool) -> Void)?
+    /// 由 AppModel 注入：返回 true 的源是本 App 自己的虚拟源，不接入。
+    var isSelfSource: ((MIDIUniqueID) -> Bool)?
 
     func start() {
         guard !running else { return }
@@ -80,6 +93,7 @@ final class PedalMIDIService {
             guard MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID,
                                                &uid) == noErr else { continue }
             if connected.contains(uid) { continue }
+            if let isSelfSource, uid != 0, isSelfSource(uid) { continue }
             if MIDIPortConnectSource(port, source, nil) == noErr {
                 connected.insert(uid)
             }

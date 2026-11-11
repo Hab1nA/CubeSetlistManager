@@ -35,6 +35,7 @@ final class AppModel: ObservableObject {
         connection = store.connection
         wireServices()
         if connection != nil {
+            syncTurnToken()
             turnServer.start(port: turnPort)
             if pedalForward { startForwarder() }
             if keepAlive { try? audio.start() }
@@ -92,6 +93,7 @@ final class AppModel: ObservableObject {
         connection = info
         webError = nil
         midiOut.start()
+        syncTurnToken()
         turnServer.start(port: store.turnPort)
         if pedalForward { startForwarder() }
         if keepAlive { try? audio.start() }
@@ -106,8 +108,15 @@ final class AppModel: ObservableObject {
         pedalIn.stop()
         store.connection = nil
         connection = nil
+        syncTurnToken()
         webError = nil
         statusNote = "已断开"
+    }
+
+    /// /turn 监听口的配对令牌随连接走：未连接或未配令牌=不校验（兼容旧
+    /// 安卓端与未开 authToken 的电脑），配了就要求推送体带匹配 t 字段。
+    private func syncTurnToken() {
+        turnServer.expectedToken = connection?.token ?? ""
     }
 
     // MARK: - 翻谱 / 踩钉
@@ -134,6 +143,7 @@ final class AppModel: ObservableObject {
             startForwarder()
         } else {
             forwarder.stop()
+            pedalIn.stop()      // 转发关掉输入口也停：不留常驻回调耗资源
         }
         pushBridge()
     }
@@ -142,6 +152,11 @@ final class AppModel: ObservableObject {
         guard let connection else { return }
         pedalIn.onEvent = { [weak self] note, down in
             Task { @MainActor in self?.handlePedal(note: note, down: down) }
+        }
+        // 排除自己的虚拟源：翻谱 note on/off 不许回流成踏板事件（回环）
+        pedalIn.isSelfSource = { [weak self] uid in
+            guard let self, uid != 0 else { return false }
+            return self.midiOut.sourceUniqueID == uid
         }
         pedalIn.start()
         forwarder.start(connection: connection)
@@ -179,6 +194,7 @@ final class AppModel: ObservableObject {
         info.token = trimmed
         connection = info
         store.connection = info
+        syncTurnToken()
         pushBridge()
     }
 
@@ -190,6 +206,7 @@ final class AppModel: ObservableObject {
         guard parsed != connection else { return }
         store.connection = parsed
         connection = parsed
+        syncTurnToken()
         turnServer.start(port: store.turnPort)
         if pedalForward { startForwarder() }
         pushBridge()

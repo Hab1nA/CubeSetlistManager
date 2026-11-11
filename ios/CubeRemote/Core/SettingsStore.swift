@@ -33,9 +33,15 @@ final class SettingsStore {
                 defaults.set(c.host, forKey: Key.host)
                 defaults.set(c.port, forKey: Key.port)
                 defaults.set(c.token, forKey: Key.token)
+                // 存带 ?t= 的 URL 形态：重新点最近连接时令牌随行，否则
+                // 配了 authToken 的电脑重连即 401。旧版存的裸 host:port
+                // 条目 parse 同样认得（令牌为空）。
+                let entry = c.pageURL?.absoluteString ?? c.displayAddress
                 var list = recent
-                list.removeAll { $0 == c.displayAddress }
-                list.insert(c.displayAddress, at: 0)
+                list.removeAll {
+                    ConnectionInfo.parse($0)?.displayAddress == c.displayAddress
+                }
+                list.insert(entry, at: 0)
                 recent = Array(list.prefix(6))
             } else {
                 defaults.removeObject(forKey: Key.host)
@@ -48,6 +54,12 @@ final class SettingsStore {
     var recent: [String] {
         get { defaults.stringArray(forKey: Key.recent) ?? [] }
         set { defaults.set(newValue, forKey: Key.recent) }
+    }
+
+    /// 最近连接（含令牌）。令牌与当前连接同级存 UserDefaults，未上
+    /// Keychain——若日后有更高敏感诉求再迁移，存储形态不变。
+    var recentEntries: [ConnectionInfo] {
+        recent.compactMap { ConnectionInfo.parse($0) }
     }
 
     var token: String {

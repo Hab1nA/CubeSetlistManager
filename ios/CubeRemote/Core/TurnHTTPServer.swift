@@ -11,6 +11,10 @@ final class TurnHTTPServer {
 
     var onTurn: ((TurnDirection) -> Void)?
     var onState: ((Bool, UInt16) -> Void)?
+    /// 配对令牌（AppModel 在连接/断开/改令牌时同步；空=不校验，兼容旧
+    /// 安卓端与未配置 authToken 的电脑）。非空时 /turn 必须带匹配的 t 字段，
+    /// 否则 LAN 任意主机都能伪造翻页。
+    var expectedToken = ""
 
     func start(port: UInt16) {
         stop()
@@ -91,6 +95,10 @@ final class TurnHTTPServer {
         }
         guard let turn = TurnRequest(body: request.body) else {
             send(connection, status: 400, object: ["error": "bad turn payload"])
+            return
+        }
+        if !expectedToken.isEmpty && turn.token != expectedToken {
+            send(connection, status: 401, object: ["error": "token mismatch"])
             return
         }
         DispatchQueue.main.async { [weak self] in

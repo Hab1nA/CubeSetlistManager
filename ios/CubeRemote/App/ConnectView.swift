@@ -147,24 +147,24 @@ struct ConnectView: View {
 
     @ViewBuilder
     private var recents: some View {
-        let list = model.store.recent
+        let list = model.store.recentEntries
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("最近连接")
                     .font(.system(size: 12, weight: .semibold))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.45))
-                ForEach(list, id: \.self) { item in
+                ForEach(list, id: \.displayAddress) { entry in
                     Button {
-                        guard let parsed = ConnectionInfo.parse(item) else { return }
-                        host = parsed.host
-                        port = String(parsed.port)
-                        connect(parsed)
+                        host = entry.host
+                        port = String(entry.port)
+                        token = entry.token
+                        connect(entry)
                     } label: {
                         HStack {
                             Image(systemName: "wifi")
                                 .foregroundStyle(accent)
-                            Text(item)
+                            Text(entry.displayAddress)
                                 .font(.system(size: 15, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.9))
                             Spacer()

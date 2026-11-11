@@ -173,6 +173,23 @@ def _push_post(ip, port, body):
             return _err(e)
 
 
+# /turn 推送携带的配对令牌（webRemote.authToken 的镜像，WebRemote 起
+# 服务时刷新）：设备端监听口（iOS TurnHTTPServer）据此拒绝 LAN 任意主机
+# 的伪造翻页；未配置=空串=不携带（设备端也不校验，与旧安卓端兼容）。
+_turn_token = ""
+
+
+def _turn_body(dir_, test, token=None):
+    """构造 /turn 请求体。纯函数便于离线测试；token=None 读当前镜像。"""
+    payload = {"dir": dir_}
+    if test:
+        payload["test"] = 1
+    tok = _turn_token if token is None else token
+    if tok:
+        payload["t"] = tok
+    return json.dumps(payload)
+
+
 def push_turn(dev, dir_, tasker_port, test=False):
     """同步向单台设备推一页（语义协议：dir=next/prev；翻页方法与坐标
     组装在 APP 端按其本机设置执行，PC 不再关心方法与分辨率）。
@@ -182,7 +199,7 @@ def push_turn(dev, dir_, tasker_port, test=False):
     ip = dev.get("ip")
     if not valid_push_ip(ip):
         return False, "翻谱推送失败：%s，目标 IP 非法，仅限热点私网地址" % name
-    body = json.dumps({"dir": dir_, **({"test": 1} if test else {})})
+    body = _turn_body(dir_, test)
     t0 = time.monotonic()
     err = _push_post(ip, tasker_port, body)
     if err:
@@ -2402,6 +2419,8 @@ class WebRemote:
                      else "热点关闭失败：%s" % r.get("err"))
 
     def _start_server(self, ip):
+        global _turn_token
+        _turn_token = self.auth_token        # /turn 推送体与监听口同源令牌
         page_web, page_app = ((PAGE_LITE_BROWSER, PAGE_LITE_APP)
                               if getattr(self.app, "lite", False)
                               else (PAGE_BROWSER, PAGE_APP))

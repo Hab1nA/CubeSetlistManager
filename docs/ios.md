@@ -189,7 +189,9 @@ cd ios/CubeRemoteCore && swift test
   - 回环地址（电脑本机）免令牌；
   - 手机页面必须带 `?t=<token>` 打开，服务端会种 `HttpOnly; SameSite=Strict`
     的 Cookie，之后页面里的 `fetch` 自动携带；
-  - iOS 的原生请求（踩钉/诊断）带 `X-Cube-Token`。
+  - iOS 的原生请求（踩钉/诊断）带 `X-Cube-Token`；
+  - 电脑推给手机的 `/turn` 翻页体带 `t` 字段，iOS 监听口校验——局域网
+    其它设备无法再向手机伪造翻页。
 - `webRemote.hosts` 可加额外可信 Host（默认只认 IP 字面量 / localhost，
   防 DNS 重绑定）。
 - **已知折衷**：`/pedal/event` 与 `/diag` 对令牌豁免，以兼容未升级的

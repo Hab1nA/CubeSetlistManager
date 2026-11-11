@@ -64,6 +64,15 @@ final class TurnProtocolTests: XCTestCase {
         XCTAssertNil(TurnRequest(body: Data("{\"dir\":\"up\"}".utf8)))
         XCTAssertNil(TurnRequest(body: Data("not json".utf8)))
     }
+
+    func testTokenField() throws {
+        let t = try XCTUnwrap(TurnRequest(
+            body: Data("{\"dir\":\"next\",\"t\":\"s3cret\"}".utf8)))
+        XCTAssertEqual(t.token, "s3cret")
+        let bare = try XCTUnwrap(TurnRequest(
+            body: Data("{\"dir\":\"next\"}".utf8)))
+        XCTAssertEqual(bare.token, "")
+    }
 }
 
 final class PedalProtocolTests: XCTestCase {
@@ -126,6 +135,14 @@ final class ConnectionInfoTests: XCTestCase {
     func testRejectsEmptyOrBadPort() {
         XCTAssertNil(ConnectionInfo.parse("  "))
         XCTAssertNil(ConnectionInfo.parse("http://h:99999"))
+    }
+
+    func testDuplicateQueryKeysFirstWins() {
+        // 恶意/损坏二维码带重复键：不得 trap，首个生效
+        let c = ConnectionInfo.parse(
+            "cube://connect?host=10.0.0.1&host=10.0.0.2&port=9000&port=1")
+        XCTAssertEqual(c?.host, "10.0.0.1")
+        XCTAssertEqual(c?.port, 9000)
     }
 }
 

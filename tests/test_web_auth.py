@@ -146,3 +146,14 @@ def test_post_gate_blocks_cross_origin_before_body():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_turn_body_carries_token():
+    """authToken 配置后 /turn 推送体带 t 字段（设备端监听口据此鉴权），
+    未配置不携带——旧安卓端 optString 解析对多余字段无感。"""
+    wr = _server_module()
+    assert json.loads(wr._turn_body("next", False, "")) == {"dir": "next"}
+    assert json.loads(wr._turn_body("prev", True, "s")) == \
+        {"dir": "prev", "test": 1, "t": "s"}
+    # 镜像默认值：模块级 _turn_token 未配置=空
+    assert json.loads(wr._turn_body("next", False)) == {"dir": "next"}

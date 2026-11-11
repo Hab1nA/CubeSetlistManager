@@ -13,6 +13,9 @@ final class PedalForwarder {
         .prefix(8)).lowercased()
     private var heartbeat: Timer?
     private var stopped = true
+    /// 会话代数：stop()/start() 自增，在途请求的完成/重试回调带旧代数
+    /// 一律丢弃——否则切换电脑后旧的 403 会停掉新会话、旧重试会发到新地址。
+    private var generation = 0
     private let session: URLSession
 
     var onDisabled: ((String) -> Void)?
@@ -44,6 +47,7 @@ final class PedalForwarder {
     }
 
     func stop() {
+        generation += 1
         stopped = true
         heartbeat?.invalidate()
         heartbeat = nil
@@ -76,6 +80,7 @@ final class PedalForwarder {
 
     private func post(_ packet: PedalPacket, retry: Bool) {
         guard let endpoint, !stopped else { return }
+        let gen = generation
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -87,6 +92,7 @@ final class PedalForwarder {
             guard let self else { return }
             if let http = response as? HTTPURLResponse, http.statusCode == 403 {
                 DispatchQueue.main.async {
+                    guard self.generation == gen else { return }
                     self.stop()
                     self.onDisabled?("电脑端未启用平板转发链路")
                 }
@@ -94,6 +100,7 @@ final class PedalForwarder {
             }
             if error != nil, retry {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    guard self.generation == gen else { return }
                     self.post(packet, retry: false)
                 }
             }
