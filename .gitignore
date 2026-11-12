@@ -32,20 +32,19 @@ mobile/local.properties
 # APK 构建产物副本（源头 mobile/app/build；dist 内由 build.bat 拷入）
 /CubeRemote.apk
 
-# 可再生调试产物（日志/工具工作目录）
-out/*.log
+# 可再生调试产物（一次性调试脚本/截图/日志全部不入库；仅打包冒烟件
+# out/_smoke_dist.py 除外——build.bat 引用）
+out/*
+!out/_smoke_dist.py
 # 合并工程原型测试件（1.2GB 工程/媒体，本地保留不入库）
 out/mergetest/
 stall*.log*
 tmp*.log
+# 运行数据滚动备份（与 config.json/playlist.json 同理不入库）
+config.json.bak*
+playlist.json.bak*
 .video_agent/
 .v2c/
-
-# 子代理目检的一次性裁剪证据（可再生成）
-out/ui_shots/crops/
-out/ui_shots/review_crops/
-out/ui_shots/_audit/
-out/ui_shots/stills/
 
 # 安卓 release 签名（密钥与口令不入库；模板见 keystore.properties.example）
 mobile/keystore/
