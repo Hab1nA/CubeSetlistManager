@@ -1015,7 +1015,7 @@ def test_config_backup_and_corrupt_isolation(monkeypatch, tmp_path):
     assert (tmp_path / "playlist.json.corrupt").read_text() == "{bad"
 
 
-def test_thread_excepthook_logs(fake_app=None):
+def test_thread_excepthook_logs():
     """threading.excepthook 钩子把一次性后台线程异常送进日志队列。"""
     app = types.SimpleNamespace(q=_Q(), )
     app._thread_exc = types.MethodType(sg.App._thread_exc, app)

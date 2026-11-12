@@ -182,12 +182,14 @@ def test_apply_auth_only_skips_rebuild():
     字段照旧走 rebuild。"""
     wr = _server_module()
     web = wr.WebRemote(_App(), {})
-    rebuilt = []
-    web._rebuild = lambda: rebuilt.append(1)
-    web.server = object()          # 哨兵：apply 只判服务存在与否
-    web.apply(authToken="x", hosts=("h.lan",))
-    assert rebuilt == []
-    assert wr._turn_token == "x"
-    web.apply(enabled=True)        # 非纯门参数 → 照常重建
-    assert rebuilt == [1]
-    web.auth_token = ""
+    try:
+        rebuilt = []
+        web._rebuild = lambda: rebuilt.append(1)
+        web.server = object()      # 哨兵：apply 只判服务存在与否
+        web.apply(authToken="x", hosts=("h.lan",))
+        assert rebuilt == []
+        assert wr._turn_token == "x"
+        web.apply(enabled=True)    # 非纯门参数 → 照常重建
+        assert rebuilt == [1]
+    finally:
+        web.auth_token = ""        # 断言失败也不向后续测试泄漏令牌镜像

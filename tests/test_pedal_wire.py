@@ -488,15 +488,18 @@ def test_s13_rate_limit_storm():
         assert h.settle(0.2) == []
     finally:
         h.close()
-    # (b) 客户端真实突发 + 429 恢复：首发 POST 停顿 0.7s 令第二包积压，
-    # 恢复后连发撞 20ms 包率闸（429）→ 按 RETRY_MS 重试送达。三脚各触发
-    # 恰好一次（第三脚远离突发窗，不受恢复期节拍影响）。
+    # (b) 客户端突发 + 429 恢复：首发 POST 停顿 0.7s 令第二包积压；429
+    # 用服务端锚点注入造确定性（评审 I-FLAKE2：原赌「恢复后连发恰落 20ms
+    # 包率窗」的真实时序，负载下偶发不撞=漏 429）——锚点拨到 +1.0s：
+    # 积压双包在 ~0.7s 到达必 429，RETRY_MS=200ms 的重试在锚点过期后
+    # （~1.2s 起）送达，第三脚 ~1.9s 远离窗口。三脚各触发恰好一次。
     # 【脚间距纪律】前两脚 0.3s（>DEBOUNCE 0.15 留倍余量）——本场景考的是
     # 限流恢复，不赌 DEBOUNCE 边缘（0.15 sleep 与 DEBOUNCE 等值的零余量
     # 曾致翻车；真实踏板双踩语义由 S2/S3 专项覆盖）。
     h2 = Harness({"next": VK_NEXT})
     h2.enable_remote()
     try:
+        h2.app._pedal_rate[DEVICE] = time.monotonic() + 1.0   # 未来锚点（同 (a) 注入手法）
         h2.sim._stall_once = 0.7        # 首发 POST 停顿 ⇒ 第二包积压成突发
         h2.sim.pulse("next", width_ms=10)
         time.sleep(0.3)                 # 第二包在停顿窗内入队（余量 >400ms）

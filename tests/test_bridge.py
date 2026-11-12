@@ -301,9 +301,10 @@ def test_song_duration():
     finally:
         os.unlink(path)
 
-    # 真歌冒烟（存在才验）：数值须落在勘查实证区间
-    real = pathlib.Path(r"C:\Users\XKZ\Documents\Studio One Projects\LinGo"
-                        r"\3.21演出\3.21演出.song")
+    # 真歌冒烟（存在才验，库根走 CUBE_S1_PROJECTS_ROOT 环境变量与 e2e 同源）：
+    # 数值须落在勘查实证区间
+    real = (pathlib.Path(os.environ.get("CUBE_S1_PROJECTS_ROOT", ""))
+            / "LinGo" / "3.21演出" / "3.21演出.song")
     if real.exists():
         d = song_meta.read_duration(str(real))
         assert d and 1500 < d < 2200     # 25~37 分钟界内（对表前宽松界）
