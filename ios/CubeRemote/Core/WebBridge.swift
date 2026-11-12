@@ -58,15 +58,15 @@ enum WebBridge {
               // 轻校验（与 ConnectionInfo.parse 同规）：host:port / http(s)
               // URL / cube://connect?host=…——非法直接回 invalid，不再乐观
               // 回 restart 造成「已保存+格式不对」双重矛盾反馈
-              if(/^cube:\/\//i.test(s)){
+              if(/^cube:\\/\\//i.test(s)){
                 var qp = new URLSearchParams(s.split("?")[1] || "");
                 if(!(qp.get("host") || qp.get("ip"))) return "invalid";
                 post({cmd:"requestAddress", value:s});
                 return "restart";
               }
               var url = s;
-              if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = "http://" + url;
-              if(!/^https?:\/\//i.test(url)) return "invalid";
+              if(!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(url)) url = "http://" + url;
+              if(!/^https?:\\/\\//i.test(url)) return "invalid";
               var probe = document.createElement("a");
               probe.href = url;
               var port = probe.port ? parseInt(probe.port, 10) : 8767;
