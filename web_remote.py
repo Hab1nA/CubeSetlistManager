@@ -1012,8 +1012,12 @@ function cmd(action,index,key){
 }
 
 function refresh(){
-  fetch("/state",{cache:"no-store"}).then(function(r){return r.json()})
-    .then(function(j){st=j;setConn(true);render();renderLive()},
+  fetch("/state",{cache:"no-store"}).then(function(r){
+      if(!r.ok){setConn(false);
+        if(r.status===401)$("bt").textContent="需要配对令牌（401）";
+        return null}
+      return r.json()})
+    .then(function(j){if(!j)return;st=j;setConn(true);render();renderLive()},
           function(){setConn(false)});
     // 断线只靠徽标表达（每秒重试 toast 会常驻闪现且暴露原始错误文案）
   try{if(window.updateAcc)updateAcc()}catch(e){}
@@ -1516,6 +1520,8 @@ class WebServer(ThreadingHTTPServer):
             def auth():
                 return hosts, token
         self.auth = auth
+        self._diag_gwin = [0.0, 0]          # /diag 全局限流窗：[窗起点, 窗内包数]
+        self._diag_gwin_lock = threading.Lock()
         super().__init__(addr, _Handler)
 
     def handle_error(self, request, client_address):
@@ -1714,8 +1720,17 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard(path):
             return
         try:
-            n = min(int(self.headers.get("Content-Length") or 0), 1 << 20)
-            body = json.loads(self.rfile.read(n) or b"{}")
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > (1 << 20):
+            # 超 1MB：明确回 413 并关连接——静默截断会让剩余字节被 keep-alive
+            # 当作下一个请求解析，造成会话错乱
+            self._json(413, {"error": "请求体超限（>1MB）"})
+            self.close_connection = True
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError
         except ValueError:
@@ -1847,12 +1862,18 @@ class _Handler(BaseHTTPRequestHandler):
             return {"key": key, "name": e["display"], "dur": _fmt_dur(sec),
                     "durSec": sec, "durSrc": src, "pt": p is not None}
 
-        lib = []
-        for s in getattr(app, "_lib_view", list)():
-            v = view(s["key"], s["name"])
-            v["team"] = s["team"]
-            lib.append(v)
-        pl = [view(k, None) for k in app.pl_keys]
+        lib, pl = [], []
+        for _ in range(3):    # 迭代中 Tk 线程重建列表 → RuntimeError；重取（与 /log 同款）
+            try:
+                for s in getattr(app, "_lib_view", list)():
+                    v = view(s["key"], s["name"])
+                    v["team"] = s["team"]
+                    lib.append(v)
+                pl = [view(k, None) for k in app.pl_keys]
+                break
+            except RuntimeError:
+                lib, pl = [], []
+                continue
         self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
 
     def _h_points(self):
@@ -1863,15 +1884,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无定位点"})
             return
         out = {}
-        for key, data in pts.items():
-            song = app.by_key.get(key)
-            out[key] = {"name": song["name"] if song else key,
-                        "enabled": bool(data["enabled"]),
-                        # 出口防御：内存毒化值（NaN/Infinity）不得进 JSON
-                        "points": [{"id": p["id"], "name": p["name"],
-                                    "start": cpr_meta.safe_dur(p["start"]),
-                                    "end": cpr_meta.safe_dur(p["end"])}
-                                   for p in data["points"]]}
+        for _ in range(3):    # 迭代中 Tk 线程重建 dict → RuntimeError；重取（与 /log 同款）
+            try:
+                out = {}
+                for key, data in pts.items():
+                    song = app.by_key.get(key)
+                    out[key] = {"name": song["name"] if song else key,
+                                "enabled": bool(data["enabled"]),
+                                # 出口防御：内存毒化值（NaN/Infinity）不得进 JSON
+                                "points": [{"id": p["id"], "name": p["name"],
+                                            "start": cpr_meta.safe_dur(p["start"]),
+                                            "end": cpr_meta.safe_dur(p["end"])}
+                                           for p in data["points"]]}
+                break
+            except RuntimeError:
+                continue
         self._json(200, {"projects": out,
                          # 定位点能力位：仅 Cubase 支持；MMC 输出口就绪与否
                          "cubase": bool(getattr(
@@ -2044,8 +2071,12 @@ class _Handler(BaseHTTPRequestHandler):
         if getattr(self.server.app, "lite", False):
             self._json(403, {"error": "简化版无键盘自动化"})
             return
+        note = body.get("note")
+        if isinstance(note, bool) or not isinstance(note, int):
+            self._json(400, {"error": "note 应为整数"})
+            return
         self._run_on_app(lambda: self.server.app._kbd_test_web(
-            str(body.get("inst") or "juno"), int(body.get("note") or 0),
+            str(body.get("inst") or "juno"), note,
             song_key=body.get("songKey") or None))
 
     def _h_slot_set(self, body, _ip):
@@ -2191,7 +2222,8 @@ class _Handler(BaseHTTPRequestHandler):
             if now - app._pedal_rate.get(device, 0.0) < 0.02:
                 self._json(429, {"error": "包率超限"})
                 return
-            if device not in app._pedal_rate                     and len(app._pedal_rate) >= 32:
+            if device not in app._pedal_rate \
+                    and len(app._pedal_rate) >= 32:
                 del app._pedal_rate[next(iter(app._pedal_rate))]
             app._pedal_rate[device] = now
             app._pedal_seq[key] = seq
@@ -2303,11 +2335,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _h_diag(self, body, ip):
         """APP 侧诊断回传：把翻谱推送处理时的内部状态直接打进电脑日志。
-        写的是主线程消费队列（无界），加私网来源门——误接公共 WiFi 时
-        LAN 任意主机不得灌日志（与 /pedal/event 同门）。"""
+        写的是主线程消费队列（无界），加私网来源门 + 全局限流窗——误接
+        公共 WiFi 时 LAN 任意主机（含同网段）不得灌日志。"""
         if not valid_push_ip(ip):   # 含环回；公网/链路本地拒
             self._json(403, {"error": "仅限私网来源"})
             return
+        # 全局限流（与 /pedal/event 同窗构架）：diag 合法量极小，20/s 足够
+        now = time.monotonic()
+        gwin = self.server._diag_gwin
+        with self.server._diag_gwin_lock:
+            if now - gwin[0] >= 1.0:
+                gwin[0], gwin[1] = now, 1
+            else:
+                gwin[1] += 1
+                if gwin[1] > 20:
+                    self._json(429, {"error": "包率超限"})
+                    return
         msg = str(body.get("msg") or "")[:500]
         if msg:
             self.server.app.q.put("APP 诊断：%s" % msg)

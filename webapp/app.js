@@ -729,6 +729,15 @@ async function poll() {
       render(stState);
       stCur = stState.cur;
       sbNote();
+    } else if (r.status === 401) {
+      // 401 是可解释态（忘带配对令牌），与真断网区分——原被吞进「连接
+      // 中断…重试中」，现场排障分不清
+      const b = await r.json().catch(() => ({}));
+      const el = $("#sb-note");
+      el.textContent = b.needToken
+          ? "需要配对令牌：用设置页扫码/链接（带 ?t=）打开本页"
+          : "需要认证（401）";
+      el.classList.add("err");
     } else {
       throw new Error(r.status);
     }
