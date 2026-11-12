@@ -74,11 +74,9 @@ final class TurnProtocolTests: XCTestCase {
     func testDecode() throws {
         let next = try XCTUnwrap(TurnRequest(body: Data("{\"dir\":\"next\"}".utf8)))
         XCTAssertEqual(next.direction, .next)
-        XCTAssertFalse(next.isTest)
         let prev = try XCTUnwrap(TurnRequest(
             body: Data("{\"dir\":\"prev\",\"test\":1}".utf8)))
-        XCTAssertEqual(prev.direction, .prev)
-        XCTAssertTrue(prev.isTest)
+        XCTAssertEqual(prev.direction, .prev)   // test 旗标 iOS 不解析，按正常翻页演示
     }
 
     func testRejectsUnknownDirection() {

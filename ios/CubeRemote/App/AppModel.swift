@@ -18,6 +18,9 @@ final class AppModel: ObservableObject {
 
     let store = SettingsStore.shared
     private weak var webView: WKWebView?
+    /// 首次连接/改地址：页面标题核验通过（pageDidLoad）才写 store——连错
+    /// 设备不再把坏地址存成有效连接、重启自动直连错误页面（对齐 Android）
+    private var pendingPersist = false
     private let turnServer = TurnHTTPServer()
     // CoreMIDI / AVAudioEngine 首次创建可能要几百毫秒，延后到真正用到时，
     // 避免启动画面被拖成白屏。
@@ -67,6 +70,10 @@ final class AppModel: ObservableObject {
     func pageDidLoad() {
         pageLoaded = true
         webError = nil
+        if pendingPersist {
+            store.connection = connection   // 标题核验通过才落库
+            pendingPersist = false
+        }
         pushBridge()
     }
 
@@ -89,7 +96,9 @@ final class AppModel: ObservableObject {
     }
 
     func connect(_ info: ConnectionInfo) {
-        store.connection = info
+        // 不立即持久化：标题核验通过（pageDidLoad）才写 store——连错设备
+        // 不再把坏地址存成有效连接（对齐 Android 内容核验）
+        pendingPersist = true
         connection = info
         webError = nil
         midiOut.start()
@@ -108,6 +117,7 @@ final class AppModel: ObservableObject {
         pedalIn.stop()
         store.connection = nil
         connection = nil
+        pendingPersist = false
         syncTurnToken()
         webError = nil
         statusNote = "已断开"
@@ -204,7 +214,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard parsed != connection else { return }
-        store.connection = parsed
+        pendingPersist = true
         connection = parsed
         syncTurnToken()
         turnServer.start(port: store.turnPort)
@@ -221,11 +231,6 @@ final class AppModel: ObservableObject {
         case "setTurnPort":
             if let n = body["value"] as? NSNumber {
                 setTurnPort(UInt16(clamping: n.intValue))
-            }
-        case "setMidiNotes":
-            if let arr = body["value"] as? [NSNumber], arr.count == 2 {
-                setMidiNotes(next: UInt8(clamping: arr[0].intValue),
-                             prev: UInt8(clamping: arr[1].intValue))
             }
         case "requestAddress":
             if let text = body["value"] as? String { changeAddress(text) }

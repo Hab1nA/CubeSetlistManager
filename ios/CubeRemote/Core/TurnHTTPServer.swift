@@ -84,11 +84,6 @@ final class TurnHTTPServer {
     }
 
     private func respond(_ connection: NWConnection, request: HTTPRequest) {
-        if request.method == "GET" && request.path == "/health" {
-            send(connection, status: 200,
-                 object: ["ok": true, "app": "CubeRemote", "port": Int(port)])
-            return
-        }
         guard request.method == "POST", request.path == "/turn" else {
             send(connection, status: 404, object: ["error": "not found"])
             return

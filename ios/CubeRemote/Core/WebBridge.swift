@@ -29,12 +29,6 @@ enum WebBridge {
             openUsageAccess: function(){},
             openAccSettings: function(){ post({cmd:"openSettings"}); },
             turnMethod: function(){ return S.turnMethod || "midi"; },
-            setTurnMethod: function(v){
-              if(v !== "midi") return false;
-              S.turnMethod = "midi";
-              post({cmd:"setTurnMethod", value:"midi"});
-              return true;
-            },
             pedalForward: function(){ return S.pedalForward === true; },
             setPedalForward: function(on){
               on = !!on; S.pedalForward = on;
@@ -51,19 +45,28 @@ enum WebBridge {
             },
             requestAddressChange: function(u){
               if(!u) return "invalid";
-              post({cmd:"requestAddress", value:String(u)});
+              var s = String(u).trim();
+              if(!s) return "invalid";
+              // 轻校验（与 ConnectionInfo.parse 同规）：host:port / http(s)
+              // URL / cube://connect?host=…——非法直接回 invalid，不再乐观
+              // 回 restart 造成「已保存+格式不对」双重矛盾反馈
+              if(/^cube:\/\//i.test(s)){
+                var qp = new URLSearchParams(s.split("?")[1] || "");
+                if(!(qp.get("host") || qp.get("ip"))) return "invalid";
+                post({cmd:"requestAddress", value:s});
+                return "restart";
+              }
+              var url = s;
+              if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = "http://" + url;
+              if(!/^https?:\/\//i.test(url)) return "invalid";
+              var probe = document.createElement("a");
+              probe.href = url;
+              var port = probe.port ? parseInt(probe.port, 10) : 8767;
+              if(!probe.hostname || !(port >= 1 && port <= 65535)) return "invalid";
+              post({cmd:"requestAddress", value:s});
               return "restart";
             },
-            switchToAppPort: function(){ return true; },
-            midiNextNote: function(){ return S.nextNote || \(TurnNotes.next); },
-            midiPrevNote: function(){ return S.prevNote || \(TurnNotes.prev); },
-            setMidiNotes: function(next, prev){
-              next = parseInt(next,10); prev = parseInt(prev,10);
-              if(!(next>=0&&next<=127) || !(prev>=0&&prev<=127)) return false;
-              S.nextNote = next; S.prevNote = prev;
-              post({cmd:"setMidiNotes", value:[next, prev]});
-              return true;
-            }
+            switchToAppPort: function(){ return true; }
           };
         })();
         """

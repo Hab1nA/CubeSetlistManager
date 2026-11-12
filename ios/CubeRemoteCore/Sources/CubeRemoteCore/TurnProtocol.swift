@@ -5,16 +5,14 @@ public enum TurnDirection: String, Sendable, Equatable {
     case prev
 }
 
-/// 电脑端 push_turn 发来的 `{"dir":"next|prev","test":1,"t":"令牌"}`。
+/// 电脑端 push_turn 发来的 `{"dir":"next|prev","t":"令牌"}`。test 旗标
+/// iOS 不解析（测试推送=当次翻页演示，行为与正常推送一致）。
 public struct TurnRequest: Equatable, Sendable {
     public let direction: TurnDirection
-    public let isTest: Bool
     public let token: String
 
-    public init(direction: TurnDirection, isTest: Bool = false,
-                token: String = "") {
+    public init(direction: TurnDirection, token: String = "") {
         self.direction = direction
-        self.isTest = isTest
         self.token = token
     }
 
@@ -24,13 +22,6 @@ public struct TurnRequest: Equatable, Sendable {
         guard let raw = obj["dir"] as? String,
               let dir = TurnDirection(rawValue: raw) else { return nil }
         direction = dir
-        if let flag = obj["test"] as? Bool {
-            isTest = flag
-        } else if let n = obj["test"] as? NSNumber {
-            isTest = n.intValue != 0
-        } else {
-            isTest = false
-        }
         token = obj["t"] as? String ?? ""
     }
 }
