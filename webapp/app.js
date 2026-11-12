@@ -1272,12 +1272,6 @@ async function refreshPoints() {
     $("#dt-body").hidden = !hasSel;
     if (!hasSel) return;
     ptProj = plSel;
-    const song = plCache && (plCache.lib.find(x => x.key === plSel)
-                              || (plCache.pl || []).find(x => x.key === plSel));
-    $("#dt-title").textContent = "曲目详情 · "
-        + ((song ? song.name.split(" · ")[0] : "")
-           || (ptData[plSel] || {}).name || plSel);
-    marquee($("#dt-title"));
     const dd = ptData[ptProj] || {enabled: false, points: []};
     if (!ptOnPending) setTgl($("#pt-on"), dd.enabled);
     if (ptSelPending !== null) {   // 点行点击：选中该点并填编辑表单
@@ -1290,6 +1284,16 @@ async function refreshPoints() {
         $("#pt-e").value = fmtTC(pp.end);
       }
     }
+    const song = plCache && (plCache.lib.find(x => x.key === plSel)
+                              || (plCache.pl || []).find(x => x.key === plSel));
+    const selP = ptSel !== null ? dd.points.find(x => x.id === ptSel) : null;
+    // 标题同播放列表/NOW 口径：选中点行=「歌 · 点名」（display_name 同源
+    // ——/points 的 name 是裸工程名，点名单独拼），未选点=裸工程名
+    $("#dt-title").textContent = "曲目详情 · "
+        + ((song ? song.name.split(" · ")[0] : "")
+           || (ptData[plSel] || {}).name || plSel)
+        + (selP ? " · " + selP.name : "");
+    marquee($("#dt-title"));
     dtPtN = dd.points.length;
     updateDtBadge();
     // 主列表（差量：签名不变不动 DOM）
