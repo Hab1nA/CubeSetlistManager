@@ -54,11 +54,12 @@ struct WKWebViewHost: UIViewRepresentable {
             // 连接核验（对齐 Android 三层防黑屏的标题层）：didFinish 只说明
             // HTML 到手；标题前缀「Cube 遥控」对上才算有效连接（pageDidLoad
             // 此刻才把首次连接/改址持久化），不符走错误页可重试
-            webView.evaluateJavaScript("document.title") { [weak model] title, _ in
+            webView.evaluateJavaScript("document.title") { [weak model, weak webView] title, _ in
                 let ok = (title as? String)?.hasPrefix("Cube 遥控") == true
+                let url = webView?.url
                 Task { @MainActor in
                     if ok {
-                        model?.pageDidLoad()
+                        model?.pageDidLoad(for: url)
                     } else {
                         model?.pageFailed(
                             "页面标题不符：连上的不是 Cube Setlist Manager 服务")

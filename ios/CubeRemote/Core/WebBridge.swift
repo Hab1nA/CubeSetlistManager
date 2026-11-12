@@ -29,6 +29,14 @@ enum WebBridge {
             openUsageAccess: function(){},
             openAccSettings: function(){ post({cmd:"openSettings"}); },
             turnMethod: function(){ return S.turnMethod || "midi"; },
+            setTurnMethod: function(v){
+              // iOS 翻谱走 MIDI 唯一路（无障碍手势/媒体键不存在）：仅接受
+              // midi，其余回 false 让页面走「设置失败」分支——共享页面模板
+              // 会真调用（复审攻击轮：删函数=按钮 TypeError 静默死亡）
+              if(v !== "midi") return false;
+              S.turnMethod = "midi";
+              return true;
+            },
             pedalForward: function(){ return S.pedalForward === true; },
             setPedalForward: function(on){
               on = !!on; S.pedalForward = on;

@@ -25,12 +25,12 @@ if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\playlist.json" dist\_playlist.bak >nul
 ) else (
   echo dist\Cube Setlist Manager missing config, fallback to root copies
-  copy /y config.json dist\_config.bak >nul
-  copy /y playlist.json dist\_playlist.bak >nul
+  copy /y config.json dist\_config.bak >nul || goto :err
+  copy /y playlist.json dist\_playlist.bak >nul || goto :err
 )
 pyinstaller "Cube Setlist Manager.spec" --noconfirm || goto :err
-copy /y dist\_config.bak "dist\Cube Setlist Manager\config.json" >nul
-copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul
+copy /y dist\_config.bak "dist\Cube Setlist Manager\config.json" >nul || goto :err
+copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul || goto :err
 del dist\_config.bak dist\_playlist.bak >nul
 rem smoke: boot packed exe, assert /app loads+nav+no JS error (guards silent Tk fallback)
 py out\_smoke_dist.py || goto :err

@@ -271,7 +271,9 @@ class TurnService : Service() {
         } catch (e: Exception) {
             bindFailed = true
             reportDiag("端口 $port 监听失败：可能被占用")
-            false
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIFY_ID, buildNotification())   // 失败即刻刷新通知，
+            false                                         //   不再保持旧「就绪」文案
         }
     }
 

@@ -19,8 +19,9 @@ final class AppModel: ObservableObject {
     let store = SettingsStore.shared
     private weak var webView: WKWebView?
     /// 首次连接/改地址：页面标题核验通过（pageDidLoad）才写 store——连错
-    /// 设备不再把坏地址存成有效连接、重启自动直连错误页面（对齐 Android）
-    private var pendingPersist = false
+    /// 设备不再把坏地址存成有效连接、重启自动直连错误页面（对齐 Android）。
+    /// 记待核验对象本身：核验异步窗口内改址/换令牌不把未核验对象落库
+    private var pendingPersist: ConnectionInfo?
     private let turnServer = TurnHTTPServer()
     // CoreMIDI / AVAudioEngine 首次创建可能要几百毫秒，延后到真正用到时，
     // 避免启动画面被拖成白屏。
@@ -67,13 +68,14 @@ final class AppModel: ObservableObject {
         pushBridge()
     }
 
-    func pageDidLoad() {
+    func pageDidLoad(for verified: URL?) {
         pageLoaded = true
         webError = nil
-        if pendingPersist {
-            store.connection = connection   // 标题核验通过才落库
-            pendingPersist = false
-        }
+        if let pending = pendingPersist, pending == connection,
+           verified == connection?.pageURL {
+            store.connection = connection   // 标题核验通过且核验的正是当前
+            pendingPersist = nil            //   待核验连接才落库（异步窗口
+        }                                   //   内改址/换令牌不误写 store）
         pushBridge()
     }
 
@@ -98,7 +100,7 @@ final class AppModel: ObservableObject {
     func connect(_ info: ConnectionInfo) {
         // 不立即持久化：标题核验通过（pageDidLoad）才写 store——连错设备
         // 不再把坏地址存成有效连接（对齐 Android 内容核验）
-        pendingPersist = true
+        pendingPersist = info
         connection = info
         webError = nil
         midiOut.start()
@@ -117,7 +119,7 @@ final class AppModel: ObservableObject {
         pedalIn.stop()
         store.connection = nil
         connection = nil
-        pendingPersist = false
+        pendingPersist = nil
         syncTurnToken()
         webError = nil
         statusNote = "已断开"
@@ -203,7 +205,9 @@ final class AppModel: ObservableObject {
         guard info.token != trimmed else { return }
         info.token = trimmed
         connection = info
-        store.connection = info
+        if pendingPersist == nil {
+            store.connection = info   // 待核验窗口内换令牌只改内存，落库
+        }                             //   等标题核验通过一并写（复审攻击轮）
         syncTurnToken()
         pushBridge()
     }
@@ -214,7 +218,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard parsed != connection else { return }
-        pendingPersist = true
+        pendingPersist = parsed
         connection = parsed
         syncTurnToken()
         turnServer.start(port: store.turnPort)

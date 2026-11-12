@@ -49,11 +49,17 @@ DAW_DEFAULTS = _ac.DAW_DEFAULTS
 
 
 def daw_settings(cfg, daw):
-    """DAW 路径段归一（Automator 独立平铺版：dawSettings > 旧 cubase 段 >
-    默认。完整版已升级按底座子段，此处独立产品线不随迁，非同规则）。"""
+    """DAW 路径段归一（两窗共存口径：完整版嵌套子段 dawSettings.<daw> >
+    旧平铺 dawSettings > 旧 cubase 段 > 默认）。完整版保存后的纯嵌套文件里
+    平铺键已收编消失，只认平铺会让完整版配好的工程库在 automator 里不可见
+    （复审攻击轮：跨窗 schema 互踩）。automator 恒用 cubase 底座。"""
+    sec = cfg.get("dawSettings") or {}
     s = {}
     s.update(cfg.get("cubase") or {})
-    s.update(cfg.get("dawSettings") or {})
+    s.update({k: v for k, v in sec.items() if isinstance(v, str)})
+    sub = sec.get(daw)
+    if isinstance(sub, dict):
+        s.update(sub)
     legacy = s.pop("cubaseExe", None)
     if legacy:
         s.setdefault("dawExe", legacy)
@@ -1351,8 +1357,9 @@ class SettingsWindow(tk.Toplevel):
         self.attributes("-alpha", 1)
 
     def _load_web_status(self):
-        """按服务网络模式查热点状态或本机网卡候选（完整版 _load_web_status
-        同款：PS 要数秒走后台线程，回主线程刷新状态/IP/候选/端口探测）。"""
+        """按服务网络模式查热点状态或本机网卡候选（PS 要数秒走后台线程，
+        回主线程刷新状态/IP/候选/端口探测；完整版 Tk 设置页已移除，无同款
+        函数可引）。"""
         lan = str(self.app.web_cfg.get("mode") or "hotspot") == "lan"
         st, cands = {}, []
         if lan:
@@ -1533,8 +1540,16 @@ class SettingsWindow(tk.Toplevel):
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
             cfg["obs"] = obs
-            daw_sec = cfg.get("dawSettings") or cfg.get("cubase") or {}
-            if proj:
+            daw_sec = cfg.get("dawSettings") or {}
+            if any(isinstance(v, dict) for v in daw_sec.values()):
+                # 完整版嵌套 schema：写进本底座子段（automator 恒 cubase）——
+                # 平铺写法会被完整版下次保存静默丢弃（复审攻击轮）
+                sub = daw_sec.get("cubase")
+                if not isinstance(sub, dict):
+                    sub = {}
+                    daw_sec["cubase"] = sub
+                sub["projectsRoot"] = proj
+            elif proj:
                 daw_sec["projectsRoot"] = proj
             cfg["dawSettings"] = daw_sec
             cfg["webRemote"] = app._web_config_payload()
