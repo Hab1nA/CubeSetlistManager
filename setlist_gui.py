@@ -42,7 +42,8 @@ import song_meta
 import stallguard
 import ui_text
 import web_remote
-from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
+import app_common as _ac
+from obs_ctrl import ObsController, find_processes_by_prefix, \
     launch_detached, list_screens, close_obs_app, close_loopmidi
 
 FOLLOW = ui_text.FOLLOW
@@ -95,63 +96,11 @@ def _log_lv(msg):
     return ""
 
 
-def _find_cubase_exe():
-    r"""扫 Program Files\Steinberg 各版本目录，取版本号最高的 Cubase<N>.exe
-    （N 取自 exe 文件名，兼容「Cubase Pro 13」式目录名；升级 Cubase 无需改路径）。"""
-    base = r"C:\Program Files\Steinberg"
-    try:
-        dirs = os.listdir(base)
-    except OSError:
-        return None
-    best = None
-    for d in dirs:
-        if "cubase" not in d.lower():
-            continue
-        try:
-            exes = os.listdir(os.path.join(base, d))
-        except OSError:
-            continue
-        for e in exes:
-            m = re.fullmatch(r"Cubase(\d+)\.exe", e)
-            if m and (best is None or int(m.group(1)) > best[0]):
-                best = (int(m.group(1)), os.path.join(base, d, e))
-    return best[1] if best else None
+_find_cubase_exe = _ac.find_cubase_exe    # 上移 app_common（评审 I-DUP-24）
 
 
-def _find_s1_exe():
-    r"""扫 Program Files\PreSonus 各版本目录，取版本号最高的 Studio One.exe
-    （版本号取自目录名，如「Studio One 7」；升级无需改路径）。"""
-    base = r"C:\Program Files\PreSonus"
-    try:
-        dirs = os.listdir(base)
-    except OSError:
-        return None
-    best = None
-    for d in dirs:
-        if "studio one" not in d.lower():
-            continue
-        try:
-            if "Studio One.exe" not in os.listdir(os.path.join(base, d)):
-                continue
-        except OSError:
-            continue
-        m = re.search(r"(\d+)", d)
-        v = int(m.group(1)) if m else 0
-        if best is None or v > best[0]:
-            best = (v, os.path.join(base, d, "Studio One.exe"))
-    return best[1] if best else None
-
-
-# 各底座的默认路径（exe 探测失败时的兜底 + 全新配置的工程库默认值）
-DAW_DEFAULTS = {
-    "cubase": {"exe": (_find_cubase_exe()
-                       or r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"),
-               "root": r"C:\Users\XKZ\Documents\Cubase Projects"},
-    "studioone": {"exe": (_find_s1_exe()
-                          or r"C:\Program Files\PreSonus\Studio One 7"
-                             r"\Studio One.exe"),
-                  "root": r"C:\Users\XKZ\Documents\Studio One\Songs"},
-}
+_find_s1_exe = _ac.find_s1_exe
+DAW_DEFAULTS = _ac.DAW_DEFAULTS
 
 
 def daw_settings(cfg, daw):
@@ -181,28 +130,35 @@ def daw_settings(cfg, daw):
     s["projectsRoot"] = os.path.normpath(s["projectsRoot"])
     return s
 
-if getattr(sys, "frozen", False):   # PyInstaller exe：数据文件放 exe 同目录
-    _HERE = pathlib.Path(sys.executable).resolve().parent
-else:
-    _HERE = pathlib.Path(__file__).resolve().parent
-CONFIG_PATH = _HERE / "config.json"
-PLAYLIST_PATH = _HERE / "playlist.json"
-# 滚动备份/损坏隔离文件：全部字面量常量（扫描器可静态判定无穿越面）
-_CONFIG_BAKS = (_HERE / "config.json.bak", _HERE / "config.json.bak2",
-                _HERE / "config.json.bak3")
-_CONFIG_CORRUPT = _HERE / "config.json.corrupt"
-_PLAYLIST_BAKS = (_HERE / "playlist.json.bak", _HERE / "playlist.json.bak2",
-                  _HERE / "playlist.json.bak3")
-_PLAYLIST_CORRUPT = _HERE / "playlist.json.corrupt"
+_HERE = _ac.HERE
+CONFIG_PATH = _ac.CONFIG_PATH
+PLAYLIST_PATH = _ac.HERE / "playlist.json"
+_CONFIG_BAKS = _ac.CONFIG_BAKS
+_CONFIG_CORRUPT = _ac.CONFIG_CORRUPT
+_PLAYLIST_BAKS = (_ac.HERE / "playlist.json.bak",
+                  _ac.HERE / "playlist.json.bak2",
+                  _ac.HERE / "playlist.json.bak3")
+_PLAYLIST_CORRUPT = _ac.HERE / "playlist.json.corrupt"
 _CRASH_LOG = None                  # faulthandler 落盘句柄，防 GC
+_check_in_here = _ac.check_in_here
+_rotate = _ac.rotate
+_err = _ac.err_str
+scan_library = _ac.scan_library
 
 
-def _check_in_here(p):
-    """写入前校验：规范化后必须仍落在程序目录内（防路径越界）。"""
-    p = pathlib.Path(p).resolve()
-    if p.parent != _HERE:
-        raise ValueError("数据文件路径越界：%s" % p)
-    return p
+def _load_config():
+    """机制上移 app_common（.corrupt 隔离/fsync/滚动备份）；壳读本模块
+    常量——测试 monkeypatch sg 属性换路径的调用面不变。"""
+    return _ac.load_config_at(CONFIG_PATH, _CONFIG_CORRUPT)
+
+
+def _save_config(cfg):
+    _ac.save_config_at(cfg, CONFIG_PATH, _CONFIG_BAKS, _CONFIG_CORRUPT,
+                       here=_HERE)
+
+
+def _atomic_write(path, text):
+    _ac.atomic_write(path, text, here=_HERE)
 
 
 # ---- 文件日志（审计 #15：q 消费漏斗单点接入；专用线程异步落盘——
@@ -265,22 +221,6 @@ class _FileLog:
 
 
 _FILE_LOG = None    # App.__init__ 里惰性创建（避免 import 期副作用）
-
-
-def _rotate(baks, path):
-    """写前滚动备份：bak2→bak3、bak→bak2、当前→bak（误存坏数据可回退
-    最近三次；路径全部来自模块级字面量常量）。当前文件不可解析（损坏且
-    .corrupt 改名失败的残余）时不入备份链——不顶掉最近的好备份。"""
-    for i in range(len(baks) - 1, 0, -1):
-        if baks[i - 1].exists():
-            os.replace(str(baks[i - 1]), str(baks[i]))
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as f:
-                json.load(f)
-        except (ValueError, OSError):
-            return
-        shutil.copy(str(path), str(baks[0]))
 
 
 # ---- OBS WebSocket 密码 DPAPI 加密（审计 #12：明文落盘泄露面=文件本身；
@@ -353,50 +293,6 @@ def _protect_obs_password(cfg):
     return pwd
 
 
-def _load_config():
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except ValueError:
-            # 配置损坏：改名 .corrupt 留证隔离（防下一次保存把坏文件连同
-            # 全部设置覆盖掉），降级为默认让界面能起来；启动后 App 检查
-            # .corrupt 并向用户红字提示
-            try:
-                os.replace(str(CONFIG_PATH), str(_CONFIG_CORRUPT))
-            except OSError:
-                pass
-            return {}
-    return {}
-
-
-def _atomic_write(path, text):
-    """先写临时文件再原子替换，避免断电/崩溃截断数据文件；写后 fsync
-    确保 os.replace 前内容已落盘（断电后替换的是完整数据而非空/半件）。
-    fsync 需另开句柄：write_text 已闭柄，FlushFileBuffers（os.fsync 的
-    Windows 底层）要求写权句柄，故 O_RDWR 重开仅作刷盘用。"""
-    p = _check_in_here(path)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    fd = os.open(os.fspath(tmp), os.O_RDWR)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(str(tmp), str(p))
-
-
-def _save_config(cfg):
-    _rotate(_CONFIG_BAKS, CONFIG_PATH)
-    _atomic_write(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
-
-
-def _err(e):
-    """异常进日志的统一格式：不用 repr（会带 Python 引号转义），
-    消息为空时退回异常类名，保证始终有可读信息。"""
-    return str(e).strip() or type(e).__name__
-
-
 def _load_playlist():
     """{"playlist": [key…], "durations": {key: 秒}, "durSrc": {key: manual}}
     durSrc 里登记的是手动设定；不在表里=自动识别；无时长=未知。
@@ -433,26 +329,6 @@ def save_playlist(keys, durations, dur_src):
                       ensure_ascii=False, indent=2)
     _rotate(_PLAYLIST_BAKS, PLAYLIST_PATH)
     _atomic_write(PLAYLIST_PATH, data)
-
-
-def scan_library(root, ext=".cpr"):
-    """工程库：<root>/<队伍>/<歌>/<歌><ext> → [{key, team, name, path}]。"""
-    base = pathlib.Path(root).resolve()
-    out = []
-    for team in sorted(os.listdir(base), key=natural_key):
-        if not team or team.startswith("."):
-            continue
-        tdir = base / team
-        if not tdir.is_dir():
-            continue
-        for name in sorted(os.listdir(tdir), key=natural_key):
-            if not name or name.startswith("."):
-                continue
-            path = tdir / name / (name + ext)
-            if path.exists():
-                out.append({"key": "%s/%s" % (team, name), "team": team,
-                            "name": name, "path": str(path)})
-    return out
 
 
 def _read_duration(path):

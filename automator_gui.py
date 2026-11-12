@@ -35,68 +35,17 @@ import midi_bridge as mb
 import stallguard
 import ui_text
 import web_remote
-from obs_ctrl import ObsController, natural_key, find_processes_by_prefix, \
+import app_common as _ac
+from obs_ctrl import ObsController, find_processes_by_prefix, \
     list_screens
 
 FOLLOW = ui_text.FOLLOW
 LOG_MAX = 2000
 
 
-def _find_cubase_exe():
-    r"""扫 Program Files\Steinberg 各版本目录，取版本号最高的 Cubase<N>.exe。"""
-    base = r"C:\Program Files\Steinberg"
-    try:
-        dirs = os.listdir(base)
-    except OSError:
-        return None
-    best = None
-    for d in dirs:
-        if "cubase" not in d.lower():
-            continue
-        try:
-            exes = os.listdir(os.path.join(base, d))
-        except OSError:
-            continue
-        for e in exes:
-            m = re.fullmatch(r"Cubase(\d+)\.exe", e)
-            if m and (best is None or int(m.group(1)) > best[0]):
-                best = (int(m.group(1)), os.path.join(base, d, e))
-    return best[1] if best else None
-
-
-def _find_s1_exe():
-    r"""扫 Program Files\PreSonus 各版本目录，取版本号最高的 Studio One.exe。"""
-    base = r"C:\Program Files\PreSonus"
-    try:
-        dirs = os.listdir(base)
-    except OSError:
-        return None
-    best = None
-    for d in dirs:
-        if "studio one" not in d.lower():
-            continue
-        try:
-            if "Studio One.exe" not in os.listdir(os.path.join(base, d)):
-                continue
-        except OSError:
-            continue
-        m = re.search(r"(\d+)", d)
-        v = int(m.group(1)) if m else 0
-        if best is None or v > best[0]:
-            best = (v, os.path.join(base, d, "Studio One.exe"))
-    return best[1] if best else None
-
-
-# 各底座的默认路径（工程库默认值；Automator 只用 projectsRoot）
-DAW_DEFAULTS = {
-    "cubase": {"exe": (_find_cubase_exe()
-                       or r"C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"),
-               "root": r"C:\Users\XKZ\Documents\Cubase Projects"},
-    "studioone": {"exe": (_find_s1_exe()
-                          or r"C:\Program Files\PreSonus\Studio One 7"
-                             r"\Studio One.exe"),
-                  "root": r"C:\Users\XKZ\Documents\Studio One\Songs"},
-}
+_find_cubase_exe = _ac.find_cubase_exe    # 上移 app_common（评审 I-DUP-24）
+_find_s1_exe = _ac.find_s1_exe
+DAW_DEFAULTS = _ac.DAW_DEFAULTS
 
 
 def daw_settings(cfg, daw):
@@ -112,67 +61,25 @@ def daw_settings(cfg, daw):
     s.setdefault("projectsRoot", DAW_DEFAULTS[daw]["root"])
     return s
 
-if getattr(sys, "frozen", False):   # PyInstaller exe：数据文件放 exe 同目录
-    _HERE = pathlib.Path(sys.executable).resolve().parent
-else:
-    _HERE = pathlib.Path(__file__).resolve().parent
-CONFIG_PATH = _HERE / "config.json"
+_HERE = _ac.HERE
+CONFIG_PATH = _ac.CONFIG_PATH
 _CRASH_LOG = None                  # faulthandler 落盘句柄，防 GC
-
-
-def _check_in_here(p):
-    """写入前校验：规范化后必须仍落在程序目录内（防路径越界）。"""
-    p = pathlib.Path(p).resolve()
-    if p.parent != _HERE:
-        raise ValueError("数据文件路径越界：%s" % p)
-    return p
+_err = _ac.err_str
+scan_library = _ac.scan_library
 
 
 def _load_config():
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except ValueError:
-            return {}        # 文件损坏：降级为默认并让界面能起来
-    return {}
-
-
-def _atomic_write(path, text):
-    """先写临时文件再原子替换，避免断电/崩溃截断数据文件。"""
-    p = _check_in_here(path)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(p))
+    """机制已上移 app_common：automator 随之获得 .corrupt 隔离/fsync/滚动
+    备份加固（评审 I-DUP-24「修复只落一边」欠账）。"""
+    return _ac.load_config_at(CONFIG_PATH, _ac.CONFIG_CORRUPT)
 
 
 def _save_config(cfg):
-    _atomic_write(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
+    _ac.save_config_at(cfg, CONFIG_PATH, _ac.CONFIG_BAKS, _ac.CONFIG_CORRUPT)
 
 
-def _err(e):
-    """异常进日志的统一格式：消息为空时退回异常类名。"""
-    return str(e).strip() or type(e).__name__
-
-
-def scan_library(root, ext=".cpr"):
-    """工程库：<root>/<队伍>/<歌>/<歌><ext> → [{key, team, name, path}]。"""
-    base = pathlib.Path(root).resolve()
-    out = []
-    for team in sorted(os.listdir(base), key=natural_key):
-        if not team or team.startswith("."):
-            continue
-        tdir = base / team
-        if not tdir.is_dir():
-            continue
-        for name in sorted(os.listdir(tdir), key=natural_key):
-            if not name or name.startswith("."):
-                continue
-            path = tdir / name / (name + ext)
-            if path.exists():
-                out.append({"key": "%s/%s" % (team, name), "team": team,
-                            "name": name, "path": str(path)})
-    return out
+def _atomic_write(path, text):
+    _ac.atomic_write(path, text, here=_ac.HERE)
 
 
 class Marquee(ttk.Entry):
@@ -744,8 +651,9 @@ class App:
     # ---- 键盘自动化（音符分发与完整版同构，无切歌忽略分支）----
 
     def _on_kb_msg(self, status, d1, d2):
-        """Keyboard Automation 端口音符：36-39→JUNO 全局移调、41-44→AX-09
-        全局移调（弯音钉位）、60-69→JUNO、72-77→AX-09 查映射切音色。"""
+        """Keyboard Automation 端口音符：48-51→JUNO 全局移调、53-56→AX-09
+        全局移调（弯音钉位）、72-81→JUNO、84-89→AX-09 查映射切音色
+        （0.16.2 锚点 +12 口径，与 kbd_auto.SHIFT_NOTES/SLOT_NOTES 一致）。"""
         st = status & 0xF0
         if st == 0x90 and d2 == 0:
             st = 0x80
@@ -826,12 +734,23 @@ class App:
     def _heal_link_ports(self):
         """联动端口自愈（_tick 主线程执行，与 _apply_ports 同线程串行）：
         只补开「已配置但当前未打开」的监听口（VJ 触发/时码/键盘/翻谱），已在场
-        的口不动。失败静默等下一轮（10s），成功才记日志——简化版不拉起
-        loopMIDI，用户手动启动后端口自动接上，无需重启本程序。"""
+        的口不动。失败静默等下一轮（10s），成功才记日志；热拔掉线（MIM_CLOSE
+        →dead 旗标）一并重开——设备拔出/loopMIDI 中途被杀重启（虚拟口删除=
+        设备移除，同一通知路径），「已掉线」并入「未打开」重开，时码断流不再
+        需要重启本软件（与完整版 setlist 同款，原缺失=评审 I-AUTOMATOR-HEAL）。
+        简化版不拉起 loopMIDI，用户手动启动后端口自动接上。"""
         if not self._startup_done:
             return
         _t0 = time.monotonic()
         try:
+            # VJ 触发口（热拔掉线先收尾并入「未打开」重开）
+            if self.port is not None and self.port.dead:
+                self.q.put("VJ 触发口已掉线，自动重开")
+                try:
+                    self.port.close()
+                except Exception:
+                    pass
+                self.port = None
             if (self.ctl is not None and self.sync is not None
                     and self.vj_hint and self.port is None):
                 try:
@@ -844,6 +763,19 @@ class App:
                     pass
             if time.monotonic() - _t0 > 2.0:   # winmm 专线毒化预算：弃轮
                 return
+            # 时码口（热拔掉线先收尾并入「未打开」重开；启动失败路径会清掉
+            # mtc 解码器：先重建再开口）
+            if self.clock_port is not None and self.clock_port.dead:
+                self.q.put("时码口已掉线，自动重开（走带基线复位）")
+                try:
+                    self.clock_port.close()
+                except Exception:
+                    pass
+                self.clock_port = None
+                self.sync.reset()
+                self.watch.reset()
+                if self.mtc is not None:    # 不变量：clock_port 非 None⇒三件套在
+                    self.mtc.reset()
             if (self.ctl is not None and self.sync is not None
                     and self.watch is not None and self.clock_hint
                     and self.clock_port is None):
@@ -862,6 +794,15 @@ class App:
                 except SystemExit:
                     self.clock_port = None
                     self.mtc = None
+            # 键盘自动化口（热拔掉线先收尾并入「未打开」重开）
+            if self.kb_port is not None and self.kb_port.dead:
+                self.q.put("键盘自动化口已掉线，自动重开")
+                try:
+                    self.kb_port.close()
+                except Exception:
+                    pass
+                self.kb_port = None
+                self.kb_err = ""
             if (self.kb_hint and self.kb_port is None
                     and self.switcher is not None):
                 try:
@@ -1058,12 +999,13 @@ class App:
             except queue.Empty:
                 break
         for fn in stallguard.coalesce(
-                batch, {"_refresh", "_persist_web_remote"}):
+                batch, {"_persist_web_remote"}):   # 幽灵名 _refresh 已删（完整版先删）
             self._run_call(fn)
         self.root.after(50, self._drain_calls)
 
     def urgent(self, fn):
-        """紧急 GUI 调用：插队到普通指令前执行（对称预留）。"""
+        """紧急 GUI 调用：插队到普通指令前执行（web 层 urgent 调用在 lite
+        门禁后——简化版恒空转预留，调用方全无。"""
         self.calls_urgent.append(fn)
 
     def _tick(self):
@@ -1322,9 +1264,13 @@ class SettingsWindow(tk.Toplevel):
                                    [ui_text.WEB_IP_AUTO])
         self.pg_var = port_var(str(wcfg.get("midiIn") or ""))
         menu_row("翻谱端口名称", self.pg_var, ins)
-        self.srv_var = tk.StringVar(value=str(wcfg.get("serverPort") or 8765))
-        self.app_var = tk.StringVar(value=str(wcfg.get("appPort") or 8767))
-        self.tsk_var = tk.StringVar(value=str(wcfg.get("taskerPort") or 8766))
+        _d = web_remote.DEFAULT_WEB_REMOTE
+        self.srv_var = tk.StringVar(value=str(
+            wcfg.get("serverPort") or _d["serverPort"]))
+        self.app_var = tk.StringVar(value=str(
+            wcfg.get("appPort") or _d["appPort"]))
+        self.tsk_var = tk.StringVar(value=str(
+            wcfg.get("taskerPort") or _d["taskerPort"]))
         wf2 = ttk.Frame(body)
         wf2.pack(fill="x", pady=2)
         ttk.Label(wf2, text="网页地址", width=15, anchor="w",
@@ -1517,20 +1463,20 @@ class SettingsWindow(tk.Toplevel):
             srv = int(self.srv_var.get().strip())
             assert srv > 0
         except (ValueError, AssertionError):
-            srv = 8765
-            app.q.put("网页端口非法，按 8765 处理")
+            srv = web_remote.DEFAULT_WEB_REMOTE["serverPort"]
+            app.q.put("网页端口非法，按默认端口处理")
         try:
             tsk = int(self.tsk_var.get().strip())
             assert tsk > 0
         except (ValueError, AssertionError):
-            tsk = 8766
-            app.q.put("APP 翻谱地址端口非法，按 8766 处理")
+            tsk = web_remote.DEFAULT_WEB_REMOTE["taskerPort"]
+            app.q.put("APP 翻谱地址端口非法，按默认端口处理")
         try:
             app_p = int(self.app_var.get().strip())
             assert app_p > 0
         except (ValueError, AssertionError):
-            app_p = 8767
-            app.q.put("APP 连接地址端口非法，按 8767 处理")
+            app_p = web_remote.DEFAULT_WEB_REMOTE["appPort"]
+            app.q.put("APP 连接地址端口非法，按默认端口处理")
         # 端口互异（完整版 Tk/web 两路径同款）：同值会让两服务在
         # SO_REUSEADDR 下双绑随机接客，保存时就地拒绝、窗口留待改值
         if srv == app_p:
@@ -1557,8 +1503,7 @@ class SettingsWindow(tk.Toplevel):
             # 串行化：连续两次保存的两个 apply_obs 线程不许交错（完整版同款）
             with app._obs_apply_lock:
                 ctl.cfg["vjMute"] = mute
-                if vid is not None:
-                    ctl.cfg["videoRoot"] = vid
+                ctl.cfg["videoRoot"] = vid
                 ctl.cfg["projectorMonitor"] = mon
                 if ctl.is_connected() and not ctl.apply_mute():
                     app.q.put("VJ静音未生效：%s" % ctl.last_error)
@@ -1584,8 +1529,7 @@ class SettingsWindow(tk.Toplevel):
             cfg.update({"vjPortHint": vj, "kbPortHint": kb,
                         "clockPortHint": ck})
             obs = cfg.get("obs") or {}
-            if vid is not None:   # 空串=显式清空（与完整版/web 路径同口径）
-                obs["videoRoot"] = vid
+            obs["videoRoot"] = vid   # 空串=显式清空（与完整版/web 路径同口径）
             obs["projectorMonitor"] = mon
             obs["vjMute"] = mute
             cfg["obs"] = obs
