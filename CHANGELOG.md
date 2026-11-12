@@ -4,6 +4,25 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [未发布]
+
+### 修复
+
+- 全仓评审修复轮（清单见 [docs/全仓评审报告-2026-11-13.md](docs/全仓评审报告-2026-11-13.md) §七）：配置缺 obs 段打穿 VJ 链降级路径、OBS 重连纪元漏接（动作失败断链后投影不再恢复）、apply_projector 开成新投影后才只关快照旧窗、_load_playlist 区分损坏隔离与短锁降级、pedal 学习键白名单接线（原定义未过滤）、winmm 回调补收 MIM_MOREDATA 防静默丢消息、开口弃单回收补 midiInClose、automator 移植端口热拔重开三段、winmm 专线快速失败文案可辨、BLE 扫描失败退避与回调护栏、mmc GOTO 小时上界、POST 超 1MB 回 413、/diag 补全局限流、401 与断网可辨提示、测试时序面改锚点注入/deadline 轮询、out/ 一次性调试产物出库。
+- 安卓：/turn 接收口补令牌校验（与 iOS 同规）；端口监听失败通知即时降级明示；gradle 代理配置移用户级。
+- iOS：连接/改址延迟到页面标题核验通过才持久化（待核验对象绑定，异步窗口内改址/换令牌不误写 store）；requestAddressChange 补同规轻校验；ATS 收窄 NSAllowsLocalNetworking；删 /health 死路由与桥死函数；恢复 setTurnMethod（共享页面模板真调用）。
+- webui：致命错改 MessageBox+文件日志后退出（原裸 sys.exit 无声消失，审计 R1 清账）。
+- daw_settings 跨窗 schema 互踩兼容（automator 识别完整版嵌套子段，写侧按子段落键）。
+
+### 变更
+
+- config IO 三件套（损坏 .corrupt 隔离/fsync 原子写/滚动备份）与 DAW 探测/工程库扫描上移 `app_common.py` 两窗共用，automator 随之补齐完整版已有两轮加固；DAW 默认工程库路径 %USERPROFILE% 推导。
+- build.bat 拷 debug 签名 APK 改 assembleRelease 正式签名链；gradle versionName/versionCode 由 git tag/提交计数自动注入；打包 copy 步骤失败即阻断；midi_bridge/obs_ctrl 提公开包装，GUI/e2e 调用面脱离模块私有段。
+
+### 文档
+
+- 苹果端谱面页定案标注「未排期」；审计账本 #13 LAN 鉴权刷新为已做（0.16.5）；JUNO 调研键位对齐 0.16.2 锚点口径；testflight 本机验证边界改引 ios.md §6；演出验证清单热点父项勾选口径修正；开发指南补 StallNativeProbe/BLE 断连语义/tests 清单/app_common 结构树；配置参考补 dawSettings 嵌套口径。
+
 ## [0.16.5] - 2026-11-12
 
 ### 新增
