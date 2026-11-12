@@ -210,11 +210,14 @@ def open_in(idx, proc, timeout=None):
         if r:
             result["err"] = "midiInOpen 失败，code %d，端口被占用？" % r
             return
-        _winmm.midiInStart(h)
+        rs = _winmm.midiInStart(h)
+        if rs:                      # Start 失败的口永不报错也没有数据=黑口，
+            _winmm.midiInClose(h)   #   比开口失败更糟——即收尾报错
+            result["err"] = "midiInStart 失败，code %d" % rs
+            return
         if state["dead"]:       # 等待方已放弃：即开即回收
             _winmm.midiInStop(h)
             _winmm.midiInReset(h)
-            _winmm.midiInClose(h)
             result["err"] = "打开超时 %.0f 秒，弃单已回收" % timeout
             return
         result["ok"] = True
@@ -224,6 +227,16 @@ def open_in(idx, proc, timeout=None):
         state["dead"] = True        # 弃单 job 本就排在队列里会迟到执行并
                                     #   自查回收——无需宽限等待（复审 R3-4：
                                     #   原 0.5s no-op 宽限是死重+毒化期队列增长源）
+        # 弃单微窗兜底：job 恰在 dead 检查后落位成功（dead 检查与 result
+        # 写入之间只有两条语句）——复读 50ms，迟到成功补收尾，兑现「绝不
+        # 泄漏已打开的句柄」承诺（评审 Minor：弃单 TOCTOU）
+        if done.wait(0.05) and result.get("ok"):
+            close_in(h)
+            return None, "打开超时 %.0f 秒（迟到成功已回收）" % timeout
+        with _io_stuck_lock:
+            stuck = _io_stuck
+        if stuck:                   # 毒化快速失败：没等也没超时，文案须可辨
+            return None, "MIDI 专线忙（前序作业挂死），已快速失败弃单"
     if result.get("ok"):
         return h, None
     return None, result.get("err") or "打开超时 %.0f 秒" % timeout

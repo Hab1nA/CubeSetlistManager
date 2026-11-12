@@ -112,6 +112,10 @@ def _refresh_once(side):
     try:
         lst = scan(side)
     except Exception:
+        # 失败也推进时间戳：蓝牙栈卡死时不做 0.5s 无限重试（下轮按 SCAN_TTL
+        # 再试），last-good 清单照常服务
+        with _cache_lock:
+            _cache_at[side] = time.monotonic()
         return
     finally:
         with _cache_lock:
@@ -243,9 +247,13 @@ class BleIn:
         self._token = port.add_message_received(self._on_event)
 
     def _on_event(self, sender, args):
-        m = parse_short(_buf_bytes(args.message.raw_data))
-        if m is not None:
-            self._on_msg(*m)
+        try:
+            m = parse_short(_buf_bytes(args.message.raw_data))
+            if m is not None:
+                self._on_msg(*m)
+        except Exception:
+            pass    # 回调线程零异常逸出（家规与 mb/mtc 回调同款）；pywinrt
+                    # 对 handler 异常行为未注明，不留隐患
 
     def close(self):
         p, self._port = self._port, None
@@ -270,7 +278,8 @@ class BleOut:
     """BLE 输出口：短消息按状态半字节映射 v1 消息类（实际只发 B0/C0，全表
     兜底防真机报错断链）；pitch bend 14 位值=LSB|MSB<<7；SysEx 经
     MidiSystemExclusiveMessage，免 winmm 的 HDR 准备/DONE 轮询。
-    send_long 返回 True=失败（同 kbd_auto._send_long 口径）。"""
+    ⚠ send_long 返回 True=失败（同 kbd_auto._send_long 口径；与 send_short
+    的 None=成功/str=错误口径相反，调用方 kbd_auto:549 按此消费）。"""
 
     def __init__(self, port):
         self._port = port
