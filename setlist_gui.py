@@ -2646,6 +2646,91 @@ class App:
         self._persist()
         return None
 
+    def _pl_export_web(self):
+        """/plexport：播放列表导出为可携带 JSON（Tk 主线程弹保存对话框）。
+        只搬 key+durations——工程路径/定位点/VJ 槽位都在各工程目录的
+        sidecar 里随工程走，不进歌单文件。"""
+        try:
+            path = filedialog.asksaveasfilename(
+                parent=None, title="导出歌单",
+                defaultextension=".cubesetlist.json",
+                initialfile=time.strftime("歌单-%Y%m%d") + ".cubesetlist.json",
+                filetypes=[("Cube 歌单", "*.cubesetlist.json"),
+                           ("JSON", "*.json")])
+        except Exception as e:
+            return {"error": _err(e)}
+        if not path:
+            return {"canceled": True}
+        data = json.dumps({"version": 1, "playlist": self.pl_keys,
+                           "durations": self.durations,
+                           "durSrc": self.dur_src},
+                          ensure_ascii=False, indent=2)
+        try:
+            # 不走 _atomic_write：它限定程序目录内，导出路径由用户任选
+            pathlib.Path(path).write_text(data, encoding="utf-8")
+        except (ValueError, OSError) as e:
+            return {"error": "导出失败：%s" % _err(e)}
+        return {"ok": True, "count": len(self.pl_keys)}
+
+    def _pl_import_web(self):
+        """/plimport：读歌单文件整体覆盖当前播放列表（Tk 主线程弹选择框）。
+        先全量校验再覆盖：坏文件不动现列表；失效条目（工程不在素材库/
+        定位点缺失或未启用）跳过并逐条报给前端，不静默丢歌。"""
+        try:
+            path = filedialog.askopenfilename(
+                parent=None, title="导入歌单",
+                filetypes=[("Cube 歌单", "*.cubesetlist.json"),
+                           ("JSON", "*.json")])
+        except Exception as e:
+            return {"error": _err(e)}
+        if not path:
+            return {"canceled": True}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (ValueError, OSError, UnicodeDecodeError) as e:
+            return {"error": "歌单文件无效：%s" % _err(e)}
+        # 全量校验先行（durations/durSrc 类型也在内）：任何不合格都在
+        # 动 pl_keys 之前返回——兑现「坏文件不动现列表」
+        if not isinstance(data, dict) \
+                or data.get("version") != 1 \
+                or not isinstance(data.get("playlist"), list) \
+                or not all(isinstance(k, str) and k
+                           for k in data["playlist"]) \
+                or not isinstance(data.get("durations", {}), dict) \
+                or not isinstance(data.get("durSrc", {}), dict):
+            return {"error": "歌单文件无效：不是本软件导出的歌单"}
+        keys = data["playlist"]
+        live, skipped = [], []
+        for k in keys:
+            if self._resolve_entry(k) is None:
+                skipped.append("%s（%s）" % (
+                    k, "定位点不存在或未启用" if points.parse_pt_key(k)
+                    else "工程不在素材库"))
+            else:
+                live.append(k)
+        if not live and keys:      # 空歌单=合法清空（与导出端对称）
+            return {"error": "歌单里 %d 个条目全部失效，未导入"
+                    % len(skipped)}
+        self.pl_keys = live
+        self.cur = None
+        # 时长合并：导入键先保留本机已有值（自动识别值更新鲜），缺的从
+        # 文件补；手动来源照搬（manual 语义跟着文件走）
+        dur = {k: self.durations[k] for k in live if k in self.durations}
+        src = {k: self.dur_src[k] for k in live if k in self.dur_src}
+        for k, v in data["durations"].items():
+            d = cpr_meta.safe_dur(v)
+            if d > 0 and k in self.pl_keys and k not in dur:
+                dur[k] = d
+                if data["durSrc"].get(k) == "manual":
+                    src[k] = "manual"
+        self.durations, self.dur_src = dur, src
+        self._persist()
+        self.q.put("已导入歌单：%d 首%s" % (
+            len(live), "，跳过失效条目 %d 个" % len(skipped)
+            if skipped else ""))
+        return {"ok": True, "loaded": len(live), "skipped": skipped}
+
     def _auto_play(self):
         """切换完成后自动播放：窗口标题出现≠加载完成——过早发播放键会被
         未就绪的 Cubase 吞掉（实测需再点一次）。等「正在加载」浮层消失

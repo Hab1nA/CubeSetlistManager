@@ -365,6 +365,7 @@ async function post(path, body) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
+    if (j && typeof j === "object") j._st = r.status;
     if (!r.ok) toast(j.error || "操作失败", "err");
     return j;
   } catch {
@@ -1144,6 +1145,31 @@ $("#sl-search").addEventListener("input", e => {
 });
 $("#pl-more").addEventListener("click", ev => {
   popover(ev.currentTarget, (box, close) => {
+    menuItem(box, "导出歌单文件…", "", async () => {
+      close();
+      const j = await post("/plexport", {});
+      if (j.canceled) return;               // 用户关掉对话框：静默
+      if (j.error && j._st === 200) { toast(j.error, "err"); return; }
+      if (j.ok) toast(`已导出 ${j.count} 首`);
+    });
+    menuItem(box, "导入歌单文件…", "", b => {
+      armConfirm(b, async () => {
+        close();
+        const j = await post("/plimport", {});
+        // 非 2xx（400/403/504）的 error 已由 post() toast，这里只补
+        // 200 载荷里的业务 error（_st 标记区分）；网络异常时 post 返回
+        // {ok:false} 无 error/canceled——!j.ok 挡住假成功 toast
+        if (j.error && j._st === 200) { toast(j.error, "err"); return; }
+        if (j.canceled || !j.ok) return;
+        toast(`已导入 ${j.loaded} 首` +
+              (j.skipped?.length
+                  ? `，跳过失效条目 ${j.skipped.length} 个：` +
+                    j.skipped.slice(0, 3).join("、") +
+                    (j.skipped.length > 3 ? ` 等 ${j.skipped.length} 个` : "")
+                  : ""), j.skipped?.length ? "err" : "");
+        refreshPlaylist();
+      }, `将覆盖当前 ${(plCache?.pl || []).length} 首？`);
+    });
     menuItem(box, "清空播放列表", "danger", b =>
         armConfirm(b, () => { plcmd2("clear", ""); close(); }, "确认清空？"));
   });

@@ -1738,6 +1738,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_diag, "/diag"),
                           (self._h_pedal, "/pedal/event"),
                           (self._h_plcmd, "/plcmd"),
+                          (self._h_plexport, "/plexport"),
+                          (self._h_plimport, "/plimport"),
                           (self._h_ptcmd, "/ptcmd"),
                           (self._h_settings_set, "/settings"),
                           (self._h_pickdir, "/pickdir"),
@@ -1937,6 +1939,31 @@ class _Handler(BaseHTTPRequestHandler):
         self._run_on_app(lambda: app._pl_cmd_web(
             str(body.get("op") or ""), str(body.get("key") or ""),
             body.get("payload") or {}))
+
+    def _h_plexport(self, body, ip):
+        """/plexport：歌单导出（Tk 主线程弹保存对话框，阻塞至用户操作，
+        长超时窗）；仅限本机 loopback（与 /pickdir 同门）。"""
+        app = self.server.app
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        fn = getattr(app, "_pl_export_web", None)
+        if fn is None:
+            self._json(403, {"error": "当前宿主不支持歌单导出"})
+            return
+        self._run_on_app(lambda: None, result_fn=fn, timeout=180.0)
+
+    def _h_plimport(self, body, ip):
+        """/plimport：歌单导入（Tk 主线程弹选择框）；仅限本机 loopback。"""
+        app = self.server.app
+        if getattr(app, "lite", False) or not ip.startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        fn = getattr(app, "_pl_import_web", None)
+        if fn is None:
+            self._json(403, {"error": "当前宿主不支持歌单导入"})
+            return
+        self._run_on_app(lambda: None, result_fn=fn, timeout=180.0)
 
     def _h_ptcmd(self, body, _ip):
         app = self.server.app

@@ -1428,3 +1428,148 @@ def test_tk_settings_port_guard_present():
     mod = __import__("automator_gui")
     src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
     assert "网页端口与 APP 端口不能相同，未保存" in src, mod.__name__
+
+
+class _PlApp:
+    """_pl_export/_import_web 单测宿主：只备方法触及的属性，filedialog
+    monkeypatch 掉（不启 Tk）。"""
+
+    def __init__(self):
+        self.q = _Q()
+        self.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
+        self.durations = {"A/歌一": 120.0, "B/歌二": 90.0}
+        self.dur_src = {"A/歌一": "manual"}
+        self.cur = 1
+        self.persists = 0
+        fake = _FakeWebApp()
+        self.by_key, self.points = fake.by_key, fake.points
+        self._resolve_entry = fake._resolve_entry
+
+    def _persist(self):
+        self.persists += 1
+
+
+def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
+    """/plexport /plimport：导出→导入内容往返一致；坏文件/全失效不动现列表；
+    失效条目跳过并逐条报告。"""
+    out = tmp_path / "歌单.cubesetlist.json"
+    monkeypatch.setattr(sg.filedialog, "asksaveasfilename",
+                        lambda **kw: str(out))
+    a = _PlApp()
+    r = sg.App._pl_export_web(a)
+    assert r == {"ok": True, "count": 3}
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["version"] == 1 and data["playlist"] == a.pl_keys
+    assert data["durations"]["A/歌一"] == 120.0
+
+    # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）
+    data["playlist"] = ["B/歌二", "C/不存在", "pt:B/歌二#9", "A/歌一"]
+    bad = tmp_path / "bad.cubesetlist.json"
+    bad.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(bad))
+    b = _PlApp()
+    r = sg.App._pl_import_web(b)
+    assert r["ok"] is True and r["loaded"] == 2
+    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.cur is None
+    assert b.persists == 1 and len(r["skipped"]) == 2
+    assert b.durations["B/歌二"] == 90.0 and b.dur_src["A/歌一"] == "manual"
+
+    # 用户取消：canceled、零副作用
+    monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: "")
+    assert sg.App._pl_import_web(b) == {"canceled": True}
+    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.persists == 1
+
+    # 坏文件：现列表原封不动
+    junk = tmp_path / "junk.json"
+    junk.write_text("not json", encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(junk))
+    assert "歌单文件无效" in sg.App._pl_import_web(b)["error"]
+    (tmp_path / "nv.json").write_text(json.dumps({"playlist": ["B/歌二"]}),
+                                      encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "nv.json"))
+    assert "歌单文件无效" in sg.App._pl_import_web(b)["error"]
+
+    # 全失效：拒绝导入，现列表不动
+    dead = tmp_path / "dead.json"
+    dead.write_text(json.dumps({"version": 1, "playlist": ["C/缺"]},
+                               ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(dead))
+    assert "全部失效" in sg.App._pl_import_web(b)["error"]
+    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.persists == 1
+
+
+def test_plexport_plimport_endpoints():
+    """/plexport /plimport：主线程结果回传；简化版拒绝。"""
+    app = _FakeWebApp()
+    app._pl_export_web = lambda: {"ok": True, "count": 2}
+    app._pl_import_web = lambda: {"error": "歌单文件无效：X"}
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    threading.Thread(target=_drain, args=(app,), daemon=True).start()
+    try:
+        assert _post(port, "/plexport", {}) == {"ok": True, "count": 2}
+        assert "歌单文件无效" in _post(port, "/plimport", {})["error"]
+        app.lite = True
+        code, body = _req("POST", port, "/plexport", {})
+        assert code == 403
+    finally:
+        srv.shutdown()
+
+
+def test_pl_import_poison_and_empty(tmp_path, monkeypatch):
+    """P1/P2 回归：毒 durations 类型/顶层数组/空歌单/全失效不动现列表。"""
+    a = _PlApp()
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "x.json"))
+
+    def feed(obj):
+        (tmp_path / "x.json").write_text(
+            json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+        return sg.App._pl_import_web(a)
+
+    # durations 是 list：校验先行，现列表原封不动（P1 曾是半套用崩溃）
+    assert "歌单文件无效" in feed({"version": 1, "playlist": ["A/歌一"],
+                                   "durations": [1, 2]})["error"]
+    assert a.pl_keys == ["A/歌一", "pt:A/歌一#1", "B/歌二"] and a.persists == 0
+    # 顶层 JSON 是数组
+    assert "歌单文件无效" in feed([1, 2])["error"]
+    # durSrc 非 dict 同门
+    assert "歌单文件无效" in feed({"version": 1, "playlist": [],
+                                  "durSrc": None})["error"]
+    # 空歌单=合法清空（与导出端对称）
+    r = feed({"version": 1, "playlist": [], "durations": {},
+              "durSrc": {}})
+    assert r == {"ok": True, "loaded": 0, "skipped": []}
+    assert a.pl_keys == [] and a.cur is None and a.persists == 1 \
+        and a.durations == {} and a.dur_src == {}
+    # 全失效：拒绝且不动（此刻现列表已空，换回非空再验）
+    a.pl_keys, a.persists = ["B/歌二"], 0
+    assert "全部失效" in feed({"version": 1, "playlist": ["C/缺"]})["error"]
+    assert a.pl_keys == ["B/歌二"] and a.persists == 0
+
+
+def test_plimport_lite_rejected():
+    """/plimport 的 lite/宿主缺方法拒绝（与 /plexport 同门）。"""
+    app = _FakeWebApp()
+    app._pl_import_web = lambda: {"ok": True, "loaded": 0, "skipped": []}
+    srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
+                               lambda: 0, page="")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever,
+                     kwargs={"poll_interval": 0.2}, daemon=True).start()
+    threading.Thread(target=_drain, args=(app,), daemon=True).start()
+    try:
+        assert _post(port, "/plimport", {})["ok"] is True
+        app.lite = True
+        code, body = _req("POST", port, "/plimport", {})
+        assert code == 403
+        app.lite = False
+        del app._pl_import_web
+        code, body = _req("POST", port, "/plimport", {})
+        assert code == 403 and "导入" in body["error"]
+    finally:
+        srv.shutdown()
