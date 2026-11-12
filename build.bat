@@ -34,13 +34,13 @@ copy /y dist\_playlist.bak "dist\Cube Setlist Manager\playlist.json" >nul
 del dist\_config.bak dist\_playlist.bak >nul
 rem smoke: boot packed exe, assert /app loads+nav+no JS error (guards silent Tk fallback)
 py out\_smoke_dist.py || goto :err
-rem APK for /app.apk download endpoint
-if exist "mobile\app\build\outputs\apk\debug\app-debug.apk" (
-  copy /y "mobile\app\build\outputs\apk\debug\app-debug.apk" ^
+rem APK for /app.apk download endpoint: release-signed (0.16.3+ official channel; debug build would break upgrade for release-signature users)
+if exist "mobile\app\build\outputs\apk\release\app-release.apk" (
+  copy /y "mobile\app\build\outputs\apk\release\app-release.apk" ^
     "dist\Cube Setlist Manager\CubeRemote.apk" >nul
   echo APK included
 ) else (
-  echo no APK found: run "cd mobile ^&^& gradlew assembleDebug" first
+  echo no APK found: run "cd mobile ^&^& gradlew assembleRelease" first
 )
 rem installer: version from latest git tag
 set "APPVER=0.0.0"

@@ -1706,7 +1706,7 @@ class _Handler(BaseHTTPRequestHandler):
             apk = _apk_file()
             if apk is None:
                 self._json(404, {"error": "APK 未找到（先在 mobile/ 跑 "
-                                          "gradlew assembleDebug 并拷贝）"})
+                                          "gradlew assembleRelease 并拷贝）"})
                 return
             self._send(200, "application/vnd.android.package-archive", apk,
                        dispo="attachment; filename=CubeRemote.apk")

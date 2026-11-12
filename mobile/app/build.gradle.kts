@@ -5,6 +5,22 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// 版本随 git tag 走（与 build.bat 安装包同源，不再手动三处漂移）：
+// versionName=git describe 去 v 前缀（tag 后提交带 -N-gSHA 后缀以示偏离）；
+// versionCode=提交计数，恒单调不减。git 缺失/无 tag 时回落保证可构建。
+fun gitOut(args: List<String>, fallback: String): String = try {
+    val p = ProcessBuilder("git", *args.toTypedArray())
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true).start()
+    val t = p.inputStream.bufferedReader().readText().trim()
+    p.waitFor()
+    if (p.exitValue() == 0 && t.isNotEmpty()) t else fallback
+} catch (_: Exception) {
+    fallback
+}
+val appVersionName = gitOut(listOf("describe", "--tags"), "0.0.0").removePrefix("v")
+val appVersionCode = gitOut(listOf("rev-list", "--count", "HEAD"), "1").toIntOrNull() ?: 1
+
 // release 签名（11-11 落地）：keystore.properties（gitignored）持有口令与
 // 路径；文件缺失=回退 debug 签名并保持可装（模板见 keystore.properties.example）。
 val keystoreProps = Properties().apply {
@@ -21,8 +37,8 @@ android {
         applicationId = "com.cubemanager.turnpage"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.16.3"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {

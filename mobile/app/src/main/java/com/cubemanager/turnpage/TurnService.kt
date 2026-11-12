@@ -34,8 +34,23 @@ class TurnService : Service() {
                 if (r < 0) break
                 off += r
             }
+            val j = try {
+                JSONObject(String(buf, 0, off, Charsets.UTF_8))
+            } catch (e: Exception) {
+                return newFixedLengthResponse(
+                    NanoHTTPD.Response.Status.BAD_REQUEST, "text/plain", "bad body")
+            }
+            // 令牌校验（与 iOS TurnHTTPServer 同规）：配对地址存有 ?t= 时，
+            // 推送体必须带同值令牌——LAN 内任意主机不得伪造翻页/测试推送。
+            // 未配令牌=跳过校验（0.16.5 对旧安卓端的豁免口径不变）
+            val expect = android.net.Uri.parse(
+                getSharedPreferences("cube", MODE_PRIVATE)
+                    .getString("addr", "") ?: "").getQueryParameter("t") ?: ""
+            if (expect.isNotEmpty() && j.optString("t") != expect)
+                return newFixedLengthResponse(
+                    NanoHTTPD.Response.Status.UNAUTHORIZED, "text/plain", "bad token")
             try {
-                handle(JSONObject(String(buf, 0, off, Charsets.UTF_8)))
+                handle(j)
             } catch (e: Exception) {
                 return newFixedLengthResponse(
                     NanoHTTPD.Response.Status.BAD_REQUEST, "text/plain", "bad body")
@@ -249,10 +264,13 @@ class TurnService : Service() {
         }
         Companion.port = port
         listening = true
+            bindFailed = false
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIFY_ID, buildNotification())
             true
         } catch (e: Exception) {
+            bindFailed = true
+            reportDiag("端口 $port 监听失败：可能被占用")
             false
         }
     }
@@ -265,11 +283,15 @@ class TurnService : Service() {
 
     private fun buildNotification(): Notification {
         val svcOn = TurnAccessibilityService.instance != null
+        val text = when {
+            bindFailed -> "端口 $port 监听失败（可能被占用）"
+            svcOn -> "端口 $port · 手势就绪"
+            else -> "端口 $port · 仅媒体键（无障碍未开启）"
+        }
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notif)
             .setContentTitle("翻谱接收中")
-            .setContentText(if (svcOn) "端口 $port · 手势就绪"
-                            else "端口 $port · 仅媒体键（无障碍未开启）")
+            .setContentText(text)
             .setOngoing(true)
             .build()
     }
@@ -282,6 +304,8 @@ class TurnService : Service() {
         const val TURN_PATH = "/turn"
 
         @Volatile var listening = false
+            private set
+        @Volatile var bindFailed = false
             private set
         @Volatile var port = 8766
             private set
