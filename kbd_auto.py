@@ -124,6 +124,17 @@ def ax_shift_msgs(total, ch):
              | (v >> 7 & 0x7F) << 16, 0)]
 
 
+def _bs_pc_msgs(msb, lsb, pc, ch):
+    """BS(MSB/LSB)+PC 短消息组：Cubase 组路由与 AX-09 单通道共用骨架。"""
+    out = []
+    if msb is not None:
+        out.append(("short", 0xB0 | ch | msb << 16, MSG_GAP))      # CC0 = MSB
+    if lsb is not None:
+        out.append(("short", 0xB0 | ch | 32 << 8 | lsb << 16, MSG_GAP))  # CC32
+    out.append(("short", 0xC0 | ch | pc << 8, 0))                  # PC
+    return out
+
+
 def switch_msgs(slot, cfg):
     """切换序列 [(kind, payload, gap)]；kind: 'long'=SysEx, 'short'=短消息。
     通道按组路由：MSB 85(Performance)→perfCh，其余→patchCh。"""
@@ -133,25 +144,14 @@ def switch_msgs(slot, cfg):
     mode = mode_for_msb(msb)
     if mode is not None:
         out.append(("long", mode_sysex(mode, cfg["deviceId"]), SYSEX_GAP))
-    if msb is not None:
-        out.append(("short", 0xB0 | ch | msb << 16, MSG_GAP))      # CC0 = MSB
-    if lsb is not None:
-        out.append(("short", 0xB0 | ch | 32 << 8 | lsb << 16, MSG_GAP))  # CC32
-    out.append(("short", 0xC0 | ch | pc << 8, 0))                  # PC
-    return out
+    return out + _bs_pc_msgs(msb, lsb, pc, ch)
 
 
 def ax_switch_msgs(slot, cfg):
     """AX-09 切换序列：BS(MSB/LSB)+PC 单通道直发，无模式 SysEx。"""
     msb, lsb, pc = slot.get("msb"), slot.get("lsb"), slot.get("pc")
     ch = cfg["ch"] - 1
-    out = []
-    if msb is not None:
-        out.append(("short", 0xB0 | ch | msb << 16, MSG_GAP))      # CC0 = MSB
-    if lsb is not None:
-        out.append(("short", 0xB0 | ch | 32 << 8 | lsb << 16, MSG_GAP))  # CC32
-    out.append(("short", 0xC0 | ch | pc << 8, 0))                  # PC
-    return out
+    return _bs_pc_msgs(msb, lsb, pc, ch)
 
 
 def slot_raw(slot):
@@ -480,6 +480,11 @@ class RawMidiIn:
             mb.close_in(h)   # 官方收尾序，见 midi_bridge.close_in
 
 
+_LONG_STUCK = []        # unprepare 失败的 SysEx 头引用保底：驱动仍占缓冲时
+                        # 局部 hdr/buf 随 GC 释放=理论 UAF，保引用不回收
+                        # （与 midi_bridge._SYSEX_STUCK 同口径）
+
+
 def _send_long(h, data):
     """SysEx 走 midiOutLongMsg；缓冲在驱动标 DONE 前必须保持有效。
     头结构复用 mb._MIDIHDR：曾在此另立同名类并覆写 winmm argtypes——
@@ -494,7 +499,8 @@ def _send_long(h, data):
     deadline = time.time() + 2
     while not (hdr.dwFlags & WHDR_DONE) and time.time() < deadline:
         time.sleep(0.005)
-    mb._winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    if mb._winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+        _LONG_STUCK.append((hdr, buf))   # 驱动仍占缓冲：保引用防 GC 理论 UAF
     return False
 
 

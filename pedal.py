@@ -58,6 +58,10 @@ CONT_GAP = 0.12         # 脉冲续判窗（秒）：持续模式按住=窄脉�
 BOUNCE_GATE = 0.03      # 触点抖动闸（秒）：闭合弹跳的密集重按下/假松开、
                         #   以及分断弹跳的回弹重压（距上次被受理松开 <30ms）
                         #   ——同一物理脚的爆发整体折算为一次按压
+_DEDUP_WIN = 0.15       # 跨源去重窗（秒）：固件双输出时蓝牙/远程同键 down 沿
+                        #   相距小于此窗按同一脚丢弃（与 BOUNCE_GATE 同值不同义）
+_STALE_PEND = 2.0       # 拦截回执陈旧折算（秒）：按压对回执超窗=失联保护，
+                        #   按压时长不采信，折算成当下的一次新按压
 _GNAME = {"single": "", "double": "·双踩", "long": "·长踩"}
 
 
@@ -226,11 +230,13 @@ class RemoteClock:
         return self.t
 
 
-# 学习阶段的按键候选：排除鼠标键（0x01-0x06）、修饰键及其左右变体
-# （Shift/Ctrl/Alt 0x10-0x12 与 0xA0-0xA5）、Pause/CapsLock（0x13/0x14）、
-# Win/Menu（0x5B-0x5D）、NumLock/ScrollLock（0x90/0x91）——这些只会
-# 来自误触，不该学成踩钉。Enter/Tab/Backspace/Esc（<0x20）是踏板真实会发
-# 的键，必须可学（首版 range(0x20,...) 起点一刀切漏掉 Enter，实测踩坑）
+# 学习阶段的按键候选（已接线：Learner._note 入口按此过滤，hid 键不在
+# 白名单即忽略——只定义不过滤=假护栏，测试绿灯掩盖未过滤的事实）：排除
+# 鼠标键（0x01-0x06）、修饰键及其左右变体（Shift/Ctrl/Alt 0x10-0x12 与
+# 0xA0-0xA5）、Pause/CapsLock（0x13/0x14）、Win/Menu（0x5B-0x5D）、
+# NumLock/ScrollLock（0x90/0x91）——这些只会来自误触，不该学成踩钉。
+# Enter/Tab/Backspace/Esc（<0x20）是踏板真实会发的键，必须可学（首版
+# range(0x20,...) 起点一刀切漏掉 Enter，实测踩坑）
 LEARN_VKS = tuple(vk for vk in range(0x08, 0x100)
                   if vk not in range(0x10, 0x15)
                   and vk not in range(0x5B, 0x5E)
@@ -752,31 +758,35 @@ class DeviceBridge:
 
     def configure(self, binds=None, device_hint=None, block=None,
                   engine=None, temporal=None):
-        if binds is not None:
-            if binds != self.binds:
-                self._state.clear()  # 换绑：旧按住状态作废，防误吃 up
-            self.binds = dict(binds)
-        if device_hint is not None and device_hint != self.device_hint:
-            self._state.clear()      # 换设备：按下态作废
-        if device_hint is not None:
-            self.device_hint = device_hint
-        if block is not None:
-            new = bool(block)
-            if new != self.block:
-                self.reset_hold_state()    # mid-hold 切换：漏掉的 up 没人处理
-            self.block = new
-        if engine is not None:
-            self.engine = engine
-        if temporal is not None:
-            self.temporal = frozenset(temporal)
+        # 状态段全程持 _io_lock（RLock）：_feed 在桥线程/HTTP 线程持同一锁
+        # 消费 _state/_pending，clear 与写交错时回执丢失=当次按压被吞
+        with self._io_lock:
+            if binds is not None:
+                if binds != self.binds:
+                    self._state.clear()  # 换绑：旧按住状态作废，防误吃 up
+                self.binds = dict(binds)
+            if device_hint is not None and device_hint != self.device_hint:
+                self._state.clear()      # 换设备：按下态作废
+            if device_hint is not None:
+                self.device_hint = device_hint
+            if block is not None:
+                new = bool(block)
+                if new != self.block:
+                    self.reset_hold_state()    # mid-hold 切换：漏掉的 up 没人处理
+                self.block = new
+            if engine is not None:
+                self.engine = engine
+            if temporal is not None:
+                self.temporal = frozenset(temporal)
         self._sync_hotkeys()     # 跨线程投递；窗口未建时启动流程会主动同步
 
     def reset_hold_state(self):
         """学习/拦截开关等边界切换后调用：按下态全作废——边界窗口期里
         漏掉的 up 没人处理，残留状态会把切换后的第一脚吃成「按住重复」
         静默吞掉（审计两轮各实测复现一次）。"""
-        self._state.clear()
-        self._pending.clear()
+        with self._io_lock:
+            self._state.clear()
+            self._pending.clear()
 
     def begin_capture(self, cb):
         self.learning = True
@@ -965,7 +975,7 @@ class DeviceBridge:
             t = rcv
         with self._io_lock:
             lvk, lt = self._last_hid_down
-            if down and vk == lvk and 0.0 <= t - lt < 0.15:
+            if down and vk == lvk and 0.0 <= t - lt < _DEDUP_WIN:
                 self._report("远程按键与本地蓝牙重复：%s，已去重"
                              % hid_name(vk))
                 return False
@@ -990,75 +1000,52 @@ class DeviceBridge:
         共用 _state/_pending，必须串行。"""
         if now is None:
             now = time.monotonic()
+        acts = []                     # 动作锁外发射：慢回调不再阻塞 HTTP 注入线程
         with self._io_lock:
             if self.learning and self.capture:
                 if (not down and src == "hid" and vk in self._pending):
                     t0 = self._pending.pop(vk)
-                    if now - t0 > 2.0:
-                        t0 = now    # 失联保护：回执已陈旧（2 秒前的按下），
+                    if now - t0 > _STALE_PEND:
+                        t0 = now    # 失联保护：回执已陈旧（超窗的按下），
                                     # 按压时长不采信，折算成当下的一次新按压
                     self.capture(vk, True, t0)
                     self.capture(vk, False, now)
-                    return
-                self.capture(vk, down, now)
-                return
-            if self.silent:
+                else:
+                    self.capture(vk, down, now)
+            elif self.silent:
                 self._pending.clear()   # 静音期回执/松开沿全弃，不留陈旧配对
-                return
-            if self.learning:
-                return                  # 学习切换的过渡瞬间（capture 缺席）：丢弃
-            if not down and src == "hid" and vk in self._pending:
+            elif self.learning:
+                pass                    # 学习切换的过渡瞬间（capture 缺席）：丢弃
+            elif not down and src == "hid" and vk in self._pending:
                 t0 = self._pending.pop(vk)
-                if now - t0 > 2.0:
-                    t0 = now        # 失联保护：回执已陈旧（2 秒前的按下），按
-                                    # 压时长不采信，折算成当下的一次新按压
+                if now - t0 > _STALE_PEND:
+                    t0 = now        # 失联保护：回执已陈旧（超窗的按压），按压
+                                    # 时长不采信，折算成当下的一次新按压
                 if vk in self.temporal and self.engine is not None:
                     self.engine.feed(("hid", vk), True, t0)    # 合成按压对
                     self.engine.feed(("hid", vk), False, now)
-                    return
-                hid_fire(self._state, vk, True, t0)            # 单踩：松开沿触发
-                hid_fire(self._state, vk, False, now)
-                action = self.binds.get(vk)
-                if action:
-                    self.on_action(action)
-                return
-            if vk in self.temporal and self.engine is not None:
+                else:
+                    hid_fire(self._state, vk, True, t0)        # 单踩：松开沿触发
+                    hid_fire(self._state, vk, False, now)
+                    action = self.binds.get(vk)
+                    if action:
+                        acts.append(action)
+            elif vk in self.temporal and self.engine is not None:
                 self.engine.feed(("hid", vk), down, now)
-                return
-            if hid_fire(self._state, vk, down, now) and down:
+            elif hid_fire(self._state, vk, down, now) and down:
                 action = self.binds.get(vk)
                 if action:
-                    self.on_action(action)
+                    acts.append(action)
+        for a in acts:
+            self.on_action(a)
 
 
-def load_binding(cfg):
-    """完整 config dict → (设备名提示, {动作: cc 号})。JSON 的 true 是
-    int 子类，须一并挡掉（否则绑定成 CC 1）；pedal 段/子键被手改成非
-    dict 时按空段处理（启动路径，类型错不能炸开机）。同码去重按
-    (码, 手势) 身份——同键不同手势是手势引擎的特性，不算冲突。"""
-    p = _pedal_dict(cfg)
-    gest = _gestures_of(p)
-    binds = {}
-    seen = set()
-    for k, v in _pedal_dict(cfg, "bindings").items():
-        if k in dict(ACTIONS) and isinstance(v, int) \
-                and not isinstance(v, bool):
-            identity = (v, gest.get(k, "single"))
-            if identity in seen:    # 同码同手势：反转时后者静默覆盖前者，
-                continue            #   载入期保首个，杜绝绑定静默失效
-            seen.add(identity)
-            binds[k] = v
-    return str(p.get("deviceHint") or ""), binds
-
-
-def load_hid(cfg):
-    """完整 config dict → {动作: VK 码}（pedal.hidBindings 段）。去重
-    身份同 load_binding：(码, 手势)。"""
-    p = _pedal_dict(cfg)
-    gest = _gestures_of(p)
+def _dedup_bind_rows(rows, gest):
+    """(码, 手势) 身份去重：同码同手势反转时后者静默覆盖前者，载入期保
+    首个，杜绝绑定静默失效；同键不同手势是手势引擎的特性，不算冲突。"""
     out = {}
     seen = set()
-    for k, v in _pedal_dict(cfg, "hidBindings").items():
+    for k, v in rows:
         if k in dict(ACTIONS) and isinstance(v, int) \
                 and not isinstance(v, bool):
             identity = (v, gest.get(k, "single"))
@@ -1067,6 +1054,24 @@ def load_hid(cfg):
             seen.add(identity)
             out[k] = v
     return out
+
+
+def load_binding(cfg):
+    """完整 config dict → (设备名提示, {动作: cc 号})。JSON 的 true 是
+    int 子类，须一并挡掉（否则绑定成 CC 1）；pedal 段/子键被手改成非
+    dict 时按空段处理（启动路径，类型错不能炸开机）。"""
+    p = _pedal_dict(cfg)
+    gest = _gestures_of(p)
+    binds = _dedup_bind_rows(_pedal_dict(cfg, "bindings").items(), gest)
+    return str(p.get("deviceHint") or ""), binds
+
+
+def load_hid(cfg):
+    """完整 config dict → {动作: VK 码}（pedal.hidBindings 段）。去重
+    身份同 load_binding：(码, 手势)。"""
+    p = _pedal_dict(cfg)
+    gest = _gestures_of(p)
+    return _dedup_bind_rows(_pedal_dict(cfg, "hidBindings").items(), gest)
 
 
 def load_device_cfg(cfg):
@@ -1380,6 +1385,9 @@ class Learner:
 
     def _note(self, key, down, t, name):
         with self._cc_lock:
+            # 白名单护栏（LEARN_VKS）：修饰键/鼠标键等误触不得学成踩钉
+            if key[0] == "hid" and key[1] not in LEARN_VKS:
+                return
             if self.cc is not None:
                 return
             # 镜像引擎边沿受理的小状态机：示范序列只留干净交替的按压

@@ -2682,3 +2682,24 @@ if __name__ == "__main__":
     test_webremote_lan_mode()
     test_hotspot_script()
     print("test_bridge：全部通过")
+
+
+def test_learn_vk_whitelist_wired():
+    """LEARN_VKS 护栏已接线（11-13 评审定谳死护栏后的行为锚）：修饰键
+    （Ctrl 左 0xA0）按下松开不进学习事件，多媒体键照常进。"""
+    orig_in = pedal.mb._in_devices
+    orig_open = pedal.mb.open_in
+    pedal.mb._in_devices = lambda: [(0, "M-Vave"), (1, "loopMIDI Port")]
+    pedal.mb.open_in = lambda idx, cb: (None, "mocked")
+    try:
+        lr = pedal.Learner("M-Vave", "", kb_ports=())
+        lr._note(("hid", 0xA0), True, 10.0, None)    # Ctrl 左：白名单外
+        lr._note(("hid", 0xA0), False, 11.0, None)
+        lr._note(("hid", 0xB0), True, 20.0, None)    # 下一曲：白名单内
+        lr._note(("hid", 0xB0), False, 20.1, None)
+        keys = [k for k, _d, _t in lr.events]
+        assert ("hid", 0xA0) not in keys, "白名单外键被学成踩钉"
+        assert ("hid", 0xB0) in keys
+    finally:
+        pedal.mb._in_devices = orig_in
+        pedal.mb.open_in = orig_open
