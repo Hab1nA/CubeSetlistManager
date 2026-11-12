@@ -301,9 +301,10 @@ def _load_playlist():
         try:
             with open(PLAYLIST_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-        except ValueError:
+        except (ValueError, OSError):
             # 损坏降级：空播放列表（durations 启动探测会重建）；坏文件
-            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示
+            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示（OSError=
+            # 杀软短锁等 IO 错，同样降级，改名失败无妨）
             data = {}
             try:
                 os.replace(str(PLAYLIST_PATH), str(_PLAYLIST_CORRUPT))
@@ -510,6 +511,13 @@ class App:
         self._pedal_learn_starting = False   # 后台构造中（轮询回 starting 态）
         self._pedal_learn_start_err = None   # 构造失败一次性错误（轮询消费）
         self._pedal_learn_start_t = 0.0      # 构造起步时刻（卡死防护计时）
+        # 惰性属性双保险：__init__ 确定性初始化（评审 Minor：属性存在性
+        # 不再是隐式协议）+ 访问点 getattr 容忍式（web 层鸭子类型 fake 只
+        # 装配所经路径的属性，直接取属性会 AttributeError）
+        self._load_gen = 0
+        self._kbd_song_cache = None
+        self._kbd_cache_gen = {}
+        self._kbd_inflight = None
         self.start_err = ""
         self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
         # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
@@ -700,7 +708,7 @@ class App:
                     mb.ensure_loopmidi(hint)   # 端口缺时拉起+等端口（≤15s）
                     self.q.put("loopMIDI 端口就绪")
                 elif not find_processes_by_prefix("loopmidi"):
-                    exe = mb._loopmidi_exe()
+                    exe = mb.loopmidi_exe()
                     if exe is None:
                         raise SystemExit("找不到 loopMIDI.exe")
                     if launch_detached(exe) <= 32:
@@ -953,7 +961,7 @@ class App:
         self.mmc_out = None
         if self.facts.get("name") != "cubase" or not self.clock_hint:
             return
-        dev = mb._pick(mb._out_devices(), self.clock_hint)
+        dev = mb.pick(mb.out_devices(), self.clock_hint)
         if dev is None:
             if not quiet:
                 self.q.put("MMC 输出口未启动：找不到含「%s」的输出端口"
@@ -990,34 +998,39 @@ class App:
         self.points = pts
         # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）
         self.pl_keys = [k for k in self.pl_keys if self._entry_alive(k)]
-        # 重启恢复：Cubase 里还开着的工程按标题对回播放列表
-        ws = daw_ctrl.current_project()
-        name = daw_ctrl.project_name_from_title(ws[1]) if ws else None
-        if name:
-            for i, k in enumerate(self.pl_keys):
-                e = self._resolve_entry(k)
-                if e is None or e["song_name"] != name:
-                    continue
-                self.cur = i
-                d_file, left = _read_span(e["path"])
-                p = e["point"]
-                if p is not None:   # 定位点条目：装载段区间，不动 durations
-                    d, left = p["end"] - p["start"], p["start"]
-                else:
-                    d = self.durations.get(k) or d_file or 0.0
-                    self.durations[k] = d
-                if self.watch is not None:  # watch 缺席降级态同 _switch
-                    self.watch.set_duration(d, left)
-                self.slots = kbd_auto.load_slots(
-                    e["path"], point_id=e["point"]["id"]
-                    if e["point"] else None)
-                self.ax_slots = kbd_auto.load_slots(
-                    e["path"], "ax", point_id=e["point"]["id"]
-                    if e["point"] else None)
-                self.cur_song_path = e["path"]
-                self.cur_point_id = e["point"]["id"] if e["point"] else None
-                self.q.put("已恢复当前工程：《%s》" % name)
-                break
+        # 重启恢复：Cubase 里还开着的工程按标题对回播放列表。仅启动线程
+        # 执行（_startup_done 尚 False）——重扫线程触发时跳过：恢复段在
+        # 后台线程直写装载态（cur/slots/watch），与主线程切歌/对位并发=
+        # 绕过 _load_lock+代际协议（评审 I-LOAD-LOCK）；重扫时 Cubase 工程
+        # 并没变，恢复值仍是启动时那份，无信息增益
+        if not self._startup_done:
+            ws = daw_ctrl.current_project()
+            name = daw_ctrl.project_name_from_title(ws[1]) if ws else None
+            if name:
+                for i, k in enumerate(self.pl_keys):
+                    e = self._resolve_entry(k)
+                    if e is None or e["song_name"] != name:
+                        continue
+                    self.cur = i
+                    d_file, left = _read_span(e["path"])
+                    p = e["point"]
+                    if p is not None:   # 定位点条目：装载段区间，不动 durations
+                        d, left = p["end"] - p["start"], p["start"]
+                    else:
+                        d = self.durations.get(k) or d_file or 0.0
+                        self.durations[k] = d
+                    if self.watch is not None:  # watch 缺席降级态同 _switch
+                        self.watch.set_duration(d, left)
+                    self.slots = kbd_auto.load_slots(
+                        e["path"], point_id=e["point"]["id"]
+                        if e["point"] else None)
+                    self.ax_slots = kbd_auto.load_slots(
+                        e["path"], "ax", point_id=e["point"]["id"]
+                        if e["point"] else None)
+                    self.cur_song_path = e["path"]
+                    self.cur_point_id = e["point"]["id"] if e["point"] else None
+                    self.q.put("已恢复当前工程：《%s》" % name)
+                    break
         self._probe_durations(songs)
         self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
@@ -1628,7 +1641,7 @@ class App:
                      "midiIn", "mode", "ip")},
             "screens": [n for n, _r in list_screens()],
             "adapters": adapters,
-            "ports": [n for _i, n in mb._in_devices()],
+            "ports": [n for _i, n in mb.in_devices()],
             "webStatus": dict(self._web_status),
         }
 
@@ -1665,7 +1678,7 @@ class App:
             if mon and not mon_prev and self.launch_apps \
                     and not find_processes_by_prefix("obs64"):
                 try:                 # 冷启动 OBS 并等端口就绪（≤30s）
-                    fresh = ctl._ensure_obs_running()
+                    fresh = ctl.ensure_obs_running()
                 except Exception as e:
                     self.q.put("OBS 自动拉起失败：%s" % _err(e))
             if fresh:
@@ -1951,8 +1964,9 @@ class App:
                 kb_ports=((self.jcfg["inHint"], kbd_auto.in_dev(self.jcfg)),
                           (self.axcfg["inHint"],
                            kbd_auto.in_dev(self.axcfg))))
-        except BaseException:
+        except BaseException as e:
             learner = None
+            self._pedal_learn_err_raw = _err(e)   # 真实根因带出（原固定文案抹掉）
         self.calls.put(
             lambda: self._pedal_learn_arm_web(gen, action, learner))
 
@@ -1963,7 +1977,8 @@ class App:
             return
         self._pedal_learn_starting = False
         if learner is None:
-            self._pedal_learn_start_err = "学习启动失败（口被占用？）"
+            self._pedal_learn_start_err = "学习启动失败：%s" % (
+                getattr(self, "_pedal_learn_err_raw", "") or "口被占用？")
             return
         self._pedal_learner = (action, learner,
                                time.time() + pedal.LEARN_TIMEOUT)
@@ -2222,7 +2237,7 @@ class App:
                                    "slots": {}, "axSlots": {}}
                 return out
             path, pid, disp = tgt
-            if not hasattr(self, "_kbd_song_cache"):
+            if not getattr(self, "_kbd_song_cache", None):
                 self._kbd_song_cache = {}
             if song_key in self._kbd_song_cache:
                 slots, ax = self._kbd_song_cache[song_key]
@@ -2231,17 +2246,17 @@ class App:
             else:               # 后台装载（网络盘 IO 不进 Tk 线程）；代际
                 out["editSong"] = {"key": song_key, "name": disp,
                                    "loading": True, "slots": {}, "axSlots": {}}
-                if not hasattr(self, "_kbd_cache_gen"):
-                    self._kbd_cache_gen = {}
                 inflight = getattr(self, "_kbd_inflight", None)
                 if inflight is None:
-                    inflight = self._kbd_inflight = set()
+                    self._kbd_inflight = inflight = set()
                 if song_key in inflight:
                     return out  # 装载在途：不废旧代际（前端 700ms 自拉若
                                 # 每次顶掉 gen，慢盘装载永不收敛）
                 inflight.add(song_key)
-                self._kbd_cache_gen[song_key] = \
-                    self._kbd_cache_gen.get(song_key, 0) + 1
+                gen = getattr(self, "_kbd_cache_gen", None)
+                if gen is None:
+                    self._kbd_cache_gen = gen = {}
+                gen[song_key] = gen.get(song_key, 0) + 1
                 gen = self._kbd_cache_gen[song_key]
 
                 def run():
@@ -2413,7 +2428,7 @@ class App:
                 slot[f] = x
             clean[int(k)] = slot
         kbd_auto.save_slots(path, clean, key=key, point_id=pid)
-        if hasattr(self, "_kbd_song_cache"):
+        if getattr(self, "_kbd_song_cache", None) is not None:
             self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
             # 代际失效键与 pop 键统一：song_key=None（存当前装载曲）时按
             # 解析后的装载键作废，否则在途后台装载不被作废（陈旧映射回写）

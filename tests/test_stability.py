@@ -66,7 +66,7 @@ def test_settings_save_obs_off_main_thread():
     assert "def _apply_obs_web" in src
     body = _slice(src, "def _apply_obs_web", "def _settings_apply_web")
     assert "with self._obs_apply_lock" in body
-    assert "_ensure_obs_running" in body
+    assert "ensure_obs_running" in body   # 公开名（obs_ctrl 公开别名，11-13）
 
 
 # ---- 修复3：简化版独立 _drain_calls + 两端排水循环 BaseException 韧性 ----
@@ -534,7 +534,7 @@ def test_winmm_io_thread_wiring():
     winmm（_enum_n 降频）；setlist 旧窗拆骨后 _tick_body 无 winmm 枚举。"""
     src = _src("automator_gui.py")
     assert "_enum_n" in src                    # 枚举降频 ~2s
-    assert 'mb._pick(mb._in_devices(), self.vj_hint)' in src
+    assert 'mb.pick(mb.in_devices(), self.vj_hint)' in src   # 公开包装（11-13）
     src = _src("setlist_gui.py")
     tick = _slice(src, "def _tick_body", "def _transport_state")
     assert "mb._in_devices()" not in tick      # 轮询体不再枚举 winmm

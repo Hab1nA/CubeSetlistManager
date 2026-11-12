@@ -1038,7 +1038,7 @@ class App:
             # winmm 枚举降频到 ~2s（每 5 个 tick 查一次）：主线程少碰与
             # midiInOpen/Close 共进程级锁的 winmm 调用（完整版同款）
             if getattr(self, "_enum_n", 0) <= 0:
-                self._vj_hit = mb._pick(mb._in_devices(), self.vj_hint)
+                self._vj_hit = mb.pick(mb.in_devices(), self.vj_hint)
                 self._enum_n = 5
             self._enum_n -= 1
             hit = self._vj_hit
@@ -1214,7 +1214,7 @@ class SettingsWindow(tk.Toplevel):
 
         ttk.Label(body, text="联动端口", anchor="w",
                   style="Dim.TLabel").pack(fill="x", pady=(pad, 3))
-        live = list(dict.fromkeys(n for _i, n in mb._in_devices()))
+        live = list(dict.fromkeys(n for _i, n in mb.in_devices()))
         ins = ["无"] + live
         for hint in dict.fromkeys(
                 h for h in (app.vj_hint, app.kb_hint, app.clock_hint) if h):

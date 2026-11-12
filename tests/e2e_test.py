@@ -88,7 +88,7 @@ def dump_windows(tag):
 
 
 def midi_out_by_name(hint, note):
-    hits = [(i, n) for i, n in mb._out_devices() if hint in n]
+    hits = [(i, n) for i, n in mb.out_devices() if hint in n]
     if not hits:
         return "未找到输出端口 %s" % hint
     mb.send_note(hits[0][0], note)
@@ -111,9 +111,9 @@ def make_ctrl():
 
 def p_preflight():
     s_a, s_b = songs_ab()
-    log("MIDI 输入端口：%s" % [n for _, n in mb._in_devices()])
-    log("MIDI 输出端口：%s" % [n for _, n in mb._out_devices()])
-    ins = [n for _, n in mb._in_devices()]
+    log("MIDI 输入端口：%s" % [n for _, n in mb.in_devices()])
+    log("MIDI 输出端口：%s" % [n for _, n in mb.out_devices()])
+    ins = [n for _, n in mb.in_devices()]
     assert any("loopMIDI Port" in n for n in ins), "缺 loopMIDI Port"
     assert any(kbd_auto.KB_PORT_HINT in n for n in ins), "缺 Keyboard Automation"
     assert not any("JUNO" in n for n in ins), "JUNO 不该在场（题目说没连）"
@@ -457,8 +457,8 @@ def dump_windows_s1(tag):
 
 
 def p_s1_preflight():
-    log("S1 MIDI 输入端口：%s" % [n for _, n in mb._in_devices()])
-    ins = [n for _, n in mb._in_devices()]
+    log("S1 MIDI 输入端口：%s" % [n for _, n in mb.in_devices()])
+    ins = [n for _, n in mb.in_devices()]
     for hint in ("VJ Automation", "Keyboard Automation", "Score Automation"):
         assert any(hint in n for n in ins), "缺 %s" % hint
     log("S1 三端口 ✓")

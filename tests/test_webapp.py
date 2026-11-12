@@ -1058,7 +1058,7 @@ def _launch_fixture(monkeypatch, obs_running):
         def close_projector(self):
             self.closed += 1
 
-        def _ensure_obs_running(self):
+        def ensure_obs_running(self):   # 公开名（obs_ctrl 公开别名同步）
             # 模拟真实门：生效 autoStart=False 时拒绝拉起（ObsError 路径）
             if not self.cfg.get("autoStart"):
                 self.ensured += 1

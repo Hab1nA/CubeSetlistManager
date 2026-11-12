@@ -592,3 +592,6 @@ class ObsController:
                 time.sleep(1)
         raise ObsError("OBS 已启动但 30 秒内 4455 端口没就绪，"
                        "请检查 OBS 的 WebSocket 服务器设置是否启用")
+
+    # 公开别名：GUI/web 层冷启动拉起用，不直取私有段（评审 Minor）
+    ensure_obs_running = _ensure_obs_running

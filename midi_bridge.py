@@ -114,6 +114,25 @@ def _pick(pairs, hint=PORT_HINT):
     return hits[0] if hits else None
 
 
+# ---- 公开包装（GUI/e2e 层取端口清单与口名；业务层直取模块私有段无契约
+# 保护，内部重构会无声打断——评审 Minor）----
+
+def in_devices():
+    return _in_devices()
+
+
+def out_devices():
+    return _out_devices()
+
+
+def pick(pairs, hint=PORT_HINT):
+    return _pick(pairs, hint)
+
+
+def loopmidi_exe():
+    return _loopmidi_exe()
+
+
 # ---- winmm 专线：open/close 统一走专职线程 ----
 # winmm 的 close 在 Win11 走进程级锁（见 MidiIn.close 注释），回调密集时
 # 最坏无限挂死，open 同锁。这些调用此前大量落在 GUI 主线程（端口热切换/
