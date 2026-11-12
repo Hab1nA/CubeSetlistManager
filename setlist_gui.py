@@ -1589,7 +1589,27 @@ class App:
                                         points.pt_keys_for(lib_key, data))
             self.pl_keys = new
             self.cur = points.remap_cur(old, new, self.cur, lib_key)
-            self._sync_watch_span()
+            # 当前装载条目被重排掉（如删除正在播放的点）：粒度标签已死，
+            # 按落点条目重装载映射——防滞留死点段（对位规则①会抑制自愈）、
+            # song_key=None 的保存不再写孤儿段；落点未变（增删他点/改排）
+            # 时元组相等，零动作
+            cur_key = (self.pl_keys[self.cur]
+                       if self.cur is not None and self.cur < len(self.pl_keys)
+                       else None)
+            e = self._resolve_entry(cur_key) if cur_key else None
+            pid = e["point"]["id"] if e and e["point"] else None
+            if (self.cur_song_path, self.cur_point_id) != \
+                    (e["path"] if e else None, pid):
+                with self._load_lock:   # 作废在途装载，防旧结果覆写
+                    self._load_gen = getattr(self, "_load_gen", 0) + 1
+                if e is not None and e["path"] == self.cur_song_path:
+                    self.slots = kbd_auto.load_slots(e["path"], point_id=pid)
+                    self.ax_slots = kbd_auto.load_slots(e["path"], "ax",
+                                                        point_id=pid)
+                    self.cur_point_id = pid
+                else:
+                    self.cur_point_id = None    # 落点非本工程/指针空：粒度
+                    #   清零，映射由后续切换/对位接管（remap 不跨工程，守卫）
         self._persist()
         return None
 
@@ -3464,6 +3484,7 @@ class App:
                 self.slots = slots
                 self.ax_slots = ax
                 self.cur_song_path = path
+                self.cur_point_id = pid
         threading.Thread(target=run, daemon=True).start()
 
     def _repoint(self, j, e, why):

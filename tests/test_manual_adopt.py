@@ -427,10 +427,11 @@ def test_adopt_pt_entry_defers_coords(monkeypatch):
     assert app.watch.durs[0] == 0
     assert _wait(app, lambda: app.cur_song_path == "/p1")
     _drain(app)
-    # 提交半程：纪元复位+坐标仍 0（段坐标归位置对位）
+    # 提交半程：纪元复位+坐标仍 0（段坐标归位置对位）；粒度标签随装载落位
     assert app.watch.ops == ["reset", "dur", "reset", "dur"]
     assert app.watch.durs == [0, 0]
     assert "pt:a#1" not in app.durations
+    assert app.cur_point_id == 1
 
 
 def test_now_entry_display_matrix():

@@ -255,10 +255,14 @@ def load_slots(cpr_path, key="slots", point_id=None):
             pts = data.get("pointSlots")
             if isinstance(pts, dict):
                 sec = pts.get(str(point_id))
-                if isinstance(sec, dict) and key in sec:
+                if isinstance(sec, dict):
                     raw = sec.get(key)
+                    if not isinstance(raw, dict):   # 段内叶子写坏（真值
+                        raw = None                  # 非 dict）：回落工程级
         if raw is None:
             raw = data.get(key)
+        if not isinstance(raw, dict):   # 手改 JSON 把段写成真值非 dict
+            raw = {}                    # （"abc"/[1,2]）时 .items() 会炸
         out = {}
         for k, v in (raw or {}).items():
             # 类型全验：手改 JSON 把 pc/msb/lsb 写成 null/字符串时，此前只
