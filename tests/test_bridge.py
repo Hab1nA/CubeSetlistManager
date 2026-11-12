@@ -2101,11 +2101,15 @@ def test_web_api():
         assert reg.snapshot()[0]["name"] == "主谱台X"
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "next"})[0] == 200
-        time.sleep(0.5)
+        dl = time.monotonic() + 2.0    # 异步推送 deadline 轮询（评审 I-FLAKE2）
+        while not _FakeDevice.hits and time.monotonic() < dl:
+            time.sleep(0.02)
         assert _FakeDevice.hits == [{"dir": "next", "test": 1}]
         _FakeDevice.hits = []
         assert _http_post(port, "/device/test", {"dir": "prev"})[0] == 200
-        time.sleep(0.5)
+        dl = time.monotonic() + 2.0
+        while not _FakeDevice.hits and time.monotonic() < dl:
+            time.sleep(0.02)
         assert _FakeDevice.hits == [{"dir": "prev", "test": 1}]
         assert _http_post(port, "/device/test", {"dir": "bad"})[0] == 400
         # 取消登记：记录删除、幂等二次 400

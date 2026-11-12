@@ -422,9 +422,14 @@ class ObsController:
                 "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
                 "monitorIndex": idx})
 
+        # 打开前快照旧投影窗句柄：新投影窗与旧窗同匹配器（标题含投影/
+        # Projector），成功后全量扫射会把新窗一起误杀=全场无投影（复审
+        # 攻击轮 Critical）——只对快照里的旧窗发 WM_CLOSE
+        old_wins = obs_projector_windows()
         ok = self._act("投影", do)
         if ok:
-            close_obs_projectors()      # PostMessage 异步，残留窗口片刻即消
+            for hwnd, _t in old_wins:
+                _user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0)
         return ok
 
     def close_projector(self):
@@ -462,16 +467,18 @@ class ObsController:
         cand = os.path.join(root, file_rel)
         if os.path.exists(cand):
             return os.path.abspath(cand)
-        # 允许只填文件名：在视频库里按 basename 找
+        # 允许只填文件名：在视频库里按 basename 找（全库精确优先），宽松
+        # 匹配「编号+空格」开头（`4 开场钢琴.mp4` ↔ 4.mp4）其次，同编号
+        # 多个取自然排序第一个——库清单只扫一遍复用（原两次全量 os.walk，
+        # 大库每切歌翻两遍树）
         name = os.path.basename(file_rel)
-        for rel in scan_videos(root):
+        m = re.match(r"(\d+)", name)
+        files = scan_videos(root)       # 单扫复用
+        for rel in files:
             if os.path.basename(rel) == name:
                 return os.path.abspath(os.path.join(root, rel))
-        # 宽松匹配：文件名以「编号+空格」开头（`4 开场钢琴.mp4` ↔ 4.mp4）；
-        # 同编号多个文件时取自然排序第一个
-        m = re.match(r"(\d+)", name)
-        if m:
-            for rel in scan_videos(root):
+        if m is not None:
+            for rel in files:
                 bm = re.match(r"(\d+)\s", os.path.basename(rel))
                 if bm and bm.group(1) == m.group(1):
                     return os.path.abspath(os.path.join(root, rel))

@@ -1000,7 +1000,6 @@ class DeviceBridge:
         共用 _state/_pending，必须串行。"""
         if now is None:
             now = time.monotonic()
-        acts = []                     # 动作锁外发射：慢回调不再阻塞 HTTP 注入线程
         with self._io_lock:
             if self.learning and self.capture:
                 if (not down and src == "hid" and vk in self._pending):
@@ -1029,15 +1028,14 @@ class DeviceBridge:
                     hid_fire(self._state, vk, False, now)
                     action = self.binds.get(vk)
                     if action:
-                        acts.append(action)
+                        self.on_action(action)   # 锁内直发：_io_lock 提供全局
+                                                 #   发射序（回调=GUI 队列投递，快）
             elif vk in self.temporal and self.engine is not None:
                 self.engine.feed(("hid", vk), down, now)
             elif hid_fire(self._state, vk, down, now) and down:
                 action = self.binds.get(vk)
                 if action:
-                    acts.append(action)
-        for a in acts:
-            self.on_action(a)
+                    self.on_action(action)   # 锁内直发（同上：序=事件序）
 
 
 def _dedup_bind_rows(rows, gest):

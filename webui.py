@@ -58,6 +58,24 @@ def _window_size(argv):
             int(nums[1]) if len(nums) > 1 else 800)
 
 
+def _fatal(msg):
+    """frozen 无控制台的致命错出口：文件日志落盘 + MessageBox 后再退
+    （审计 R1 遗留清账：原裸 sys.exit=无声消失）。"""
+    try:
+        d = sg._LOGDIR
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / ("fatal-%s.log" % time.strftime("%Y%m%d")),
+                  "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
+    except Exception:
+        pass
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(
+        0, "%s\n\n详见日志目录：%s" % (msg, sg._LOGDIR),
+        "Cube Setlist Manager", 0x30)
+    sys.exit(msg)
+
+
 def main():
     w, h = _window_size(sys.argv[1:])
     sg.dpi.enable()
@@ -88,10 +106,10 @@ def main():
             if wr is not None and wr.registry is not None:
                 break
         if "err" in holder:
-            sys.exit("业务栈启动失败：%s" % holder["err"])
+            _fatal("业务栈启动失败：%s" % holder["err"])
         time.sleep(0.2)
     else:
-        sys.exit("等待业务栈超时（App 未就绪）")
+        _fatal("等待业务栈超时（App 未就绪）")
 
     # UI 专用 loopback 实例：127.0.0.1 随机口，/app /state /cmd 同一套面；
     # 与 WebRemote 主服务（按用户配置起/不起热点与对外端口）完全独立

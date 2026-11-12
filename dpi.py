@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
-import ctypes
-import os
-import sys
-import sv_ttk
-import tkinter as tk
-import tkinter.ttk as ttk
-
 """Windows UI 环境适配：DPI 感知 + 深色演出主题。
-enable() 必须先于 tk.Tk() 调用；感知后 tkinter 按真实 DPI 自动放大
+enable() 必须先于 tk.Tk() 调用；感知后 tkinter 按真 DPI 自动放大
 点数字体，写死的像素尺寸用 scale() 换算。非 Windows 或声明失败时
 安全降级（维持旧的不缩放行为）。
 
@@ -15,6 +8,12 @@ enable() 必须先于 tk.Tk() 调用；感知后 tkinter 按真实 DPI 自动放
 （Win11 观感）+ 集中命名 style；动态状态色 config(style=tone(色)+族名)
 同时写 widget 级 foreground（实测见 paint_tree）。sv_ttk 缺失/初始化
 失败直接抛异常，无任何回退。窗口级深色标题栏走 setup_window()。"""
+import ctypes
+import os
+import sys
+import sv_ttk
+import tkinter as tk
+import tkinter.ttk as ttk
 
 # 深色主题调色板（各界面文件共用）。底色系=sv-ttk dark 原生值（取自
 # theme/dark.tcl 与 spritesheet_dark 实测采样），状态语义色保留原值。

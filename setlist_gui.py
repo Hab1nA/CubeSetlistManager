@@ -301,15 +301,18 @@ def _load_playlist():
         try:
             with open(PLAYLIST_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-        except (ValueError, OSError):
+        except ValueError:
             # 损坏降级：空播放列表（durations 启动探测会重建）；坏文件
-            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示（OSError=
-            # 杀软短锁等 IO 错，同样降级，改名失败无妨）
+            # 改名 .corrupt 留证隔离，启动后 App 向用户红字提示
             data = {}
             try:
                 os.replace(str(PLAYLIST_PATH), str(_PLAYLIST_CORRUPT))
             except OSError:
                 pass
+        except OSError:
+            # 杀软/同步盘短锁等 IO 错：内容可能完全健康，只降级不改名——
+            # 健康文件被误隔离（复审攻击轮 Important）
+            data = {}
         keys = data.get("playlist") or data.get("order") or []
         durations = {}
         for k, v in data.get("durations", {}).items():
