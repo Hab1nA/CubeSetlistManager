@@ -218,24 +218,28 @@ def open_in(idx, proc, timeout=None):
         if state["dead"]:       # 等待方已放弃：即开即回收
             _winmm.midiInStop(h)
             _winmm.midiInReset(h)
+            _winmm.midiInClose(h)
             result["err"] = "打开超时 %.0f 秒，弃单已回收" % timeout
             return
         result["ok"] = True
 
+    t0 = time.monotonic()
     done, _ = run_io(job, timeout)
     if not done:
         state["dead"] = True        # 弃单 job 本就排在队列里会迟到执行并
                                     #   自查回收——无需宽限等待（复审 R3-4：
                                     #   原 0.5s no-op 宽限是死重+毒化期队列增长源）
         # 弃单微窗兜底：job 恰在 dead 检查后落位成功（dead 检查与 result
-        # 写入之间只有两条语句）——复读 50ms，迟到成功补收尾，兑现「绝不
-        # 泄漏已打开的句柄」承诺（评审 Minor：弃单 TOCTOU）
-        if done.wait(0.05) and result.get("ok"):
+        # 写入之间只有两条语句）——短轮询复读 50ms，迟到成功补收尾，兑现
+        # 「绝不泄漏已打开的句柄」承诺（评审 Minor：弃单 TOCTOU）
+        deadline = time.monotonic() + 0.05
+        while not result.get("ok") and time.monotonic() < deadline:
+            time.sleep(0.002)
+        if result.get("ok"):
             close_in(h)
             return None, "打开超时 %.0f 秒（迟到成功已回收）" % timeout
-        with _io_stuck_lock:
-            stuck = _io_stuck
-        if stuck:                   # 毒化快速失败：没等也没超时，文案须可辨
+        if time.monotonic() - t0 < timeout / 2:
+            # 没等到半程就回来=专线毒化快速失败（没等也没超时），文案须可辨
             return None, "MIDI 专线忙（前序作业挂死），已快速失败弃单"
     if result.get("ok"):
         return h, None
