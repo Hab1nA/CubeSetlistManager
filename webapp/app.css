@@ -849,6 +849,12 @@ button.armed {
   color: var(--err) !important;
   border-color: var(--err) !important;
 }
+/* 菜单项 armed 态与 danger 项（如「清空播放列表」）同款：浅红底无边框，
+   不带通用 armed 的深栗底+红描边 */
+.pop .menu-item.armed {
+  background: var(--err-bg) !important;
+  border-color: var(--err-bg) !important;
+}
 
 /* ---- 演出模式：ESC/F11 或走带行「退出演出」钮退出 ---- */
 body.show #side, body.show #statusbar { display: none; }
