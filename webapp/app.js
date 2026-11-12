@@ -1339,6 +1339,8 @@ async function refreshPoints() {
 }
 function selectPt(id) {
   ptSel = id;
+  selRowKey = ptProj ? "pt:" + ptProj + "#" + id : null;
+  markPlSel();               // 左侧蓝框随选中点移动（与左点入同一条键空间）
   const dd = ptData[ptProj];
   const p = dd && dd.points.find(x => x.id === id);
   if (p) {
