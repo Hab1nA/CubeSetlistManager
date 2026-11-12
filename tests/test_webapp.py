@@ -947,7 +947,7 @@ def test_file_log_writes_and_rotates(tmp_path):
         _t.sleep(0.1)
     txt = (d / ("%s.log" % day)).read_text(encoding="utf-8")
     assert "启动测试行" in txt and "界面异常：X" in txt
-    assert "[I]" in txt and "[E]" not in txt or True   # lv 空串→I 档
+    assert "[I]" in txt and "[err]" in txt   # lv 空串→I 档；lv 原样透传
     for _i in range(3000):
         fl.put("洪峰 %d" % _i, "")
     # 洪峰后进程仍健康（队列 Full 静默丢行）

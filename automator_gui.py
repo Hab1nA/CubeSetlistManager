@@ -543,7 +543,7 @@ class App:
                            "（简化版不自动拉起其它软件）")
             # VJ 链：OBS 客户端 → 走带同步 → MIDI 监听
             try:
-                obs_cfg = _load_config()["obs"]
+                obs_cfg = _load_config().get("obs") or {}
                 # 简化版铁律：绝不拉起 OBS（只连不拉），不受配置残留影响
                 obs_cfg["autoStart"] = False
                 self.ctl = ObsController(obs_cfg)

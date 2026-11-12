@@ -1053,11 +1053,11 @@ refresh();
 </html>
 """
 
-# ---- 双版页面：浏览器端无翻谱功能（右上角下载 APP，留苹果端占位）；
+# ---- 双版页面：浏览器端无翻谱功能（右上角下载 APP）；
 # APP 端（8767）承载全部翻谱设置 ----
 
 BTN_BROWSER = """<a class="ghost" href="/app.apk" style="color:var(--acc);
-  text-decoration:none">下载 APP</a><!-- __RIGHT_BTN2__ 预留：苹果端按钮 -->"""
+  text-decoration:none">下载 APP</a>"""
 
 BTN_APP = """<button class="ghost" id="b-dev">设置</button>"""
 

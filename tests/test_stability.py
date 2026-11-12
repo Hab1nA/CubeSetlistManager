@@ -1027,3 +1027,11 @@ def test_grace_noop_removed():
     弃单 job 本就在队列里会迟到自查回收。"""
     src = _slice(_src("midi_bridge.py"), "def open_in", "def close_in")
     assert "run_io(lambda: None" not in src
+
+
+def test_mim_moredata_handled_in_both_dispatches():
+    """winmm 回调跟不上（GIL 长占/GC 停顿即够，QF 间隔仅 8.3ms）时改投
+    MIM_MOREDATA(0x3C5)，载荷与 MIM_DATA 相同——分发点漏一处=演出中静默
+    丢音符/时码（11-13 评审定谳）。锚定两个回调分发点的分支条件。"""
+    assert "msg in (_MIM_DATA, _MIM_MOREDATA)" in _src("midi_bridge.py")
+    assert "msg in (mb._MIM_DATA, mb._MIM_MOREDATA)" in _src("kbd_auto.py")

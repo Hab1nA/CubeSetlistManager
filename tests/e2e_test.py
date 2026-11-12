@@ -228,6 +228,7 @@ def p_transport():
 
 
 def p_advance():
+    s_a, s_b = songs_ab()          # :237/:268 引用，原缺此调用必 NameError
     ctrl = make_ctrl()
     if not daw_ctrl.project_windows() or \
             "intro" not in (daw_ctrl.project_windows()[0][1] or ""):

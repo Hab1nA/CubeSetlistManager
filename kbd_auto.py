@@ -458,7 +458,7 @@ class RawMidiIn:
         self._h = h
 
     def _dispatch(self, h, msg, inst, p1, p2):
-        if msg == mb._MIM_DATA:
+        if msg in (mb._MIM_DATA, mb._MIM_MOREDATA):
             self._on_msg(p1 & 0xFF, (p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
         elif msg == mb._MIM_CLOSE and not self._closing:
             self._dead = True        # 设备移除/端口被删：自愈循环据此重开

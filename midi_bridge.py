@@ -9,7 +9,7 @@
   python midi_bridge.py               # 监听（自动拉起 OBS、断线重连）
   python midi_bridge.py --send 72     # 不经 Cubase，向 loopMIDI 发测试音符
 Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port，
-在触发位置画音符：C5(72)→1.mp4、C#5(73)→2.mp4 …（只认 Note On，音符长度
+在触发位置画音符：C4(72)→1.mp4、C#4(73)→2.mp4 …（只认 Note On，音符长度
 无所谓；0.16.2 起锚点对齐 Cubase 显示，72 起才是 VJ 区）。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
@@ -43,6 +43,7 @@ NOTE_MAP[102] = None  # F#6 → 熄屏
 
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
+_MIM_MOREDATA = 0x3C5     # 回调跟不上时改投此码，载荷与 DATA 相同——不同样处理就会静默丢消息
 _MIM_LONGDATA = 0x3C4     # SysEx 缓冲收满（须先 AddBuffer 投缓冲，否则 SysEx 被静默丢弃）
 _MIM_LONGERROR = 0x3C6    # SysEx 接收错误（缓冲同样要回收重投；旧值 0x3C2 是 MIM_CLOSE，错装）
 _MIM_CLOSE = 0x3C2        # 口关闭=设备被移除/loopMIDI 端口被删（winmm 热拔通知，11-11 修正）
@@ -487,7 +488,7 @@ class MidiIn:
 
     def _dispatch(self, h, msg, inst, p1, p2):
         # 回调线程零重活：longdata 只入队+按需派工，取字节/重投在专线
-        if msg == _MIM_DATA:
+        if msg in (_MIM_DATA, _MIM_MOREDATA):
             status = p1 & 0xFF
             if status == 0xF1:
                 if self._on_mtc:

@@ -849,7 +849,7 @@ class App:
             # VJ 链：OBS 客户端 → 走带同步/自动推进 → MIDI 监听（相互依赖，
             # 整链一组；链内 MIDI 口缺失仍单独降级）
             try:
-                self.ctl = ObsController(_load_config()["obs"])
+                self.ctl = ObsController(_load_config().get("obs") or {})
                 self.ctl.on_connected = self._on_obs_connected
                 # 密码以 dpapi: 密文落盘：控制器拿解密后的明文去连接；
                 # 旧明文原样通过（写入链在下次保存时升级为密文）

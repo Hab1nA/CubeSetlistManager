@@ -222,7 +222,7 @@ def mmc_goto_bytes(sec, fps=30.0, dev=127):
     帧率码：0=24 1=25 2=30df 3=30——与 mtc._FPS 同口径；子帧恒 0。"""
     fps_code = {24.0: 0, 25.0: 1, 30.0: 3}.get(float(fps), 3)
     sec = max(0.0, float(sec))
-    h = int(sec // 3600)
+    h = min(int(sec // 3600), 23)   # 小时字节只有 5 位，超界会回绕发错 GOTO 位置
     m = int(sec // 60) % 60
     s = int(sec) % 60
     f = int(round((sec - int(sec)) * fps))

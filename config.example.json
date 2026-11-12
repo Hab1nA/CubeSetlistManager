@@ -43,6 +43,7 @@
     "hidBindings": {},
     "hidDeviceHint": "",
     "intercept": true,
+    "remoteEnabled": false,
     "gestures": {},
     "doubleWindow": 0.35,
     "longPress": 0.35
