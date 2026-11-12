@@ -130,8 +130,6 @@ def main():
                "安装指引：https://developer.microsoft.com/microsoft-edge/"
                "webview2/（Evergreen Bootstrapper）" % e,
             "Cube Setlist Manager", 0x30)
-        app.calls.put(app._on_exit)
-        return
     ui_srv.shutdown()
     # 先入队退出再 join：_on_exit（热点/OBS/连带关闭）跑完才 root.destroy，
     # biz 线程随之结束——join 在 join 之后入队则 Tk 线程无死亡路径，恒

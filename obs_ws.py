@@ -19,9 +19,16 @@ import struct
 OP_HELLO, OP_IDENTIFY, OP_IDENTIFIED = 0, 1, 2
 OP_REQUEST, OP_REQUEST_RESPONSE = 6, 7
 
+_MAX_FRAME = 16 * 1024 * 1024   # 帧长上限：流失步时防 _buf 无界攒包（OBS 响应远小于此）
+
 
 class ObsError(Exception):
     pass
+
+
+class ObsProtocolError(ObsError):
+    """不可恢复的协议错（帧超长等）：与「帧未收全继续攒」严格区分，
+    后者靠 ObsError 由 _read_frame 吞掉继续等，前者必须断链重连。"""
 
 
 def auth_digest(password, salt, challenge):
@@ -32,10 +39,10 @@ def auth_digest(password, salt, challenge):
         hashlib.sha256((secret + challenge).encode("utf-8")).digest()).decode()
 
 
-def encode_text_frame(payload, mask_key):
-    """客户端帧必须掩码：b1=0x81(text|FIN)，长度 7/16/64 位，负载异或掩码。"""
+def _encode_frame(b1, payload, mask_key):
+    """客户端帧必须掩码：长度 7/16/64 位，负载异或掩码。"""
     assert len(mask_key) == 4
-    head = bytearray([0x81])
+    head = bytearray([b1])
     n = len(payload)
     if n < 126:
         head.append(0x80 | n)
@@ -48,6 +55,17 @@ def encode_text_frame(payload, mask_key):
     head += mask_key
     masked = bytearray(b ^ mask_key[i % 4] for i, b in enumerate(payload))
     return bytes(head) + bytes(masked)
+
+
+def encode_text_frame(payload, mask_key):
+    """文本帧：b1=0x81(text|FIN)。"""
+    return _encode_frame(0x81, payload, mask_key)
+
+
+def encode_pong_frame(payload, mask_key):
+    """PONG 帧：b1=0x8A(pong|FIN)，回显 ping 负载——回 TEXT 帧会被按协议
+    错断链（obs-websocket MessageDecodeError，实测源码行为）。"""
+    return _encode_frame(0x8A, payload, mask_key)
 
 
 def decode_frame(buf, pos):
@@ -68,6 +86,8 @@ def decode_frame(buf, pos):
             raise ObsError("帧头不完整（64 位长度缺失）")
         n = struct.unpack(">Q", buf[p:p + 8])[0]
         p += 8
+    if n > _MAX_FRAME:
+        raise ObsProtocolError("帧超长：%d" % n)
     if buf[pos + 1] & 0x80:  # 服务端帧不应掩码，容错处理
         if len(buf) - p < n + 4:
             raise ObsError("帧体不完整")
@@ -125,13 +145,15 @@ class ObsWs:
             if self._buf:
                 try:
                     op, payload, nxt = decode_frame(self._buf, 0)
+                except ObsProtocolError:
+                    raise                 # 帧超长是死局：断链重连，不许当未收全
                 except (ObsError, IndexError, struct.error):
                     op = None  # 帧还没收全，继续攒
             else:
                 op, nxt = None, 0
             if op is not None:
-                if op == 0x9:  # ping → 回 pong（客户端帧需掩码）
-                    self.sock.sendall(encode_text_frame(payload, os.urandom(4)))
+                if op == 0x9:  # ping → 回 PONG 帧（回 TEXT 会被按协议错断链）
+                    self.sock.sendall(encode_pong_frame(payload, os.urandom(4)))
                     self._buf = self._buf[nxt:]
                     continue
                 if op == 0x8:
@@ -188,6 +210,12 @@ class ObsWs:
             return d.get("responseData") or {}
 
     def close(self):
+        # 先发 CLOSE 帧再断 TCP：对端记优雅关闭（1000）而非异常断开（1006），
+        # 重连频繁时 OBS 侧日志不再全是噪音
+        try:
+            self.sock.sendall(_encode_frame(0x88, b"", os.urandom(4)))
+        except OSError:
+            pass
         try:
             self.sock.close()
         except OSError:

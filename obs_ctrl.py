@@ -9,8 +9,10 @@ import glob
 import os
 import re
 import socket
+import sys
 import threading
 import time
+import traceback
 from ctypes import wintypes
 
 from obs_ws import ObsWs, ObsError
@@ -237,6 +239,9 @@ class ObsController:
         self._stop = threading.Event()
         self._thread = None
         self.last_error = ""
+        # 连接纪元标志：只在「断开→连上」跃迁时通知（全部断开路径都要复位，
+        # 动作失败/探活失败/停用/循环异常漏复位=重连后投影不恢复，11-13 C2）
+        self._connected_notified = False
 
     # ---- 生命周期 ----
 
@@ -253,6 +258,7 @@ class ObsController:
             if self._ws:
                 self._ws.close()
                 self._ws = None
+            self._connected_notified = False
 
     def is_connected(self):
         return bool(self._ws)
@@ -376,8 +382,9 @@ class ObsController:
 
     def apply_projector(self):
         """按 cfg['projectorMonitor']（本机屏名，空=无）把节目画面全屏投影
-        过去；先关掉旧投影（换屏不留双份）。屏名对 OBS 侧先按名匹配，取不到
-        再按 (y,x) 排名兜底；配置的屏本机都不在了只报错不动手。"""
+        过去；开成新投影后才关旧投影（换屏不留双份；OBS 侧屏数不符开不成时
+        旧投影保留不黑场）。屏名对 OBS 侧先按名匹配，取不到再按 (y,x) 排名
+        兜底；配置的屏本机都不在了只报错不动手。"""
         val = self.cfg.get("projectorMonitor", "")
         if isinstance(val, int):        # 旧版语义（OBS 索引）：-1=无
             if val < 0:
@@ -395,19 +402,18 @@ class ObsController:
             self.last_error = "配置的显示器「%s」当前不在线" % name
             return False
         rank = wins.index(me)           # 屏名对不上 OBS 命名时按整序排名兜底
-        same_rank = [m for m in wins if m[0] == name].index(me)
 
         def do(ws):
             obss = ws.request("GetMonitorList")["monitors"]
             obss.sort(key=lambda m: (m["monitorPositionY"],
                                      m["monitorPositionX"]))
             hits = [m for m in obss if _screen_match(m["monitorName"], name)]
-            if len(hits) == 1:
-                idx = hits[0]["monitorIndex"]
-            elif hits:                  # 同型号多屏：命中子集内按序号对应
+            # 命中子集按 (y,x) 排序取首：本机同名屏已在 list_screens 加 (N)
+            # 序号唯一化，配置名只对应唯一物理屏
+            if hits:
                 hits.sort(key=lambda m: (m["monitorPositionY"],
                                          m["monitorPositionX"]))
-                idx = hits[min(same_rank, len(hits) - 1)]["monitorIndex"]
+                idx = hits[0]["monitorIndex"]
             elif rank < len(obss):
                 idx = obss[rank]["monitorIndex"]
             else:
@@ -416,8 +422,10 @@ class ObsController:
                 "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
                 "monitorIndex": idx})
 
-        close_obs_projectors()          # PostMessage 异步，残留窗口片刻即消
-        return self._act("投影", do)
+        ok = self._act("投影", do)
+        if ok:
+            close_obs_projectors()      # PostMessage 异步，残留窗口片刻即消
+        return ok
 
     def close_projector(self):
         """关掉全部 OBS 投影窗口（协议无关闭请求，走 WM_CLOSE）。永不抛。"""
@@ -444,6 +452,7 @@ class ObsController:
                 except OSError:
                     pass
                 self._ws = None
+                self._connected_notified = False   # 断链=纪元复位，重连必再通知
                 return False
 
     def _abs_path(self, file_rel):
@@ -471,8 +480,7 @@ class ObsController:
     # ---- 连接循环（RESYNC） ----
 
     def _connect_loop(self):
-        was_connected = False          # 只在「断开→连上」跃迁时通知（探活周期
-        while not self._stop.is_set():  # 会绕回顶部，不能每次都当全新连接）
+        while not self._stop.is_set():
             if not self.enabled:
                 time.sleep(1)
                 continue
@@ -492,15 +500,22 @@ class ObsController:
                     self._set_mute(ws)
                 except (ObsError, OSError):
                     pass
+                if self._stop.is_set():       # 退出竞态：握手完成也别再接管
+                    try:
+                        ws.close()
+                    except OSError:
+                        pass
+                    break
                 with self._lock:
                     self._ws = ws
                     self.last_error = ""
-                if self.on_connected and not was_connected:
+                    first_notify = not self._connected_notified
+                    self._connected_notified = True
+                if first_notify and self.on_connected:
                     try:
                         self.on_connected()
                     except Exception as e:
                         self.last_error = "连接通知回调异常: %s" % e
-                was_connected = True
                 # 挂起等断线/停用：socket 读超时也不重连，靠动作失败触发
                 self._stop.wait(self.cfg.get("healthSec", 30))
                 if self._stop.is_set():
@@ -510,6 +525,7 @@ class ObsController:
                         if self._ws:
                             self._ws.close()
                             self._ws = None
+                        self._connected_notified = False
                     continue
                 # 周期探活，断了就清理进入重连（下次连上才重新通知）
                 with self._lock:
@@ -523,21 +539,30 @@ class ObsController:
                                 pass
                             self._ws = None
                             self.last_error = "连接已断开，正在重连…"
-                            was_connected = False
+                            self._connected_notified = False
             except (ObsError, OSError) as e:
                 self.last_error = str(e)
                 with self._lock:
                     self._ws = None
+                    self._connected_notified = False
                 self._stop.wait(self.cfg.get("retrySec", 5))
             except Exception as e:
                 # 重连线程绝不允许静默死亡（死=OBS 永不重连、VJ 链全灭且
                 # 零日志）：捕获面以外的逃逸者（obs_ws json.loads 的
                 # ValueError 族、_ensure_media_input 的 KeyError 等响应
-                # 形状异常）同样按断线处理进重连
-                self.last_error = "连接循环异常，已恢复：%s: %s" % (
-                    type(e).__name__, e)
+                # 形状异常）同样按断线处理进重连；last_error 带异常源行，
+                # 逃逸面至少能定位到行
+                origin = ""
+                tb = traceback.extract_tb(sys.exc_info()[2])
+                if tb:
+                    f = tb[-1]
+                    origin = "%s:%d " % (os.path.basename(f.filename),
+                                         f.lineno)
+                self.last_error = "连接循环异常，已恢复：%s%s: %s" % (
+                    origin, type(e).__name__, e)
                 with self._lock:
                     self._ws = None
+                    self._connected_notified = False
                 try:
                     self._stop.wait(self.cfg.get("retrySec", 5))
                 except Exception:
