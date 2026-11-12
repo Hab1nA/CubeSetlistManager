@@ -676,6 +676,7 @@ function pedalEvtLog() {
   t.className = "t";
   t.textContent = new Date().toTimeString().slice(0, 8);
   const m = document.createElement("span");
+  m.className = "m";
   m.textContent = "踩钉信号";
   div.append(t, m);
   box.appendChild(div);

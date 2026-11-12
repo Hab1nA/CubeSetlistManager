@@ -756,6 +756,10 @@ input.invalid { border-color: var(--err) !important; }
 .log .ln .t { color: var(--dim); flex: none; width: 62px;
   font-variant-numeric: tabular-nums; }
 .log .ln .lv { flex: none; width: 3em; color: var(--dim); }
+/* 消息列可收缩且任意断行：完整路径等不可断 token 窄列不再横向溢出
+   （踩钉页 evt-log 同型行一并覆盖） */
+.log .ln .m, .evt-log .ln .m { flex: 1; min-width: 0;
+  overflow-wrap: anywhere; }
 .log .ln.err { color: var(--err); border-left-color: var(--err); }
 .log .ln.warn { color: var(--warn); border-left-color: var(--warn); }
 .log .ln.err .lv, .log .ln.warn .lv { color: inherit; }
