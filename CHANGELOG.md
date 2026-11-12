@@ -4,7 +4,7 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
-## [未发布]
+## [0.16.5] - 2026-11-12
 
 ### 新增
 
@@ -20,11 +20,32 @@
   `X-Cube-Token` / Bearer / `?t=` / Cookie，页面首次带 `?t=` 打开会种
   `HttpOnly; SameSite=Strict` Cookie；Host 只认 IP 字面量/localhost/显式配置，
   挡 DNS 重绑定。`/pedal/event`、`/diag` 为兼容旧安卓客户端豁免令牌。
+- **定位点各自独立音色映射槽位**：sidecar 新增 pointSlots 段按点 id 分存，
+  读入懒继承（点无段回落工程级，旧工程零迁移）；空段=该点显式清空不回落。
+  装载/切换/GOTO/repoint/开关切换五路径全部带点粒度重装载并记录
+  cur_point_id，代际守卫防在途旧结果覆写；web 编辑/试听/保存/缓存支持点
+  粒度，曲目选择器展开点条目，热更新判定升级 (path, pid) 二元组；删点
+  同步清孤儿段。
+- **编排页歌单文件导出与导入**：播放列表「⋯」菜单新增导出/导入，写出
+  {version, playlist, durations, durSrc} 的 .cubesetlist.json；导入全量校验
+  先行，坏文件与全失效条目不动现列表，失效条目跳过并逐条报告，空歌单按
+  合法清空处理。工程路径/定位点/VJ 槽位留在各工程 sidecar，随工程走不进
+  歌单文件。
+- **编排页详情标题跟随选中定位点名**：点击点行后标题显示「歌 · 点名」
+  （与播放列表/NOW 的 display_name 同口径），ptSel 指向已删点时自愈回落。
 - `requirements.txt` / `requirements-dev.txt` / `pyproject.toml`，补齐运行时与
   测试依赖清单。
 
 ### 修复
 
+- **定位点槽位三处粒度破约与脏结构**：手动采纳 pt 条目后 web 保存写进
+  点段而非工程级（_adopted_load 补 cur_point_id 回写）；删除当前装载点
+  按落点条目重装载并跟随粒度（原滞留死点段致保存写孤儿段）；sidecar
+  段内脏叶子/脏容器回落工程级（原 AttributeError 炸后台装载线程）。
+- **详情面板选点时左侧选中框随动**：selectPt 与左列表同一条键空间双向
+  同步，蓝框不再停在原行。
+- **菜单项二次确认态与危险项样式统一**：菜单场景下 armed 态对齐 danger
+  项外观。
 - **配对令牌/Host 热生效**：`WebRemote.auth_token` 收敛为属性唯一写口（赋值
   即同步 `/turn` 推送镜像），HTTP 门改经活取回调逐请求读现值（沿 tasker_port
   活引用惯例）——设置链（`/settings` 白名单纳入 authToken/hosts、桌面热应用
@@ -51,6 +72,9 @@
 
 - **旧 Tk 前端整轮移除（功能/UI 解耦重构）**：PointsWindow/SettingsWindow/PedalWindow 三窗体类删除（全部业务在 web 路径有等价或超集实现），KeyboardAutoWindow 迁入 automator_gui（唯一在用产品线），kbd_auto.py 收纯功能库；隐藏 Tk 主窗骨架（_build 显示件/双列表/监控栏/跑马灯/走带按钮）拆除，_tick/_drain_calls 轮询循环纯数据化（日志只喂 log_ring+文件日志、/state 快照照常），App 降为无头业务宿主；`webui_mode=False` 死模式世界（退出 Tk 确认框/对话框父窗分支/Tk 窗口聚焦分支）随旧前端一并移除，退出确认统一由前端两段式承担；setlist_gui.py 5260→3626 行，产品代码净删约 2100 行（全区间含测试工具净删 2787 行），功能面零变化（web 六页为完整镜像）。
 - CI 增加 macOS job：`ios/CubeRemoteCore` 的 `swift test` 与无签名模拟器编译。
+- **README 重整为面向用户的产品介绍**：配置参考与文件架构与平台坑迁出至
+  docs/开发指南.md 和 docs/配置参考.md；修正过时信息（踩钉补长踩、Cubase
+  走带需一次性部署 MIDI Remote、Web 界面为唯一界面），iOS 能力并入正文。
 - `compileall` 纳入 `web_auth.py`。
 
 ## [0.16.3] - 2026-11-11
