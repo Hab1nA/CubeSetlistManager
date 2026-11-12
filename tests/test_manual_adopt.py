@@ -106,7 +106,7 @@ def test_adopt_match(monkeypatch):
                         lambda p: (0.0, 120.0))
     loaded = []
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
-                        lambda p, kind=None: loaded.append(p) or {"s": 1})
+                        lambda p, kind=None, point_id=None: loaded.append(p) or {"s": 1})
     app = _app()
     setlist_gui.App._adopt(app, "Y")
     assert app.cur == 1                      # 指针指到命中的那首（立即）
@@ -128,7 +128,7 @@ def test_adopt_match_keeps_manual_duration(monkeypatch):
     monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
                         lambda p: (5.0, 120.0))
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
-                        lambda p, kind=None: {})
+                        lambda p, kind=None, point_id=None: {})
     app = _app(durs={"a": 42.0})
     setlist_gui.App._adopt(app, "X")
     assert _wait(app, lambda: app.cur_song_path == "/p1")
@@ -153,7 +153,7 @@ def test_adopt_duplicate_name_takes_first(monkeypatch):
     monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
                         lambda p: (0.0, 0.0))
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
-                        lambda p, kind=None: {})
+                        lambda p, kind=None, point_id=None: {})
     app = _app(pl=("a", "b"))
     app.by_key["b"] = {"name": "X", "path": "/p2"}   # 同名歌取靠前项
     setlist_gui.App._adopt(app, "X")
@@ -185,6 +185,10 @@ def _pt_app(pl, pts, cur=0, pos=None):
     app.q = app.logs = _Q()
     app.calls = queue.Queue()
     app.cur_song_path = "/pA"
+    app.cur_point_id = None            # _repoint 点粒度槽位重装载触及
+    app.slots, app.ax_slots = {}, {}
+    import threading as _th
+    app._load_lock = _th.Lock()
     app._goto_ack = None               # GOTO 在途闸（repick 触及）
     app._refresh = lambda: app.logs.append("<refresh>")
     app._resolve_entry = lambda key: \
@@ -412,7 +416,7 @@ def test_adopt_pt_entry_defers_coords(monkeypatch):
     monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
                         lambda p: (0.0, 120.0))
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
-                        lambda p, kind=None: {})
+                        lambda p, kind=None, point_id=None: {})
     app = _app(pl=("pt:a#1",))
     app.points = {"a": {"enabled": True, "counter": 1,
                         "points": [{"id": 1, "name": "定位点1",

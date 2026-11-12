@@ -677,7 +677,7 @@ def test_title_load_off_main_thread():
     assert "def _adopted_load" in src
     body = _slice(src, "def _adopt", "def _tick_banner")
     assert "_load_gen" in body
-    assert "load_slots(path)" in body
+    assert "load_slots(path, point_id=pid)" in body
     redict = _slice(src, 'if op == "redict"', 'if op == "move"')
     assert "threading.Thread(target=run" in redict
     src = _src("automator_gui.py")

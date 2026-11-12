@@ -612,6 +612,7 @@ class App:
         self.log_ring = collections.deque(maxlen=500)   # 新前端日志页数据源
         self.slots = {}                 # 已加载工程：JUNO 映射（音符 72-81）
         self.ax_slots = {}              # 已加载工程：AX-09 映射（音符 84-89）
+        self.cur_point_id = None        # 已装载条目的定位点 id（裸条目=None）
         self._persist_lock = threading.Lock()   # 主/切歌/启动三线程共用写播放列表
         self._obs_apply_lock = threading.Lock()  # 设置保存的 OBS 热应用串行化
         self._load_lock = threading.Lock()  # 装载代际守卫的校验+写原子化
@@ -1061,12 +1062,13 @@ class App:
                 return None
             return {"display": points.display_name(song["name"], p["name"]),
                     "path": song["path"], "lib_key": lib_key,
-                    "song_name": song["name"], "point": p}
+                    "song_name": song["name"], "point": p, "key": key}
         song = self.by_key.get(key)
         if song is None:
             return None
         return {"display": song["name"], "path": song["path"],
-                "lib_key": key, "song_name": song["name"], "point": None}
+                "lib_key": key, "song_name": song["name"], "point": None,
+                "key": key}
 
     def _open_mmc_out(self, quiet=False):
         """MMC 输出口启动（_startup 工作线程调用）：仅 Cubase 底座 + 时码口
@@ -1130,9 +1132,14 @@ class App:
                     self.durations[k] = d
                 if self.watch is not None:  # watch 缺席降级态同 _switch
                     self.watch.set_duration(d, left)
-                self.slots = kbd_auto.load_slots(e["path"])
-                self.ax_slots = kbd_auto.load_slots(e["path"], "ax")
+                self.slots = kbd_auto.load_slots(
+                    e["path"], point_id=e["point"]["id"]
+                    if e["point"] else None)
+                self.ax_slots = kbd_auto.load_slots(
+                    e["path"], "ax", point_id=e["point"]["id"]
+                    if e["point"] else None)
                 self.cur_song_path = e["path"]
+                self.cur_point_id = e["point"]["id"] if e["point"] else None
                 self.q.put("已恢复当前工程：《%s》" % name)
                 break
         self._probe_durations(songs)
@@ -1334,6 +1341,7 @@ class App:
             self.slots = {}         # 「校验后写入」TOCTOU 窗（复审 M3）
             self.ax_slots = {}
             self.cur_song_path = None
+            self.cur_point_id = None
             self._load_gen = getattr(self, "_load_gen", 0) + 1
         self._kb_warned = set()
         self.q.put("切换到《%s》…：%s"
@@ -1423,12 +1431,14 @@ class App:
 
     def _finish_switch_common(self, entry, play_after):
         """切换收尾公共段（_switch_done 工作线程）：音色映射装载+焦点/自动播。"""
-        slots = kbd_auto.load_slots(entry["path"])
-        ax_slots = kbd_auto.load_slots(entry["path"], "ax")
+        pid = entry["point"]["id"] if entry["point"] else None
+        slots = kbd_auto.load_slots(entry["path"], point_id=pid)
+        ax_slots = kbd_auto.load_slots(entry["path"], "ax", point_id=pid)
         with self._load_lock:       # 写回与 _switch 清空/后台装载同锁原子化
             self.slots = slots      # （复审 R3-1：第三写者收编；IO 在锁外）
             self.ax_slots = ax_slots
             self.cur_song_path = entry["path"]
+            self.cur_point_id = pid
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
@@ -1502,6 +1512,22 @@ class App:
         self._persist()
         self.q.put("《%s》定位点已%s"
                    % (song["name"], "启用" if on else "停用，条目已还原整曲"))
+        # 当前曲在这家族里：装载粒度随开关变了（pt↔裸），重装载映射
+        cur_key = (self.pl_keys[self.cur]
+                   if self.cur is not None and self.cur < len(self.pl_keys)
+                   else None)
+        if cur_key and (cur_key == lib_key
+                        or (points.parse_pt_key(cur_key)
+                            or (None, None))[0] == lib_key):
+            e = self._resolve_entry(cur_key)
+            if e is not None and e["song_name"] == song["name"]:
+                pid = e["point"]["id"] if e["point"] else None
+                with self._load_lock:
+                    self._load_gen = getattr(self, "_load_gen", 0) + 1
+                self.slots = kbd_auto.load_slots(e["path"], point_id=pid)
+                self.ax_slots = kbd_auto.load_slots(e["path"], "ax",
+                                                    point_id=pid)
+                self.cur_point_id = pid
 
     def _check_goto_ack(self):
         """GOTO 无回执告警：发送 1.2 秒后时码位置无变化 → MMC 链路存疑。
@@ -1613,6 +1639,10 @@ class App:
         if op == "del":
             data["points"] = [q for q in data["points"]
                               if q["id"] != pt["id"]]
+            try:                # 点删了它的槽位段一并清（点 id 不复用，留着
+                kbd_auto.delete_point_slots(song["path"], pt["id"])
+            except OSError:     # 是死数据；失败不拦删点
+                pass
             self.points[lib_key] = data
             if not data["points"]:
                 self._toggle_points(lib_key, False)   # 删光=自动停用
@@ -2201,13 +2231,28 @@ class App:
         return None
 
     def _kbd_song_key(self):
-        """当前装载映射的曲 key（cur_song_path 反查；未装载/游离=None）。"""
+        """当前装载映射的条目 key（cur_song_path 反查 + 装载粒度：定位点
+        模式下返回 pt key；未装载/游离=None）。"""
         if not self.cur_song_path:
             return None
         for k, s in self.by_key.items():
             if s["path"] == self.cur_song_path:
-                return k
+                return points.pt_key(k, self.cur_point_id) \
+                    if self.cur_point_id is not None else k
         return None
+
+    def _kbd_edit_target(self, song_key):
+        """槽位编辑目标解析（库 key 或 pt key）→ (path, 定位点id|None,
+        显示名)；条目不存活返回 None。"""
+        if points.parse_pt_key(song_key):
+            e = self._resolve_entry(song_key)
+            if e is None:
+                return None
+            return e["path"], e["point"]["id"], e["display"]
+        song = self.by_key.get(song_key)
+        if song is None:
+            return None
+        return song["path"], None, song["name"]
 
     def _kbd_get_web(self, song_key=None):
         """/kbd 数据面：live 态 + 曲目清单（任意曲预配映射）+ 端口候选与
@@ -2224,8 +2269,10 @@ class App:
                "axOutDev": self.axcfg.get("dev", 0),
                "junoShift": self.juno_shift, "axShift": self.ax_shift,
                "songKey": loaded,
+               # 曲目选择器同编排页口径：启用定位点的工程展开为点条目
+               #（点的音色映射独立编辑，选裸条目无入口）
                "songs": [{"key": s["key"], "team": s["team"],
-                          "name": s["name"]} for s in self.songs],
+                          "name": s["name"]} for s in self._lib_view()],
                "lastResult": self._kb_last,
                "counts": {"juno": len(self.slots),
                           "ax": len(self.ax_slots)}}
@@ -2273,21 +2320,21 @@ class App:
                     "axSlots": with_desc(ax, kbd_auto.describe_ax)}
 
         if song_key and song_key != loaded:
-            song = self.by_key.get(song_key)
-            if song is None:
+            tgt = self._kbd_edit_target(song_key)
+            if tgt is None:
                 out["editSong"] = {"key": None, "loading": False,
                                    "slots": {}, "axSlots": {}}
                 return out
+            path, pid, disp = tgt
             if not hasattr(self, "_kbd_song_cache"):
                 self._kbd_song_cache = {}
             if song_key in self._kbd_song_cache:
                 slots, ax = self._kbd_song_cache[song_key]
-                out["editSong"] = edit_song(song_key, song["name"],
+                out["editSong"] = edit_song(song_key, disp,
                                             False, slots, ax)
             else:               # 后台装载（网络盘 IO 不进 Tk 线程）；代际
-                out["editSong"] = {"key": song_key, "name": song["name"],
+                out["editSong"] = {"key": song_key, "name": disp,
                                    "loading": True, "slots": {}, "axSlots": {}}
-                path = song["path"]
                 if not hasattr(self, "_kbd_cache_gen"):
                     self._kbd_cache_gen = {}
                 inflight = getattr(self, "_kbd_inflight", None)
@@ -2302,16 +2349,16 @@ class App:
                 gen = self._kbd_cache_gen[song_key]
 
                 def run():
-                    slots = kbd_auto.load_slots(path)
-                    ax = kbd_auto.load_slots(path, "ax")
+                    slots = kbd_auto.load_slots(path, point_id=pid)
+                    ax = kbd_auto.load_slots(path, "ax", point_id=pid)
                     inflight.discard(song_key)
                     if self._kbd_cache_gen.get(song_key) != gen:
                         return    # IO 期间已保存失效：不回写旧数据
                     self._kbd_song_cache[song_key] = (slots, ax)
                 threading.Thread(target=run, daemon=True).start()
             return out
-        song = self.by_key.get(loaded) if loaded else None
-        out["editSong"] = edit_song(loaded, song["name"] if song else None,
+        tgt = self._kbd_edit_target(loaded) if loaded else None
+        out["editSong"] = edit_song(loaded, tgt[2] if tgt else None,
                                     False, self.slots, self.ax_slots)
         return out
 
@@ -2410,11 +2457,12 @@ class App:
         从该曲旁挂文件现读映射（详情面板可试任意预配曲），其余走 live。"""
         note = int(note)
         if song_key and song_key != self._kbd_song_key():
-            song = self.by_key.get(song_key)
-            if song is None:
+            tgt = self._kbd_edit_target(song_key)
+            if tgt is None:
                 return "曲目不在素材库"
+            path, pid, _ = tgt
             slots = kbd_auto.load_slots(
-                song["path"], "ax" if inst == "ax" else "slots")
+                path, "ax" if inst == "ax" else "slots", point_id=pid)
             slot = slots.get(note)
         else:
             slots = self.ax_slots if inst == "ax" else self.slots
@@ -2441,14 +2489,14 @@ class App:
         那首歌的旁挂文件（任意曲预配），缺省写当前装载曲；仅当目标=当前
         装载曲时热更新 live 映射。"""
         if song_key:
-            song = self.by_key.get(song_key)
-            if song is None:
+            tgt = self._kbd_edit_target(song_key)
+            if tgt is None:
                 return "曲目不在素材库"
-            path = song["path"]
+            path, pid = tgt[0], tgt[1]
         else:
             if not self.cur_song_path:
                 return "当前没有打开的工程"
-            path = self.cur_song_path
+            path, pid = self.cur_song_path, self.cur_point_id
         key = "ax" if inst == "ax" else "slots"
         clean = {}
         for k, v in (slots or {}).items():
@@ -2468,7 +2516,7 @@ class App:
                     return "%s 须为 0-127" % f.upper()
                 slot[f] = x
             clean[int(k)] = slot
-        kbd_auto.save_slots(path, clean, key=key)
+        kbd_auto.save_slots(path, clean, key=key, point_id=pid)
         if hasattr(self, "_kbd_song_cache"):
             self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
             # 代际失效键与 pop 键统一：song_key=None（存当前装载曲）时按
@@ -2477,9 +2525,10 @@ class App:
             self._kbd_cache_gen[gen_key] = \
                 self._kbd_cache_gen.get(gen_key, 0) + 1
             self._kbd_song_cache.pop(gen_key, None)      # 脏缓存重装载
-        if path == self.cur_song_path:
+        if (path, pid) == (self.cur_song_path, self.cur_point_id):
             with self._load_lock:
-                if path == self.cur_song_path:   # 锁内复核：IO 期间切歌不串写
+                if (path, pid) == (self.cur_song_path,
+                                   self.cur_point_id):  # 锁内复核：IO 期间切歌不串写
                     if inst == "ax":
                         self.ax_slots = clean
                     else:
@@ -3269,6 +3318,7 @@ class App:
                 with self._load_lock:   # 清空+代际递增原子化（同 _switch）
                     self.slots = {}
                     self.ax_slots = {}
+                    self.cur_point_id = None
                     self._load_gen = getattr(self, "_load_gen", 0) + 1
                     gen = self._load_gen
                 if e["point"] is not None and self.watch is not None \
@@ -3281,6 +3331,7 @@ class App:
                 return
         self.cur = None
         self.cur_song_path = None
+        self.cur_point_id = None
         self.slots = {}
         self.ax_slots = {}
         if self.watch is not None:
@@ -3305,8 +3356,9 @@ class App:
             else:
                 d_file, left = _read_span(path)
                 d = self.durations.get(key) or d_file or 0.0
-            slots = kbd_auto.load_slots(path)
-            ax = kbd_auto.load_slots(path, "ax")
+            pid = pt["id"] if pt is not None else None
+            slots = kbd_auto.load_slots(path, point_id=pid)
+            ax = kbd_auto.load_slots(path, "ax", point_id=pid)
             with self._load_lock:
                 if gen != self._load_gen:
                     return              # 已被更新的一次装载/切歌取代
@@ -3330,12 +3382,25 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def _repoint(self, j, e, why):
-        """指针改指同工程点条目 j（同路径：音色映射/时长缓存全复用，只改
-        指针+段坐标；set_duration 不复位——时码绝对值自证）。日志只在走带
-        停止时记（DAW 循环播放跨界会按循环周期刷屏）。"""
+        """指针改指同工程点条目 j（时长缓存复用；音色映射按点粒度重装载
+        ——sidecar 是小文件，主线程同步读；set_duration 不复位——时码绝对
+        值自证）。日志只在走带停止时记（DAW 循环播放跨界会按循环周期刷屏）。"""
         self.cur = j
+        pid = e["point"]["id"]
         self.watch.set_duration(e["point"]["end"] - e["point"]["start"],
                                 e["point"]["start"])
+        with self._load_lock:       # 代际递增作废在途装载，防旧结果覆写点段
+            self._load_gen = getattr(self, "_load_gen", 0) + 1
+            gen = self._load_gen
+        slots = kbd_auto.load_slots(e["path"], point_id=pid)
+        ax = kbd_auto.load_slots(e["path"], "ax", point_id=pid)
+        with self._load_lock:
+            if gen != self._load_gen:
+                return          # 指针/段坐标已生效，映射由后来者装载
+            self.slots = slots
+            self.ax_slots = ax
+            self.cur_song_path = e["path"]
+            self.cur_point_id = pid
         if not self.watch.is_transport_live():
             self.q.put("%s：《%s》" % (why, e["display"]))
 

@@ -239,14 +239,28 @@ def _slot_path(cpr_path):
     return pathlib.Path(cpr_path).resolve().parent / SLOT_FILE
 
 
-def load_slots(cpr_path, key="slots"):
+def load_slots(cpr_path, key="slots", point_id=None):
+    """读槽位段。point_id 给定且该定位点在 pointSlots 里有本段（含空段
+    =该点显式清空）则读点段，否则回落工程级段——懒继承：旧文件零迁移，
+    停用/复用定位点模式不丢数据。"""
     p = _slot_path(cpr_path)
     if not p.exists():
         return {}
     try:
         data = json.loads(p.resolve().read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        raw = None
+        if point_id is not None:
+            pts = data.get("pointSlots")
+            if isinstance(pts, dict):
+                sec = pts.get(str(point_id))
+                if isinstance(sec, dict) and key in sec:
+                    raw = sec.get(key)
+        if raw is None:
+            raw = data.get(key)
         out = {}
-        for k, v in data.get(key, {}).items():
+        for k, v in (raw or {}).items():
             # 类型全验：手改 JSON 把 pc/msb/lsb 写成 null/字符串时，此前只
             # 验 "pc" in v，describe_slot 做 501+pc 才炸（且会炸死发送线程）
             if not (str(k).isdigit() and isinstance(v, dict)):
@@ -276,7 +290,7 @@ def load_slots(cpr_path, key="slots"):
         return {}
 
 
-def save_slots(cpr_path, slots, key="slots"):
+def save_slots(cpr_path, slots, key="slots", point_id=None):
     p = _slot_path(cpr_path).resolve()
     if p.parent != pathlib.Path(cpr_path).resolve().parent:  # 只准落在工程文件夹
         raise ValueError("音色映射文件路径越界：%s" % p)
@@ -286,7 +300,16 @@ def save_slots(cpr_path, slots, key="slots"):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data[key] = {str(k): slots[k] for k in sorted(slots)}
+    if point_id is not None:                # 定位点段：空段保留（=该点显式
+        pts = data.get("pointSlots")        # 清空，不回落）；孤儿清理只走
+        if not isinstance(pts, dict):       # delete_point_slots（删点时调用）
+            pts = data["pointSlots"] = {}
+        sec = pts.get(str(point_id))
+        if not isinstance(sec, dict):
+            sec = pts[str(point_id)] = {}
+        sec[key] = {str(k): slots[k] for k in sorted(slots)}
+    else:
+        data[key] = {str(k): slots[k] for k in sorted(slots)}
     data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
     # 先写临时再替换：断电不截断原文件。临时名带进程+线程标识——Tk 线程
     # 与后台保存线程（及双开进程）并发写同一固定 .tmp 会交错损坏
@@ -295,6 +318,31 @@ def save_slots(cpr_path, slots, key="slots"):
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                    encoding="utf-8")
     os.replace(str(tmp), str(p))
+
+
+def delete_point_slots(cpr_path, point_id):
+    """定位点删除时清掉它的槽位段（防孤儿段随删点-重建累积；点 id 不复用，
+    留着只会是死数据）。文件不存在/无段=无操作。"""
+    p = _slot_path(cpr_path)
+    if not p.exists():
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    pts = data.get("pointSlots")
+    if not isinstance(pts, dict) or str(point_id) not in pts:
+        return
+    del pts[str(point_id)]
+    if not pts:
+        del data["pointSlots"]
+    tmp = p.with_name("%s.%d-%d.tmp"
+                      % (p.name, os.getpid(), threading.get_ident()))
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    os.replace(str(tmp), p.resolve())
 
 
 # ---- MIDI 收发（winmm；输入只收短消息，输出支持 SysEx 长消息） ----
