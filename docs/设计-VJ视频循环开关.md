@@ -107,10 +107,10 @@ def _set_video_loop(self, note, on):
   `sync.video_state` 为 playing/paused → 起工作线程调 `ctl.set_looping(on)`。
 - 返回 `(True, on)` 供端点回包。
 
-### 4.5 Tk 主窗监控格小润色（可选 1 行）
+### 4.5 Tk 主窗监控格小润色（**已作废**）
 
-「走带跟随」格在播视频名后追加 `（循环）` 后缀（setlist_gui.py:3914-3926
-拼接处查 `self.ctl.cfg`），与 obs_ctrl 日志同文案。
+（11-12 Tk 前端整体移除后本节永久作废，保留仅为编号连续；「（循环）」后缀
+现由 webapp VJ 页 ∞ 角标承载。）
 
 ## 5. 前端改动明细（webapp 三件）
 

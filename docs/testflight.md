@@ -171,5 +171,7 @@ xcodebuild -exportArchive \
 - `CubeRemoteCore` 的纯逻辑测试通过；
 - `Info.plist` / `PrivacyInfo.xcprivacy` / `project.pbxproj` 通过 `plutil -lint`。
 
-**没有**在本机生成 `.app`、没有签名、没有上传 TestFlight，也没有真机验收。
+本机验证边界以 [ios.md §6](ios.md) 为准（较本文旧快照更新）：已产出未签名
+archive 并在 Simulator 完成编译/安装/启动截图；**未做**真机签名与
+TestFlight 上传——需付费 Apple Developer Team。
 上面第 1–4 步必须在你自己有 Apple Developer 权限的 Mac 上完成。
