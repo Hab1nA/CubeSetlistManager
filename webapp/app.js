@@ -1118,6 +1118,7 @@ function selectSong(rowKey, base, ptId) {
     ptSel = null;
     ptProj = null;              // 定位点半边同清：ptcmd 全以 ptProj 定向，
                                 // 停在旧曲上=对旧曲误写（时序红队 P1）
+    dtInst = null;              // 双琴页签回自动（每曲按配置侧落位）
     // 数据在途时先清面板；dataset.sig 必须一并清：否则差量守卫见
     // 「签名同」跳过重绘（探针 p1 实证）
     dtKbd = null;
@@ -1216,6 +1217,36 @@ async function plcmd2(op, key, payload) {
 
 // ================= 定位点页 =================
 let ptProj = null, ptData = null, ptSel = null, ptCap = null;
+let dtInst = null;             // 音色映射双琴页签：null=自动（有配置侧优先）
+// 槽位编辑目标 key：选中定位点=该点（pt:宿主#id，读/录/存/测同源），
+// 否则=宿主工程级；ptSel 悬空（点被删）自动回落宿主
+function editKey() {
+  if (ptSel !== null && ptProj === plSel) {
+    const dd = ptData[ptProj];
+    if (dd && dd.points.some(p => p.id === ptSel))
+      return "pt:" + plSel + "#" + ptSel;
+  }
+  return plSel;
+}
+// 页签落位：手动选择优先，否则自动——JUNO 空而 AX 有配置时落 AX
+//（AX-only 曲不再「看不见」）
+function applyInstTab(es) {
+  const show = dtInst
+      || (Object.keys(es.slots || {}).length === 0
+          && Object.keys(es.axSlots || {}).length > 0 ? "ax" : "juno");
+  $("#dt-grp-juno").hidden = show !== "juno";
+  $("#dt-grp-ax").hidden = show !== "ax";
+  $("#dt-tab-juno").classList.toggle("cur", show === "juno");
+  $("#dt-tab-ax").classList.toggle("cur", show === "ax");
+}
+$("#dt-tab-juno").addEventListener("click", () => {
+  dtInst = "juno";
+  if (dtKbd && dtKbd.editSong && !dtKbd.editSong.loading) applyInstTab(dtKbd.editSong);
+});
+$("#dt-tab-ax").addEventListener("click", () => {
+  dtInst = "ax";
+  if (dtKbd && dtKbd.editSong && !dtKbd.editSong.loading) applyInstTab(dtKbd.editSong);
+});
 const parseTC = t => {
   const raw = String(t || "").trim();
   if (!raw || !/^\d+(?::\d{0,2}){0,2}$/.test(raw)) return null;
@@ -1292,6 +1323,7 @@ async function refreshPoints() {
         $("#pt-name").value = pp.name;
         $("#pt-s").value = fmtTC(pp.start);
         $("#pt-e").value = fmtTC(pp.end);
+        refreshKbdDetail();   // 编辑目标换点：映射面板随点重载
       }
     }
     const song = plCache && (plCache.lib.find(x => x.key === plSel)
@@ -1351,6 +1383,7 @@ function selectPt(id) {
   ptSel = id;
   selRowKey = ptProj ? "pt:" + ptProj + "#" + id : null;
   markPlSel();               // 左侧蓝框随选中点移动（与左点入同一条键空间）
+  refreshKbdDetail();        // 编辑目标换点：映射面板随点重载
   const dd = ptData[ptProj];
   const p = dd && dd.points.find(x => x.id === id);
   if (p) {
@@ -1394,6 +1427,8 @@ async function ptcmd(op, payload) {
   if (j.ok && op !== "move") toast("定位点已更新");
   await refreshPlaylist();   // 先列表后定位点：跳到这点按钮即时就位
   refreshPoints();
+  // 删点/停用会作废当前编辑目标（editKey 回落宿主）：映射面板随落
+  if (op === "del" || op === "toggle") refreshKbdDetail();
 }
 let ptOnPending = false;    // 启用钮在途：轮询回写跳过（防视觉回弹诱发双击）
 $("#pt-on").addEventListener("click", async () => {
@@ -2085,7 +2120,7 @@ function pollRecord(inst, onCap) {
 // 定格在开录时刻：保存目标就是开录时选中的那首歌与那份映射
 async function cardRecord(div, inst, note) {
   const es = dtKbd && dtKbd.editSong;
-  const ready = !!(plSel && es && es.key === plSel && !es.loading);
+  const ready = !!(plSel && es && es.key === editKey() && !es.loading);
   if (recInst === inst && recNote === note) {   // 再点=停止并保存
     const cap = recCap, ctx = recCtx, card = recCard, had = !!recInst;
     recInst = recNote = recCap = null; recCtx = null; recCard = null;
@@ -2130,12 +2165,12 @@ async function cardRecord(div, inst, note) {
   }
   if (recInst) stopRecord();                    // 全局单录制会话
   if (recPend) return;                          // start 在途：不重入
-  const key0 = plSel, es0c = es;
+  const key0 = editKey(), es0c = es;
   recPend = inst;
   post("/kbdrecord", {inst}).then(j => {
     recPend = null;
     if (!j.ok) return;
-    if (plSel !== key0) {                       // 在途窗口换曲：即刻撤销
+    if (editKey() !== key0) {                   // 在途窗口换曲/换点：即刻撤销
       post("/kbdrecord", {inst, stop: true});
       toast("录制已取消：目标曲已变化", "err");
       return;
@@ -2183,7 +2218,7 @@ function slotRow(note, slot, inst) {
     test.textContent = "测试";
     test.addEventListener("click", ev => {
       ev.stopPropagation();
-      post("/kbdtest", {inst, note, songKey: plSel}).then(j => {
+      post("/kbdtest", {inst, note, songKey: editKey()}).then(j => {
         if (j.ok) toast("已发送测试：" + noteName(note));
       });
     });
@@ -2195,13 +2230,13 @@ function slotRow(note, slot, inst) {
     clr.addEventListener("click", ev => {
       ev.stopPropagation();
       const es = dtKbd && dtKbd.editSong;
-      if (!plSel || !es || es.key !== plSel || es.loading) {
+      if (!plSel || !es || es.key !== editKey() || es.loading) {
         toast("映射未就绪", "err");
         return;
       }
       const slots = {...(inst === "ax" ? es.axSlots : es.slots)};
       delete slots[note];
-      post("/slotset", {inst, slots, songKey: plSel}).then(j => {
+      post("/slotset", {inst, slots, songKey: editKey()}).then(j => {
         if (j.ok) toast(noteName(note) + " 已清除");
         refreshKbdDetail();
       });
@@ -2271,20 +2306,24 @@ async function refreshKbdDetail() {
   updateDtBadge();
   try {
     const seq = refreshKbdDetail.seq = (refreshKbdDetail.seq || 0) + 1;
-    const r = await fetch("/kbd?song=" + encodeURIComponent(plSel));
+    const r = await fetch("/kbd?song=" + encodeURIComponent(editKey()));
     if (!r.ok) return;                    // 504 错误体不当数据（P1-2）
     const d = await r.json();
     if (seq !== refreshKbdDetail.seq) return;
-    // 数据须属于当前选中曲且非装载中才渲染：导航/换曲瞬间的陈旧 plSel
-    // 响应不得把别曲映射画到新曲名下（显示层与编辑层同一口径）
+    // 数据须属于当前编辑目标（选中点=点键）且非装载中才渲染：导航/换曲
+    // 瞬间的陈旧响应不得把别曲映射画到新曲名下（显示层与编辑层同一口径）
     const es0 = d.editSong;
-    if (!es0 || es0.key !== plSel || es0.loading) {
+    if (!es0 || es0.key !== editKey() || es0.loading) {
       dtKbd = null;
       $("#dt-kbd-stat").textContent = !es0 || es0.loading
           ? "映射装载中…" : "映射不可用，曲目不在素材库";
       // 陈旧响应/异常态不同帧渲染：同步清槽位，防旧曲槽卡残留可点
-      $("#dt-slots").textContent = "";
-      $("#dt-axslots").textContent = "";
+      //（dataset.sig 一并清：差量守卫见「签名同」会跳过重建=槽位卡
+      // 永久空白，同数据回填也救不回）
+      for (const id of ["dt-slots", "dt-axslots"]) {
+        $("#" + id).textContent = "";
+        delete $("#" + id).dataset.sig;
+      }
       updateDtBadge();
       return;
     }
@@ -2294,6 +2333,7 @@ async function refreshKbdDetail() {
     $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…" : "";
     buildSlots($("#dt-slots"), es.slots, 72, 81, "juno");
     buildSlots($("#dt-axslots"), es.axSlots, 84, 89, "ax");
+    applyInstTab(es);
     updateDtBadge();
     // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
     if (es.loading && pageOn("setlist"))
