@@ -1118,7 +1118,6 @@ function selectSong(rowKey, base, ptId) {
     ptSel = null;
     ptProj = null;              // 定位点半边同清：ptcmd 全以 ptProj 定向，
                                 // 停在旧曲上=对旧曲误写（时序红队 P1）
-    dtInst = null;              // 双琴页签回自动（每曲按配置侧落位）
     // 数据在途时先清面板；dataset.sig 必须一并清：否则差量守卫见
     // 「签名同」跳过重绘（探针 p1 实证）
     dtKbd = null;
@@ -1217,7 +1216,6 @@ async function plcmd2(op, key, payload) {
 
 // ================= 定位点页 =================
 let ptProj = null, ptData = null, ptSel = null, ptCap = null;
-let dtInst = null;             // 音色映射双琴页签：null=自动（有配置侧优先）
 // 槽位编辑目标 key：选中定位点=该点（pt:宿主#id，读/录/存/测同源），
 // 否则=宿主工程级；ptSel 悬空（点被删）自动回落宿主
 function editKey() {
@@ -1228,25 +1226,6 @@ function editKey() {
   }
   return plSel;
 }
-// 页签落位：手动选择优先，否则自动——JUNO 空而 AX 有配置时落 AX
-//（AX-only 曲不再「看不见」）
-function applyInstTab(es) {
-  const show = dtInst
-      || (Object.keys(es.slots || {}).length === 0
-          && Object.keys(es.axSlots || {}).length > 0 ? "ax" : "juno");
-  $("#dt-grp-juno").hidden = show !== "juno";
-  $("#dt-grp-ax").hidden = show !== "ax";
-  $("#dt-tab-juno").classList.toggle("cur", show === "juno");
-  $("#dt-tab-ax").classList.toggle("cur", show === "ax");
-}
-$("#dt-tab-juno").addEventListener("click", () => {
-  dtInst = "juno";
-  if (dtKbd && dtKbd.editSong && !dtKbd.editSong.loading) applyInstTab(dtKbd.editSong);
-});
-$("#dt-tab-ax").addEventListener("click", () => {
-  dtInst = "ax";
-  if (dtKbd && dtKbd.editSong && !dtKbd.editSong.loading) applyInstTab(dtKbd.editSong);
-});
 const parseTC = t => {
   const raw = String(t || "").trim();
   if (!raw || !/^\d+(?::\d{0,2}){0,2}$/.test(raw)) return null;
@@ -2333,7 +2312,6 @@ async function refreshKbdDetail() {
     $("#dt-kbd-stat").textContent = es.loading ? "映射装载中…" : "";
     buildSlots($("#dt-slots"), es.slots, 72, 81, "juno");
     buildSlots($("#dt-axslots"), es.axSlots, 84, 89, "ax");
-    applyInstTab(es);
     updateDtBadge();
     // 任意曲首答 loading（后台装载中）：短暂自拉直到数据就位
     if (es.loading && pageOn("setlist"))

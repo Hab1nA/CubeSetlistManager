@@ -93,6 +93,50 @@ def test_dirty_leaf_section_falls_back(tmp_path):
         assert kbd_auto.load_slots(cpr, point_id=1)[72]["pc"] == 1
 
 
+def test_goto_worker_reloads_point_slots(tmp_path):
+    """同工程定位点切换（踩钉下一首/跳到这点/段间推进共用路径）必须按点
+    粒度重装载：11-13 真机翻案=该路径只挪指针不动槽位=琴上仍发旧点音色。"""
+    import queue
+    import threading
+    import types
+    import setlist_gui
+    cpr = tmp_path / "song.cpr"
+    cpr.write_text("", encoding="utf-8")
+    kbd_auto.save_slots(str(cpr), {72: {"pc": 1}})          # 工程级
+    kbd_auto.save_slots(str(cpr), {72: {"pc": 51}}, point_id=1)
+    kbd_auto.save_slots(str(cpr), {72: {"pc": 52}}, point_id=2)
+    app = types.SimpleNamespace(
+        by_key={"L": {"key": "L", "name": "歌", "path": str(cpr)}},
+        points={"L": {"enabled": True, "counter": 2, "points": [
+            {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
+            {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
+        pl_keys=["pt:L#1", "pt:L#2"], cur=0,
+        cur_song_path=str(cpr), cur_point_id=1,
+        slots={72: {"pc": 51}}, ax_slots={},
+        _load_lock=threading.Lock(), calls=queue.Queue(), watch=None,
+        ctrl=types.SimpleNamespace(busy=False, transport=lambda a: None),
+        q=_Q())
+    app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app._reload_entry_slots = lambda e: \
+        setlist_gui.App._reload_entry_slots(app, e)
+    app._goto_send = lambda start, label: None
+    setlist_gui.App._goto_worker(app, 1,
+                                 app._resolve_entry("pt:L#2"), False)
+    # finish 已入 calls 队列：排干执行（主线程语义）
+    while True:
+        try:
+            app.calls.get_nowait()()
+        except queue.Empty:
+            break
+    assert app.cur == 1 and app.cur_point_id == 2
+    assert app.slots == {72: {"pc": 52}}    # 切点后 live 槽位=新点段
+
+
+class _Q:
+    def put(self, v):
+        pass
+
+
 def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     """删掉正在播放的定位点：粒度标签跟随落点条目重装载（原实现滞留死点
     段且对位规则①抑制自愈）。"""
@@ -113,6 +157,8 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
         slots={72: {"pc": 2}}, ax_slots={},
         _load_lock=threading.Lock(), _persist=lambda: None)
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app._reload_entry_slots = lambda e: \
+        setlist_gui.App._reload_entry_slots(app, e)
     app.points["L"]["points"] = app.points["L"]["points"][1:]  # 删点1
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.cur_point_id == 2            # 粒度跟随落点（点2 无段→回落）

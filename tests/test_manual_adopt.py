@@ -197,6 +197,8 @@ def _pt_app(pl, pts, cur=0, pos=None):
         setlist_gui.App._repick_by_position(app, name, pos_)
     app._repoint = lambda j, e, why: \
         setlist_gui.App._repoint(app, j, e, why)
+    app._reload_entry_slots = lambda e: \
+        setlist_gui.App._reload_entry_slots(app, e)
     return app
 
 

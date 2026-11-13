@@ -1253,6 +1253,9 @@ class App:
                     or self.cur_song_path != entry["path"]):
                 return              # 编排已变/已切走他曲：弃本次装载
             self.cur = i
+            # 点粒度槽位随切点重装载（同工程≠同映射：每点可各配一组，
+            # 11-13 真机翻案=此处漏装=踩钉/跳点后琴上仍发旧点音色）
+            self._reload_entry_slots(entry)
             if self.watch is not None:
                 self.watch.reset()  # 清推进闩；位置由 GOTO 补发全帧重灌
                 self.watch.set_duration(
@@ -1413,13 +1416,7 @@ class App:
                             or (None, None))[0] == lib_key):
             e = self._resolve_entry(cur_key)
             if e is not None and e["song_name"] == song["name"]:
-                pid = e["point"]["id"] if e["point"] else None
-                with self._load_lock:
-                    self._load_gen = getattr(self, "_load_gen", 0) + 1
-                self.slots = kbd_auto.load_slots(e["path"], point_id=pid)
-                self.ax_slots = kbd_auto.load_slots(e["path"], "ax",
-                                                    point_id=pid)
-                self.cur_point_id = pid
+                self._reload_entry_slots(e)
 
     def _check_goto_ack(self):
         """GOTO 无回执告警：发送 1.2 秒后时码位置无变化 → MMC 链路存疑。
@@ -1492,14 +1489,11 @@ class App:
             pid = e["point"]["id"] if e and e["point"] else None
             if (self.cur_song_path, self.cur_point_id) != \
                     (e["path"] if e else None, pid):
-                with self._load_lock:   # 作废在途装载，防旧结果覆写
-                    self._load_gen = getattr(self, "_load_gen", 0) + 1
                 if e is not None and e["path"] == self.cur_song_path:
-                    self.slots = kbd_auto.load_slots(e["path"], point_id=pid)
-                    self.ax_slots = kbd_auto.load_slots(e["path"], "ax",
-                                                        point_id=pid)
-                    self.cur_point_id = pid
+                    self._reload_entry_slots(e)
                 else:
+                    with self._load_lock:
+                        self._load_gen = getattr(self, "_load_gen", 0) + 1
                     self.cur_point_id = None    # 落点非本工程/指针空：粒度
                     #   清零，映射由后续切换/对位接管（remap 不跨工程，守卫）
         self._persist()
@@ -3381,26 +3375,32 @@ class App:
                 self.cur_point_id = pid
         threading.Thread(target=run, daemon=True).start()
 
-    def _repoint(self, j, e, why):
-        """指针改指同工程点条目 j（时长缓存复用；音色映射按点粒度重装载
-        ——sidecar 是小文件，主线程同步读；set_duration 不复位——时码绝对
-        值自证）。日志只在走带停止时记（DAW 循环播放跨界会按循环周期刷屏）。"""
-        self.cur = j
-        pid = e["point"]["id"]
-        self.watch.set_duration(e["point"]["end"] - e["point"]["start"],
-                                e["point"]["start"])
-        with self._load_lock:       # 代际递增作废在途装载，防旧结果覆写点段
+    def _reload_entry_slots(self, e):
+        """按条目粒度同步重装载音色映射（主线程；sidecar 小文件）。同工程
+        点间切换的唯一槽位装载口：代际递增作废在途后台装载，提交前锁内
+        复核防旧结果覆写。e= _resolve_entry 产物（point=None=工程级）。"""
+        pid = e["point"]["id"] if e["point"] else None
+        with self._load_lock:
             self._load_gen = getattr(self, "_load_gen", 0) + 1
             gen = self._load_gen
         slots = kbd_auto.load_slots(e["path"], point_id=pid)
         ax = kbd_auto.load_slots(e["path"], "ax", point_id=pid)
         with self._load_lock:
             if gen != self._load_gen:
-                return          # 指针/段坐标已生效，映射由后来者装载
+                return          # 已被更新的装载/切歌取代：由后来者落位
             self.slots = slots
             self.ax_slots = ax
             self.cur_song_path = e["path"]
             self.cur_point_id = pid
+
+    def _repoint(self, j, e, why):
+        """指针改指同工程点条目 j（时长缓存复用；音色映射按点粒度重装载
+        ——set_duration 不复位——时码绝对值自证）。日志只在走带停止时记
+        （DAW 循环播放跨界会按循环周期刷屏）。"""
+        self.cur = j
+        self.watch.set_duration(e["point"]["end"] - e["point"]["start"],
+                                e["point"]["start"])
+        self._reload_entry_slots(e)
         if not self.watch.is_transport_live():
             self.q.put("%s：《%s》" % (why, e["display"]))
 
