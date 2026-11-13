@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Cubase MIDI Remote 直控（CC → driver → runCommand）。
 哑协议：一条 CC=一条命令，动作序列语义在本模块。driver=mr_driver/Local/
-CubeSetlistManager/CubeSetlistRemote/（部署 docs/MIDIRemote直控部署.md），
+CubeSetlistManager/CubeSetlistRemote/（部署三步见 README「快速开始」），
 端口=loopMIDI「CubeSetlist Remote」单口双向。完整迁移：Cubase 无键盘
 回落，口不在、发送失败或 Cubase 不在线=动作失败报错；效果核验沿用
 MTC 三态。存活探针（Phase 2，11-11 落地）：纯回声方案被实证作废——

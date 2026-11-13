@@ -79,12 +79,10 @@
   设置」启用）；
 - DAW 二选一：
   - **Steinberg Cubase 13–15**（实测 13.0.40 / 15）——走带与切歌经官方
-    MIDI Remote 直控，需按
-    [docs/MIDIRemote直控部署.md](docs/MIDIRemote直控部署.md) 一次性部署
-    （三步，约两分钟，不部署则走带动作不可用）；
+    MIDI Remote 直控，需一次性部署三步（约两分钟，见快速开始第 4 步；
+    不部署则走带动作不可用）；
   - **PreSonus Studio One 7 Pro**（实测 7.2）——走带时钟需在
-    「歌曲选项 → 同步」勾选 **MIDI 时码输出** 到主程序的时码端口
-    （详见 [docs/MTC时码部署.md](docs/MTC时码部署.md)）；
+    「歌曲选项 → 同步」勾选 **MIDI 时码输出** 到主程序的时码端口；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、
   MIDI 或蓝牙踩钉；
 - 移动端可选：安卓 8.0+ / iOS 16+ 设备，或任意现代浏览器。
@@ -100,7 +98,14 @@
    （全字段见[配置参考](docs/配置参考.md)）；
 3. **准备素材**：工程按 `<队伍>/<歌>/<歌>.cpr`（Studio One 为 `.song`）
    放进工程库根目录，视频放进 VJ 视频目录；歌名来源=工程文件名；
-4. **Cubase 用户加一步**：部署 MIDI Remote 直控脚本（见环境要求里的链接）；
+4. **Cubase 用户加一步**（一次性部署 MIDI Remote 直控，全程不抢焦点）：
+   - 在 loopMIDI 里新建端口，命名 `CubeSetlist Remote`（严格同名，勿加
+     后缀）；
+   - 把仓库 `mr_driver/Local/CubeSetlistManager/CubeSetlistRemote/` 按同样
+     目录层级拷到 `%USERPROFILE%\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\CubeSetlistManager\CubeSetlistRemote\`；
+   - 重启 Cubase，「Studio → MIDI Remote Manager」确认
+     `CubeSetlistManager CubeSetlistRemote` 已自动填上该端口（罕见未连时
+     手选该口）。
 5. **启动主程序**：启动自检自动拉起三大后端并写日志——loopMIDI 端口就绪、
    OBS 启动并等 WebSocket（至多 30 秒）、DAW 冷启动（Cubase 约 30 秒到 Hub，
    Studio One 同实例换歌约 1–2 秒）；任一失败只记日志不阻断其余功能；
@@ -215,8 +220,6 @@ Cubase / Studio One 界面显示一致）。
 | 文档 | 内容 |
 |---|---|
 | [演出验证清单](docs/演出验证清单.md) | 赛前自检 + 现场故障恢复 |
-| [MIDIRemote直控部署](docs/MIDIRemote直控部署.md) | Cubase 走带直控一次性部署与验收 |
-| [MTC时码部署](docs/MTC时码部署.md) | 时码输出配置（走带三态/定位点/自动推进的前提） |
 | [配置参考](docs/配置参考.md) | config.json 全字段 |
 | [ios.md](docs/ios.md) | iOS 端构建与能力边界 |
 | [testflight.md](docs/testflight.md) | iOS 上架 TestFlight 步骤 |

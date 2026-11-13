@@ -8,7 +8,7 @@
 
 ### 修复
 
-- 全仓评审修复轮（清单见 [docs/全仓评审报告-2026-11-13.md](docs/全仓评审报告-2026-11-13.md) §七）：配置缺 obs 段打穿 VJ 链降级路径、OBS 重连纪元漏接（动作失败断链后投影不再恢复）、apply_projector 开成新投影后才只关快照旧窗、_load_playlist 区分损坏隔离与短锁降级、pedal 学习键白名单接线（原定义未过滤）、winmm 回调补收 MIM_MOREDATA 防静默丢消息、开口弃单回收补 midiInClose、automator 移植端口热拔重开三段、winmm 专线快速失败文案可辨、BLE 扫描失败退避与回调护栏、mmc GOTO 小时上界、POST 超 1MB 回 413、/diag 补全局限流、401 与断网可辨提示、测试时序面改锚点注入/deadline 轮询、out/ 一次性调试产物出库。
+- 全仓评审修复轮：配置缺 obs 段打穿 VJ 链降级路径、OBS 重连纪元漏接（动作失败断链后投影不再恢复）、apply_projector 开成新投影后才只关快照旧窗、_load_playlist 区分损坏隔离与短锁降级、pedal 学习键白名单接线（原定义未过滤）、winmm 回调补收 MIM_MOREDATA 防静默丢消息、开口弃单回收补 midiInClose、automator 移植端口热拔重开三段、winmm 专线快速失败文案可辨、BLE 扫描失败退避与回调护栏、mmc GOTO 小时上界、POST 超 1MB 回 413、/diag 补全局限流、401 与断网可辨提示、测试时序面改锚点注入/deadline 轮询、out/ 一次性调试产物出库。
 - 安卓：/turn 接收口补令牌校验（与 iOS 同规）；端口监听失败通知即时降级明示；gradle 代理配置移用户级。
 - iOS：连接/改址延迟到页面标题核验通过才持久化（待核验对象绑定，异步窗口内改址/换令牌不误写 store）；requestAddressChange 补同规轻校验；ATS 收窄 NSAllowsLocalNetworking；删 /health 死路由与桥死函数；恢复 setTurnMethod（共享页面模板真调用）。
 - webui：致命错改 MessageBox+文件日志后退出（原裸 sys.exit 无声消失，审计 R1 清账）。

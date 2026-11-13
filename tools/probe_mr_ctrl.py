@@ -2,7 +2,7 @@
 """MIDI Remote 直控探针（真机取证）：向「CubeSetlist Remote」口发动作 CC
 序列（生产同路径 mr_ctrl.send：press127+release0），同时监听时码口 MTC——
 play/resume 后位置推进、stop/pause 后冻结、rewind 后归零、close 后 QF 停。
-真机前提（docs/MIDIRemote直控部署.md 三步全做）：loopMIDI 建口「CubeSetlist
+真机前提（README「快速开始」第 4 步三步全做）：loopMIDI 建口「CubeSetlist
 Remote」；driver 已在 Cubase MIDI Remote Manager 里映射到该口；工程勾 MTC
 时码输出（MTC 监听=时钟口，同 App 接线）。
 用法：
