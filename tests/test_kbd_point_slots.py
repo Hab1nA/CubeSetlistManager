@@ -117,6 +117,9 @@ def test_goto_worker_reloads_point_slots(tmp_path):
         ctrl=types.SimpleNamespace(busy=False, transport=lambda a: None),
         q=_Q())
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app.end_beh = {}                # 播完行为表（_sync_watch_armed 触及）
+    app.auto_advance = False
+    app._sync_watch_armed = lambda: setlist_gui.App._sync_watch_armed(app)
     app._reload_entry_slots = lambda e: \
         setlist_gui.App._reload_entry_slots(app, e)
     app._goto_send = lambda start, label: None
@@ -157,6 +160,9 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
         slots={72: {"pc": 2}}, ax_slots={},
         _load_lock=threading.Lock(), _persist=lambda: None)
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app.end_beh = {}                # 播完行为表（_sync_watch_armed 触及）
+    app.auto_advance = False
+    app._sync_watch_armed = lambda: setlist_gui.App._sync_watch_armed(app)
     app._reload_entry_slots = lambda e: \
         setlist_gui.App._reload_entry_slots(app, e)
     app.points["L"]["points"] = app.points["L"]["points"][1:]  # 删点1

@@ -434,7 +434,8 @@ def _pl_app():
         points={"A/歌一": {"enabled": True, "counter": 1, "points": [
             {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}},
         durations={}, dur_src={}, watch=None, q=_Q(),
-        _persist=lambda: None, _refresh=lambda: None)
+        _persist=lambda: None, _refresh=lambda: None,
+        _sync_watch_armed=lambda: None)
 
 
 def test_plcmd_add_pt_key():
@@ -707,7 +708,8 @@ def test_kbd_web_song_slots_and_validation(tmp_path):
     loaded = kbd_auto.load_slots(str(b_cpr), "ax")
     assert loaded[84]["msb"] == 87
     assert fake.ax_slots == {}            # 非装载曲：live 映射不动
-    assert "B/歌二" not in fake._kbd_song_cache   # 脏缓存已失效
+    # 脏缓存=半边原位更新（权威数据直接回写）：下次 GET 不再走 loading 往返
+    assert fake._kbd_song_cache["B/歌二"] == ({}, {84: {"pc": 5, "msb": 87}})
     # 装载曲保存：热更新 live
     assert sg.App._slots_save_web(
         fake, "juno", {"72": {"pc": 63}}, song_key="A/歌一") is None
@@ -1439,11 +1441,13 @@ class _PlApp:
         self.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
         self.durations = {"A/歌一": 120.0, "B/歌二": 90.0}
         self.dur_src = {"A/歌一": "manual"}
+        self.end_beh = {}
         self.cur = 1
         self.persists = 0
         fake = _FakeWebApp()
         self.by_key, self.points = fake.by_key, fake.points
         self._resolve_entry = fake._resolve_entry
+        self._sync_watch_armed = lambda: None
 
     def _persist(self):
         self.persists += 1
@@ -1456,11 +1460,13 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(sg.filedialog, "asksaveasfilename",
                         lambda **kw: str(out))
     a = _PlApp()
+    a.end_beh = {"A/歌一": "stop", "B/歌二": "delay:30", "C/不存在": "next"}
     r = sg.App._pl_export_web(a)
     assert r == {"ok": True, "count": 3}
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["version"] == 1 and data["playlist"] == a.pl_keys
     assert data["durations"]["A/歌一"] == 120.0
+    assert data["endBeh"] == a.end_beh          # 播完行为随歌单携带
 
     # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）
     data["playlist"] = ["B/歌二", "C/不存在", "pt:B/歌二#9", "A/歌一"]
@@ -1468,11 +1474,14 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     bad.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(bad))
     b = _PlApp()
+    b.end_beh = {"B/歌二": "playnext"}          # 本机已有值优先
     r = sg.App._pl_import_web(b)
     assert r["ok"] is True and r["loaded"] == 2
     assert b.pl_keys == ["B/歌二", "A/歌一"] and b.cur is None
     assert b.persists == 1 and len(r["skipped"]) == 2
     assert b.durations["B/歌二"] == 90.0 and b.dur_src["A/歌一"] == "manual"
+    # 行为合并：本机已有值优先；只对存活条目的宿主补值（C 不带入）
+    assert b.end_beh == {"B/歌二": "playnext", "A/歌一": "stop"}
 
     # 用户取消：canceled、零副作用
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: "")
@@ -1497,6 +1506,22 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(dead))
     assert "全部失效" in sg.App._pl_import_web(b)["error"]
     assert b.pl_keys == ["B/歌二", "A/歌一"] and b.persists == 1
+
+    # endBeh 段校验（独立宿主：不扰动上面 b 的取消/坏文件断言）：
+    # 非法值拒绝、null 视同缺省
+    data["playlist"] = ["B/歌二"]
+    data["endBeh"] = {"B/歌二": "hax"}
+    (tmp_path / "badbeh.json").write_text(json.dumps(data, ensure_ascii=False),
+                                          encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "badbeh.json"))
+    assert "endBeh 段含非法值" in sg.App._pl_import_web(_PlApp())["error"]
+    data["endBeh"] = None
+    (tmp_path / "nullbeh.json").write_text(json.dumps(data, ensure_ascii=False),
+                                           encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "nullbeh.json"))
+    assert sg.App._pl_import_web(_PlApp())["ok"] is True
 
 
 def test_plexport_plimport_endpoints():

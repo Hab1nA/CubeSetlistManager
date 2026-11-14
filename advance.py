@@ -177,3 +177,33 @@ class AdvanceWatch:
                                               self.duration))
                 return
         self.on_finished()              # 锁外触发，避免回调死锁
+
+
+# ---- 逐曲播完行为（playlist.json endBeh 段）----
+
+END_BEH_MAX_DELAY = 86400.0    # 延迟播放秒数上限（24h）：防手滑输错秒数
+
+
+def parse_end_beh(v):
+    """存储值 → (kind, delay)。kind ∈ follow/stop/next/playnext/delay；
+    空/非法=跟随全局。delay=延迟播放秒数（钳 0-86400），仅 delay 有值。
+    follow 在调用方按「设置页两开关」当前组合映射：
+    OFF→stop / ON→next / ON+autoPlay→playnext。"""
+    if not v:
+        return ("follow", 0.0)
+    if v in ("stop", "next", "playnext"):
+        return (v, 0.0)
+    if v.startswith("delay:"):
+        try:
+            n = float(v[6:])
+        except ValueError:
+            return ("follow", 0.0)
+        return ("delay", min(END_BEH_MAX_DELAY, max(0.0, n)))
+    return ("follow", 0.0)
+
+
+def valid_end_beh(v):
+    """非空值必须是可解析的显式行为（""=清除=合法）。"""
+    if not v:
+        return True
+    return parse_end_beh(v)[0] != "follow"

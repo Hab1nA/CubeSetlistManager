@@ -438,7 +438,13 @@ class DeviceRegistry:
 
 
 def _ver():
-    """git describe（开发仓库；打包态/失败为空——侧栏版本号缺省不显示）。"""
+    """版本号：打包态读 exe 同目录 version.txt（build.bat 落盘）；开发态 git describe。"""
+    if getattr(sys, "frozen", False):
+        try:
+            return pathlib.Path(sys.executable).with_name("version.txt") \
+                .read_text(encoding="ascii").strip()
+        except (OSError, ValueError):   # UnicodeDecodeError 系 ValueError
+            return ""
     import subprocess
     try:
         out = subprocess.run(["git", "describe", "--tags"],
@@ -1874,7 +1880,8 @@ class _Handler(BaseHTTPRequestHandler):
             except RuntimeError:
                 lib, pl = [], []
                 continue
-        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
+        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur,
+                         "endBeh": dict(getattr(app, "end_beh", {}) or {})})
 
     def _h_points(self):
         """定位点定义：全部工程的 sidecar 数据 + 启用态。"""

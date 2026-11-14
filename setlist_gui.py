@@ -294,7 +294,8 @@ def _protect_obs_password(cfg):
 
 
 def _load_playlist():
-    """{"playlist": [key…], "durations": {key: 秒}, "durSrc": {key: manual}}
+    """{"playlist": [key…], "durations": {key: 秒}, "durSrc": {key: manual},
+    "endBeh": {lib_key: stop|next|playnext|delay:秒}}
     durSrc 里登记的是手动设定；不在表里=自动识别；无时长=未知。
     兼容旧 schema 的 order 键。"""
     if PLAYLIST_PATH.exists():
@@ -319,18 +320,24 @@ def _load_playlist():
             d = cpr_meta.safe_dur(v)   # 历史毒化（NaN/Infinity/超界）归零
             if d > 0:
                 durations[str(k)] = d
+        end_beh = {}
+        for k, v in (data.get("endBeh") or {}).items():
+            if advance.valid_end_beh(str(v)):
+                end_beh[str(k)] = str(v)
         return {"playlist": [str(k) for k in keys],
                 "durations": durations,
+                "endBeh": end_beh,
                 "durSrc": {k: "manual"
                            for k, v in data.get("durSrc", {}).items()
                            if v == "manual"}}
-    return {"playlist": [], "durations": {}, "durSrc": {}}
+    return {"playlist": [], "durations": {}, "endBeh": {}, "durSrc": {}}
 
 
-def save_playlist(keys, durations, dur_src):
-    data = json.dumps({"playlist": keys, "durations": durations,
-                       "durSrc": dur_src},
-                      ensure_ascii=False, indent=2)
+def save_playlist(keys, durations, dur_src, end_beh=None):
+    data = {"playlist": keys, "durations": durations, "durSrc": dur_src}
+    if end_beh:
+        data["endBeh"] = dict(end_beh)
+    data = json.dumps(data, ensure_ascii=False, indent=2)
     _rotate(_PLAYLIST_BAKS, PLAYLIST_PATH)
     _atomic_write(PLAYLIST_PATH, data)
 
@@ -478,6 +485,8 @@ class App:
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
         self.durations = pl["durations"]
         self.dur_src = pl["durSrc"]     # "manual"=手填；不在表=自动；无时长=未知
+        self.end_beh = pl["endBeh"]     # 逐曲播完行为（lib_key → 存储值，缺=跟随全局）
+        self._delay_seq = 0             # 延迟自动播放代际：任何切换/走带动作使在途失效
         self.songs = []                 # 素材库全量
         self.by_key = {}
         self.cur = None                 # 播放列表下标：已请求加载的项
@@ -1034,6 +1043,8 @@ class App:
                     self.cur_point_id = e["point"]["id"] if e["point"] else None
                     self.q.put("已恢复当前工程：《%s》" % name)
                     break
+        if not self._startup_done:
+            self._sync_watch_armed()    # 恢复指针后按恢复条目重算武装门
         self._probe_durations(songs)
         self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
@@ -1180,6 +1191,7 @@ class App:
 
     def _switch(self, i, via, play_after=False):
         """切到播放列表第 i 项；返回 False=没开始（越界/正忙/库缺项）。"""
+        self._delay_play_cancel()   # 新切换使在途延迟起播失效（含本次 delay 流程再重排）
         if not (0 <= i < len(self.pl_keys)):
             if via == "advance":
                 self.q.put("自动切换：已到播放列表末尾，不切换")
@@ -1261,6 +1273,7 @@ class App:
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])
+            self._sync_watch_armed()    # 同工程换点：同歌行为，门值不变也统一走此口
             if play_after:
                 # resume 而非 play：光标已被上面的 GOTO 放在段起点，通用
                 # play 的回零会打回工程头；play 也不走 _point_play 二次
@@ -1337,6 +1350,7 @@ class App:
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
+        self._sync_watch_armed()    # 新条目=新歌行为：武装门按显式行为重算
         if play_after:
             # 等待加载的循环放后台线程，别堵主线程的状态轮询
             self.calls.put(lambda: threading.Thread(
@@ -1457,6 +1471,7 @@ class App:
         else:
             self.watch.set_duration(
                 self.durations.get(entry["lib_key"], 0.0) or 0.0, 0.0)
+        self._sync_watch_armed()    # 条目重锚后统一重算武装门（含裸条目回落）
 
     def _points_sync_list(self, lib_key):
         """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
@@ -2427,12 +2442,21 @@ class App:
         kbd_auto.save_slots(path, clean, key=key, point_id=pid)
         if getattr(self, "_kbd_song_cache", None) is not None:
             self._kbd_cache_gen = getattr(self, "_kbd_cache_gen", {})
-            # 代际失效键与 pop 键统一：song_key=None（存当前装载曲）时按
+            # 代际失效键与缓存键统一：song_key=None（存当前装载曲）时按
             # 解析后的装载键作废，否则在途后台装载不被作废（陈旧映射回写）
             gen_key = song_key or self._kbd_song_key()
             self._kbd_cache_gen[gen_key] = \
                 self._kbd_cache_gen.get(gen_key, 0) + 1
-            self._kbd_song_cache.pop(gen_key, None)      # 脏缓存重装载
+            # 缓存半边更新而非 pop：pop 会让下一次 /kbd?song= 必答 loading
+            # → 前端整栏清空重建（滚动重置+空面板 ~700ms，用户实测卡顿源）。
+            # 保存手里就有权威数据，按 inst 替换缓存元组对应半边；无缓存项
+            # （该曲从未经编辑面板装载过）不动，下次 GET 装载一次即入缓存
+            cached = self._kbd_song_cache.get(gen_key)
+            if cached is not None:
+                jn, axc = cached
+                self._kbd_song_cache[gen_key] = (
+                    clean if key == "slots" else jn,
+                    clean if key == "ax" else axc)
         if (path, pid) == (self.cur_song_path, self.cur_point_id):
             with self._load_lock:
                 if (path, pid) == (self.cur_song_path,
@@ -2447,10 +2471,29 @@ class App:
         """/plcmd：编排动作（op: add/remove/up/down/clear/move/setdur/
         redict）。返回 None=成功。"""
         payload = payload or {}
+        if op == "setend":
+            # 逐曲播完行为：key 归一到宿主工程（点条目=全歌统一行为），
+            # 空 beh=清除回跟随全局
+            pt = points.parse_pt_key(key)
+            if pt:
+                key = pt[0]
+            if key not in self.by_key:
+                return "素材库里没有该工程"
+            beh = str(payload.get("beh") or "")
+            if beh and not advance.valid_end_beh(beh):
+                return "未知播完行为：%s" % beh
+            if beh:
+                self.end_beh[key] = beh
+            else:
+                self.end_beh.pop(key, None)
+            self._persist()
+            self._sync_watch_armed()
+            return None
         if op == "clear":
             self.pl_keys = []
             self.cur = None
             self._persist()
+            self._sync_watch_armed()    # 指针清空：武装门回落全局口径
             return None
         if op == "setdur":        # 手动写入时长（秒数或 分:秒）
             if points.parse_pt_key(key):
@@ -2552,6 +2595,7 @@ class App:
             else:
                 return "未知操作"
         self._persist()
+        self._sync_watch_armed()    # remove/add 换身份：武装门按新指针重算
         return None
 
     def _pl_export_web(self):
@@ -2569,10 +2613,11 @@ class App:
             return {"error": _err(e)}
         if not path:
             return {"canceled": True}
-        data = json.dumps({"version": 1, "playlist": self.pl_keys,
-                           "durations": self.durations,
-                           "durSrc": self.dur_src},
-                          ensure_ascii=False, indent=2)
+        data = {"version": 1, "playlist": self.pl_keys,
+                "durations": self.durations, "durSrc": self.dur_src}
+        if self.end_beh:
+            data["endBeh"] = dict(self.end_beh)   # 可选键：旧版导入端忽略
+        data = json.dumps(data, ensure_ascii=False, indent=2)
         try:
             # 不走 _atomic_write：它限定程序目录内，导出路径由用户任选
             pathlib.Path(path).write_text(data, encoding="utf-8")
@@ -2606,8 +2651,12 @@ class App:
                 or not all(isinstance(k, str) and k
                            for k in data["playlist"]) \
                 or not isinstance(data.get("durations", {}), dict) \
-                or not isinstance(data.get("durSrc", {}), dict):
+                or not isinstance(data.get("durSrc", {}), dict) \
+                or not isinstance(data.get("endBeh") or {}, dict):
             return {"error": "歌单文件无效：不是本软件导出的歌单"}
+        for k, v in (data.get("endBeh") or {}).items():
+            if not (isinstance(k, str) and advance.valid_end_beh(str(v))):
+                return {"error": "歌单文件无效：endBeh 段含非法值"}
         keys = data["playlist"]
         live, skipped = [], []
         for k in keys:
@@ -2622,6 +2671,7 @@ class App:
                     % len(skipped)}
         self.pl_keys = live
         self.cur = None
+        self._sync_watch_armed()    # 指针清空：武装门回落全局口径
         # 时长合并：导入键先保留本机已有值（自动识别值更新鲜），缺的从
         # 文件补；手动来源照搬（manual 语义跟着文件走）
         dur = {k: self.durations[k] for k in live if k in self.durations}
@@ -2633,6 +2683,13 @@ class App:
                 if data["durSrc"].get(k) == "manual":
                     src[k] = "manual"
         self.durations, self.dur_src = dur, src
+        # 播完行为合并：只对导入存活条目的宿主歌补值（本机已有值优先），
+        # 不给「在库但不在本次歌单」的歌顺带写入行为
+        hosts = {points.parse_pt_key(k)[0] if points.parse_pt_key(k) else k
+                 for k in live}
+        for k, v in (data.get("endBeh") or {}).items():
+            if k in hosts and k not in self.end_beh:
+                self.end_beh[k] = str(v)
         self._persist()
         self.q.put("已导入歌单：%d 首%s" % (
             len(live), "，跳过失效条目 %d 个" % len(skipped)
@@ -2658,7 +2715,8 @@ class App:
         # 串行化：并发写会踩同一个临时文件（Windows 上报错或写出交错内容）
         with self._persist_lock:
             try:
-                save_playlist(self.pl_keys, self.durations, self.dur_src)
+                save_playlist(self.pl_keys, self.durations, self.dur_src,
+                              getattr(self, "end_beh", None))
             except (ValueError, OSError, RuntimeError) as e:
                 self.q.put("播放列表保存失败：%s" % e)
 
@@ -2685,16 +2743,100 @@ class App:
             self.q.put("已在播放列表开头")
 
     def _advance(self):
+        """播完推进出口（AdvanceWatch 资格闩闭合后调用）：按当前条目所属歌
+        的播完行为分发（缺省=跟随全局两开关）。同歌段间链进（点→点）不算
+        歌尾——行为只在推进跨出该歌（末点→下一首/裸条目播完/已到列表末尾）
+        时生效，段间接续按全局「切完自动播放」。"""
         if self.ctrl is not None and self.ctrl.busy:
             self.q.put("自动切换：正在切换中，跳过")
             return
-        self._switch(self.cur + 1 if self.cur is not None else 0, "自动",
-                     play_after=self.cont_play)
+        i = self.cur + 1 if self.cur is not None else 0
+        cur_key = (self.pl_keys[self.cur]
+                   if self.cur is not None and 0 <= self.cur < len(self.pl_keys)
+                   else None)
+        e = self._resolve_entry(cur_key) if cur_key else None
+        nxt = self.pl_keys[i] if i < len(self.pl_keys) else None
+        nxt_e = self._resolve_entry(nxt) if nxt else None
+        song_end = nxt_e is None \
+            or (e is None or nxt_e["lib_key"] != e["lib_key"])
+        if not song_end:
+            self._switch(i, "自动", play_after=self.cont_play)
+            return
+        kind, delay = advance.parse_end_beh(
+            self.end_beh.get(e["lib_key"]) if e else None)
+        if kind == "follow":
+            kind = "playnext" if self.cont_play else "next"
+        if kind == "stop":
+            self.q.put("《%s》播完停止：按该曲播完行为"
+                       % (e["song_name"] if e else "未知条目"))
+            return
+        if kind == "delay":
+            if self._switch(i, "自动"):
+                self._schedule_delay_play(i, delay)
+            return
+        self._switch(i, "自动", play_after=(kind == "playnext"))
+
+    def _schedule_delay_play(self, i, delay):
+        """延迟自动播放（工作线程 Timer）：切到下一首后等 delay 秒再发播放。
+        代际令牌防呆：其后任何切换/走带动作/全停都使在途延迟失效；到时经
+        状态闸起播（见 _delay_play_fire）。"""
+        self._delay_seq += 1
+        seq = self._delay_seq
+        key = self.pl_keys[i]
+        if delay > 0:
+            self.q.put("已切到下一首，%s 秒后自动开始播放"
+                       % cpr_meta.fmt_mmss(delay))
+
+        def fire():
+            self.calls.put(lambda: self._delay_play_fire(seq, key))
+        t = threading.Timer(delay, fire)
+        t.daemon = True
+        t.start()
+
+    def _delay_play_rearm(self, seq, key, tries, ptries):
+        t = threading.Timer(1.0, lambda: self.calls.put(
+            lambda: self._delay_play_fire(seq, key, tries, ptries)))
+        t.daemon = True
+        t.start()
+
+    def _delay_play_cancel(self):
+        self._delay_seq += 1
+
+    def _delay_play_fire(self, seq, key, tries=0, ptries=0):
+        """延迟起播到时闸：代际/指针守卫 + 分状态处置——busy（工程装载中）
+        与 paused（上一曲停止尾流，推进协议收尾即复位为 stopped）各自独立
+        限次 1 秒重探；playing=用户已手动接管不抢；stopped=新纪元闭合，
+        交 _auto_play 等「正在加载」浮层消散后再起播（窗口标题出现≠加载
+        完成，过早发播放键会被未就绪的 Cubase 吞掉——与 playnext 同一条
+        已验证路径，延迟路径不得更弱）。"""
+        if seq != self._delay_seq:
+            return                      # 已被一次新的切换/走带动作取代
+        if self.cur is None or not (0 <= self.cur < len(self.pl_keys)) \
+                or self.pl_keys[self.cur] != key:
+            return                      # 指针已他移
+        if self.ctrl is not None and self.ctrl.busy:
+            if tries < 60:
+                self._delay_play_rearm(seq, key, tries + 1, ptries)
+            else:
+                self.q.put("延迟起播放弃：工程装载超 60 秒未就绪")
+            return
+        st = self._transport_state()
+        if st == "playing":
+            return                      # 用户已手动起播：不抢
+        if st == "paused":
+            if ptries < 10:
+                self._delay_play_rearm(seq, key, tries, ptries + 1)
+            else:
+                self.q.put("延迟起播放弃：间隔窗内暂停被接管")
+            return
+        self.q.put("延迟到时：等加载浮层消散后开始播放")
+        threading.Thread(target=self._auto_play, daemon=True).start()
 
     def _transport(self, action):
         if self.ctrl is None:
             self.q.put("服务未就绪：启动未完成")
             return
+        self._delay_play_cancel()   # 用户/自动走带动作接管：在途延迟起播失效
         ts = self._transport_state()
         if transport_blocked(action, ts):
             self.q.put("%s：「%s」忽略，状态互锁" % (FOLLOW[ts], TX_NAMES.get(
@@ -2769,6 +2911,7 @@ class App:
         if self.ctrl is None:
             self.q.put("服务未就绪：启动未完成")
             return
+        self._delay_play_cancel()   # 全停=用户明确要静场：在途延迟起播一并作废
         skip_keys = self._transport_state() != "playing"
         ctl = self.ctl
 
@@ -3117,9 +3260,9 @@ class App:
 
     def _toggle_auto(self):
         # 生效 self.auto_advance（调用方先写属性再调用）：watch 建立时按它
-        # 恢复；踩钉可在 watch 存在前翻转
+        # 恢复；踩钉可在 watch 存在前翻转。显式逐曲行为不受全局翻转影响
         if self.watch is not None:
-            self.watch.set_armed(self.auto_advance)
+            self._sync_watch_armed()
             self.q.put("自动切换工程%s" % ("已开启，播完自动切下一首"
                                         if self.auto_advance else "已关闭"))
         self._persist_config(autoAdvance=bool(self.auto_advance))
@@ -3290,6 +3433,19 @@ class App:
             return "playing"
         return "paused" if w.ever_live() else "stopped"
 
+    def _sync_watch_armed(self):
+        """推进看门狗武装门 = 全局「播完自动切换」或 当前条目歌有显式播完
+        行为。显式行为（含 stop）必须武装：unarmed 时连曲尾自动停走带都
+        没有（poll 直接返回），逐曲「播完停止」就无从谈起。条目/行为变更
+        的装载点调用；无指针=纯全局口径。"""
+        if self.watch is None:
+            return
+        e = (self._resolve_entry(self.pl_keys[self.cur])
+             if self.cur is not None and 0 <= self.cur < len(self.pl_keys)
+             else None)
+        self.watch.set_armed(bool(self.auto_advance)
+                             or bool(e and self.end_beh.get(e["lib_key"])))
+
     def _adopt(self, name):
         """手动跟随：Cubase 里的工程被人工变更（横幅发现标题对不上指针）
         → 按标题对位播放列表。命中=采纳：指针立即就位，时长/音色映射 IO
@@ -3373,6 +3529,7 @@ class App:
                 self.ax_slots = ax
                 self.cur_song_path = path
                 self.cur_point_id = pid
+            self._sync_watch_armed()    # 装载提交=条目归属落定：武装门重算
         threading.Thread(target=run, daemon=True).start()
 
     def _reload_entry_slots(self, e):

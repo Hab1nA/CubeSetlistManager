@@ -150,9 +150,9 @@
                   <input id="pt-name"></div>
                 <div class="field-row">
                   <div class="field"><label for="pt-s">开始</label>
-                    <input id="pt-s" placeholder="分:秒 如 3:33" inputmode="numeric"></div>
+                    <input id="pt-s" placeholder="如 3:33 / 0:25:23.9" inputmode="numeric"></div>
                   <div class="field"><label for="pt-e">结束</label>
-                    <input id="pt-e" placeholder="分:秒 如 4:05" inputmode="numeric"></div>
+                    <input id="pt-e" placeholder="如 4:05 / 0:25:23.9" inputmode="numeric"></div>
                 </div>
                 <div class="field-err" id="pt-hint"></div>
                 <div class="tl-wrap">
@@ -169,6 +169,25 @@
                   <button id="pt-down" class="btn icon sm" title="下移">↓</button>
                   <button id="pt-del" class="btn danger sm">删除</button>
                 </div>
+              </div>
+            </div>
+            <div class="card" id="dt-endcard">
+              <div class="md-head" title="按曲目保存；定位点条目共用所属工程的行为">播完行为</div>
+              <div class="field-row">
+                <div class="field" style="flex:1">
+                  <select id="dt-end-sel" title="跟随全局=按设置页「播完自动切换/切完自动播放」当前组合">
+                    <option value="">跟随全局</option>
+                    <option value="stop">播放完停止</option>
+                    <option value="next">播放完切下一首</option>
+                    <option value="playnext">播放完立刻开始播放下一首</option>
+                    <option value="delay">间隔指定秒后开始播放下一首</option>
+                  </select></div>
+                <div class="field" id="dt-end-delay-wrap" hidden>
+                  <label for="dt-end-delay">间隔秒</label>
+                  <input id="dt-end-delay" inputmode="numeric" placeholder="如 30">
+                </div>
+                <button id="dt-end-save" class="btn primary sm"
+                  style="align-self:flex-start">保存</button>
               </div>
             </div>
             <div class="card">

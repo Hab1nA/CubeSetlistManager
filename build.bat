@@ -46,6 +46,8 @@ rem installer: version from latest git tag
 set "APPVER=0.0.0"
 for /f %%v in ('git describe --tags --abbrev^=0 2^>nul') do set "APPVER=%%v"
 set "APPVER=%APPVER:v=%"
+rem bake sidebar version: frozen exe reads version.txt next to itself (installer packs it, no .git ancestor when installed); tag only, no commit suffix
+(echo v%APPVER%) > "dist\Cube Setlist Manager\version.txt"
 set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" set "ISCC=%LocalAppData%\Programs\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" (

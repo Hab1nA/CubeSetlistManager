@@ -139,7 +139,11 @@ let curPage = "console", booted = false;
 const PAGES = $$(".nav").filter(b => b.dataset.page).map(b => b.dataset.page);
 const PAGE_REFRESH = {
   console: () => { refreshPlaylist(); refreshLog(); },
-  setlist: () => { refreshPlaylist(); refreshPoints(); refreshKbdDetail(); },
+  setlist: () => {
+    refreshPlaylist().then(() => { if (!endBehDirty) refreshEndBeh(); });
+    refreshPoints();
+    refreshKbdDetail();
+  },
   pedal: () => { refreshPedal(true); refreshPedalDevices(); },
   kbd: () => refreshKbd(),
   vj: () => refreshVj(true),
@@ -654,7 +658,8 @@ function drawChips(st, cur) {
   items.forEach(x => {
     const b = document.createElement("button");
     b.className = "chip-btn" + (x.cur ? " cur" : "");
-    b.textContent = "切歌";
+    b.textContent = x.name;
+    b.title = "点击切到该定位点，同工程免重开";
     b.addEventListener("click", () => switchTo(x.i, b, false, x.key));
     box.appendChild(b);
   });
@@ -1144,6 +1149,11 @@ function selectSong(rowKey, base, ptId) {
     markPlSel();
     if (ptSelPending !== null) refreshPoints();   // 同曲换点：进编辑
   }
+  // 播完行为卡随选中装载：即时读现缓存 + 拉最新（编辑中的未保存改动
+  // 由 endBehDirty 拦下回填，防静默重置）
+  endBehDirty = false;
+  refreshEndBeh();
+  refreshPlaylist().then(() => { if (!endBehDirty) refreshEndBeh(); });
   // 窄窗（页签可见）选中后切到详情列，给可见反馈
   if (getComputedStyle($("#sl-tabs")).display !== "none")
     $('#sl-tabs [data-col="dt"]').click();
@@ -1226,14 +1236,19 @@ function editKey() {
   }
   return plSel;
 }
-const parseTC = t => {
-  const raw = String(t || "").trim();
-  if (!raw || !/^\d+(?::\d{0,2}){0,2}$/.test(raw)) return null;
+const parseTC = (t, isEnd) => {
+  const raw = String(t || "").trim().replace(/：/g, ":");
+  if (!raw || !/^(\d+)(\.\d+)?(:\d{1,2}(\.\d+)?)?(:\d{1,2}(\.\d+)?)?$/.test(raw))
+    return null;
   const p = raw.split(":").map(Number);
-  if (p.length > 1 && p[1] > 59) return null;
-  if (p.length > 2 && p[2] > 59) return null;
+  // 秒/分上界只比整数部分：59.902（Cubase 每分钟最后一秒）是合法输入
+  if (p.length > 1 && Math.floor(p[1]) > 59) return null;
+  if (p.length > 2 && Math.floor(p[2]) > 59) return null;
   while (p.length < 3) p.unshift(0);
-  return p[0] * 3600 + p[1] * 60 + p[2];
+  const s = p[0] * 3600 + p[1] * 60 + p[2];
+  // Cubase 粘贴格式（h:mm:ss.mmm）整取秒；进入点向下取整、结束点向上取整
+  // （用户口径：不必精确到毫秒，进点不迟于源、出点不早于源）
+  return isEnd ? Math.ceil(s) : Math.floor(s);
 };
 const fmtTC = s => {
   s = Math.max(0, Math.round(s || 0));
@@ -1246,9 +1261,10 @@ const fmtTC = s => {
 // <3 秒段软提示（黄色）不禁保存（停止重试窗可能吃掉自动推进）
 function validatePt() {
   if (ptSel === null) return false;
-  const s = parseTC($("#pt-s").value), e = parseTC($("#pt-e").value);
+  const s = parseTC($("#pt-s").value, false), e = parseTC($("#pt-e").value, true);
   let msg = "";
-  if (s === null) msg = "开始时码格式应为 分:秒 或 秒数，如 3:33";
+  if (s === null) msg = "开始时码应为 分:秒 / 时:分:秒 或 秒数，如 3:33 或 0:25:23.9";
+  else if (e === null) msg = "结束时码应为 分:秒 / 时:分:秒 或 秒数，如 4:05 或 0:25:23.9";
   else if (e === 0) msg = "结束点未定，工程末尾未知：请补填后保存";
   else if (e <= s) msg = "结束必须晚于开始";
   $("#pt-s").classList.toggle("invalid", s === null);
@@ -1408,6 +1424,7 @@ async function ptcmd(op, payload) {
   refreshPoints();
   // 删点/停用会作废当前编辑目标（editKey 回落宿主）：映射面板随落
   if (op === "del" || op === "toggle") refreshKbdDetail();
+  return j;
 }
 let ptOnPending = false;    // 启用钮在途：轮询回写跳过（防视觉回弹诱发双击）
 $("#pt-on").addEventListener("click", async () => {
@@ -1453,16 +1470,22 @@ $("#pt-del").addEventListener("click", ev => {
                "确认删除？");
   }
 });
-$("#pt-save").addEventListener("click", () => {
+$("#pt-save").addEventListener("click", async () => {
   if (!$("#pt-name").value.trim()) {
     $("#pt-hint").textContent = "名称不能为空";
     $("#pt-hint").className = "field-err";
     return;
   }
   if (!validatePt()) return;
-  ptcmd("edit", {id: ptSel, name: $("#pt-name").value,
-                 start: parseTC($("#pt-s").value),
-                 end: parseTC($("#pt-e").value)});
+  const s = parseTC($("#pt-s").value, false),
+        e = parseTC($("#pt-e").value, true), sel0 = ptSel;
+  const j = await ptcmd("edit", {id: ptSel, name: $("#pt-name").value,
+                                 start: s, end: e});
+  if (j.ok && ptSel === sel0) {  // 保存成功才回显规范格式（自动更正冒号/格式）
+    $("#pt-s").value = fmtTC(s);
+    $("#pt-e").value = fmtTC(e);
+    validatePt();
+  }
 });
 $("#pt-goto").addEventListener("click", () => {
   const i = ptGotoIndex();
@@ -2289,12 +2312,12 @@ async function refreshKbdDetail() {
     if (!r.ok) return;                    // 504 错误体不当数据（P1-2）
     const d = await r.json();
     if (seq !== refreshKbdDetail.seq) return;
-    // 数据须属于当前编辑目标（选中点=点键）且非装载中才渲染：导航/换曲
-    // 瞬间的陈旧响应不得把别曲映射画到新曲名下（显示层与编辑层同一口径）
+    // 数据须属于当前编辑目标（选中点=点键）才渲染：导航/换曲瞬间的陈旧
+    // 响应不得把别曲映射画到新曲名下（显示层与编辑层同一口径）
     const es0 = d.editSong;
-    if (!es0 || es0.key !== editKey() || es0.loading) {
+    if (!es0 || es0.key !== editKey()) {
       dtKbd = null;
-      $("#dt-kbd-stat").textContent = !es0 || es0.loading
+      $("#dt-kbd-stat").textContent = es0 && es0.loading
           ? "映射装载中…" : "映射不可用，曲目不在素材库";
       // 陈旧响应/异常态不同帧渲染：同步清槽位，防旧曲槽卡残留可点
       //（dataset.sig 一并清：差量守卫见「签名同」会跳过重建=槽位卡
@@ -2303,6 +2326,22 @@ async function refreshKbdDetail() {
         $("#" + id).textContent = "";
         delete $("#" + id).dataset.sig;
       }
+      updateDtBadge();
+      return;
+    }
+    if (es0.loading) {
+      // 同曲重装载（保存后缓存命中兜底路）：网格保持现值不清——
+      // 清空会让音色映射卡塌陷把 #dt-scroll 滚动钳位回去（用户实测=
+      // 每设一个音色滚动条就被重置）。但编辑目标换点（同工程 pt:A#1→
+      // pt:A#2）时旧网格属他点：仍须清，防串点残留可点
+      if (dtKbd && dtKbd.editSong.key !== es0.key) {
+        dtKbd = null;
+        for (const id of ["dt-slots", "dt-axslots"]) {
+          $("#" + id).textContent = "";
+          delete $("#" + id).dataset.sig;
+        }
+      }
+      $("#dt-kbd-stat").textContent = "映射装载中…";
       updateDtBadge();
       return;
     }
@@ -2318,6 +2357,64 @@ async function refreshKbdDetail() {
       setTimeout(() => { if (pageOn("setlist")) refreshKbdDetail(); }, 700);
   } catch { /* 瞬断 */ }
 }
+
+// ---- 详情面板「播完行为」卡（逐曲 endBeh；lib 级，点条目归一宿主）----
+let endBehDirty = false;    // 未保存的下拉改动：轮询回填跳过（防静默重置）
+function endBehBase() {
+  if (!plSel) return null;
+  return plSel.startsWith("pt:") ? ptBaseOf(plSel) : plSel;
+}
+function refreshEndBeh() {
+  const sel = $("#dt-end-sel");
+  if (!sel) return;
+  const base = endBehBase();
+  const wrap = $("#dt-end-delay-wrap");
+  if (!base || !plCache) {
+    sel.value = "";
+    wrap.hidden = true;
+    return;
+  }
+  const v = (plCache.endBeh || {})[base] || "";
+  if (v.startsWith("delay:")) {
+    sel.value = "delay";
+    $("#dt-end-delay").value = v.slice(6);
+    wrap.hidden = false;
+  } else {
+    sel.value = v;      // ""=跟随全局 / stop / next / playnext
+    $("#dt-end-delay").value = "";
+    wrap.hidden = true;
+  }
+}
+$("#dt-end-sel").addEventListener("change", () => {
+  endBehDirty = true;
+  $("#dt-end-delay-wrap").hidden = $("#dt-end-sel").value !== "delay";
+});
+$("#dt-end-save").addEventListener("click", async () => {
+  const base = endBehBase();
+  if (!base) { toast("未选中曲目", "err"); return; }
+  let beh = $("#dt-end-sel").value;
+  if (beh === "delay") {
+    const raw = $("#dt-end-delay").value.trim();
+    if (!raw) { toast("请填写间隔秒数", "err"); return; }
+    const n = Math.round(Number(raw));
+    if (!(n >= 0) || n > 86400) {
+      toast("间隔秒须为 0-86400 的整数", "err");
+      return;
+    }
+    beh = "delay:" + n;
+  }
+  const j = await post("/plcmd", {op: "setend", key: base, payload: {beh}});
+  if (j.ok) {
+    endBehDirty = false;
+    toast(beh ? "播完行为已保存" : "播完行为已恢复跟随全局");
+    if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
+      plCache.endBeh = plCache.endBeh || {};
+      if (beh) plCache.endBeh[base] = beh;
+      else delete plCache.endBeh[base];
+    }
+    refreshEndBeh();
+  }
+});
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
 $("#kb-save").addEventListener("click", async () => {
   if (!kbData) {              // /kbd 未装载（启动期 504 等）：裸取会抛

@@ -46,6 +46,7 @@ Source: "dist\{#SrcDir}\_internal\*"; \
     DestDir: "{app}\_internal"; \
     Excludes: ".mimosa"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\{#SrcDir}\version.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
