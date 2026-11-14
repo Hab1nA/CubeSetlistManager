@@ -1474,11 +1474,13 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(bad))
     b = _PlApp()
     b.end_beh = ["", "playnext", ""]            # 本机旧行为将被整表替换
+    b.durations["D/歌四"] = 55.0                # 未进本次歌单的库内缓存
     r = sg.App._pl_import_web(b)
     assert r["ok"] is True and r["loaded"] == 2
     assert b.pl_keys == ["B/歌二", "A/歌一"] and b.cur is None
     assert b.persists == 1 and len(r["skipped"]) == 2
     assert b.durations["B/歌二"] == 90.0 and b.dur_src["A/歌一"] == "manual"
+    assert b.durations["D/歌四"] == 55.0        # 未进歌单的库内歌时长不裁剪
     # 行为逐位替换：本机旧行为不保留（行为绑定条目随歌单走）
     assert b.end_beh == ["", "stop"]
 
@@ -1568,8 +1570,9 @@ def test_pl_import_poison_and_empty(tmp_path, monkeypatch):
     r = feed({"version": 1, "playlist": [], "durations": {},
               "durSrc": {}})
     assert r == {"ok": True, "loaded": 0, "skipped": []}
-    assert a.pl_keys == [] and a.cur is None and a.persists == 1 \
-        and a.durations == {} and a.dur_src == {}
+    assert a.pl_keys == [] and a.cur is None and a.persists == 1
+    # 全库时长缓存不随清空裁剪（素材库列三态着色数据面）
+    assert a.durations == {"A/歌一": 120.0, "B/歌二": 90.0}
     # 全失效：拒绝且不动（此刻现列表已空，换回非空再验）
     a.pl_keys, a.persists = ["B/歌二"], 0
     assert "全部失效" in feed({"version": 1, "playlist": ["C/缺"]})["error"]

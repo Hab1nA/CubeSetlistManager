@@ -2742,10 +2742,11 @@ class App:
                     % len(skipped)}
         self.pl_keys = live
         self.cur = None
-        # 时长合并：导入键先保留本机已有值（自动识别值更新鲜），缺的从
-        # 文件补；手动来源照搬（manual 语义跟着文件走）
-        dur = {k: self.durations[k] for k in live if k in self.durations}
-        src = {k: self.dur_src[k] for k in live if k in self.dur_src}
+        # 时长合并：durations/dur_src 是全库时长缓存（素材库列三态着色
+        # 的数据面），导入不得裁剪未进歌单的歌——只在本机缺值时从文件
+        # 补导入条目；手动来源照搬（manual 语义跟着文件走）
+        dur = dict(self.durations)
+        src = dict(self.dur_src)
         for k, v in data["durations"].items():
             d = cpr_meta.safe_dur(v)
             if d > 0 and k in self.pl_keys and k not in dur:
