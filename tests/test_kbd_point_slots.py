@@ -110,7 +110,7 @@ def test_goto_worker_reloads_point_slots(tmp_path):
         points={"L": {"enabled": True, "counter": 2, "points": [
             {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
             {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
-        pl_keys=["pt:L#1", "pt:L#2"], cur=0,
+        pl_keys=["pt:L#1", "pt:L#2"], end_beh=["", ""], cur=0,
         cur_song_path=str(cpr), cur_point_id=1,
         slots={72: {"pc": 51}}, ax_slots={},
         _load_lock=threading.Lock(), calls=queue.Queue(), watch=None,
@@ -152,7 +152,7 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
         points={"L": {"enabled": True, "counter": 2, "points": [
             {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
             {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
-        pl_keys=["pt:L#1", "pt:L#2"], cur=0,
+        pl_keys=["pt:L#1", "pt:L#2"], end_beh=["", ""], cur=0,
         cur_song_path=str(cpr), cur_point_id=1,
         slots={72: {"pc": 2}}, ax_slots={},
         _load_lock=threading.Lock(), _persist=lambda: None)
@@ -163,8 +163,15 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.cur_point_id == 2            # 粒度跟随落点（点2 无段→回落）
     assert app.slots == {72: {"pc": 1}}     # 点2 回落工程级映射
+    assert app.end_beh == [""]              # 行为表逐位对齐未漂移（2 点块缩 1 位）
     # 增删他点不动当前装载：零动作
     app.points["L"]["points"].append(
         {"id": 3, "name": "P3", "start": 60.0, "end": 90.0})
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.cur_point_id == 2 and app.slots == {72: {"pc": 1}}
+    assert app.end_beh == ["", ""]          # 增点=块扩一位
+    # 出口行为随删末点保留（删 P3 → 行为迁回新出口 P2）
+    app.end_beh = ["", "delay:5"]           # 出口（末点 P3）带延迟行为
+    app.points["L"]["points"] = app.points["L"]["points"][:-1]  # 删 P3
+    assert setlist_gui.App._points_sync_list(app, "L") is None
+    assert app.end_beh == ["delay:5"]       # 出口行为迁到新末位

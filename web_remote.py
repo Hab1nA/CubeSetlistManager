@@ -626,7 +626,7 @@ def build_snapshot(app, has_project, proj_name=None):
         # 崩溃/被误关后前端据此区分「已暂停」与「DAW 已失联」（审计 #2）
         "dawAlive": bool(getattr(app, "_daw_alive", False)),
         "projName": proj_name,
-        "confirm": bool(app.switch_confirm),
+        "confirm": True,     # 手动切歌二次确认恒开（设置项已删）
         "live": bool(app.watch is not None and app.watch.is_transport_live()),
         "tstate": tstate,
         "pos": round(pos, 1),
@@ -1857,31 +1857,35 @@ class _Handler(BaseHTTPRequestHandler):
                 return 0.0, "unknown"
             return d, "manual" if dur_src.get(key) == "manual" else "auto"
 
-        def view(key, name):
+        def view(key, name, beh=""):
             e = resolve(key)
             p = e["point"] if e else None
             if e is None:
                 return {"key": key, "name": name or key.split("/")[-1],
                         "dur": "", "durSec": 0.0, "durSrc": "unknown",
-                        "pt": False}
+                        "pt": False, "beh": ""}
             sec, src = dur_info(key, p)
             return {"key": key, "name": e["display"], "dur": _fmt_dur(sec),
-                    "durSec": sec, "durSrc": src, "pt": p is not None}
+                    "durSec": sec, "durSrc": src, "pt": p is not None,
+                    "beh": beh}
 
         lib, pl = [], []
         for _ in range(3):    # 迭代中 Tk 线程重建列表 → RuntimeError；重取（与 /log 同款）
             try:
+                end_beh = getattr(app, "end_beh", []) or []
                 for s in getattr(app, "_lib_view", list)():
                     v = view(s["key"], s["name"])
                     v["team"] = s["team"]
                     lib.append(v)
-                pl = [view(k, None) for k in app.pl_keys]
+                pl = []
+                for i, k in enumerate(app.pl_keys):
+                    b = end_beh[i] if i < len(end_beh) else ""
+                    pl.append(view(k, None, b))
                 break
             except RuntimeError:
                 lib, pl = [], []
                 continue
-        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur,
-                         "endBeh": dict(getattr(app, "end_beh", {}) or {})})
+        self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})
 
     def _h_points(self):
         """定位点定义：全部工程的 sidecar 数据 + 启用态。"""

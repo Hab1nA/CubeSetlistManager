@@ -612,7 +612,6 @@ def test_automator_lite():
         by_key = {}
         durations = {}
         cur = None
-        switch_confirm = False
         web = None
     snap = wr.build_snapshot(_FakeApp(), False)
     assert snap["ready"] is True and snap["tstate"] == "stopped" \
@@ -1916,7 +1915,6 @@ class _FakeWebApp:
         self.q = queue.Queue()
         self.calls_urgent = queue.Queue()   # App.urgent 替身通道
         self.web_cfg = dict(web_remote.DEFAULT_WEB_REMOTE)
-        self.switch_confirm = True
         self.cur = None
         self.ctrl = None
         self.watch = None

@@ -39,6 +39,7 @@ class _FakeWebApp:
         self.calls = queue.Queue()
         self.q = _Q()
         self.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
+        self.end_beh = ["next", "", "delay:5"]
         self.durations = {"A/歌一": 120.0}
         self.by_key = {"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
                                  "path": "/p1"},
@@ -204,6 +205,9 @@ def test_playlist_points_log_endpoints():
         assert [x["key"] for x in pl["pl"]] == app.pl_keys
         assert pl["pl"][1]["pt"] is True and pl["pl"][1]["name"] == "歌一 · 定位点1"
         assert len(pl["lib"]) == 2
+        # 行为逐位随行携带（""=默认播完停止；顶层 endBeh 键已删）
+        assert [x["beh"] for x in pl["pl"]] == ["next", "", "delay:5"]
+        assert "endBeh" not in pl
 
         pts = _get(port, "/points")
         assert pts["projects"]["A/歌一"]["enabled"] is True
@@ -428,7 +432,7 @@ def test_app_asset_whitelist():
 
 def _pl_app():
     return types.SimpleNamespace(
-        pl_keys=["B/歌二"], cur=0,
+        pl_keys=["B/歌二"], end_beh=[""], cur=0,
         by_key={"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
                            "path": "/p1"}},
         points={"A/歌一": {"enabled": True, "counter": 1, "points": [
@@ -1127,7 +1131,7 @@ def test_launch_apps_guards(monkeypatch):
 def test_launch_apps_setting_persist(monkeypatch):
     """launchAppsOnStart 在场检测：部分载荷只动该键，内存+磁盘跟随。"""
     disk = {"topMost": True,
-            "switchConfirm": True, "exitCloseApps": False,
+    "exitCloseApps": False,
             "launchAppsOnStart": True,
             "vjPortHint": "VJ1", "kbPortHint": "KB1", "clockPortHint": "CK1",
             "obs": {"projectorMonitor": "DP-1", "vjMute": True,
@@ -1163,7 +1167,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     """B1：VJ 页只发 obs 节 → 其余内存/磁盘字段逐项不变；设置页全量
     载荷才更新对应字段（在场检测）。"""
     disk = {"topMost": True,
-            "switchConfirm": True, "exitCloseApps": False,
+    "exitCloseApps": False,
             "vjPortHint": "VJ1", "kbPortHint": "KB1", "clockPortHint": "CK1",
             "obs": {"projectorMonitor": "DP-1", "vjMute": True,
                     "videoRoot": "D:/v", "mediaInput": "Old"},
@@ -1193,13 +1197,11 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
                 "projectorMonitor": "DP-2"}}) is None
     assert (fake.vj_hint, fake.kb_hint, fake.clock_hint) == \
         ("VJ1", "KB1", "CK1")
-    assert fake.switch_confirm is True
     assert fake.top_most is True and fake.exit_close_apps is False
     assert disk["obs"] == {"projectorMonitor": "DP-2", "vjMute": False,
                            "videoRoot": "D:/v", "mediaInput": "Media34"}
     assert disk["vjPortHint"] == "VJ1" and disk["kbPortHint"] == "KB1"
     assert disk["clockPortHint"] == "CK1"
-    assert disk["switchConfirm"] is True
     assert disk["webRemote"]["enabled"] is False
     assert calls == []                       # 端口/遥控未动：不触发热切换
     # 设置页全量载荷：web.enabled 翻转 → 热应用触发、磁盘跟随
@@ -1209,7 +1211,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     assert sg.App._settings_apply_web(fake, {
         "clockHint": "CK1", "vjHint": "VJ1", "kbHint": "KB1",
         "topMost": True,
-        "switchConfirm": True, "exitCloseApps": False,
+"exitCloseApps": False,
         "projectsRoot": "C:/x", "dawExe": "e",
         "web": {"enabled": True, "serverPort": 8765, "appPort": 8767,
                 "taskerPort": 8766, "midiIn": "", "mode": "lan",
@@ -1455,28 +1457,30 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(sg.filedialog, "asksaveasfilename",
                         lambda **kw: str(out))
     a = _PlApp()
-    a.end_beh = {"A/歌一": "stop", "B/歌二": "delay:30", "C/不存在": "next"}
+    a.end_beh = ["stop", "", "next"]
     r = sg.App._pl_export_web(a)
     assert r == {"ok": True, "count": 3}
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["version"] == 1 and data["playlist"] == a.pl_keys
     assert data["durations"]["A/歌一"] == 120.0
-    assert data["endBeh"] == a.end_beh          # 播完行为随歌单携带
+    assert data["endBeh"] == ["stop", "", "next"]   # 行为逐位随歌单携带
 
-    # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）
+    # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）；行为表随
+    # playlist 逐位对齐重写（C 的 next 随失效位落空）
     data["playlist"] = ["B/歌二", "C/不存在", "pt:B/歌二#9", "A/歌一"]
+    data["endBeh"] = ["", "next", "", "stop"]
     bad = tmp_path / "bad.cubesetlist.json"
     bad.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(bad))
     b = _PlApp()
-    b.end_beh = {"B/歌二": "playnext"}          # 本机已有值优先
+    b.end_beh = ["", "playnext", ""]            # 本机旧行为将被整表替换
     r = sg.App._pl_import_web(b)
     assert r["ok"] is True and r["loaded"] == 2
     assert b.pl_keys == ["B/歌二", "A/歌一"] and b.cur is None
     assert b.persists == 1 and len(r["skipped"]) == 2
     assert b.durations["B/歌二"] == 90.0 and b.dur_src["A/歌一"] == "manual"
-    # 行为合并：本机已有值优先；只对存活条目的宿主补值（C 不带入）
-    assert b.end_beh == {"B/歌二": "playnext", "A/歌一": "stop"}
+    # 行为逐位替换：本机旧行为不保留（行为绑定条目随歌单走）
+    assert b.end_beh == ["", "stop"]
 
     # 用户取消：canceled、零副作用
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: "")

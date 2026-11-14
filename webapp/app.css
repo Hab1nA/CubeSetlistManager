@@ -521,6 +521,7 @@ input.invalid { border-color: var(--err) !important; }
   margin-top: var(--s3); }
 /* flex gap 管行距：关掉旧 .card .field 的 margin（否则 12+8+12 叠成 32） */
 #pt-form .field, #pt-form .field-row .field { margin-bottom: 0; }
+#dt-endcard .field { margin-bottom: 0; }
 #pt-mmc { margin-bottom: var(--s3); }   /* MMC 提示与定位点列表间标准行距 */
 /* 校验提示空占位不参与布局（否则开始/结束框与时间轴间距虚大：
    min-height 与前后 flex gap 都要归零） */

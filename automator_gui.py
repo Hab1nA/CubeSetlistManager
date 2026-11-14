@@ -217,7 +217,6 @@ class App:
         self.by_name = {}               # 歌名 → song（标题匹配索引）
         self.durations = {}
         self.cur = None
-        self.switch_confirm = False
         self.ctrl = None                # 无 DawController：走带/切歌不存在
         # 当前工程（标题识别）与音色映射
         self.slots = {}

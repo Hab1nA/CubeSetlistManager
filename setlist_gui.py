@@ -295,7 +295,7 @@ def _protect_obs_password(cfg):
 
 def _load_playlist():
     """{"playlist": [key…], "durations": {key: 秒}, "durSrc": {key: manual},
-    "endBeh": {lib_key: stop|next|playnext|delay:秒}}
+    "endBeh": [与 playlist 逐位平行的行为表；""=默认播完停止]}
     durSrc 里登记的是手动设定；不在表里=自动识别；无时长=未知。
     兼容旧 schema 的 order 键。"""
     if PLAYLIST_PATH.exists():
@@ -320,23 +320,83 @@ def _load_playlist():
             d = cpr_meta.safe_dur(v)   # 历史毒化（NaN/Infinity/超界）归零
             if d > 0:
                 durations[str(k)] = d
-        end_beh = {}
-        for k, v in (data.get("endBeh") or {}).items():
-            if advance.valid_end_beh(str(v)):
-                end_beh[str(k)] = str(v)
+        end_beh = _end_beh_from_file(data.get("endBeh"), keys)
         return {"playlist": [str(k) for k in keys],
                 "durations": durations,
                 "endBeh": end_beh,
                 "durSrc": {k: "manual"
                            for k, v in data.get("durSrc", {}).items()
                            if v == "manual"}}
-    return {"playlist": [], "durations": {}, "endBeh": {}, "durSrc": {}}
+    return {"playlist": [], "durations": {}, "endBeh": [], "durSrc": {}}
+
+
+def _end_beh_from_file(raw, keys):
+    """endBeh 载荷 → 与 keys 等长的行为表。列表=逐位绑定播放列表条目
+    （本版格式）；字典=旧格式（lib_key→行为，键归一宿主随条目走）。
+    非法值/缺位补 ""（默认播完停止）。"""
+    if isinstance(raw, dict):               # 旧格式：按键映射
+        d = {str(k): str(v) for k, v in raw.items()
+             if advance.valid_end_beh(str(v))}
+        out = []
+        for k in keys:
+            pt = points.parse_pt_key(str(k))   # 键归一 str（手改文件防崩）
+            out.append(d.get(pt[0] if pt else str(k), ""))
+        return out
+    if isinstance(raw, list):
+        out = []
+        for i, k in enumerate(keys):
+            v = str(raw[i]) if i < len(raw) else ""
+            out.append(str(v) if advance.valid_end_beh(str(v)) else "")
+        return out
+    return [""] * len(keys)
+
+
+def _end_beh_expand(keys, behs, lib_key, pt_keys):
+    """展开变换：歌槽位行为迁到点块末位（歌尾出口=末点，行为始终留在
+    出口上——增删/重排点后行为不丢）。pt_keys 空或歌不在表=原样。"""
+    if lib_key not in keys or not pt_keys:
+        return list(behs)
+    out = []
+    for i, k in enumerate(keys):
+        b = behs[i] if i < len(behs) else ""
+        if k == lib_key:
+            out.extend([""] * (len(pt_keys) - 1) + [b])
+        else:
+            out.append(b)
+    return out
+
+
+def _end_beh_collapse(keys, behs, lib_key):
+    """收起变换：首个点块末位（出口）行为迁回歌槽位，其余点位行为丢弃。
+    与 points.collapse_restore 逐分支镜像（裸条目在场=块行为丢弃；
+    离散多块=仅首块出口晋升，其余块随条目位丢弃）。"""
+    prefix = "pt:%s#" % lib_key
+    if lib_key in keys:
+        return [b for i, (k, b) in enumerate(zip(keys, behs))
+                if not k.startswith(prefix)]
+    out, block, promoted = [], None, False
+    for i, k in enumerate(keys):
+        b = behs[i] if i < len(behs) else ""
+        if k.startswith(prefix):
+            if block is None:
+                block = []
+            block.append(b)
+        else:
+            if block is not None:
+                if not promoted:
+                    out.append(block[-1])   # 出口行为迁回歌槽位（仅首块）
+                block = None
+                promoted = True
+            out.append(b)
+    if block is not None and not promoted:
+        out.append(block[-1])
+    return out
 
 
 def save_playlist(keys, durations, dur_src, end_beh=None):
     data = {"playlist": keys, "durations": durations, "durSrc": dur_src}
-    if end_beh:
-        data["endBeh"] = dict(end_beh)
+    if end_beh and any(end_beh):
+        data["endBeh"] = [str(b) for b in end_beh]
     data = json.dumps(data, ensure_ascii=False, indent=2)
     _rotate(_PLAYLIST_BAKS, PLAYLIST_PATH)
     _atomic_write(PLAYLIST_PATH, data)
@@ -405,7 +465,7 @@ class App:
         # 习惯给安全默认。播完行为不再有全局开关：未定义行为=播完停止
         # （2026-11-15 定案），逐曲行为在编排页详情面板定义。
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
-        self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
+        # 手动切歌确认恒开（设置项已删）：切歌是高代价动作，二次确认防误触
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
         # 启动连带开被控软件（DAW/OBS，与退出关闭对等；loopMIDI 不受此闸
         # 管：启动无条件保活、退出随 DAW 定去留）；默认开=保持历史行为
@@ -484,7 +544,7 @@ class App:
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
         self.durations = pl["durations"]
         self.dur_src = pl["durSrc"]     # "manual"=手填；不在表=自动；无时长=未知
-        self.end_beh = pl["endBeh"]     # 逐曲播完行为（lib_key → 存储值，缺=播完停止）
+        self.end_beh = pl["endBeh"]     # 逐条目播完行为（与 pl_keys 逐位平行；""=播完停止）
         self._delay_seq = 0             # 延迟自动播放代际：任何切换/走带动作使在途失效
         self.songs = []                 # 素材库全量
         self.by_key = {}
@@ -1006,8 +1066,11 @@ class App:
                 self.q.put("《%s》%s" % (s["name"], err))
             pts[s["key"]] = data
         self.points = pts
-        # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）
-        self.pl_keys = [k for k in self.pl_keys if self._entry_alive(k)]
+        # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）；行为表逐位平行
+        alive = [(k, self.end_beh[i] if i < len(self.end_beh) else "")
+                 for i, k in enumerate(self.pl_keys) if self._entry_alive(k)]
+        self.pl_keys = [k for k, _ in alive]
+        self.end_beh = [b for _, b in alive]
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表。仅启动线程
         # 执行（_startup_done 尚 False）——重扫线程触发时跳过：恢复段在
         # 后台线程直写装载态（cur/slots/watch），与主线程切歌/对位并发=
@@ -1383,11 +1446,14 @@ class App:
                 and not on:
             self._switch_key = lib_key
         old_keys = list(self.pl_keys)
+        old_behs = list(self.end_beh)
         if on:
-            self.pl_keys = points.expand_replace(
-                old_keys, lib_key, points.pt_keys_for(lib_key, data))
+            pt_keys = points.pt_keys_for(lib_key, data)
+            self.pl_keys = points.expand_replace(old_keys, lib_key, pt_keys)
+            self.end_beh = _end_beh_expand(old_keys, old_behs, lib_key, pt_keys)
         else:
             self.pl_keys = points.collapse_restore(old_keys, lib_key)
+            self.end_beh = _end_beh_collapse(old_keys, old_behs, lib_key)
         self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
         self._sync_watch_span()
         if self._pending_switch is not None:
@@ -1407,6 +1473,7 @@ class App:
             data2, _ = points.load_points(os.path.dirname(song["path"]))
             self.points[lib_key] = data2
             self.pl_keys = old_keys
+            self.end_beh = old_behs          # 行为表随列表一并还原
             self.cur = points.remap_cur(self.pl_keys, old_keys,
                                         self.cur, lib_key)
             self._sync_watch_span()
@@ -1481,10 +1548,14 @@ class App:
             return "保存失败：%s" % e
         if data["enabled"]:
             old = list(self.pl_keys)
-            new = points.collapse_restore(old, lib_key)
-            new = points.expand_replace(new, lib_key,
-                                        points.pt_keys_for(lib_key, data))
+            old_behs = list(self.end_beh)
+            pt_keys = points.pt_keys_for(lib_key, data)
+            # 收起→展开两步：中间态=裸键在场（expand 守卫要求展开前键表）
+            mid = points.collapse_restore(old, lib_key)
+            mid_behs = _end_beh_collapse(old, old_behs, lib_key)
+            new = points.expand_replace(mid, lib_key, pt_keys)
             self.pl_keys = new
+            self.end_beh = _end_beh_expand(mid, mid_behs, lib_key, pt_keys)
             self.cur = points.remap_cur(old, new, self.cur, lib_key)
             # 当前装载条目被重排掉（如删除正在播放的点）：粒度标签已死，
             # 按落点条目重装载映射——防滞留死点段（对位规则①会抑制自愈）、
@@ -1623,7 +1694,6 @@ class App:
             "clockHint": self.clock_hint, "vjHint": self.vj_hint,
             "kbHint": self.kb_hint,
             "topMost": self.top_most,
-            "switchConfirm": self.switch_confirm,
             "exitCloseApps": self.exit_close_apps,
             "launchAppsOnStart": self.launch_apps,
             # daw=落盘值（回填下拉），dawActive=生效值（落盘≠生效时前端
@@ -1793,8 +1863,6 @@ class App:
         self.web_cfg.update(web_fields)
         if "topMost" in p:      # 只落盘：置顶由演出模式 js_api 承担
             self.top_most = bool(p["topMost"])
-        if "switchConfirm" in p:
-            self.switch_confirm = bool(p["switchConfirm"])
         if "exitCloseApps" in p:
             self.exit_close_apps = bool(p["exitCloseApps"])
         if "launchAppsOnStart" in p:
@@ -1837,8 +1905,6 @@ class App:
             flags = {}
             if "topMost" in p:
                 flags["topMost"] = self.top_most
-            if "switchConfirm" in p:
-                flags["switchConfirm"] = self.switch_confirm
             if "exitCloseApps" in p:
                 flags["exitCloseApps"] = self.exit_close_apps
             if "launchAppsOnStart" in p:
@@ -2453,24 +2519,25 @@ class App:
         redict）。返回 None=成功。"""
         payload = payload or {}
         if op == "setend":
-            # 逐曲播完行为：key 归一到宿主工程（点条目=全歌统一行为），
-            # 空 beh=清除回默认（播完停止）
-            pt = points.parse_pt_key(key)
-            if pt:
-                key = pt[0]
-            if key not in self.by_key:
-                return "素材库里没有该工程"
+            # 播完行为绑定播放列表条目：按键套用到全部同键条目位
+            #（应用层禁止同键重复加入；导入文件含同键多位时逐位可异、
+            # 编辑面按 key 表达），空 beh=清除回默认（播完停止）
             beh = str(payload.get("beh") or "")
             if beh and not advance.valid_end_beh(beh):
                 return "未知播完行为：%s" % beh
-            if beh:
-                self.end_beh[key] = beh
-            else:
-                self.end_beh.pop(key, None)
+            idxs = [i for i, k in enumerate(self.pl_keys) if k == key]
+            if not idxs:
+                return "条目不在播放列表里"
+            # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再套用
+            self.end_beh += [""] * (len(self.pl_keys) - len(self.end_beh))
+            self.end_beh = self.end_beh[:len(self.pl_keys)]
+            for i in idxs:
+                self.end_beh[i] = beh
             self._persist()
             return None
         if op == "clear":
             self.pl_keys = []
+            self.end_beh = []
             self.cur = None
             self._persist()
             return None
@@ -2533,6 +2600,11 @@ class App:
                 return "列表刚变化，未能移动"
             item = self.pl_keys.pop(frm)
             self.pl_keys.insert(to, item)
+            if frm < len(self.end_beh):
+                b = self.end_beh.pop(frm)
+                self.end_beh.insert(to, b if b else "")
+            else:
+                self.end_beh.insert(to, "")
             if self.cur is not None:
                 if self.cur == frm:
                     self.cur = to
@@ -2558,6 +2630,7 @@ class App:
             if key in self.pl_keys:
                 return "已在播放列表里"
             self.pl_keys.append(key)
+            self.end_beh.append("")      # 新条目默认（播完停止），行为卡再定
         else:
             try:
                 i = self.pl_keys.index(key)
@@ -2565,6 +2638,8 @@ class App:
                 return "条目不在播放列表里"
             if op == "remove":
                 self.pl_keys.pop(i)
+                if i < len(self.end_beh):
+                    self.end_beh.pop(i)
                 if self.cur is not None:
                     if i < self.cur:
                         self.cur -= 1
@@ -2593,8 +2668,8 @@ class App:
             return {"canceled": True}
         data = {"version": 1, "playlist": self.pl_keys,
                 "durations": self.durations, "durSrc": self.dur_src}
-        if self.end_beh:
-            data["endBeh"] = dict(self.end_beh)   # 可选键：旧版导入端忽略
+        if any(self.end_beh):
+            data["endBeh"] = [str(b) for b in self.end_beh]   # 逐位绑定条目
         data = json.dumps(data, ensure_ascii=False, indent=2)
         try:
             # 不走 _atomic_write：它限定程序目录内，导出路径由用户任选
@@ -2630,20 +2705,38 @@ class App:
                            for k in data["playlist"]) \
                 or not isinstance(data.get("durations", {}), dict) \
                 or not isinstance(data.get("durSrc", {}), dict) \
-                or not isinstance(data.get("endBeh") or {}, dict):
+                or not (isinstance(data.get("endBeh"), (list, dict))
+                        or data.get("endBeh") is None):
             return {"error": "歌单文件无效：不是本软件导出的歌单"}
-        for k, v in (data.get("endBeh") or {}).items():
-            if not (isinstance(k, str) and advance.valid_end_beh(str(v))):
-                return {"error": "歌单文件无效：endBeh 段含非法值"}
+        raw_beh = data.get("endBeh")
+        if isinstance(raw_beh, dict):
+            for k, v in raw_beh.items():
+                if not (isinstance(k, str)
+                        and advance.valid_end_beh(str(v))):
+                    return {"error": "歌单文件无效：endBeh 段含非法值"}
+        elif isinstance(raw_beh, list):
+            for v in raw_beh:
+                if not (isinstance(v, str) and advance.valid_end_beh(v)):
+                    return {"error": "歌单文件无效：endBeh 段含非法值"}
         keys = data["playlist"]
-        live, skipped = [], []
-        for k in keys:
+        live, skipped, live_beh = [], [], []
+        for i, k in enumerate(keys):
             if self._resolve_entry(k) is None:
                 skipped.append("%s（%s）" % (
                     k, "定位点不存在或未启用" if points.parse_pt_key(k)
                     else "工程不在素材库"))
             else:
                 live.append(k)
+                # 行为按原文件位取值（失效位过滤不得引起索引错位）
+                if isinstance(raw_beh, list):
+                    v = str(raw_beh[i]) if i < len(raw_beh) else ""
+                    live_beh.append(v if advance.valid_end_beh(v) else "")
+                else:                   # 旧字典格式：按键归一宿主
+                    pt = points.parse_pt_key(k)
+                    d = {str(kk): str(vv) for kk, vv in
+                         (raw_beh or {}).items()
+                         if advance.valid_end_beh(str(vv))}
+                    live_beh.append(d.get(pt[0] if pt else k, ""))
         if not live and keys:      # 空歌单=合法清空（与导出端对称）
             return {"error": "歌单里 %d 个条目全部失效，未导入"
                     % len(skipped)}
@@ -2660,13 +2753,9 @@ class App:
                 if data["durSrc"].get(k) == "manual":
                     src[k] = "manual"
         self.durations, self.dur_src = dur, src
-        # 播完行为合并：只对导入存活条目的宿主歌补值（本机已有值优先），
-        # 不给「在库但不在本次歌单」的歌顺带写入行为
-        hosts = {points.parse_pt_key(k)[0] if points.parse_pt_key(k) else k
-                 for k in live}
-        for k, v in (data.get("endBeh") or {}).items():
-            if k in hosts and k not in self.end_beh:
-                self.end_beh[k] = str(v)
+        # 播完行为=逐位替换：行为绑定条目随歌单走（不同歌单同歌可异），
+        # 本机旧行为不保留——它是节目单编排决定，不是本地缓存
+        self.end_beh = live_beh
         self._persist()
         self.q.put("已导入歌单：%d 首%s" % (
             len(live), "，跳过失效条目 %d 个" % len(skipped)
@@ -2739,8 +2828,10 @@ class App:
         if not song_end:
             self._switch(i, "自动", play_after=True)
             return
-        kind, delay = advance.parse_end_beh(
-            self.end_beh.get(e["lib_key"]) if e else None)
+        beh = (self.end_beh[self.cur]
+               if self.cur is not None
+               and 0 <= self.cur < len(self.end_beh) else "")
+        kind, delay = advance.parse_end_beh(beh or None)
         if kind == "follow":
             kind = "stop"
         if kind == "stop":

@@ -61,7 +61,6 @@
     "hosts": []
   },
   "topMost": true,
-  "switchConfirm": true,
   "exitCloseApps": false,
   "launchAppsOnStart": true,
   "vjPortHint": "loopMIDI Port",

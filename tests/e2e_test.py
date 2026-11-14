@@ -279,7 +279,6 @@ class _WebShim:
         import queue as _q
         self.calls = _q.Queue()
         self.q = _q.Queue()
-        self.switch_confirm = True
         self.cur = None
         self.ctrl = None
         self.watch = None

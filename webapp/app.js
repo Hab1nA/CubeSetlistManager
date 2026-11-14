@@ -12,6 +12,7 @@ addEventListener("unhandledrejection",
                       .split("\n").slice(0, 2).join(" ⏎ ")));
 
 let stState = null, plCache = null, stCur = null;
+let plSelFromPl = false;    // 详情面板选中来源：pl=播放列表行（行为卡仅此显示）
 
 // ---- 启用类绿钮（.tgl）：点文字即启停，启用=绿 ----
 function setTgl(btn, on) {
@@ -815,8 +816,8 @@ function libRow(s, inPl) {
     const k = s.key;
     if (k.startsWith("pt:")) {
       const base = ptBaseOf(k);
-      selectSong(k, base, ptIdOf(k));
-    } else selectSong(k, k, null);
+      selectSong(k, base, ptIdOf(k), "lib");
+    } else selectSong(k, k, null, "lib");
   });
   return div;
 }
@@ -983,8 +984,8 @@ function plRow(i, it) {
     const k = it.key;
     if (k.startsWith("pt:")) {
       const base = ptBaseOf(k);
-      selectSong(k, base, ptIdOf(k));
-    } else selectSong(k, k, null);
+      selectSong(k, base, ptIdOf(k), "pl");
+    } else selectSong(k, k, null, "pl");
   });
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
   // dragstart 的复位（F 批：拖拽细节）
@@ -1114,8 +1115,10 @@ function markPlSel() {
 }
 // 选中曲（素材库/播放列表行点击，pt 条目归一到宿主工程）：
 // 详情面板（定位点+音色映射）跟随；换曲清定位点选择防串编辑
-function selectSong(rowKey, base, ptId) {
+function selectSong(rowKey, base, ptId, src) {
   selRowKey = rowKey;
+  plSelFromPl = src === "pl";   // 播完行为绑定播放列表条目：素材库
+                                // 选中不显示行为卡
   ptSelPending = ptId || null;
   if (recInst) stopRecord();     // 录制目标定格在开始时的曲，换选即弃
   if (plSel !== base) {
@@ -2358,23 +2361,22 @@ async function refreshKbdDetail() {
   } catch { /* 瞬断 */ }
 }
 
-// ---- 详情面板「播完行为」卡（逐曲 endBeh；lib 级，点条目归一宿主）----
+// ---- 详情面板「播完行为」卡（绑定播放列表条目；素材库选中不显示）----
 let endBehDirty = false;    // 未保存的下拉改动：轮询回填跳过（防静默重置）
-function endBehBase() {
-  if (!plSel) return null;
-  return plSel.startsWith("pt:") ? ptBaseOf(plSel) : plSel;
-}
 function refreshEndBeh() {
   const sel = $("#dt-end-sel");
   if (!sel) return;
-  const base = endBehBase();
+  const card = $("#dt-endcard");
   const wrap = $("#dt-end-delay-wrap");
-  if (!base || !plCache) {
+  const row = plCache && selRowKey
+      ? (plCache.pl || []).find(r => r.key === selRowKey) : null;
+  card.hidden = !(plSelFromPl && row);   // 仅播放列表选中显示
+  if (!row) {
     sel.value = "";
     wrap.hidden = true;
     return;
   }
-  const v = (plCache.endBeh || {})[base] || "";
+  const v = row.beh || "";
   if (v.startsWith("delay:")) {
     sel.value = "delay";
     $("#dt-end-delay").value = v.slice(6);
@@ -2390,8 +2392,8 @@ $("#dt-end-sel").addEventListener("change", () => {
   $("#dt-end-delay-wrap").hidden = $("#dt-end-sel").value !== "delay";
 });
 $("#dt-end-save").addEventListener("click", async () => {
-  const base = endBehBase();
-  if (!base) { toast("未选中曲目", "err"); return; }
+  const base = selRowKey;   // 行键（pt 行=完整 pt 键）：后端按键套用
+  if (!base || !plSelFromPl) { toast("请先在播放列表中选中曲目", "err"); return; }
   let beh = $("#dt-end-sel").value;
   if (beh === "delay") {
     const raw = $("#dt-end-delay").value.trim();
@@ -2408,9 +2410,7 @@ $("#dt-end-save").addEventListener("click", async () => {
     endBehDirty = false;
     toast("播完行为已保存");
     if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
-      plCache.endBeh = plCache.endBeh || {};
-      if (beh) plCache.endBeh[base] = beh;
-      else delete plCache.endBeh[base];
+      (plCache.pl || []).forEach(r => { if (r.key === base) r.beh = beh; });
     }
     refreshEndBeh();
   }
@@ -2585,7 +2585,7 @@ function renderVjState() {
 
 // ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
 const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb",
-                   "st-confirm", "st-exit", "st-launch",
+                   "st-exit", "st-launch",
                    "st-root", "st-exe", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
@@ -2726,7 +2726,6 @@ async function refreshSettings(force) {
     fillSel("st-vj", d.vjHint, d.ports || [], " · 未接入");
     fillSel("st-kb", d.kbHint, d.ports || [], " · 未接入");
     fillSel("st-pg", d.web.midiIn, d.ports || [], " · 未接入");
-    $("#st-confirm").checked = d.switchConfirm;
     $("#st-exit").checked = d.exitCloseApps;
     $("#st-launch").checked = d.launchAppsOnStart !== false;
     $("#st-root").value = d.projectsRoot;
@@ -2816,7 +2815,6 @@ async function saveSettings() {
   }
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
-    switchConfirm: $("#st-confirm").checked,
     exitCloseApps: $("#st-exit").checked,
     launchAppsOnStart: $("#st-launch").checked,
     projectsRoot: $v("#st-root"), dawExe: $v("#st-exe"),
