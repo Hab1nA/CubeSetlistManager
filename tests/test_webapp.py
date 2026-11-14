@@ -434,8 +434,7 @@ def _pl_app():
         points={"A/歌一": {"enabled": True, "counter": 1, "points": [
             {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}},
         durations={}, dur_src={}, watch=None, q=_Q(),
-        _persist=lambda: None, _refresh=lambda: None,
-        _sync_watch_armed=lambda: None)
+        _persist=lambda: None, _refresh=lambda: None)
 
 
 def test_plcmd_add_pt_key():
@@ -960,7 +959,7 @@ def test_state_snapshot_daw_alive():
     fake = types.SimpleNamespace(
         pl_keys=[], songs=[], cur=None, switch_confirm=False,
         exit_close_apps=False, launch_apps=True, top_most=True,
-        cont_play=True, auto_advance=True, watch=None)
+        watch=None)
     snap = web_remote.build_snapshot(fake, False, None)
     assert "dawAlive" in snap and snap["dawAlive"] is False
 
@@ -1127,7 +1126,7 @@ def test_launch_apps_guards(monkeypatch):
 
 def test_launch_apps_setting_persist(monkeypatch):
     """launchAppsOnStart 在场检测：部分载荷只动该键，内存+磁盘跟随。"""
-    disk = {"autoAdvance": True, "autoPlay": True, "topMost": True,
+    disk = {"topMost": True,
             "switchConfirm": True, "exitCloseApps": False,
             "launchAppsOnStart": True,
             "vjPortHint": "VJ1", "kbPortHint": "KB1", "clockPortHint": "CK1",
@@ -1140,13 +1139,12 @@ def test_launch_apps_setting_persist(monkeypatch):
                         lambda cfg: disk.clear() or disk.update(cfg))
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
-        cont_play=True, auto_advance=True, top_most=True,
+        top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
         _obs_autostart_cfg=True, daw="cubase", ccfg={"projectsRoot": "C:/x"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
-        _toggle_auto=lambda: None,
         _apply_ports=lambda: None,
         _apply_web=lambda: None,
         _web_config_payload=lambda **f: dict(
@@ -1155,7 +1153,7 @@ def test_launch_apps_setting_persist(monkeypatch):
     assert sg.App._settings_apply_web(
         fake, {"launchAppsOnStart": False}) is None
     assert fake.launch_apps is False and disk["launchAppsOnStart"] is False
-    assert disk["exitCloseApps"] is False and disk["autoPlay"] is True
+    assert disk["exitCloseApps"] is False
     assert disk["obs"]["projectorMonitor"] == "DP-1"   # 其余键零波及
     # 三重门：ctl 缺席=False（构造前无 OBS 连接循环可影响）
     assert sg.App._obs_autostart_effective(fake) is False
@@ -1164,7 +1162,7 @@ def test_launch_apps_setting_persist(monkeypatch):
 def test_settings_partial_payload_no_wipe(monkeypatch):
     """B1：VJ 页只发 obs 节 → 其余内存/磁盘字段逐项不变；设置页全量
     载荷才更新对应字段（在场检测）。"""
-    disk = {"autoAdvance": True, "autoPlay": True, "topMost": True,
+    disk = {"topMost": True,
             "switchConfirm": True, "exitCloseApps": False,
             "vjPortHint": "VJ1", "kbPortHint": "KB1", "clockPortHint": "CK1",
             "obs": {"projectorMonitor": "DP-1", "vjMute": True,
@@ -1177,14 +1175,13 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     calls = []
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="KB1", clock_hint="CK1",
-        cont_play=True, auto_advance=True, top_most=True,
+        top_most=True,
         switch_confirm=True, exit_close_apps=False,
         daw="cubase",
         ccfg={"projectsRoot": "C:/x", "dawExe": "e"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
-        _toggle_auto=lambda: None,
         _apply_ports=lambda: calls.append("ports"),
         _apply_web=lambda: calls.append("web"),
         _web_config_payload=lambda **f: dict(
@@ -1196,13 +1193,13 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
                 "projectorMonitor": "DP-2"}}) is None
     assert (fake.vj_hint, fake.kb_hint, fake.clock_hint) == \
         ("VJ1", "KB1", "CK1")
-    assert fake.cont_play is True and fake.switch_confirm is True
+    assert fake.switch_confirm is True
     assert fake.top_most is True and fake.exit_close_apps is False
     assert disk["obs"] == {"projectorMonitor": "DP-2", "vjMute": False,
                            "videoRoot": "D:/v", "mediaInput": "Media34"}
     assert disk["vjPortHint"] == "VJ1" and disk["kbPortHint"] == "KB1"
     assert disk["clockPortHint"] == "CK1"
-    assert disk["autoPlay"] is True and disk["switchConfirm"] is True
+    assert disk["switchConfirm"] is True
     assert disk["webRemote"]["enabled"] is False
     assert calls == []                       # 端口/遥控未动：不触发热切换
     # 设置页全量载荷：web.enabled 翻转 → 热应用触发、磁盘跟随
@@ -1211,7 +1208,7 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
         registry=types.SimpleNamespace(snapshot=lambda: []))
     assert sg.App._settings_apply_web(fake, {
         "clockHint": "CK1", "vjHint": "VJ1", "kbHint": "KB1",
-        "autoAdvance": True, "autoPlay": True, "topMost": True,
+        "topMost": True,
         "switchConfirm": True, "exitCloseApps": False,
         "projectsRoot": "C:/x", "dawExe": "e",
         "web": {"enabled": True, "serverPort": 8765, "appPort": 8767,
@@ -1259,14 +1256,13 @@ def test_daw_setting_persist(monkeypatch):
     rescans = []
     fake = types.SimpleNamespace(
         vj_hint="VJ1", kb_hint="CK1", clock_hint="CK1",
-        cont_play=True, auto_advance=True, top_most=True,
+        top_most=True,
         switch_confirm=True, exit_close_apps=False, launch_apps=True,
         _obs_autostart_cfg=True, daw="cubase",
         ccfg={"projectsRoot": "C:/cb", "dawExe": "C:/cb.exe"},
         web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE), web=None, ctl=None,
         _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
         root=types.SimpleNamespace(attributes=lambda *_a, **_k: None),
-        _toggle_auto=lambda: None,
         _apply_ports=lambda: None,
         _apply_web=lambda: None,
         _web_config_payload=lambda **f: dict(
@@ -1301,7 +1297,7 @@ def test_settings_get_web_daw_fields(monkeypatch):
     底座各自记忆（前端联动换显）；平铺旧键只迁给活跃底座不外溢。"""
     fake = types.SimpleNamespace(
         clock_hint="", vj_hint="", kb_hint="", watch=None,
-        cont_play=False, top_most=False, switch_confirm=True,
+        top_most=False, switch_confirm=True,
         exit_close_apps=False, launch_apps=True,
         ccfg={"projectsRoot": "S:/songs", "dawExe": "S:/so.exe"},
         daw="studioone",
@@ -1447,7 +1443,6 @@ class _PlApp:
         fake = _FakeWebApp()
         self.by_key, self.points = fake.by_key, fake.points
         self._resolve_entry = fake._resolve_entry
-        self._sync_watch_armed = lambda: None
 
     def _persist(self):
         self.persists += 1

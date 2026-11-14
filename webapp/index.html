@@ -172,22 +172,22 @@
               </div>
             </div>
             <div class="card" id="dt-endcard">
-              <div class="md-head" title="按曲目保存；定位点条目共用所属工程的行为">播完行为</div>
+              <div class="md-head">播完行为</div>
               <div class="field-row">
-                <div class="field" style="flex:1">
-                  <select id="dt-end-sel" title="跟随全局=按设置页「播完自动切换/切完自动播放」当前组合">
-                    <option value="">跟随全局</option>
-                    <option value="stop">播放完停止</option>
-                    <option value="next">播放完切下一首</option>
-                    <option value="playnext">播放完立刻开始播放下一首</option>
-                    <option value="delay">间隔指定秒后开始播放下一首</option>
+                <div class="field"><label for="dt-end-sel">行为</label>
+                  <select id="dt-end-sel">
+                    <option value="">播完停止</option>
+                    <option value="next">切下一首</option>
+                    <option value="playnext">播放下一首</option>
+                    <option value="delay">延迟播放下一首</option>
                   </select></div>
                 <div class="field" id="dt-end-delay-wrap" hidden>
                   <label for="dt-end-delay">间隔秒</label>
                   <input id="dt-end-delay" inputmode="numeric" placeholder="如 30">
                 </div>
-                <button id="dt-end-save" class="btn primary sm"
-                  style="align-self:flex-start">保存</button>
+              </div>
+              <div class="md-actions">
+                <button id="dt-end-save" class="btn primary sm">保存</button>
               </div>
             </div>
             <div class="card">
@@ -378,16 +378,12 @@
       </div>
       <div class="card"><h3>行为</h3>
         <div class="grid2">
-          <label class="switch"><input type="checkbox" id="st-auto"><i></i>
-            <span>播完自动切换</span></label>
-          <label class="switch"><input type="checkbox" id="st-cont"><i></i>
-            <span>切完自动播放</span></label>
           <label class="switch"><input type="checkbox" id="st-confirm"><i></i>
             <span>手动切歌确认</span></label>
-          <label class="switch"><input type="checkbox" id="st-launch"><i></i>
-            <span>启动时打开被控软件</span></label>
           <label class="switch"><input type="checkbox" id="st-exit"><i></i>
             <span>退出时关闭被控软件</span></label>
+          <label class="switch"><input type="checkbox" id="st-launch"><i></i>
+            <span>启动时打开被控软件</span></label>
         </div>
       </div>
       <div class="card"><h3>目录与工程</h3>

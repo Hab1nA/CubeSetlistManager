@@ -2380,7 +2380,7 @@ function refreshEndBeh() {
     $("#dt-end-delay").value = v.slice(6);
     wrap.hidden = false;
   } else {
-    sel.value = v;      // ""=跟随全局 / stop / next / playnext
+    sel.value = v === "stop" ? "" : v;   // ""=播完停止（未定义行为亦同）
     $("#dt-end-delay").value = "";
     wrap.hidden = true;
   }
@@ -2395,7 +2395,7 @@ $("#dt-end-save").addEventListener("click", async () => {
   let beh = $("#dt-end-sel").value;
   if (beh === "delay") {
     const raw = $("#dt-end-delay").value.trim();
-    if (!raw) { toast("请填写间隔秒数", "err"); return; }
+    if (!raw) { toast("请填写间隔秒", "err"); return; }
     const n = Math.round(Number(raw));
     if (!(n >= 0) || n > 86400) {
       toast("间隔秒须为 0-86400 的整数", "err");
@@ -2406,7 +2406,7 @@ $("#dt-end-save").addEventListener("click", async () => {
   const j = await post("/plcmd", {op: "setend", key: base, payload: {beh}});
   if (j.ok) {
     endBehDirty = false;
-    toast(beh ? "播完行为已保存" : "播完行为已恢复跟随全局");
+    toast("播完行为已保存");
     if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
       plCache.endBeh = plCache.endBeh || {};
       if (beh) plCache.endBeh[base] = beh;
@@ -2584,8 +2584,8 @@ function renderVjState() {
 }
 
 // ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
-const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb", "st-auto",
-                   "st-cont", "st-confirm", "st-exit", "st-launch",
+const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb",
+                   "st-confirm", "st-exit", "st-launch",
                    "st-root", "st-exe", "st-mode", "st-srv", "st-app",
                    "st-tsk", "st-pg", "st-ip"];
 let stBase = null;
@@ -2726,8 +2726,6 @@ async function refreshSettings(force) {
     fillSel("st-vj", d.vjHint, d.ports || [], " · 未接入");
     fillSel("st-kb", d.kbHint, d.ports || [], " · 未接入");
     fillSel("st-pg", d.web.midiIn, d.ports || [], " · 未接入");
-    $("#st-auto").checked = d.autoAdvance;
-    $("#st-cont").checked = d.autoPlay;
     $("#st-confirm").checked = d.switchConfirm;
     $("#st-exit").checked = d.exitCloseApps;
     $("#st-launch").checked = d.launchAppsOnStart !== false;
@@ -2818,7 +2816,6 @@ async function saveSettings() {
   }
   const r = await post("/settings", {
     clockHint: $v("#st-clock"), vjHint: $v("#st-vj"), kbHint: $v("#st-kb"),
-    autoAdvance: $("#st-auto").checked, autoPlay: $("#st-cont").checked,
     switchConfirm: $("#st-confirm").checked,
     exitCloseApps: $("#st-exit").checked,
     launchAppsOnStart: $("#st-launch").checked,

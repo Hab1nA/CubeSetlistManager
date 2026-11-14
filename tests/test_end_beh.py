@@ -62,7 +62,7 @@ def _setend_app():
     return types.SimpleNamespace(
         by_key={"A/歌一": {"key": "A/歌一", "name": "歌一", "path": "/p"}},
         end_beh={}, pl_keys=[], cur=None,
-        _persist=lambda: None, _sync_watch_armed=lambda: None)
+        _persist=lambda: None)
 
 
 def test_plcmd_setend():
@@ -74,7 +74,7 @@ def test_plcmd_setend():
     assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#3",
                               {"beh": "delay:15"}) is None
     assert app.end_beh["A/歌一"] == "delay:15"
-    # 空 beh=清除回跟随全局
+    # 空 beh=清除回默认（播完停止）
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一", {"beh": ""}) is None
     assert app.end_beh == {}
     # 拒绝分支
@@ -85,13 +85,13 @@ def test_plcmd_setend():
     assert app.end_beh == {}
 
 
-def _advance_app(lib_of, pl, cur, end_beh=None, cont_play=True):
+def _advance_app(lib_of, pl, cur, end_beh=None):
     """_advance 单测宿主：lib_of={key: lib_key} 映射，_switch/_transport/
     定时器全部捕获式 stub。"""
     app = types.SimpleNamespace(
         ctrl=types.SimpleNamespace(busy=False),
         pl_keys=list(pl), cur=cur, end_beh=end_beh or {},
-        cont_play=cont_play, _delay_seq=0,
+        _delay_seq=0,
         switches=[], delayed=[], logs=_Log(),
         _resolve_entry=lambda k: ({"lib_key": lib_of[k],
                                    "song_name": k}
@@ -118,24 +118,21 @@ class _Log(list):
 
 def test_advance_song_end_semantics():
     """歌尾行为只在推进跨出该歌时生效：段间链进（点→点）不解析行为，
-    接续按全局「切完自动播放」；末点→他歌才解析（stop=不切）。"""
+    无条件接续播放；末点→他歌才解析（未定义=停止不切）。"""
     app = _advance_app({"pt:A#1": "A", "pt:A#2": "A", "B": "B"},
                        ["pt:A#1", "pt:A#2", "B"], cur=0,
                        end_beh={"A": "stop"})
     sg.App._advance(app)
-    assert app.switches == [(1, True)]          # 段间：按 cont_play 接续
+    assert app.switches == [(1, True)]          # 段间：无条件接续播放
     app.cur = 1
     sg.App._advance(app)
     assert app.switches == [(1, True)]          # 歌尾：stop → 不切
     assert any("播完停止" in m for m in app.logs)
-    # 全局缺省映射：follow+cont_play→playnext；cont_play=False→next
+    # 未定义行为=播完停止：不切
     app2 = _advance_app({"A": "A", "B": "B"}, ["A", "B"], cur=0,
                         end_beh={})
     sg.App._advance(app2)
-    assert app2.switches == [(1, True)]         # playnext
-    app3 = _advance_app({"A": "A", "B": "B"}, ["A", "B"], cur=0, cont_play=False)
-    sg.App._advance(app3)
-    assert app3.switches == [(1, False)]        # next（不自动播）
+    assert app2.switches == [] and any("播完停止" in m for m in app2.logs)
 
 
 def test_advance_delay_and_stop_paths():
@@ -151,6 +148,19 @@ def test_advance_delay_and_stop_paths():
     end_app._switch = lambda i, via, play_after=False: False
     sg.App._advance(end_app)
     assert end_app.switches == [] and end_app.delayed == []
+
+
+def test_advance_explicit_next_playnext():
+    """显式行为三分支：next=切不起播、playnext=切并起播、stop=不切。"""
+    for beh, want_play in (("next", False), ("playnext", True)):
+        app = _advance_app({"A": "A", "B": "B"}, ["A", "B"], cur=0,
+                           end_beh={"A": beh})
+        sg.App._advance(app)
+        assert app.switches == [(1, want_play)], beh
+    app = _advance_app({"A": "A", "B": "B"}, ["A", "B"], cur=0,
+                       end_beh={"A": "stop"})
+    sg.App._advance(app)
+    assert app.switches == [] and any("播完停止" in m for m in app.logs)
 
 
 def test_delay_play_fire_gates():
@@ -176,19 +186,3 @@ def test_delay_play_fire_gates():
     assert app.rearms[-1] == (7, "k", 1, 0)     # 装载中：重探
 
 
-def test_sync_watch_armed():
-    """武装门 = 全局开关 或 当前条目歌有显式行为；无显式行为回落全局。"""
-    calls = []
-    app = types.SimpleNamespace(
-        pl_keys=["pt:A/歌一#1"], cur=0, end_beh={"A/歌一": "stop"},
-        auto_advance=False,
-        watch=types.SimpleNamespace(set_armed=lambda on: calls.append(on)),
-        _resolve_entry=lambda key: ({"lib_key": "A/歌一"} if key else None))
-    sg.App._sync_watch_armed(app)
-    assert calls == [True]
-    app.end_beh = {}
-    sg.App._sync_watch_armed(app)
-    assert calls == [True, False]
-    app.auto_advance = True
-    sg.App._sync_watch_armed(app)
-    assert calls == [True, False, True]

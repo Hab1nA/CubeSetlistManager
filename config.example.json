@@ -60,8 +60,6 @@
     "authToken": "",
     "hosts": []
   },
-  "autoAdvance": true,
-  "autoPlay": false,
   "topMost": true,
   "switchConfirm": true,
   "exitCloseApps": false,

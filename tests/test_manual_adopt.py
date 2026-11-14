@@ -76,10 +76,7 @@ def _app(name="X", durs=None, pl=("a", "b")):
     app._load_lock = _th.Lock()     # 装载代际守卫锁（_adopt/_switch 触及）
     app._refresh = lambda: app.logs.append("<refresh>")
     app.points = {}                 # _resolve_entry 触及（pt 条目解析）
-    app.end_beh = {}                # 播完行为表（_sync_watch_armed 触及）
-    app.auto_advance = False
     # SimpleNamespace 无类方法解析：显式绑定真实现（装载半程要真跑）
-    app._sync_watch_armed = lambda: setlist_gui.App._sync_watch_armed(app)
     app._adopted_load = lambda key, gen: \
         setlist_gui.App._adopted_load(app, key, gen)
     app._resolve_entry = lambda key: \
@@ -197,11 +194,8 @@ def _pt_app(pl, pts, cur=0, pos=None):
     app._load_lock = _th.Lock()
     app._goto_ack = None               # GOTO 在途闸（repick 触及）
     app._refresh = lambda: app.logs.append("<refresh>")
-    app.end_beh = {}                # 播完行为表（_sync_watch_armed 触及）
-    app.auto_advance = False
     app._resolve_entry = lambda key: \
         setlist_gui.App._resolve_entry(app, key)
-    app._sync_watch_armed = lambda: setlist_gui.App._sync_watch_armed(app)
     app._repick_by_position = lambda name, pos_: \
         setlist_gui.App._repick_by_position(app, name, pos_)
     app._repoint = lambda j, e, why: \

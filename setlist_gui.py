@@ -402,9 +402,8 @@ class App:
             self.ccfg["dawExe"] = DAW_DEFAULTS[self.daw]["exe"]
         # 全新配置（无文件/掉配置）的默认值：端口联动一律停用（名称不再
         # 预设旧硬编码，用户在设置页按实际在线端口选）；勾选项按演出
-        # 习惯给安全默认
-        self.auto_advance = bool(cfg.get("autoAdvance", True))
-        self.cont_play = bool(cfg.get("autoPlay", False))  # 连续播放：切完自动起播
+        # 习惯给安全默认。播完行为不再有全局开关：未定义行为=播完停止
+        # （2026-11-15 定案），逐曲行为在编排页详情面板定义。
         self.top_most = bool(cfg.get("topMost", True))     # 保持软件前台
         self.switch_confirm = bool(cfg.get("switchConfirm", True))  # 切歌需确认
         self.exit_close_apps = bool(cfg.get("exitCloseApps"))  # 退出连带关被控软件
@@ -485,7 +484,7 @@ class App:
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
         self.durations = pl["durations"]
         self.dur_src = pl["durSrc"]     # "manual"=手填；不在表=自动；无时长=未知
-        self.end_beh = pl["endBeh"]     # 逐曲播完行为（lib_key → 存储值，缺=跟随全局）
+        self.end_beh = pl["endBeh"]     # 逐曲播完行为（lib_key → 存储值，缺=播完停止）
         self._delay_seq = 0             # 延迟自动播放代际：任何切换/走带动作使在途失效
         self.songs = []                 # 素材库全量
         self.by_key = {}
@@ -761,9 +760,8 @@ class App:
                         lambda: self._transport("stop")),
                     on_event=self.q.put,
                     clock_timeout=mb.CLOCK_TIMEOUT)
-                self.watch.set_armed(self.auto_advance)   # 恢复持久化的勾选
-                if self.auto_advance:
-                    self.q.put("自动切换工程已恢复为开启")
+                self.watch.set_armed(True)   # 常备武装：曲尾自动停走带（未定义
+                                             # 行为=播完停止），逐曲行为决定切否
                 try:
                     if self.vj_hint:
                         self.port = mb.MidiIn(
@@ -1043,8 +1041,6 @@ class App:
                     self.cur_point_id = e["point"]["id"] if e["point"] else None
                     self.q.put("已恢复当前工程：《%s》" % name)
                     break
-        if not self._startup_done:
-            self._sync_watch_armed()    # 恢复指针后按恢复条目重算武装门
         self._probe_durations(songs)
         self.q.put("素材库 %d 首，播放列表 %d 首：%s"
                    % (len(songs), len(self.pl_keys), root))
@@ -1273,7 +1269,6 @@ class App:
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])
-            self._sync_watch_armed()    # 同工程换点：同歌行为，门值不变也统一走此口
             if play_after:
                 # resume 而非 play：光标已被上面的 GOTO 放在段起点，通用
                 # play 的回零会打回工程头；play 也不走 _point_play 二次
@@ -1350,7 +1345,6 @@ class App:
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
-        self._sync_watch_armed()    # 新条目=新歌行为：武装门按显式行为重算
         if play_after:
             # 等待加载的循环放后台线程，别堵主线程的状态轮询
             self.calls.put(lambda: threading.Thread(
@@ -1471,7 +1465,6 @@ class App:
         else:
             self.watch.set_duration(
                 self.durations.get(entry["lib_key"], 0.0) or 0.0, 0.0)
-        self._sync_watch_armed()    # 条目重锚后统一重算武装门（含裸条目回落）
 
     def _points_sync_list(self, lib_key):
         """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
@@ -1629,8 +1622,7 @@ class App:
         return {
             "clockHint": self.clock_hint, "vjHint": self.vj_hint,
             "kbHint": self.kb_hint,
-            "autoAdvance": self.watch.armed if self.watch else False,
-            "autoPlay": self.cont_play, "topMost": self.top_most,
+            "topMost": self.top_most,
             "switchConfirm": self.switch_confirm,
             "exitCloseApps": self.exit_close_apps,
             "launchAppsOnStart": self.launch_apps,
@@ -1799,14 +1791,6 @@ class App:
         if srv_p and app_p and srv_p == app_p:
             return "网页端口与 APP 端口不能相同"
         self.web_cfg.update(web_fields)
-        if "autoAdvance" in p or "autoPlay" in p:
-            cont = (bool(p["autoPlay"]) if "autoPlay" in p
-                    else self.cont_play)
-            auto = (bool(p["autoAdvance"]) if "autoAdvance" in p
-                    else self.auto_advance) or cont
-            self.cont_play = cont
-            self.auto_advance = auto
-            self._toggle_auto()
         if "topMost" in p:      # 只落盘：置顶由演出模式 js_api 承担
             self.top_most = bool(p["topMost"])
         if "switchConfirm" in p:
@@ -1851,9 +1835,6 @@ class App:
         try:
             cfg = _load_config()
             flags = {}
-            if "autoAdvance" in p or "autoPlay" in p:
-                flags.update({"autoAdvance": self.auto_advance,
-                              "autoPlay": self.cont_play})
             if "topMost" in p:
                 flags["topMost"] = self.top_most
             if "switchConfirm" in p:
@@ -2473,7 +2454,7 @@ class App:
         payload = payload or {}
         if op == "setend":
             # 逐曲播完行为：key 归一到宿主工程（点条目=全歌统一行为），
-            # 空 beh=清除回跟随全局
+            # 空 beh=清除回默认（播完停止）
             pt = points.parse_pt_key(key)
             if pt:
                 key = pt[0]
@@ -2487,13 +2468,11 @@ class App:
             else:
                 self.end_beh.pop(key, None)
             self._persist()
-            self._sync_watch_armed()
             return None
         if op == "clear":
             self.pl_keys = []
             self.cur = None
             self._persist()
-            self._sync_watch_armed()    # 指针清空：武装门回落全局口径
             return None
         if op == "setdur":        # 手动写入时长（秒数或 分:秒）
             if points.parse_pt_key(key):
@@ -2595,7 +2574,6 @@ class App:
             else:
                 return "未知操作"
         self._persist()
-        self._sync_watch_armed()    # remove/add 换身份：武装门按新指针重算
         return None
 
     def _pl_export_web(self):
@@ -2671,7 +2649,6 @@ class App:
                     % len(skipped)}
         self.pl_keys = live
         self.cur = None
-        self._sync_watch_armed()    # 指针清空：武装门回落全局口径
         # 时长合并：导入键先保留本机已有值（自动识别值更新鲜），缺的从
         # 文件补；手动来源照搬（manual 语义跟着文件走）
         dur = {k: self.durations[k] for k in live if k in self.durations}
@@ -2744,9 +2721,9 @@ class App:
 
     def _advance(self):
         """播完推进出口（AdvanceWatch 资格闩闭合后调用）：按当前条目所属歌
-        的播完行为分发（缺省=跟随全局两开关）。同歌段间链进（点→点）不算
-        歌尾——行为只在推进跨出该歌（末点→下一首/裸条目播完/已到列表末尾）
-        时生效，段间接续按全局「切完自动播放」。"""
+        的播完行为分发；未定义行为=播完停止（全局两开关已删）。同歌段间
+        链进（点→点）不算歌尾——行为只在推进跨出该歌（末点→下一首/裸条目
+        播完/已到列表末尾）时生效，段间无条件接续播放。"""
         if self.ctrl is not None and self.ctrl.busy:
             self.q.put("自动切换：正在切换中，跳过")
             return
@@ -2760,12 +2737,12 @@ class App:
         song_end = nxt_e is None \
             or (e is None or nxt_e["lib_key"] != e["lib_key"])
         if not song_end:
-            self._switch(i, "自动", play_after=self.cont_play)
+            self._switch(i, "自动", play_after=True)
             return
         kind, delay = advance.parse_end_beh(
             self.end_beh.get(e["lib_key"]) if e else None)
         if kind == "follow":
-            kind = "playnext" if self.cont_play else "next"
+            kind = "stop"
         if kind == "stop":
             self.q.put("《%s》播完停止：按该曲播完行为"
                        % (e["song_name"] if e else "未知条目"))
@@ -3258,15 +3235,6 @@ class App:
                                 # 段坐标 duration/left 原样保留）
         return True
 
-    def _toggle_auto(self):
-        # 生效 self.auto_advance（调用方先写属性再调用）：watch 建立时按它
-        # 恢复；踩钉可在 watch 存在前翻转。显式逐曲行为不受全局翻转影响
-        if self.watch is not None:
-            self._sync_watch_armed()
-            self.q.put("自动切换工程%s" % ("已开启，播完自动切下一首"
-                                        if self.auto_advance else "已关闭"))
-        self._persist_config(autoAdvance=bool(self.auto_advance))
-
     def _persist_config(self, **kv):
         try:
             cfg = _load_config()
@@ -3433,19 +3401,6 @@ class App:
             return "playing"
         return "paused" if w.ever_live() else "stopped"
 
-    def _sync_watch_armed(self):
-        """推进看门狗武装门 = 全局「播完自动切换」或 当前条目歌有显式播完
-        行为。显式行为（含 stop）必须武装：unarmed 时连曲尾自动停走带都
-        没有（poll 直接返回），逐曲「播完停止」就无从谈起。条目/行为变更
-        的装载点调用；无指针=纯全局口径。"""
-        if self.watch is None:
-            return
-        e = (self._resolve_entry(self.pl_keys[self.cur])
-             if self.cur is not None and 0 <= self.cur < len(self.pl_keys)
-             else None)
-        self.watch.set_armed(bool(self.auto_advance)
-                             or bool(e and self.end_beh.get(e["lib_key"])))
-
     def _adopt(self, name):
         """手动跟随：Cubase 里的工程被人工变更（横幅发现标题对不上指针）
         → 按标题对位播放列表。命中=采纳：指针立即就位，时长/音色映射 IO
@@ -3529,7 +3484,6 @@ class App:
                 self.ax_slots = ax
                 self.cur_song_path = path
                 self.cur_point_id = pid
-            self._sync_watch_armed()    # 装载提交=条目归属落定：武装门重算
         threading.Thread(target=run, daemon=True).start()
 
     def _reload_entry_slots(self, e):

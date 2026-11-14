@@ -28,7 +28,7 @@ class AdvanceWatch:
         self.on_event = on_event or (lambda msg: None)
         self.clock_timeout = clock_timeout
         self._t = t
-        self.armed = False          # GUI「自动推进」勾选框
+        self.armed = False          # 看门狗常备武装（App 创建时置 True）
         self.duration = 0.0         # 当前工程时长秒；0=未知（不推进）
         self.left = 0.0             # 左定位条偏移（位置→歌内秒换算）
         self._pos = None            # 最近时码位置（工程绝对秒）；None=未知
@@ -44,9 +44,9 @@ class AdvanceWatch:
     def set_armed(self, on):
         with self._lock:
             self.armed = on
-            # _fired 不清：它是本曲级闩锁——全停 suppress 或已推进过的歌，
-            # 中途取消再重勾自动推进不得瞬间触发（停点 ≥阈值 时重勾=立即
-            # 关当前工程切下一首）。纪元复位（reset）才是清闩锁的唯一入口。
+            # _fired 不清：它是本曲级闩锁——全停 suppress 或已推进过的歌
+            # 不得因 armed 翻转瞬间重触发。纪元复位（reset）才是清闩锁的
+            # 唯一入口。（armed 现为常备武装：App 创建时置 True 后不再翻转）
             self._dead_reported = False
 
     def set_duration(self, sec, left=None):
@@ -186,9 +186,8 @@ END_BEH_MAX_DELAY = 86400.0    # 延迟播放秒数上限（24h）：防手滑�
 
 def parse_end_beh(v):
     """存储值 → (kind, delay)。kind ∈ follow/stop/next/playnext/delay；
-    空/非法=跟随全局。delay=延迟播放秒数（钳 0-86400），仅 delay 有值。
-    follow 在调用方按「设置页两开关」当前组合映射：
-    OFF→stop / ON→next / ON+autoPlay→playnext。"""
+    空/非法=follow（调用方映射为播完停止：未定义行为一律播完停止）。
+    delay=延迟播放秒数（钳 0-86400），仅 delay 有值。"""
     if not v:
         return ("follow", 0.0)
     if v in ("stop", "next", "playnext"):
