@@ -34,6 +34,7 @@ import dpi
 import hotspot
 import kbd_auto
 import mr_ctrl
+import mr_deploy
 import mtc
 import midi_bridge as mb
 import pedal
@@ -787,6 +788,18 @@ class App:
             except SystemExit as e:  # 单项降级：缺 loopMIDI 不拖垮其余
                 self.q.put("loopMIDI 未就绪：%s，VJ 触发/走带跟随不可用"
                            % e)
+            if self.facts["name"] == "cubase":
+                try:                 # 直控部署自检：缺什么报什么（UI 设置卡
+                    st = mr_deploy.status(       # +主控台引导条同数据源）
+                        self.facts["proc_prefix"])
+                    if not st["script"] or st["stale"]:
+                        self.q.put("Cubase 直控脚本未部署/有新版本"
+                                   "（设置页「Cubase 直控部署」卡可一键部署）")
+                    elif not st["port"]:
+                        self.q.put("CubeSetlist Remote 端口缺失"
+                                   "（设置页「Cubase 直控部署」卡可一键创建）")
+                except Exception:
+                    pass                 # 诊断行失败不拖垮启动
             try:                         # OBS 未运行时连接循环会自动拉起，
                 if not find_processes_by_prefix("obs64"):   # 这里只补状态
                     # 与三重门口径一致（此处 ctl 未建，按同源配置组合判）

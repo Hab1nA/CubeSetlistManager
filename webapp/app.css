@@ -572,6 +572,9 @@ input.invalid { border-color: var(--err) !important; }
 .kv .v.on { color: var(--ok); }
 .kv .v.off { color: var(--dim); }
 .kv .v.warn { color: var(--warn); }
+.mr-cell { display: flex; align-items: center; gap: 8px; }
+.mr-banner { display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; }
 .stat-big + .kv { margin-top: 8px; }
 /* 三页状态卡（踩钉/键盘/VJ）行距统一：以踩钉页 kv 行节奏为基准——
    大字行 → 下一个小字行 8px 间距 + 小字行自身上下 5px 衬（踩钉页

@@ -79,8 +79,8 @@
   设置」启用）；
 - DAW 二选一：
   - **Steinberg Cubase 13–15**（实测 13.0.40 / 15）——走带与切歌经官方
-    MIDI Remote 直控，需一次性部署三步（约两分钟，见快速开始第 4 步；
-    不部署则走带动作不可用）；
+    MIDI Remote 直控，驱动随安装包自动部署（就绪核对见快速开始第 4 步；
+    未就绪则走带动作不可用）；
   - **PreSonus Studio One 7 Pro**（实测 7.2）——走带时钟需在
     「歌曲选项 → 同步」勾选 **MIDI 时码输出** 到主程序的时码端口；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、
@@ -98,14 +98,13 @@
    （全字段见[配置参考](docs/配置参考.md)）；
 3. **准备素材**：工程按 `<队伍>/<歌>/<歌>.cpr`（Studio One 为 `.song`）
    放进工程库根目录，视频放进 VJ 视频目录；歌名来源=工程文件名；
-4. **Cubase 用户加一步**（一次性部署 MIDI Remote 直控，全程不抢焦点）：
-   - 在 loopMIDI 里新建端口，命名 `CubeSetlist Remote`（严格同名，勿加
-     后缀）；
-   - 把仓库 `mr_driver/Local/CubeSetlistManager/CubeSetlistRemote/` 按同样
-     目录层级拷到 `%USERPROFILE%\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\CubeSetlistManager\CubeSetlistRemote\`；
-   - 重启 Cubase，「Studio → MIDI Remote Manager」确认
-     `CubeSetlistManager CubeSetlistRemote` 已自动填上该端口（罕见未连时
-     手选该口）。
+4. **Cubase 用户核对直控就绪**（通常零操作）：驱动脚本已随安装包自动铺进
+   Cubase 用户目录；打开主程序看主控台引导条/设置页「Cubase 直控部署」卡，
+   三行灯全绿即就绪。未绿的点什么补什么——「一键部署」（驱动脚本）或
+   「一键创建」（loopMIDI 端口 `CubeSetlist Remote`，写注册表后重启
+   loopMIDI，数秒完成）；Cubase 正在运行则部署后重启 Cubase 生效。绑定
+   确认以 Cubase「Studio → MIDI Remote Manager」显示为准（罕见未连时
+   手选该口）。
 5. **启动主程序**：启动自检自动拉起三大后端并写日志——loopMIDI 端口就绪、
    OBS 启动并等 WebSocket（至多 30 秒）、DAW 冷启动（Cubase 约 30 秒到 Hub，
    Studio One 同实例换歌约 1–2 秒）；任一失败只记日志不阻断其余功能；

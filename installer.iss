@@ -48,6 +48,11 @@ Source: "dist\{#SrcDir}\_internal\*"; \
 Source: "dist\{#SrcDir}\version.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+; Cubase 直控 driver 预铺：Cubase 启动时扫描用户脚本目录自动加载（卸载不
+; 回收——无主文件无害）；应用内「Cubase 直控部署」卡可重铺/立口/查状态
+Source: "mr_driver\Local\CubeSetlistManager\CubeSetlistRemote\*.js"; \
+    DestDir: "{userdocs}\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\CubeSetlistManager\CubeSetlistRemote"; \
+    Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
 Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}"; \
     Flags: ignoreversion skipifsourcedoesntexist

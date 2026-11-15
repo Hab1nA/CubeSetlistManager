@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cpr_meta
 import hotspot
 import kbd_auto
+import mr_deploy
 import obs_ctrl
 import points
 import ui_text
@@ -1677,6 +1678,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/settings":
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._settings_get_web)
+        elif path == "/mrdeploy":
+            f = self._daw_facts()
+            st = mr_deploy.status(f.get("proc_prefix") or "cubase")
+            st["kind"] = f.get("name") or "cubase"
+            self._json(200, st)
         elif path == "/pedal":
             self._run_on_app(lambda: None,
                              result_fn=self.server.app._pedal_get_web)
@@ -1763,6 +1769,7 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_plimport, "/plimport"),
                           (self._h_ptcmd, "/ptcmd"),
                           (self._h_settings_set, "/settings"),
+                          (self._h_mrdeploy, "/mrdeploy"),
                           (self._h_pickdir, "/pickdir"),
                           (self._h_pedal_set, "/pedalset"),
                           (self._h_pedal_learn, "/pedal/learn"),
@@ -2026,6 +2033,30 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "简化版无设置"})
             return
         self._run_on_app(lambda: self.server.app._settings_apply_web(body))
+
+    def _daw_facts(self):
+        """生效底座 facts（mr_deploy 快照用；无 facts 视为 cubase）。"""
+        return getattr(self.server.app, "facts", {}) or {}
+
+    def _h_mrdeploy(self, body, _ip):
+        """Cubase 直控部署动作：{action:"deploy"|"port"}。mr_deploy 无 App
+        状态依赖，HTTP 线程直出（立口重启 loopMIDI ~5s，不冻结 UI）；改系统
+        态（写文件/重启进程）照 /pickdir 同门=仅限本机。"""
+        if not self.client_address[0].startswith("127."):
+            self._json(403, {"error": "仅限本机操作"})
+            return
+        action = str(body.get("action") or "")
+        if action == "deploy":
+            msg = mr_deploy.deploy_driver()
+        elif action == "port":
+            msg = mr_deploy.create_port()
+        else:
+            self._json(400, {"error": "未知 action"})
+            return
+        self._json(200, {"msg": msg,
+                         "status": mr_deploy.status(
+                             self._daw_facts().get("proc_prefix")
+                             or "cubase")})
 
     def _h_pickdir(self, body, ip):
         """目录/文件选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，

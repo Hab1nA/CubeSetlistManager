@@ -5,7 +5,8 @@ a = Analysis(
     ['setlist_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('app.ico', '.'), ('webapp', 'webapp')],       # 窗口/任务栏图标（exe 图标见 EXE.icon）；assets 不随包（仅源码运行的 automator 用）
+    datas=[('app.ico', '.'), ('webapp', 'webapp'),
+           ('mr_driver', 'mr_driver')],   # 窗口/任务栏图标（exe 图标见 EXE.icon）；assets 不随包（仅源码运行的 automator 用）
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

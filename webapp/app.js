@@ -240,7 +240,7 @@ const PAGE_REFRESH = {
   pedal: () => { refreshPedal(true); refreshPedalDevices(); },
   kbd: () => refreshKbd(),
   vj: () => refreshVj(true),
-  settings: () => refreshSettings(),
+  settings: () => { refreshSettings(); refreshMr(); },
 };
 function pageRefresh(page) {
   const fn = PAGE_REFRESH[page];
@@ -2826,6 +2826,83 @@ function renderNetStat(d) {
      ls.appPort ? "on" : "err");
 }
 
+// ---- Cubase 直控部署（设置卡 + 主控台引导条；GET /mrdeploy 只读快照，
+//      POST 动作仅限本机）----
+let mrState = null;
+function mrNeed(d) {
+  return !!d && d.kind === "cubase" && (!d.script || d.stale || !d.port);
+}
+function renderMrCard() {
+  const card = $("#st-mr-card");
+  if (!card || !mrState) return;
+  card.hidden = mrState.kind !== "cubase";
+  if (card.hidden) return;
+  const set = (id, txt, cls) => {
+    const el = $("#" + id);
+    el.textContent = txt;
+    el.className = "v " + cls;
+  };
+  set("st-mr-script",
+      !mrState.src ? "随包驱动缺失"
+      : mrState.script ? "已部署"
+      : mrState.stale ? "有新版本" : "未部署",
+      !mrState.src ? "err" : mrState.script ? "on"
+      : mrState.stale ? "warn" : "err");
+  set("st-mr-port",
+      mrState.port ? "已就绪"
+      : mrState.loopmidi ? "缺失" : "未装 loopMIDI",
+      mrState.port ? "on" : "err");
+  set("st-mr-daw", mrState.daw ? "运行中" : "未运行",
+      mrState.daw ? "on" : "off");
+  $("#st-mr-deploy").hidden = mrState.src && mrState.script && !mrState.stale;
+  $("#st-mr-portbtn").hidden = mrState.port;
+  const restart = mrState.daw && (!mrState.script || mrState.stale);
+  $("#st-mr-note").hidden = !restart;
+  if (restart) $("#st-mr-note").textContent =
+      "Cubase 正在运行：部署后需重启 Cubase 加载脚本";
+}
+function renderMrBanner() {
+  const el = $("#mr-banner");
+  if (!el) return;
+  const need = mrNeed(mrState);
+  el.hidden = !need;
+  if (need) $("#mr-banner-t").textContent = "Cubase 直控未就绪：" +
+      [!mrState.script && !mrState.stale && "驱动脚本未部署",
+       mrState.stale && "驱动脚本有新版本",
+       !mrState.port && "MIDI 端口未建"].filter(Boolean).join("、");
+}
+async function refreshMr() {
+  try {
+    mrState = await (await fetch("/mrdeploy")).json();
+  } catch {
+    mrState = null;
+  }
+  renderMrCard();
+  renderMrBanner();
+}
+$("#st-mr-deploy").addEventListener("click", async () => {
+  const b = $("#st-mr-deploy");
+  b.disabled = true;
+  try {
+    const r = await post("/mrdeploy", {action: "deploy"});
+    if (r && r.msg === "") toast("驱动脚本已部署");
+  } finally {
+    await refreshMr();
+    b.disabled = false;
+  }
+});
+$("#st-mr-portbtn").addEventListener("click", async () => {
+  const b = $("#st-mr-portbtn");
+  b.disabled = true;
+  try {
+    const r = await post("/mrdeploy", {action: "port"});
+    if (r && r.msg === "") toast("MIDI 端口已就绪");
+  } finally {
+    await refreshMr();
+    b.disabled = false;
+  }
+});
+
 async function refreshSettings(force) {
   try {
     const d = await (await fetch("/settings")).json();
@@ -3278,4 +3355,5 @@ refreshPedal();
 refreshKbd();
 refreshVj();
 refreshSettings();
+refreshMr();
 booted = true;

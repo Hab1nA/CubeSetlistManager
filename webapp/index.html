@@ -66,6 +66,10 @@
         <button id="show-exit" class="btn lg" title="退出演出模式：ESC / F11"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.6 4.6l6.8 6.8M11.4 4.6l-6.8 6.8"/></svg><span>退出演出</span></button>
       </div>
       <div id="chips" class="chips" hidden></div>
+      <div id="mr-banner" class="card mr-banner" hidden>
+        <span id="mr-banner-t">Cubase 直控未就绪</span>
+        <button class="btn ghost sm" data-nav="settings">去设置</button>
+      </div>
       <div id="next-card" class="card">
         <div class="lbl">NEXT</div>
         <div class="next-row"><div id="next" class="mid mq">—</div>
@@ -383,6 +387,19 @@
           <label class="switch"><input type="checkbox" id="st-exit"><i></i>
             <span>退出时关闭被控软件</span></label>
         </div>
+      </div>
+      <div class="card" id="st-mr-card" hidden>
+        <h3>Cubase 直控部署</h3>
+        <div class="kv"><span class="k">驱动脚本</span>
+          <span class="mr-cell"><span class="v" id="st-mr-script">…</span>
+            <button id="st-mr-deploy" class="btn ghost sm" hidden>一键部署</button></span></div>
+        <div class="kv"><span class="k">MIDI 端口</span>
+          <span class="mr-cell"><span class="v" id="st-mr-port">…</span>
+            <button id="st-mr-portbtn" class="btn ghost sm" hidden>一键创建</button></span></div>
+        <div class="kv"><span class="k">Cubase</span>
+          <span class="v" id="st-mr-daw">…</span></div>
+        <p class="dim sm-txt" id="st-mr-note" hidden></p>
+        <p class="dim sm-txt">绑定以 Cubase「Studio → MIDI Remote Manager」显示为准；脚本只在 Cubase 启动时加载，部署后需重启 Cubase</p>
       </div>
       <div class="card"><h3>目录与工程</h3>
         <div class="grid2">
