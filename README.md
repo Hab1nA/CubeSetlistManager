@@ -76,7 +76,7 @@
 - [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)：虚拟 MIDI
   端口，装好后由主程序自动拉起；
 - OBS Studio 28+（obs-websocket 5.x 已内置，需在「工具 → WebSocket 服务器
-  设置」启用）；
+  设置」启用；密码自动读取，无需手填）；
 - DAW 二选一：
   - **Steinberg Cubase 13–15**（实测 13.0.40 / 15）——走带与切歌经官方
     MIDI Remote 直控，驱动随安装包自动部署（就绪核对见快速开始第 4 步；
@@ -93,9 +93,10 @@
    `%LOCALAPPDATA%\Programs\CubeSetlistManager`（免管理员），自动创建
    开始菜单/桌面快捷方式，自带卸载器；升级直接装新版，数据保留。
    `config.json`、`playlist.json` 放 exe 同目录（安装根目录）。
-2. **首次配置**：把 `config.example.json` 复制为 exe 同目录的
-   `config.json`，改 OBS 地址/密码、DAW 路径、工程库与视频目录
-   （全字段见[配置参考](docs/配置参考.md)）；
+2. **首次配置（可跳过）**：无需手工建 `config.json`——程序按缺省值起步，
+   OBS 的 WebSocket 密码自动从 OBS 自身配置读取（启用鉴权也不用手填）；
+   要自定义 OBS 地址/DAW 路径/工程库与视频目录时，再参考
+   `config.example.json` 手改（全字段见[配置参考](docs/配置参考.md)）；
 3. **准备素材**：工程按 `<队伍>/<歌>/<歌>.cpr`（Studio One 为 `.song`）
    放进工程库根目录，视频放进 VJ 视频目录；歌名来源=工程文件名；
 4. **Cubase 用户核对直控就绪**（通常零操作）：驱动脚本已随安装包自动铺进

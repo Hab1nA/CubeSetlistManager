@@ -14,6 +14,10 @@
   即重铺，覆盖 driver 升级换版）、「一键创建」（写 loopMIDI 注册表名单后
   重启 loopMIDI 立口，11-15 本机实证）；启动自检按底座补部署状态日志行。
   README 手工三步同步改为「核对就绪」口径。
+- **OBS WebSocket 密码自动读取**：obs.password 留空时连接即读 OBS 自身配置
+  （%APPDATA%\obs-studio\global.ini 的 [WebSocketServerSettings] ServerPassword），
+  启用鉴权的 OBS 免手填密码，config 显式填写仍优先；config.example.json
+  密码占位符同步清空。
 
 ### 修复
 
@@ -23,6 +27,7 @@
 - 打包版不再随包 `assets/` 按钮图：Start/Stop 图片样式仅源码运行的 automator 窗消费（Tk 前端遗留死重），dpi 按目录存在性跳过注册，dist 相应减重。
 - 安装器移除指向安装包布局中不存在路径的 `.mimosa` 排除项。
 - 依赖清单补 `websocket-client`（build.bat 冒烟步必需，此前新环境按清单装完依赖跑构建必挂）；`.gitignore` 补 `.pytest_cache/`。
+- build.bat dist 缺 config 的 fallback 源由仓库根 config.json 改为 config.example.json（根垃圾 config.json 已清）。
 
 ## [0.17.0] - 2026-11-15
 

@@ -170,7 +170,9 @@ class ObsWs:
         ident = {"rpcVersion": 1, "eventSubscriptions": 0}
         if "challenge" in d:  # 设了密码才需要认证
             if not self.password:
-                raise ObsError("OBS 设了 WebSocket 密码，请在 config.json obs.password 填写")
+                raise ObsError("OBS 设了 WebSocket 密码且自动读取未命中"
+                               "（obs-studio/global.ini 缺失或未含密码），"
+                               "请在 config.json obs.password 填写")
             ident["authentication"] = auth_digest(
                 self.password, d["salt"], d["challenge"])
         self._send_json({"op": OP_IDENTIFY, "d": ident})

@@ -3,7 +3,7 @@
   "obs": {
     "host": "127.0.0.1",
     "port": 4455,
-    "password": "在 OBS 的 WebSocket 服务器设置里查看",
+    "password": "",
     "obsExe": "",
     "autoStart": true,
     "mediaInput": "舞台视频",

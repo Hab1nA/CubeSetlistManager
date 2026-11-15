@@ -108,3 +108,51 @@ def test_renotify_after_disable_enable_cycle(monkeypatch):
         assert _wait_until(lambda: len(notified) == 2)
     finally:
         ctl.shutdown()
+
+
+# ---- OBS WebSocket 密码自动读取（global.ini [WebSocketServerSettings] ServerPassword）----
+
+
+def test_obs_password_reads_global_ini(tmp_path):
+    ini = tmp_path / "global.ini"
+    ini.write_text("[WebSocketServerSettings]\nServerEnabled=true\n"
+                   "ServerPort=4455\nServerPassword=s3cret\n", encoding="utf-8")
+    assert obs_ctrl.read_obs_websocket_password(str(ini)) == "s3cret"
+
+
+def test_obs_password_missing_or_section_scoped(tmp_path):
+    """缺失/键在其它段/键不存在 → 一律空串，不阻塞连接循环。"""
+    assert obs_ctrl.read_obs_websocket_password(str(tmp_path / "none.ini")) == ""
+    ini = tmp_path / "global.ini"
+    ini.write_text("[Video]\nServerPassword=leak\n"
+                   "[WebSocketServerSettings]\nServerEnabled=true\n",
+                   encoding="utf-8")
+    assert obs_ctrl.read_obs_websocket_password(str(ini)) == ""
+
+
+def test_obs_password_fallback_and_precedence(monkeypatch):
+    """config 留空 → 连接回退自动值；显式填写优先（接线+优先级测试）。"""
+    seen = []
+    monkeypatch.setattr(obs_ctrl, "read_obs_websocket_password",
+                        lambda p=None: "auto-pw")
+    factory = lambda h, p, pw, timeout=5: seen.append(pw) or _FakeWs()
+    monkeypatch.setattr(obs_ctrl, "ObsWs", factory)
+
+    ctl = ObsController({"retrySec": 0.02, "healthSec": 0.05})
+    monkeypatch.setattr(ctl, "_ensure_obs_running", lambda: False)
+    ctl.on_connected = lambda: None
+    ctl.enabled = True
+    ctl.start()
+    try:
+        assert _wait_until(lambda: seen and seen[0] == "auto-pw"), "回退未生效"
+        seen.clear()
+        ctl2 = ObsController({"retrySec": 0.02, "healthSec": 0.05,
+                              "password": "explicit-pw"})
+        monkeypatch.setattr(ctl2, "_ensure_obs_running", lambda: False)
+        ctl2.on_connected = lambda: None
+        ctl2.enabled = True
+        ctl2.start()
+        assert _wait_until(lambda: seen and seen[0] == "explicit-pw"), "显式未优先"
+    finally:
+        ctl.shutdown()
+        ctl2.shutdown()

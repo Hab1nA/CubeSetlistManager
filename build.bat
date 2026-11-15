@@ -19,13 +19,13 @@ py -c "import winrt.runtime" 2>nul || (
 rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never overwritten
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
-rem dist\Cube Setlist Manager（缺省回退仓库根恢复源）
+rem dist\Cube Setlist Manager（缺省回退 config.example.json 恢复源）
 if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\config.json" dist\_config.bak >nul
   copy /y "dist\Cube Setlist Manager\playlist.json" dist\_playlist.bak >nul
 ) else (
-  echo dist\Cube Setlist Manager missing config, fallback to root copies
-  copy /y config.json dist\_config.bak >nul || goto :err
+  echo dist\Cube Setlist Manager missing config, fallback to config.example.json
+  copy /y config.example.json dist\_config.bak >nul || goto :err
   copy /y playlist.json dist\_playlist.bak >nul || goto :err
 )
 pyinstaller "Cube Setlist Manager.spec" --noconfirm || goto :err

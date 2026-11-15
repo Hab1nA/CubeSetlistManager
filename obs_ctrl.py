@@ -7,6 +7,7 @@
 import ctypes
 import glob
 import os
+import pathlib
 import re
 import socket
 import sys
@@ -111,6 +112,30 @@ def wait_process_gone(prefix, wait_sec):
             return False
         time.sleep(0.5)
     return True
+
+
+def read_obs_websocket_password(ini_path=None):
+    r"""OBS 的 WebSocket 密码自动读取：obs-websocket 5（OBS 28+ 内置）把
+    密码明文存 %APPDATA%\obs-studio\global.ini 的 [WebSocketServerSettings]
+    ServerPassword。config.json obs.password 留空时连接即读此处——启用鉴权
+    的 OBS 免手填，未启用鉴权则无该键返回空串空密码直连；读不到（OBS 未
+    装/IO 错/非默认位置）一律返回 ""，不阻塞连接循环。"""
+    if ini_path is None:
+        ini_path = os.path.join(os.environ.get("APPDATA", ""), "obs-studio",
+                                "global.ini")
+    try:
+        sec = ""
+        for line in pathlib.Path(ini_path).read_text(
+                encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                sec = line[1:-1].strip()
+            elif sec == "WebSocketServerSettings" \
+                    and line.startswith("ServerPassword="):
+                return line.split("=", 1)[1]
+    except (OSError, ValueError):
+        return ""
+    return ""
 
 
 def close_obs_app():
@@ -498,7 +523,8 @@ class ObsController:
                 fresh = self._ensure_obs_running()
                 ws = ObsWs(self.cfg.get("host", "127.0.0.1"),
                            int(self.cfg.get("port", 4455)),
-                           self.cfg.get("password", ""), timeout=5)
+                           (self.cfg.get("password", "")
+                            or read_obs_websocket_password()), timeout=5)
                 ws.request("GetVersion")  # 探活
                 self._ensure_media_input(ws)  # 缺「舞台视频」源就在活动场景补建
                 if fresh:                 # 本次拉起的 OBS：掐掉上次退出时
