@@ -49,6 +49,34 @@ def _mk(monkeypatch, notified):
     return ctl, ws
 
 
+def test_healthy_connection_not_rebuilt(monkeypatch):
+    """健康期探活通过必须保持现有连接（原探活成功落回循环顶部=每
+    healthSec 整轮重建连接+重同步静音，OBS 侧手动调整 ≤30s 被打回）。"""
+    created = []
+
+    def _factory(*_a, **_k):
+        ws = _FakeWs()
+        created.append(ws)
+        return ws
+
+    notified = []
+    ctl = ObsController({"retrySec": 0.02, "healthSec": 0.05})
+    monkeypatch.setattr(obs_ctrl, "ObsWs", _factory)
+    monkeypatch.setattr(ctl, "_ensure_obs_running", lambda: False)
+    ctl.on_connected = lambda: notified.append(1)
+    ctl.enabled = True
+    ctl.start()
+    try:
+        assert _wait_until(lambda: ctl.is_connected() and len(notified) == 1)
+        assert _wait_until(
+            lambda: created[0].requests.count("GetVersion") >= 2)
+        time.sleep(0.2)               # 再熬过几个健康期
+        assert len(created) == 1, "健康期重建了连接"
+        assert len(notified) == 1
+    finally:
+        ctl.shutdown()
+
+
 def test_reconnect_after_action_failure_notifies_again(monkeypatch):
     """动作失败断链（_act 清 _ws）后重连必须再通知（投影恢复依赖）。"""
     notified = []

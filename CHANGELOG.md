@@ -8,6 +8,8 @@
 
 ### 修复
 
+- OBS 连接循环健康期整轮重建连接：探活成功落回循环顶部，每 healthSec（默认 30s）重握手+补源检查+强写静音/监听，OBS 混音器手动调整 ≤30 秒被打回（「VJ 静音不稳定」根因）；健康连接现保持至断线/停用，静音偏好仍随每次建连同步一次。附只读探针 tools/probe_obs_mute.py（采样媒体源静音/监听/播放态）。
+- VJ 静音缺省口径对齐：控制器缺省 False 与三处 UI 缺省 True（勾=静音）相反，obs 段未配置时运行态与勾选态相反；现统一缺省 True。连接时静音同步失败（如老版 OBS 无 SetInputAudioMonitorType）不再静默吞掉，浮出 last_error 提示。
 - 全仓死代码审计清账：删除孤儿焦点收回方法 `_regain_focus`/`_visible_own_window`（切歌/走带焦点收口已由 daw_ctrl「还原操作前前台」承担，docstring 声称的「外部激活」场景全仓无调用点）、`load_config`/`save_config` 薄包装、automator `_atomic_write` 残留、OBS `_recv_exact` 死副本；webapp 摘除永不匹配的 `.pop.menu` 死规则组、未用变量与冗余分支、无引用的死 id。
 - 打包版不再随包 `assets/` 按钮图：Start/Stop 图片样式仅源码运行的 automator 窗消费（Tk 前端遗留死重），dpi 按目录存在性跳过注册，dist 相应减重。
 - 安装器移除指向安装包布局中不存在路径的 `.mimosa` 排除项。

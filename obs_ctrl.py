@@ -335,7 +335,10 @@ class ObsController:
         播放设备）。媒体源默认监听是关的——声音只进混音器/录制，不进任何
         播放设备，所以听不听得到由监听决定，两者一起按勾选状态同步。"""
         name = self.cfg.get("mediaInput", "舞台视频")
-        mute = bool(self.cfg.get("vjMute"))
+        # 缺省 True=静音：与三处 UI（Tk 两版/webapp）的 get("vjMute", True)
+        # 同口径——原缺省 False 使「从未保存过 OBS 设置」的运行态与勾选态
+        # 相反（UI 显示静音、实际每轮连接强写不静音+开监听）
+        mute = bool(self.cfg.get("vjMute", True))
         ws.request("SetInputMute", {"inputName": name, "inputMuted": mute})
         ws.request("SetInputAudioMonitorType", {
             "inputName": name,
@@ -503,10 +506,14 @@ class ObsController:
                         self._stop_and_forget(ws)
                     except (ObsError, OSError):
                         pass
-                try:                      # 静音偏好随每次连接同步
-                    self._set_mute(ws)
-                except (ObsError, OSError):
-                    pass
+                mute_err = ""
+                try:                      # 静音偏好随每次连接同步（回调前，
+                    self._set_mute(ws)    # 契约=Tk 回调不重放静音）
+                except (ObsError, OSError) as e:
+                    # 不断链（连接健康，仅该请求失败——老版 OBS 无
+                    # SetInputAudioMonitorType 即此症状）：接管时浮出到
+                    # last_error，不静默吞
+                    mute_err = "VJ静音同步失败：%s" % e
                 if self._stop.is_set():       # 退出竞态：握手完成也别再接管
                     try:
                         ws.close()
@@ -515,7 +522,7 @@ class ObsController:
                     break
                 with self._lock:
                     self._ws = ws
-                    self.last_error = ""
+                    self.last_error = mute_err
                     first_notify = not self._connected_notified
                     self._connected_notified = True
                 if first_notify and self.on_connected:
@@ -523,20 +530,23 @@ class ObsController:
                         self.on_connected()
                     except Exception as e:
                         self.last_error = "连接通知回调异常: %s" % e
-                # 挂起等断线/停用：socket 读超时也不重连，靠动作失败触发
-                self._stop.wait(self.cfg.get("healthSec", 30))
-                if self._stop.is_set():
-                    break
-                if not self.enabled:  # 被关掉：主动断开，下轮睡眠
+                # 挂起等断线/停用：探活健康=保持现有连接。探活成功若落回
+                # 循环顶部会每 healthSec 整轮重建连接+重同步静音，OBS 混音器
+                # 手动调整 ≤30s 被打回=「VJ 静音不稳定」根因（11-15 定案）
+                while not self._stop.is_set():
+                    self._stop.wait(self.cfg.get("healthSec", 30))
+                    if self._stop.is_set():
+                        break
+                    if not self.enabled:  # 被关掉：主动断开，下轮睡眠
+                        with self._lock:
+                            if self._ws:
+                                self._ws.close()
+                                self._ws = None
+                            self._connected_notified = False
+                        break
                     with self._lock:
-                        if self._ws:
-                            self._ws.close()
-                            self._ws = None
-                        self._connected_notified = False
-                    continue
-                # 周期探活，断了就清理进入重连（下次连上才重新通知）
-                with self._lock:
-                    if self._ws:
+                        if not self._ws:
+                            break         # 动作失败断链：回外循环重连
                         try:
                             self._ws.request("GetVersion", timeout=3)
                         except (ObsError, OSError):
@@ -547,6 +557,9 @@ class ObsController:
                             self._ws = None
                             self.last_error = "连接已断开，正在重连…"
                             self._connected_notified = False
+                            break
+                if self._stop.is_set():
+                    break
             except (ObsError, OSError) as e:
                 self.last_error = str(e)
                 with self._lock:
