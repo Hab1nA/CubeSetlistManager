@@ -521,6 +521,7 @@ def test_daw_backends():
     s1 = daw_ctrl.FACTS["studioone"]
     assert s1["song_ext"] == ".song" and s1["probe_duration"]  # song_meta ZIP 解析
     assert s1.get("via_mr") and daw_ctrl.CUBASE.get("via_mr")  # 双底座走 MR
+    assert s1.get("close_before_open") is False  # S1 同窗换歌不走 _close
     daw_ctrl.set_active(s1)
     try:
         assert daw_ctrl.project_name_from_title("Studio One - 優しい彗星") \

@@ -5,7 +5,8 @@ r"""Studio One 直控 M0 探针：校准 s1_driver bundle 与命令通道。
     CubeSetlistRemote（列表可见=加载成功；detectorPortName 自动挂载若生效，
     设备已自动出现且已绑口，免手工添加）
   ② 未自动挂载时：手工添加设备并选「CubeSetlist Remote」口
-  ③ send 各动作人工确认走带真动（start/stop/rtz/save/close）
+  ③ send 各动作人工确认走带真动（play/stop/rewind/close；
+    close 序列连发保存+关闭两条待证命令，105/106 一次校准）
   ④ 有失败 → 查 S1 日志与命令名（surface.xml 命令名英文内部名待证，修正后
     同步本探针 selftest 与 tests/test_mr_ctrl 的期望表）
 用法：
@@ -23,7 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import mr_ctrl
 import mr_deploy
 
-_ACTIONS = ("start", "stop", "rtz", "save", "close")
+_ACTIONS = ("play", "stop", "rewind", "close")
 _SURFACE = (pathlib.Path(__file__).resolve().parents[1] / "s1_driver"
             / "CubeSetlistManager" / "CubeSetlistRemote"
             / "CubeSetlistRemote.surface.xml")

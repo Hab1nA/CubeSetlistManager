@@ -108,7 +108,8 @@
    脚本已随安装包预铺通常零操作；Studio One 侧首次需部署脚本并重启 S1，
    再在「设置→外部设备」添加 CubeSetlistRemote 设备并绑口（一次性）。
    正在运行的 DAW 部署后需重启生效；绑定确认以 Cubase「Studio → MIDI
-   Remote Manager」/S1「设置→外部设备」显示为准。
+   Remote Manager」/S1「设置→外部设备」显示为准。注意：两个 DAW 不要同时
+   打开（共用同一直控口与 CC 表，同时挂载会一条命令双触发）。
 5. **启动主程序**：启动自检自动拉起三大后端并写日志——loopMIDI 端口就绪、
    OBS（设置页配好投屏位置后自动拉起）并等 WebSocket（至多 30 秒）、DAW
    冷启动（Cubase 约 30 秒到 Hub，Studio One 同实例换歌约 1–2 秒）；任一

@@ -13,7 +13,7 @@
 			<MidiMessage status="#B0" address="#67"/>
 		</Control>
 		<Control name="rtzButton" title="Return to Zero" type="button" options="receive">
-		<MidiMessage status="#B0" address="#68"/>
+			<MidiMessage status="#B0" address="#68"/>
 		</Control>
 		<Control name="saveButton" title="Save" type="button" options="receive">
 			<MidiMessage status="#B0" address="#69"/>

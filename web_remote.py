@@ -2058,10 +2058,13 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(400, {"error": "未知 action"})
             return
+        f = self._daw_facts()
+        kind = f.get("name") or "cubase"
         self._json(200, {"msg": msg,
-                         "status": mr_deploy.status(
-                             self._daw_facts().get("proc_prefix")
-                             or "cubase")})
+                         "status": (mr_deploy.s1_status()
+                                    if kind == "studioone"
+                                    else mr_deploy.status(
+                                        f.get("proc_prefix") or "cubase"))})
 
     def _h_pickdir(self, body, ip):
         """目录/文件选择：原生对话框在 Tk 主线程弹出（阻塞至用户选择/取消，

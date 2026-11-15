@@ -153,7 +153,7 @@ def test_send_dead_daw_probe_blocks_send():
         n = len(fake.shorts)
         probe[0] = False                        # DAW 死（进程或界面不在）
         err = mr_ctrl.send("stop")
-        assert err and "Cubase 不在线" in err
+        assert err and "不在线" in err
         assert len(fake.shorts) == n            # 一条 CC 都没发
         with mr_ctrl._lock:
             assert mr_ctrl._out is None         # 已弃口
@@ -277,6 +277,7 @@ def test_transport_studioone_mr_down_no_keyboard():
         ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe",
                                      log=logs.append)
         assert ctl.transport("play") is False
+        assert any(x.startswith("走带控制：") for x in logs)  # 与 Cubase 同口径
         assert not any("没有工程窗口" in x for x in logs)
     finally:
         undo()
@@ -356,6 +357,19 @@ def test_driver_js_cc_table_and_bindings_match_python():
     assert binds == [("Transport", "Start"), ("Transport", "Stop"),
                      ("Transport", "Return to Zero"),
                      ("File", "Save"), ("File", "Close")]
+
+
+def test_panic_studioone_mr_down():
+    undo = _mr_down()
+    try:
+        logs = []
+        ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe",
+                                     log=logs.append)
+        ctl.panic()
+        assert any(x.startswith("全停：") for x in logs)
+    finally:
+        undo()
+        daw_ctrl.set_active(daw_ctrl.CUBASE)   # 构造器已切 ACTIVE，还原本底
 
 
 def test_panic_studioone_mr():

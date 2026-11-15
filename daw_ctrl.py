@@ -14,7 +14,8 @@
 内部激活态影响，时灵时不灵，已废弃）。模态弹窗阻塞期间单实例转交会被
 Cubase 丢弃，放行弹窗后要补发一次打开请求。
 S1 走带同样 MR 直控（11-16 硬切，S1 控制器脚本 bundle 见 s1_driver/，与
-Cubase driver 同 CC 表同口）。切歌链路完全不依赖焦点。全程只走
+Cubase driver 同 CC 表同口）。切歌链路完全不依赖焦点。全程只走正常键序/
+消息，绝不强杀进程（强杀会留崩溃标记弹「检测到崩溃」）。
 
 双底座：各 DAW 的「事实表」（进程名前缀/窗口类与标题标记/弹窗词表/
 工程扩展名等）收拢在 CUBASE / STUDIOONE 两个 dict，其余全部逻辑共用。
@@ -329,7 +330,7 @@ def wait_exit(timeout=45):
 
 
 def focus(hwnd, tries=6):
-    """置前台（transport 走带键需要）。后台进程被前台锁拦：空敲 ALT +
+    """置前台（弹窗排水/切歌还原在用）。后台进程被前台锁拦：空敲 ALT +
     AttachThreadInput 附加前台线程 + 最小化先恢复，SwitchToThisWindow 兜底。"""
     kernel32 = ctypes.windll.kernel32
     for _ in range(tries):

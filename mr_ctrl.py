@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Cubase MIDI Remote 直控（CC → driver → runCommand）。
+"""MIDI Remote 直控（双底座共用：Cubase MR driver 与 S1 控制器
+脚本 bundle 同表同口，CC → 脚本 → runCommand/命令）。
 哑协议：一条 CC=一条命令，动作序列语义在本模块。driver=mr_driver/Local/
 CubeSetlistManager/CubeSetlistRemote/（部署三步见 README「快速开始」），
 端口=loopMIDI「CubeSetlist Remote」单口双向。完整迁移：Cubase 无键盘
@@ -103,7 +104,7 @@ def send(action):
         if _alive_probe is not None and not _alive_probe():
             _drop_locked()
             _next_try = time.time() + RETRY_AFTER
-            return "Cubase 不在线：进程或界面不在（口在而 DAW 死，拒绝发送）"
+            return "DAW 不在线：进程或界面不在（口在而 DAW 死，拒绝发送）"
         h, err = _ensure_locked()
         if h is None:
             return err
