@@ -217,19 +217,34 @@ def remap_cur(old_keys, new_keys, cur, lib_key):
     return None
 
 
-def mmc_goto_bytes(sec, fps=30.0, dev=127):
-    """秒 → MMC GOTO SysEx（F0 7F <dev> 06 44 06 01 时 分 秒 帧 子帧 F7）。
-    帧率码：0=24 1=25 2=30df 3=30——与 mtc._FPS 同口径；子帧恒 0。"""
+def _smpte_fields(sec, fps):
+    """秒 → (fps_code, 时字节, 分, 秒, 帧)，MMC/MTC 定位编码共用拆分。"""
     fps_code = {24.0: 0, 25.0: 1, 30.0: 3}.get(float(fps), 3)
     sec = max(0.0, float(sec))
-    h = min(int(sec // 3600), 23)   # 小时字节只有 5 位，超界会回绕发错 GOTO 位置
+    h = min(int(sec // 3600), 23)   # 小时字节只有 5 位，超界会回绕发错定位位置
     m = int(sec // 60) % 60
     s = int(sec) % 60
     f = int(round((sec - int(sec)) * fps))
     if f >= fps:
         f = int(fps) - 1
+    return fps_code, (fps_code << 5) | (h & 0x1F), m, s, f
+
+
+def mmc_goto_bytes(sec, fps=30.0, dev=127):
+    """秒 → MMC GOTO SysEx（F0 7F <dev> 06 44 06 01 时 分 秒 帧 子帧 F7）。
+    帧率码：0=24 1=25 2=30df 3=30——与 mtc._FPS 同口径；子帧恒 0。
+    Cubase 定位字节（真机已验）。"""
+    _, hr, m, s, f = _smpte_fields(sec, fps)
     return bytes([0xF0, 0x7F, dev & 0x7F, 0x06, 0x44, 0x06, 0x01,
-                  (fps_code << 5) | (h & 0x1F), m, s, f, 0x00, 0xF7])
+                  hr, m, s, f, 0x00, 0xF7])
+
+
+def mtc_full_frame_bytes(sec, fps=30.0):
+    """秒 → MTC 全帧 SysEx（F0 7F 7F 01 01 时 分 秒 帧 F7）——S1 定位字节。
+    真机校准 2026-11-16：S1「选项→高级→同步」勾「同步到外部设备」且时码源
+    =本口时，停止态收全帧即跟随定位（无需持续流、无需播态）。"""
+    _, hr, m, s, f = _smpte_fields(sec, fps)
+    return bytes([0xF0, 0x7F, 0x7F, 0x01, 0x01, hr, m, s, f, 0xF7])
 
 
 def fmt_tc(sec):

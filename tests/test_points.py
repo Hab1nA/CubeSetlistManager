@@ -175,6 +175,9 @@ def test_mmc_goto_30fps_exact_bytes():
 
 
 def test_mmc_goto_frame_clamp_and_dev_mask():
+    b = points.mtc_full_frame_bytes(60.0)
+    assert b == bytes([0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x60, 0x01, 0x00, 0x00, 0xF7])
+    assert points.mtc_full_frame_bytes(0.0)[5] == 0x60  # 30fps 码|0 时
     b = points.mmc_goto_bytes(59.999, dev=200)         # 29.97 帧→钳到 29
     assert b[7] == 0x60 and b[10] == 29 and b[2] == (200 & 0x7F)
 

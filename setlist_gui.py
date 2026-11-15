@@ -886,9 +886,9 @@ class App:
             if self.facts.get("via_mr"):
                 mr_ctrl.set_port_hint(
                     self.mr_hint or mr_ctrl.PORT_HINT_DEFAULT)
-            # MMC 输出口（定位点 GOTO）：仅 Cubase 底座，走与 MTC 收听同一
-            # 虚拟口——外发 SysEx 经 loopMIDI 喂给 DAW；mtc.Decoder 不解析
-            # MMC 帧（F0 7F 7F 06 …），回环进本程序无害
+            # 定位输出口（定位点 GOTO）：双底座共用同一虚拟口——Cubase=MMC
+            # GOTO SysEx、S1=MTC 全帧（真机校准 2026-11-16 停止态跟随定位）；
+            # mtc.Decoder 不解析 MMC/MTC 全帧回环，进本程序无害
             self._open_mmc_out()
             # 键盘自动化：发送线程（JUNO + AX-09）+ 联动端口
             try:
@@ -1037,11 +1037,11 @@ class App:
                 "key": key}
 
     def _open_mmc_out(self, quiet=False):
-        """MMC 输出口启动（_startup 工作线程调用）：仅 Cubase 底座 + 时码口
-        已配；找不到/打不开只降级定位点定位，不拦主流程。quiet=自愈轮静默
-        重试（失败不记日志，10s 一轮防刷屏）。"""
+        """定位输出口启动（_startup 工作线程调用）：双底座（Cubase=MMC GOTO、
+        S1=MTC 全帧）+ 时码口已配；找不到/打不开只降级定位点定位，不拦主
+        流程。quiet=自愈轮静默重试（失败不记日志，10s 一轮防刷屏）。"""
         self.mmc_out = None
-        if self.facts.get("name") != "cubase" or not self.clock_hint:
+        if not self.facts.get("via_mr") or not self.clock_hint:
             return
         dev = mb.pick(mb.out_devices(), self.clock_hint)
         if dev is None:
@@ -1353,12 +1353,17 @@ class App:
         self.calls.put(finish)
 
     def _goto_send(self, start, label):
-        """发 MMC GOTO 并登记 ACK（任意线程；1.2 秒内时码无变化则告警）。"""
+        """发定位指令并登记 ACK（任意线程；1.2 秒内时码无变化则告警）。
+        Cubase=MMC GOTO；S1=MTC 全帧（真机校准：S1 同步页勾选+时码源=本口，
+        停止态收全帧即跟随定位，先停后定位语义与 Cubase 相同）。"""
         if self.mmc_out is None:
-            self.q.put("MMC 输出口未就绪：无法定位《%s》" % label)
+            self.q.put("定位输出口未就绪：无法定位《%s》" % label)
             return
         pre = self.mtc.position() if self.mtc is not None else None
-        err = mb.send_sysex_h(self.mmc_out, points.mmc_goto_bytes(start))
+        payload = (points.mtc_full_frame_bytes(start)
+                   if self.facts.get("name") == "studioone"
+                   else points.mmc_goto_bytes(start))
+        err = mb.send_sysex_h(self.mmc_out, payload)
         if err:
             self.q.put("定位发送失败：%s，输出口已弃，10 秒内自愈重开" % err)
             mb.close_out(self.mmc_out)   # 输出口无热拔通知，发送失败即弃口，

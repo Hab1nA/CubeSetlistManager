@@ -476,6 +476,8 @@ def _play_app(monkeypatch, stop_ok=True, cur_song_path="/pA"):
                                    "end": 90.0}])},
                   cur=0)
     app.cur_song_path = cur_song_path
+    import daw_ctrl
+    app.facts = daw_ctrl.CUBASE         # _goto_send 按底座分派载荷
     app.ctrl = _FakeCtrl(stop_ok)
     app.mmc_out = 7
     app.mtc = None
