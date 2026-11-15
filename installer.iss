@@ -53,6 +53,12 @@ Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mr_driver\Local\CubeSetlistManager\CubeSetlistRemote\*.js"; \
     DestDir: "{userdocs}\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\CubeSetlistManager\CubeSetlistRemote"; \
     Flags: ignoreversion
+; S1 控制器脚本预铺：bundle 三件平铺进用户设备目录即被 S1 加载（真机校准
+; 2026-11-16：自动注册+按端口名自动绑口零手工；版本目录写死 Studio One 7，
+; 升级大版本后由应用内部署卡按实况重铺——应用侧扫描最高版本目录）
+Source: "s1_driver\CubeSetlistManager\CubeSetlistRemote\*"; \
+    DestDir: "{userappdata}\PreSonus\Studio One 7\User Devices"; \
+    Flags: ignoreversion
 ; 翻谱 APP 的 APK：build.bat 已从 mobile/ 拷入，缺失时跳过该行由 Inno 自动处理
 Source: "dist\{#SrcDir}\CubeRemote.apk"; DestDir: "{app}"; \
     Flags: ignoreversion skipifsourcedoesntexist

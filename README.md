@@ -105,8 +105,8 @@
    三行灯全绿即就绪。未绿的点什么补什么——「一键部署」（按底座自动分派
    Cubase driver / S1 控制器脚本）或「一键创建」（loopMIDI 端口
    `CubeSetlist Remote`，写注册表后重启 loopMIDI，数秒完成）。Cubase 侧
-   脚本已随安装包预铺通常零操作；Studio One 侧首次需一键部署并重启 S1
-   （设备自动注册并绑口）。
+   两侧脚本均已随安装包预铺通常零操作；S1 升级大版本后（如 Studio One 8）
+   用设置页「一键部署」按实况重铺。
    正在运行的 DAW 部署后需重启生效；绑定确认以 Cubase「Studio → MIDI
    Remote Manager」/S1「设置→外部设备」显示为准。注意：两个 DAW 不要同时
    打开（共用同一直控口与 CC 表，同时挂载会一条命令双触发）。
