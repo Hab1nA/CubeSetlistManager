@@ -1458,11 +1458,13 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
                         lambda **kw: str(out))
     a = _PlApp()
     a.end_beh = ["stop", "", "next"]
+    a.durations["D/歌四"] = 55.0                # 非歌单条目：不得外带
     r = sg.App._pl_export_web(a)
     assert r == {"ok": True, "count": 3}
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["version"] == 1 and data["playlist"] == a.pl_keys
     assert data["durations"]["A/歌一"] == 120.0
+    assert "D/歌四" not in data["durations"]    # 只记歌单条目信息
     assert data["endBeh"] == ["stop", "", "next"]   # 行为逐位随歌单携带
 
     # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）；行为表随

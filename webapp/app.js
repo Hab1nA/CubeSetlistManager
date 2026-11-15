@@ -2363,6 +2363,7 @@ async function refreshKbdDetail() {
 
 // ---- 详情面板「播完行为」卡（绑定播放列表条目；素材库选中不显示）----
 let endBehDirty = false;    // 未保存的下拉改动：轮询回填跳过（防静默重置）
+let endBehPrev = "";        // 最近一次生效的选择：末条目驳回时回退到此
 function refreshEndBeh() {
   const sel = $("#dt-end-sel");
   if (!sel) return;
@@ -2386,10 +2387,21 @@ function refreshEndBeh() {
     $("#dt-end-delay").value = "";
     wrap.hidden = true;
   }
+  endBehPrev = sel.value;
 }
 $("#dt-end-sel").addEventListener("change", () => {
-  endBehDirty = true;
-  $("#dt-end-delay-wrap").hidden = $("#dt-end-sel").value !== "delay";
+  const sel = $("#dt-end-sel");
+  // 末条目无下一首可推进：非播完停止的选择即时报错并驳回回退
+  const isLast = plCache && selRowKey && (plCache.pl || []).length > 0
+      && plCache.pl[plCache.pl.length - 1].key === selRowKey;
+  if (isLast && sel.value !== "") {
+    toast("已是播放列表末尾，仅可播完停止", "err");
+    sel.value = endBehPrev;
+  } else {
+    endBehPrev = sel.value;
+    endBehDirty = true;
+  }
+  $("#dt-end-delay-wrap").hidden = sel.value !== "delay";
 });
 $("#dt-end-save").addEventListener("click", async () => {
   const base = selRowKey;   // 行键（pt 行=完整 pt 键）：后端按键套用
@@ -2412,8 +2424,10 @@ $("#dt-end-save").addEventListener("click", async () => {
     if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
       (plCache.pl || []).forEach(r => { if (r.key === base) r.beh = beh; });
     }
-    refreshEndBeh();
-  }
+  } else {
+    endBehDirty = false;        // 被驳（如它端重排进末位）：按服务端现值
+  }                             // 重同步，防 endBehPrev 中毒回错值
+  refreshEndBeh();
 });
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
 $("#kb-save").addEventListener("click", async () => {

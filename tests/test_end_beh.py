@@ -92,8 +92,8 @@ def test_end_beh_expand_collapse():
 
 def _setend_app():
     return types.SimpleNamespace(
-        end_beh=["", ""], pl_keys=["A/歌一", "A/歌一"], cur=None,
-        _persist=lambda: None)
+        end_beh=["", "", ""], pl_keys=["A/歌一", "A/歌一", "B/歌二"],
+        cur=None, _persist=lambda: None)
 
 
 def test_plcmd_setend():
@@ -102,17 +102,25 @@ def test_plcmd_setend():
     # 同键多位（导入文件可含）：按键套用到全部位
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
                               {"beh": "delay:15"}) is None
-    assert app.end_beh == ["delay:15", "delay:15"]
+    assert app.end_beh == ["delay:15", "delay:15", ""]
     # 空 beh=清除回默认（播完停止）
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一", {"beh": ""}) is None
-    assert app.end_beh == ["", ""]
+    assert app.end_beh == ["", "", ""]
     # pt 条目键=独立条目位
     app.pl_keys = ["pt:A/歌一#3", "A/歌一"]
     app.end_beh = ["", "next"]
     assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#3",
                               {"beh": "delay:15"}) is None
     assert app.end_beh == ["delay:15", "next"]
-    # 不在播放列表 / 非法值
+    # 不在播放列表 / 非法值 / 末条目仅可播完停止
+    app.pl_keys = ["A/歌一", "B/歌二"]
+    app.end_beh = ["", ""]
+    assert sg.App._pl_cmd_web(app, "setend", "B/歌二",
+                              {"beh": "next"}) == "已是播放列表末尾，仅可播完停止"
+    assert app.end_beh == ["", ""]              # 驳回不落盘
+    assert sg.App._pl_cmd_web(app, "setend", "B/歌二", {"beh": ""}) is None
+    assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
+                              {"beh": "next"}) is None   # 非末条目不受限
     assert sg.App._pl_cmd_web(app, "setend", "X/无",
                               {"beh": "stop"}) == "条目不在播放列表里"
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",

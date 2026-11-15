@@ -2528,6 +2528,9 @@ class App:
             idxs = [i for i, k in enumerate(self.pl_keys) if k == key]
             if not idxs:
                 return "条目不在播放列表里"
+            # 末条目无下一首可推进：仅可播完停止（驳回其它行为）
+            if beh and len(self.pl_keys) - 1 in idxs:
+                return "已是播放列表末尾，仅可播完停止"
             # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再套用
             self.end_beh += [""] * (len(self.pl_keys) - len(self.end_beh))
             self.end_beh = self.end_beh[:len(self.pl_keys)]
@@ -2653,7 +2656,9 @@ class App:
 
     def _pl_export_web(self):
         """/plexport：播放列表导出为可携带 JSON（Tk 主线程弹保存对话框）。
-        只搬 key+durations——工程路径/定位点/VJ 槽位都在各工程目录的
+        只搬歌单条目自身的信息：durations/durSrc 过滤到条目及其宿主（点
+        条目的宿主歌仍是歌单曲目）——全库时长缓存不外带（键含团队/歌名，
+        外带=泄露素材库清单）；工程路径/定位点/VJ 槽位在各工程目录的
         sidecar 里随工程走，不进歌单文件。"""
         try:
             path = filedialog.asksaveasfilename(
@@ -2666,8 +2671,16 @@ class App:
             return {"error": _err(e)}
         if not path:
             return {"canceled": True}
+        hosts = set(self.pl_keys)
+        for k in self.pl_keys:
+            pt = points.parse_pt_key(k)
+            if pt:
+                hosts.add(pt[0])
         data = {"version": 1, "playlist": self.pl_keys,
-                "durations": self.durations, "durSrc": self.dur_src}
+                "durations": {k: self.durations[k] for k in hosts
+                              if k in self.durations},
+                "durSrc": {k: self.dur_src[k] for k in hosts
+                           if k in self.dur_src}}
         if any(self.end_beh):
             data["endBeh"] = [str(b) for b in self.end_beh]   # 逐位绑定条目
         data = json.dumps(data, ensure_ascii=False, indent=2)
