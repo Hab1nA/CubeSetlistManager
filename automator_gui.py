@@ -52,7 +52,7 @@ def daw_settings(cfg, daw):
     """DAW 路径段归一（两窗共存口径：完整版嵌套子段 dawSettings.<daw> >
     旧平铺 dawSettings > 旧 cubase 段 > 默认）。完整版保存后的纯嵌套文件里
     平铺键已收编消失，只认平铺会让完整版配好的工程库在 automator 里不可见
-    （复审攻击轮：跨窗 schema 互踩）。automator 恒用 cubase 底座。"""
+    （复审攻击轮：跨窗 schema 互踩）。automator 底座缺省 studioone。"""
     sec = cfg.get("dawSettings") or {}
     s = {}
     s.update(cfg.get("cubase") or {})

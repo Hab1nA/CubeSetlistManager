@@ -133,8 +133,9 @@ def test_obs_password_missing_or_section_scoped(tmp_path):
 def test_obs_password_fallback_and_precedence(monkeypatch):
     """config 留空 → 连接回退自动值；显式填写优先（接线+优先级测试）。"""
     seen = []
+    reads = []
     monkeypatch.setattr(obs_ctrl, "read_obs_websocket_password",
-                        lambda p=None: "auto-pw")
+                        lambda p=None: reads.append(1) or "auto-pw")
     factory = lambda h, p, pw, timeout=5: seen.append(pw) or _FakeWs()
     monkeypatch.setattr(obs_ctrl, "ObsWs", factory)
 
@@ -143,6 +144,7 @@ def test_obs_password_fallback_and_precedence(monkeypatch):
     ctl.on_connected = lambda: None
     ctl.enabled = True
     ctl.start()
+    ctl2 = None
     try:
         assert _wait_until(lambda: seen and seen[0] == "auto-pw"), "回退未生效"
         seen.clear()
@@ -153,6 +155,16 @@ def test_obs_password_fallback_and_precedence(monkeypatch):
         ctl2.enabled = True
         ctl2.start()
         assert _wait_until(lambda: seen and seen[0] == "explicit-pw"), "显式未优先"
+        assert len(reads) == 1, "显式填写不应再读 global.ini"
     finally:
         ctl.shutdown()
-        ctl2.shutdown()
+        if ctl2 is not None:
+            ctl2.shutdown()
+
+
+def test_obs_password_bom_crlf(tmp_path):
+    """真机 global.ini 实测带 UTF-8 BOM（文件头 357 273 277）+ CRLF 行尾。"""
+    ini = tmp_path / "global.ini"
+    ini.write_text("\ufeff[WebSocketServerSettings]\r\n"
+                   "ServerPassword=bompw\r\n", encoding="utf-8")
+    assert obs_ctrl.read_obs_websocket_password(str(ini)) == "bompw"

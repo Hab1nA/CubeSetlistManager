@@ -126,7 +126,7 @@ def read_obs_websocket_password(ini_path=None):
     try:
         sec = ""
         for line in pathlib.Path(ini_path).read_text(
-                encoding="utf-8").splitlines():
+                encoding="utf-8-sig").splitlines():
             line = line.strip()
             if line.startswith("[") and line.endswith("]"):
                 sec = line[1:-1].strip()

@@ -17,7 +17,10 @@
 - **OBS WebSocket 密码自动读取**：obs.password 留空时连接即读 OBS 自身配置
   （%APPDATA%\obs-studio\global.ini 的 [WebSocketServerSettings] ServerPassword），
   启用鉴权的 OBS 免手填密码，config 显式填写仍优先；config.example.json
-  密码占位符同步清空。
+  密码占位符同步清空。随对抗复审加固：global.ini 按 utf-8-sig 读取（真机
+  文件实测带 BOM），两个 OBS 诊断探针同享密码回退并改以 config.example.json
+  兜底读取，build.bat 新克隆先建 dist 再走 fallback，README 启动步骤 OBS
+  自动拉起口径收口（三重门：设置页配好投屏位置后才自动拉起）。
 
 ### 修复
 

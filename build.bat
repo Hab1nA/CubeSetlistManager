@@ -20,6 +20,7 @@ rem snapshot runtime data (config/playlist) to _bak_dist, timestamped, never ove
 py tools\_snapshot_bak.py || goto :err
 rem dist will be wiped by pyinstaller; backup runtime data first.
 rem dist\Cube Setlist Manager（缺省回退 config.example.json 恢复源）
+if not exist "dist" mkdir "dist" >nul 2>&1
 if exist "dist\Cube Setlist Manager\config.json" (
   copy /y "dist\Cube Setlist Manager\config.json" dist\_config.bak >nul
   copy /y "dist\Cube Setlist Manager\playlist.json" dist\_playlist.bak >nul

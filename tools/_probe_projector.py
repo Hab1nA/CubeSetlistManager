@@ -6,13 +6,15 @@ dry-run——枚举本机屏 → 连 OBS 取 GetMonitorList → 按 apply_projec
 规则算出目标 monitorIndex，不发开投影请求。
 """
 import json
+import os
 
 import dpi
 dpi.enable()
-from obs_ctrl import _screen_match, list_screens
+from obs_ctrl import _screen_match, list_screens, read_obs_websocket_password
 from obs_ws import ObsError, ObsWs
 
-cfg = dict(json.load(open("config.json", encoding="utf-8"))["obs"])
+_cfgsrc = "config.json" if os.path.exists("config.json") else "config.example.json"
+cfg = dict(json.load(open(_cfgsrc, encoding="utf-8-sig"))["obs"])
 wins = list_screens()
 print("本机显示器:", wins)
 name, _rect = wins[0]
@@ -21,7 +23,8 @@ same_rank = 0           # 同名子集里的序号（单屏时都是 0）
 
 try:
     ws = ObsWs(cfg.get("host", "127.0.0.1"), int(cfg.get("port", 4455)),
-               cfg.get("password", ""), timeout=5)
+               (cfg.get("password", "")
+                or read_obs_websocket_password()), timeout=5)
     obss = ws.request("GetMonitorList")["monitors"]
     obss.sort(key=lambda m: (m["monitorPositionY"],
                              m["monitorPositionX"]))
