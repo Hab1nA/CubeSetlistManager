@@ -254,18 +254,33 @@ def test_transport_mr_down_no_keyboard():
         undo()
 
 
-def test_transport_studioone_keeps_keyboard():
+def test_transport_studioone_mr():
+    """11-16 硬切：S1 走带同样只有 MR 一条路（无键盘回落）。"""
     logs = []
     ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe", log=logs.append)
     sent = []
     undo = _mr_ok(sent)
     try:
-        # S1 无 MR：本机无工程窗口→键盘路径失败，但绝不发 MR
-        assert ctl.transport("play") is False
-        assert sent == []
-        assert any("没有工程窗口" in x for x in logs)
+        assert ctl.transport("play") is True
+        assert sent == ["play"]
+        assert "走带 播放" in logs
     finally:
         undo()
+        daw_ctrl.set_active(daw_ctrl.CUBASE)   # 构造器已切 ACTIVE，还原本底
+
+
+def test_transport_studioone_mr_down_no_keyboard():
+    """MR 不在线时 S1 与 Cubase 同口径：失败报错，绝不进键盘路径。"""
+    logs = []
+    undo = _mr_down()
+    try:
+        ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe",
+                                     log=logs.append)
+        assert ctl.transport("play") is False
+        assert not any("没有工程窗口" in x for x in logs)
+    finally:
+        undo()
+        daw_ctrl.set_active(daw_ctrl.CUBASE)   # 构造器已切 ACTIVE，还原本底
 
 
 def test_panic_cubase_mr_only():
@@ -278,6 +293,7 @@ def test_panic_cubase_mr_only():
         assert "全停：已发送" in logs
     finally:
         undo()
+        daw_ctrl.set_active(daw_ctrl.CUBASE)   # 构造器已切 ACTIVE，还原本底
 
 
 def test_panic_mr_down_no_sweep():
@@ -340,6 +356,44 @@ def test_driver_js_cc_table_and_bindings_match_python():
     assert binds == [("Transport", "Start"), ("Transport", "Stop"),
                      ("Transport", "Return to Zero"),
                      ("File", "Save"), ("File", "Close")]
+
+
+def test_panic_studioone_mr():
+    logs = []
+    ctl = daw_ctrl.DawController(daw_ctrl.STUDIOONE, "x.exe", log=logs.append)
+    sent = []
+    undo = _mr_ok(sent)
+    try:
+        ctl.panic()
+        assert sent == ["stop"]
+        assert "全停：已发送" in logs
+    finally:
+        undo()
+        daw_ctrl.set_active(daw_ctrl.CUBASE)   # 构造器已切 ACTIVE，还原本底
+
+
+_S1_SURFACE = (pathlib.Path(__file__).resolve().parents[1] / "s1_driver"
+               / "CubeSetlistManager" / "CubeSetlistRemote"
+               / "CubeSetlistRemote.surface.xml")
+
+
+def test_s1_surface_cc_table_and_commands_match_python():
+    src = _S1_SURFACE.read_text(encoding="utf-8")
+    ctl = dict(re.findall(
+        r'<Control name="(\w+)"[^>]*>\s*'
+        r'<MidiMessage status="#B0" address="#([0-9A-Fa-f]{2})"/>',
+        src))
+    cmds = re.findall(
+        r'<Command control="(\w+)" command\.category="([^"]+)" '
+        r'command\.name="([^"]+)"/>',
+        src)
+    assert len(ctl) == 5 and len(cmds) == 5
+    got = {int(ctl[name], 16): (cat, cmd) for name, cat, cmd in cmds}
+    assert got == {mr_ctrl.CC_START: ("Transport", "Start"),
+                   mr_ctrl.CC_STOP: ("Transport", "Stop"),
+                   mr_ctrl.CC_RTZ: ("Transport", "Return to Zero"),
+                   mr_ctrl.CC_SAVE: ("File", "Save"),
+                   mr_ctrl.CC_CLOSE: ("File", "Close")}
 
 
 def test_seq_covers_all_actions_with_semantics():

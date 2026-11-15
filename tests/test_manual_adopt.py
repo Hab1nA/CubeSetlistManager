@@ -464,7 +464,7 @@ class _FakeCtrl:
         self.calls = []
         self.stop_ok = stop_ok
 
-    def transport(self, action, live=None):
+    def transport(self, action):
         self.calls.append(action)
         return self.stop_ok or action != "stop"
 

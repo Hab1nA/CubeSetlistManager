@@ -116,6 +116,46 @@ def test_create_port_reg_fail(monkeypatch):
     assert not any(c[0] == "set" for c in wr.calls)
 
 
+_S1_SRC = (pathlib.Path(__file__).resolve().parents[1] / "s1_driver"
+           / "CubeSetlistManager" / "CubeSetlistRemote")
+
+
+@pytest.fixture
+def tmp_s1_dst(monkeypatch, tmp_path):
+    dst = tmp_path / "PreSonus" / "Studio One 7" / "Devices"         / mr_deploy._S1_LOCAL
+    monkeypatch.setattr(mr_deploy, "s1_dst", lambda: dst)
+    return dst
+
+
+def test_s1_deploy_copies_all_and_idempotent(tmp_s1_dst):
+    assert mr_deploy.deploy_s1_driver() == ""
+    files = sorted(p.name for p in tmp_s1_dst.iterdir())
+    src_names = sorted(p.name for p in _S1_SRC.iterdir() if p.is_file())
+    assert files == src_names
+    assert (tmp_s1_dst / "CubeSetlistRemote.surface.xml").read_bytes() ==         (_S1_SRC / "CubeSetlistRemote.surface.xml").read_bytes()
+    m = (tmp_s1_dst / "CubeSetlistRemote.device").stat().st_mtime_ns
+    assert mr_deploy.deploy_s1_driver() == ""
+    assert (tmp_s1_dst / "CubeSetlistRemote.device").stat().st_mtime_ns == m
+
+
+def test_s1_deploy_src_missing(tmp_s1_dst, monkeypatch):
+    monkeypatch.setattr(mr_deploy, "s1_driver_src",
+                        lambda: pathlib.Path("Z:/no/such/dir"))
+    assert "缺失" in mr_deploy.deploy_s1_driver()
+    assert not tmp_s1_dst.exists()
+
+
+def test_s1_status_fields(tmp_s1_dst, monkeypatch):
+    mr_deploy.deploy_s1_driver()
+    monkeypatch.setattr(mr_deploy, "port_ok", lambda: True)
+    monkeypatch.setattr(mr_deploy, "loopmidi_exe", lambda: "C:/l.exe")
+    monkeypatch.setattr(mr_deploy, "find_processes_by_prefix",
+                        lambda p: [(9, "S1.exe")] if "studio" in p else [])
+    st = mr_deploy.s1_status()
+    assert st == {"src": True, "script": True, "stale": False, "port": True,
+                  "loopmidi": True, "daw": True}
+
+
 def test_status_fields(tmp_dst, monkeypatch):
     mr_deploy.deploy_driver()
     monkeypatch.setattr(mr_deploy, "port_ok", lambda: True)

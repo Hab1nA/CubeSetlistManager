@@ -69,11 +69,9 @@ def panic_quiet_msgs(*cfgs):
 
 
 def transport_blocked(action, tstate):
-    """走带命令的状态互锁：S1 的 SPACE 系键序是播放⇄停止开关、Cubase 的
-    「继续」也是裸 SPACE——不看当前状态盲发会反向作用（已暂停按「暂停」
-    反而起播、播放中按「播放/继续」反停、已暂停/停止按「停止/全停」反起
-    播——S1 无真暂停，暂停=停止）。返回 True=忽略该命令。rewind 不拦
-    （回零在停止态也有意义，键序由 facts["rewind_stopped"] 按态选择）。"""
+    """走带命令的状态互锁（UX 防误触守卫）：不看当前状态盲发会反向作用
+    （已暂停按「暂停」、播放中按「播放/继续」、已停止按「停止/全停」）。
+    返回 True=忽略该命令。rewind 不拦（回零在停止态也有意义）。"""
     if action == "play":
         return tstate == "playing"
     if action in ("pause", "stop"):
@@ -881,9 +879,9 @@ class App:
             except Exception as e:
                 self.q.put("%s 控制未启动：%s，切歌/走带不可用"
                            % (self.facts["display_name"], _err(e)))
-            # MIDI Remote 直控口（走带/全停/关工程，Cubase 唯一路径）：
-            # 仅 Cubase；口名缺省=默认 loopMIDI 口
-            if self.facts.get("name") == "cubase":
+            # MIDI Remote 直控口（走带/全停/关工程，双底座唯一路径）：
+            # 口名缺省=默认 loopMIDI 口（CC 表双底座同表同口）
+            if self.facts.get("via_mr"):
                 mr_ctrl.set_port_hint(
                     self.mr_hint or mr_ctrl.PORT_HINT_DEFAULT)
             # MMC 输出口（定位点 GOTO）：仅 Cubase 底座，走与 MTC 收听同一
@@ -3244,7 +3242,7 @@ class App:
             return
         if action == "rewind" and self._point_rewind():
             return
-        if self.ctrl.transport(action, live=self._transport_state() == "playing") \
+        if self.ctrl.transport(action) \
                 and action == "rewind" \
                 and self.watch is not None:
             self.watch.reset()      # 回零=停在零点：纪元复位让显示立即归零，

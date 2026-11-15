@@ -3,7 +3,7 @@
 （自动保存）再打开下一个。不做多工程切换——Cubase 本机实测：多工程打开后
 「激活」无法由软件可靠控制（聚焦≠激活，仅切窗口聚焦不激活工程），必须先关
 后开；S1 v1 保守沿用同一状态机（多窗口直切的简化留待真机校准后评估）。
-关闭工程 = MIDI Remote 直控 close 序列（仅 Cubase，mr_ctrl.send("close")，
+关闭工程 = MIDI Remote 直控 close 序列（双底座共用，mr_ctrl.send("close")，
 不聚焦不抢焦点，口不在即动作失败；原 PostMessage(WM_CLOSE) 关工程路径于
 11-02 MR 迁移时废弃——Cubase E2E 曾实测 0.5s 生效，现仅「退出应用」路径
 （close_app：WM_CLOSE 框架窗）沿用 PostMessage）；键盘 Ctrl+W 更早废弃
@@ -13,10 +13,10 @@
 转交打开（Cubase E2E 实测最稳；Hub 上 Ctrl+O+键入路径受前台锁/对话框预填/
 内部激活态影响，时灵时不灵，已废弃）。模态弹窗阻塞期间单实例转交会被
 Cubase 丢弃，放行弹窗后要补发一次打开请求。
-S1 走带仍键序表键盘路径，需真聚焦窗口。切歌链路完全不依赖焦点。全程只走
-正常键序/消息，绝不强杀进程（强杀会留崩溃标记弹「检测到崩溃」）。
+S1 走带同样 MR 直控（11-16 硬切，S1 控制器脚本 bundle 见 s1_driver/，与
+Cubase driver 同 CC 表同口）。切歌链路完全不依赖焦点。全程只走
 
-双底座：各 DAW 的「事实表」（进程名前缀/窗口类与标题标记/弹窗词表/键序表/
+双底座：各 DAW 的「事实表」（进程名前缀/窗口类与标题标记/弹窗词表/
 工程扩展名等）收拢在 CUBASE / STUDIOONE 两个 dict，其余全部逻辑共用。
 模块级 ACTIVE 事实表由 set_active() 按config 选定（单进程单底座），
 Cubase 行为与重构前逐位一致。"""
@@ -42,7 +42,7 @@ ENTER_HOLD = 0.12       # 仿人回车按下保持时长（零间隔连发会被
 
 # 键名 → 虚拟键码；值=tuple 时第二位为扩展键标志（NumEnter 等小键盘键
 # 须带 KEYEVENTF_EXTENDEDKEY，否则宿主收到的是主键盘同码键，语义可能不同）
-VK = {"MENU": 0x12, "RETURN": 0x0D, "SPACE": 0x20, "NUMDOT": 0x6E}
+VK = {"MENU": 0x12, "RETURN": 0x0D}   # 仅弹窗确认在用（走带键盘路径已删）
 ACTION_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
                 "rewind": "回零", "stop": "停止"}   # 日志用中文动作名
 
@@ -74,12 +74,12 @@ CUBASE = dict(
     name_after_mark=True,               # 「<版本名> 工程 - <歌名>」：歌名在后
     probe_duration=True,                # .cpr RIFF 解析时长（cpr_meta）
     app_suffix=" Cubase",               # 窗口标题后缀（与 Studio One 版对称）
-    # 走带已完整迁移 MIDI Remote：动作→CC 序列语义在 mr_ctrl.SEQ；
-    # 键序表仅 S1 事实表持有（本表不设 transport 键）
+    # 走带=MR 直控（11-02 完整迁移）：动作→CC 序列语义在 mr_ctrl.SEQ
+    via_mr=True,
 )
 
-# ---- Studio One 7 事实表（v1=按调研推断，待真机 M0 校准修订——
-# docs/StudioOne迁移调研.md §四 八项清单；标注「待采样」的项校准后更新）----
+# ---- Studio One 7 事实表（v1=按调研推断，走带已硬切 MR 直控；窗口/弹窗
+# 表沿用真机采样，M0 校准记录回填时更新）----
 STUDIOONE = dict(
     name="studioone",
     display_name="Studio One",
@@ -117,23 +117,15 @@ STUDIOONE = dict(
     probe_duration=True,                # .song=ZIP/XML 事件终点解析（song_meta）
     dirty_suffix="*",                   # 脏工程=歌名尾加*（真机采样）；切回时
                                         # 修改保留在内存、星随工程恢复（2026-09-29）
-    rewind_stopped=("NUMDOT",),         # 停止态回零：只跳开头不发空格
-                                        # （空格是播放⇄停止开关，会反向起播）
     app_suffix=" Studio One",
     # 真机 2026-09-27 实测：CLI 递交=同实例同窗口换歌（标题原地翻转，不弹
     # 任何确认框）；**未保存修改被静默丢弃**（.song mtime 不变实证）→ 无需
     # 先关后开（文档注明：切歌前自行保存）。
     close_before_open=False,
-    # 待校准中：Space=播放/停止切换（真机双向已验）、小键盘.（NUMDOT）=
-    # 返回零点（用户查 S1 默认键表；真机单向待验）。S1 无独立暂停键，
-    # stop/pause/resume 同键序；play=先回零再播；rewind=先停再回零。
-    transport={
-        "play": ("NUMDOT", "SPACE"),
-        "stop": ("SPACE",),
-        "pause": ("SPACE",),
-        "resume": ("SPACE",),
-        "rewind": ("SPACE", "NUMDOT"),
-    },
+    # 走带=MR 直控（11-16 硬切）：控制器脚本 bundle 见 s1_driver/，CC 表与
+    # Cubase driver 同表同口（102-106），SEQ 语义在 mr_ctrl.SEQ 双底座共用；
+    # 键序表路径（transport/rewind_stopped）已删，直控未就绪=动作失败报错。
+    via_mr=True,
 )
 
 FACTS = {"cubase": CUBASE, "studioone": STUDIOONE}
@@ -393,7 +385,7 @@ class DawController:
     def __init__(self, facts, exe, log=print):
         self.facts = facts
         set_active(facts)       # 模块级函数跟随本控制器的底座
-        if facts.get("name") == "cubase":
+        if facts.get("via_mr"):
             # MR 直控存活探针：进程+界面在场（口在而 DAW 死的静默失效根修；
             # 纯回声方案被实证作废，见 mr_ctrl 模块头）
             mr_ctrl.set_alive_probe(
@@ -416,57 +408,20 @@ class DawController:
                          daemon=True).start()
         return True
 
-    def transport(self, action, live=None):
-        """Cubase=MIDI Remote 直控（CC 序列在 mr_ctrl，不聚焦不抢焦点）；
-        S1=键序表键盘路径（键名见 VK），发到当前工程窗口，需聚焦。
-        live=调用方感知的走带状态（True 播放中/False 已停/None 未知）：
-        S1 的回零键序是「空格停→点跳开头」，已停时空格会反向起播——
-        事实表 rewind_stopped 提供停止态专用键序（仅跳开头，不发空格）。
-        S1 键发完把焦点交还操作前的前台窗口（不收回=用户接着打字/点按
-        会打进 DAW）。"""
-        if self.facts.get("name") == "cubase":
-            err = mr_ctrl.send(action)
-            if err:
-                self._log("走带控制：%s" % err)
-                return False
-            self._log("走带 %s" % ACTION_NAMES.get(action, action))
-            return True
-        ws = current_project()
-        if not ws:
-            self._log("走带控制：没有工程窗口")
+    def transport(self, action):
+        """双底座 MR 直控（CC 序列在 mr_ctrl.SEQ，不聚焦不抢焦点）。
+        直控未就绪=失败报错，无键盘回落（11-16 硬切，S1 键序表路径删除）。"""
+        err = mr_ctrl.send(action)
+        if err:
+            self._log("走带控制：%s" % err)
             return False
-        prev = foreground_hwnd()
-        if not focus(ws[0]):
-            self._log("走带控制：无法聚焦工程窗口")
-            return False
-        keys = self.facts["transport"].get(action, ())
-        if action == "rewind" and live is not True \
-                and self.facts.get("rewind_stopped"):
-            keys = self.facts["rewind_stopped"]
-        for k in keys:
-            tap(VK[k])
-        self._log("走带 %s → 《%s》" % (ACTION_NAMES.get(action, action),
-                                       project_name_from_title(ws[1])))
-        restore_foreground(prev)
+        self._log("走带 %s" % ACTION_NAMES.get(action, action))
         return True
 
     def panic(self):
-        """全停。Cubase=MIDI Remote 停止（作用激活工程）；S1=向所有工程
-        窗口发停止键序——激活错乱也保证静音。"""
-        if self.facts.get("name") == "cubase":
-            err = mr_ctrl.send("stop")
-            self._log("全停：已发送" if err is None else "全停：%s" % err)
-            return
-        ws = project_windows()
-        prev = foreground_hwnd()
-        n = 0
-        for h, t in ws:
-            if focus(h):
-                for k in self.facts["transport"]["stop"]:
-                    tap(VK[k])
-                n += 1
-        self._log("全停：已向 %d/%d 个工程窗口发送停止" % (n, len(ws)))
-        restore_foreground(prev)
+        """全停 = MR 停止（作用激活工程，双底座一致）。"""
+        err = mr_ctrl.send("stop")
+        self._log("全停：已发送" if err is None else "全停：%s" % err)
 
     # ---- 切歌流程（工作线程内执行） ----
 
@@ -518,7 +473,7 @@ class DawController:
 
     def _close(self, hwnd):
         """发 MR 关闭序列（stop+save+close，CC 直达键令），轮询窗口消亡
-        验收。仅 Cubase 会走到（S1 close_before_open=False 同窗换歌）。"""
+        验收（S1 close_before_open=False，切歌流程不走到；序列双底座通用）。"""
         self._log("关闭工程…")
         err = mr_ctrl.send("close")
         if err:

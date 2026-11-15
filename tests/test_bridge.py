@@ -442,9 +442,8 @@ def test_advance_drag_to_end_while_paused_no_fire():
 
 
 def test_transport_blocked():
-    """走带状态互锁：S1/Cubase 的 SPACE 系键序是播放⇄停止开关，状态盲发
-    会反向作用（已暂停按「暂停」起播、播放中按「播放/继续」反停、已停止
-    按「停止/全停」起播）。rewind 永不拦（停止态由 rewind_stopped 键序兜）。"""
+    """走带状态互锁（UX 防误触守卫，双底座一致）：已暂停按「暂停」、
+    播放中按「播放/继续」、已停止按「停止/全停」均拦。rewind 永不拦。"""
     import setlist_gui as sg
     for ts in ("playing", "paused", "stopped"):
         assert not sg.transport_blocked("rewind", ts)
@@ -460,8 +459,6 @@ def test_transport_blocked():
     assert sg.transport_blocked("stop", "playing") is False
     assert sg.transport_blocked("stop", "paused")
     assert sg.transport_blocked("stop", "stopped")
-    # S1 事实表带停止态回零键序（纯 NUMDOT，不发空格）
-    assert daw_ctrl.STUDIOONE.get("rewind_stopped") == ("NUMDOT",)
 
 
 def test_pedal_pause_toggle():
@@ -523,7 +520,7 @@ def test_daw_backends():
     assert daw_ctrl.FACTS["cubase"]["song_ext"] == ".cpr"
     s1 = daw_ctrl.FACTS["studioone"]
     assert s1["song_ext"] == ".song" and s1["probe_duration"]  # song_meta ZIP 解析
-    assert set(s1["transport"]) == set(daw_ctrl.ACTION_NAMES)  # 动作齐
+    assert s1.get("via_mr") and daw_ctrl.CUBASE.get("via_mr")  # 双底座走 MR
     daw_ctrl.set_active(s1)
     try:
         assert daw_ctrl.project_name_from_title("Studio One - 優しい彗星") \

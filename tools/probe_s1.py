@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Studio One 7 底座真机采样探针（M0 校准用，docs/StudioOne迁移调研.md §四）。
+"""Studio One 7 底座真机采样探针（窗口/弹窗/CLI 行为取证）。
 采样事实表四要素：进程名 / 窗口类与标题格式 / 弹窗全集 / CLI 转交行为。
-只读为主；发键验证需显式 --send（默认 dry-run 只打印将发的键序）。
+只读探针（不发键不发 MIDI）；走带直控取证用 probe_s1_ctrl.py。
 子命令：
   proc              列 Studio One 进程（事实表 proc_prefix 命中情况）
   win               列全部可见顶层窗口，标出疑似工程窗（按 S1 事实表识别）
   watch             实时监测：工程窗变化 + 弹窗出现（只打印，绝不按键）
   open <song路径>   按 CLI 方式把 .song 交给 S1（转交 or 新实例？）+ watch
-  transport <动作>  [--send] 打印（或发送）S1 事实表键序：play/stop/rewind
   clock             列 MIDI 输入端口（人工在 S1 External Devices 勾 Send
                     MIDI Clock 指向 loopMIDI 后，用它看脉冲是否到达）
 用法：py -u probe_s1.py <子命令> [参数]"""
@@ -77,26 +76,6 @@ def _s1_exe():
     return setlist_gui.DAW_DEFAULTS["studioone"]["exe"]
 
 
-def cmd_transport(action):
-    keys = daw_ctrl.STUDIOONE["transport"].get(action)
-    if keys is None:
-        print("未知动作 %r（可选：%s）"
-              % (action, "/".join(daw_ctrl.STUDIOONE["transport"])))
-        return
-    print("键序 %s：%s" % (action, " → ".join(keys)))
-    if "--send" not in sys.argv:
-        print("（dry-run；加 --send 才真正发键，需 S1 工程窗在前台）")
-        return
-    ws = daw_ctrl.current_project()
-    if not ws:
-        print("没有工程窗口，不发")
-        return
-    daw_ctrl.focus(ws[0])
-    for k in keys:
-        daw_ctrl.tap(daw_ctrl.VK[k])
-    print("已发送。")
-
-
 def cmd_clock():
     import midi_bridge as mb
     import mtc
@@ -128,11 +107,9 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     arg = sys.argv[2] if len(sys.argv) > 2 else None
     table = {"proc": cmd_proc, "win": cmd_win, "watch": cmd_watch,
-             "transport": cmd_transport, "clock": cmd_clock}
+             "clock": cmd_clock}
     if cmd == "open" and arg:
         cmd_open(arg)
-    elif cmd == "transport" and arg:
-        cmd_transport(arg)
     elif cmd in table:
         table[cmd]()
     else:

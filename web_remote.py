@@ -1680,8 +1680,10 @@ class _Handler(BaseHTTPRequestHandler):
                              result_fn=self.server.app._settings_get_web)
         elif path == "/mrdeploy":
             f = self._daw_facts()
-            st = mr_deploy.status(f.get("proc_prefix") or "cubase")
-            st["kind"] = f.get("name") or "cubase"
+            kind = f.get("name") or "cubase"
+            st = (mr_deploy.s1_status() if kind == "studioone"
+                  else mr_deploy.status(f.get("proc_prefix") or "cubase"))
+            st["kind"] = kind
             self._json(200, st)
         elif path == "/pedal":
             self._run_on_app(lambda: None,
@@ -2039,15 +2041,18 @@ class _Handler(BaseHTTPRequestHandler):
         return getattr(self.server.app, "facts", {}) or {}
 
     def _h_mrdeploy(self, body, _ip):
-        """Cubase 直控部署动作：{action:"deploy"|"port"}。mr_deploy 无 App
-        状态依赖，HTTP 线程直出（立口重启 loopMIDI ~5s，不冻结 UI）；改系统
-        态（写文件/重启进程）照 /pickdir 同门=仅限本机。"""
+        """直控部署动作（双底座）：{action:"deploy"|"port"}，deploy 按底座
+        kind 分派到 Cubase driver / S1 控制器脚本。mr_deploy 无 App 状态
+        依赖，HTTP 线程直出（立口重启 loopMIDI ~5s，不冻结 UI）；改系统态
+        （写文件/重启进程）照 /pickdir 同门=仅限本机。"""
         if not self.client_address[0].startswith("127."):
             self._json(403, {"error": "仅限本机操作"})
             return
         action = str(body.get("action") or "")
         if action == "deploy":
-            msg = mr_deploy.deploy_driver()
+            msg = (mr_deploy.deploy_s1_driver()
+                   if self._daw_facts().get("name") == "studioone"
+                   else mr_deploy.deploy_driver())
         elif action == "port":
             msg = mr_deploy.create_port()
         else:

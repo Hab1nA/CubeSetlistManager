@@ -2830,12 +2830,14 @@ function renderNetStat(d) {
 //      POST 动作仅限本机）----
 let mrState = null;
 function mrNeed(d) {
-  return !!d && d.kind === "cubase" && (!d.script || d.stale || !d.port);
+  const dual = d && (d.kind === "cubase" || d.kind === "studioone");
+  return !!dual && (!d.script || d.stale || !d.port);
 }
 function renderMrCard() {
   const card = $("#st-mr-card");
   if (!card || !mrState) return;
-  card.hidden = mrState.kind !== "cubase";
+  card.hidden = mrState.kind !== "cubase" &&
+      mrState.kind !== "studioone";
   if (card.hidden) return;
   const set = (id, txt, cls) => {
     const el = $("#" + id);
@@ -2856,17 +2858,24 @@ function renderMrCard() {
       mrState.daw ? "on" : "off");
   $("#st-mr-deploy").hidden = mrState.src && mrState.script && !mrState.stale;
   $("#st-mr-portbtn").hidden = mrState.port;
+  $("#st-mr-dawk").textContent =
+      mrState.kind === "studioone" ? "Studio One" : "Cubase";
+  const s1 = mrState.kind === "studioone";
   const restart = mrState.daw && (!mrState.script || mrState.stale);
-  $("#st-mr-note").hidden = !restart;
-  if (restart) $("#st-mr-note").textContent =
-      "Cubase 正在运行：部署后需重启 Cubase 加载脚本";
+  $("#st-mr-note").hidden = !(restart || (s1 && mrState.script));
+  $("#st-mr-note").textContent =
+      restart ? (s1 ? "Studio One 正在运行：部署后需重启 S1 加载脚本"
+      : "Cubase 正在运行：部署后需重启 Cubase 加载脚本")
+      : s1 ? "首次使用：在 Studio One「设置→外部设备」添加 CubeSetlistRemote" +
+      " 设备并选「CubeSetlist Remote」口（设备列表可见=脚本加载成功）"
+      : "";
 }
 function renderMrBanner() {
   const el = $("#mr-banner");
   if (!el) return;
   const need = mrNeed(mrState);
   el.hidden = !need;
-  if (need) $("#mr-banner-t").textContent = "Cubase 直控未就绪：" +
+  if (need) $("#mr-banner-t").textContent = "直控未就绪：" +
       [!mrState.script && !mrState.stale && "驱动脚本未部署",
        mrState.stale && "驱动脚本有新版本",
        !mrState.port && "MIDI 端口未建"].filter(Boolean).join("、");
