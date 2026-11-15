@@ -176,20 +176,18 @@
               <div class="field-row">
                 <div class="field">
                   <label for="dt-end-sel">行为</label>
-                  <div class="input-row">
-                    <select id="dt-end-sel">
-                      <option value="">播完停止</option>
-                      <option value="next">切下一首</option>
-                      <option value="playnext">播放下一首</option>
-                      <option value="delay">延迟播放下一首</option>
-                    </select>
-                    <button id="dt-end-save" class="btn primary sm">保存</button>
-                  </div>
+                  <select id="dt-end-sel">
+                    <option value="">播完停止</option>
+                    <option value="next">切下一首</option>
+                    <option value="playnext">播放下一首</option>
+                    <option value="delay">延迟播放下一首</option>
+                  </select>
                 </div>
                 <div class="field" id="dt-end-delay-wrap" hidden>
                   <label for="dt-end-delay">间隔秒</label>
                   <input id="dt-end-delay" inputmode="numeric" placeholder="如 30">
                 </div>
+                <button id="dt-end-save" class="btn primary sm">保存</button>
               </div>
             </div>
             <div class="card">

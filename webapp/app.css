@@ -522,6 +522,11 @@ input.invalid { border-color: var(--err) !important; }
 /* flex gap 管行距：关掉旧 .card .field 的 margin（否则 12+8+12 叠成 32） */
 #pt-form .field, #pt-form .field-row .field { margin-bottom: 0; }
 #dt-endcard .field { margin-bottom: 0; }
+/* 行为/间隔秒/保存一行：按钮与输入框同高（底座卡 input-row 同款几何），
+   间隔秒定宽不做半场分；行底对齐=按钮落在输入框线上 */
+#dt-endcard .field-row { align-items: flex-end; }
+#dt-endcard #dt-end-delay-wrap { flex: 0 0 132px; }
+#dt-endcard #dt-end-save { flex: none; height: 38px; }
 #pt-mmc { margin-bottom: var(--s3); }   /* MMC 提示与定位点列表间标准行距 */
 /* 校验提示空占位不参与布局（否则开始/结束框与时间轴间距虚大：
    min-height 与前后 flex gap 都要归零） */
