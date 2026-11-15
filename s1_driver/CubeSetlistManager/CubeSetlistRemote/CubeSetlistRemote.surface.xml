@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Studio One 控制器脚本 surface：CC→命令声明式绑定（Global 段裸 Command，
+	无组件逻辑；Tranzport footSwitch 同款）。哑协议：一条 CC=一条命令，
+	press(127) 受理、release(0) 不发命令；CC 号与 Cubase driver 完全同表，
+	SEQ 语义在 Python 侧 mr_ctrl.SEQ。
+	CC-TABLE: start=102 stop=103 rtz=104 save=105 close=106 -->
+<ControlSurface>
+	<Controls>
+		<Control name="startButton" title="Start" type="button" options="receive">
+			<MidiMessage status="#B0" address="#66"/>
+		</Control>
+		<Control name="stopButton" title="Stop" type="button" options="receive">
+			<MidiMessage status="#B0" address="#67"/>
+		</Control>
+		<Control name="rtzButton" title="Return to Zero" type="button" options="receive">
+		<MidiMessage status="#B0" address="#68"/>
+		</Control>
+		<Control name="saveButton" title="Save" type="button" options="receive">
+			<MidiMessage status="#B0" address="#69"/>
+		</Control>
+		<Control name="closeButton" title="Close" type="button" options="receive">
+			<MidiMessage status="#B0" address="#6A"/>
+		</Control>
+	</Controls>
+	<Global>
+		<Command control="startButton" command.category="Transport" command.name="Start"/>
+		<Command control="stopButton" command.category="Transport" command.name="Stop"/>
+		<Command control="rtzButton" command.category="Transport" command.name="Return to Zero"/>
+		<Command control="saveButton" command.category="File" command.name="Save"/>
+		<Command control="closeButton" command.category="File" command.name="Close"/>
+	</Global>
+</ControlSurface>

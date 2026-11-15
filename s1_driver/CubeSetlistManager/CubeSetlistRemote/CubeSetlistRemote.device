@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Studio One 控制器脚本设备定义（结构仿 stock Tranzport：JSControlSurfaceDevice
+	宿主 + 声明式 surface XML）。classID 为自造 GUID（社区惯例，仅须唯一）。
+	detectorPortName=自动探测端口名：若 S1 对 loopMIDI 口在跑时自动挂载，
+	External Device 免手工添加（M0 待证；不行则首次在「设置→外部设备」
+	手工添加一次）。 -->
+<DeviceDefinition
+	vendor="CubeSetlistManager"
+	name="CubeSetlistRemote"
+	classID="{7E4C821A-5B3D-4C69-9F0E-2A18D3B5C746}"
+	category="Surface"
+
+	nativeCode="JSControlSurfaceDevice"
+	classFile="CubeSetlistRemote.js"
+	classFile.functionName="createCubeSetlistRemoteInstance"
+	surfaceFile="CubeSetlistRemote.surface.xml"
+
+	detectorPortName="CubeSetlist Remote"
+/>
