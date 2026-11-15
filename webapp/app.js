@@ -37,11 +37,17 @@ function toast(msg, kind) {
 
 // ---- 两段式确认（替代 confirm）：首点变「确认…？」3s 回弹，再点执行 ----
 function armConfirm(btn, fn, confirmText) {
-  if (btn.dataset.armed) {
+  const disarm = () => {
+    if (!btn.dataset.armed) return;
     clearTimeout(+btn.dataset.t);
     delete btn.dataset.armed;
     btn.classList.remove("armed");
     btn.textContent = btn.dataset.orig;
+    document.removeEventListener("keydown", btn._armEsc, true);
+    delete btn._armEsc;
+  };
+  if (btn.dataset.armed) {
+    disarm();
     fn();
     return;
   }
@@ -49,17 +55,26 @@ function armConfirm(btn, fn, confirmText) {
   btn.textContent = confirmText || "确认移除？";
   btn.classList.add("armed");
   btn.dataset.armed = "1";
-  btn.dataset.t = setTimeout(() => {
-    delete btn.dataset.armed;
-    btn.classList.remove("armed");
-    btn.textContent = btn.dataset.orig;
-  }, 3000);
+  btn._armEsc = e => {          // Esc=撤武装（键盘流可取消危险操作）
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    disarm();
+    btn.focus();
+  };
+  document.addEventListener("keydown", btn._armEsc, true);
+  btn.dataset.t = setTimeout(disarm, 3000);
 }
 
 // ---- popover（替代 prompt 链 / ⋯ 菜单）：锚定面板，外点/ESC 关闭 ----
 let popEl = null, popAnchor = null;
 function _popOut(e) { if (popEl && !popEl.contains(e.target)) closePop(); }
-function _popEsc(e) { if (e.key === "Escape") closePop(); }
+function _popEsc(e) {
+  if (e.key === "Escape") {
+    e.stopPropagation();   // 弹层收口后不再落到全局 Esc（演出退出等）
+    closePop();
+  }
+}
 function closePop() {
   if (!popEl) return;
   popEl.remove();
@@ -86,6 +101,17 @@ function popover(anchor, build) {
   popEl.style.top = y + "px";
   document.addEventListener("pointerdown", _popOut, true);
   document.addEventListener("keydown", _popEsc, true);
+  // 菜单 ↑↓=相邻菜单项移焦（表单弹层内输入框让位原生光标移动）
+  popEl.addEventListener("keydown", e => {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown")
+        && e.target.classList.contains("menu-item")) {
+      e.preventDefault();
+      const items = $$(".menu-item", popEl);
+      const t = items[items.indexOf(e.target)
+          + (e.key === "ArrowUp" ? -1 : 1)];
+      if (t) t.focus();
+    }
+  });
 }
 function menuItem(box, text, cls, fn) {
   const b = document.createElement("button");
@@ -94,6 +120,72 @@ function menuItem(box, text, cls, fn) {
   b.addEventListener("click", () => fn(b));
   box.appendChild(b);
   return b;
+}
+
+// ---- 行类元素键盘统一（元素层契约）：Tab 可达（tabIndex=0）；↑↓=容器内
+// 相邻可聚焦行移焦；Alt+↑↓=数据移位（move）；Enter=主操作；触发类行
+// （space=true）Space 同 Enter。行内按钮聚焦时放行原生，不劫持 ----
+function kbdRow(el, act, move, space) {
+  el.tabIndex = 0;
+  el.addEventListener("keydown", e => {
+    if (e.target !== el) return;
+    if (e.key === "Enter" || (space && e.key === " ")) {
+      e.preventDefault();
+      act();
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      if (e.altKey && move) {
+        e.preventDefault();
+        move(e.key === "ArrowUp" ? -1 : 1);
+        return;
+      }
+      // 可聚焦行=直接子级里 tabIndex=0 的元素（黑板格/隐藏页不在其列）
+      const sibs = [...el.parentElement.children].filter(
+          c => c.tabIndex === 0);
+      const t = sibs[sibs.indexOf(el) + (e.key === "ArrowUp" ? -1 : 1)];
+      if (t) {
+        e.preventDefault();
+        t.focus();
+      }
+    }
+  });
+}
+
+// ---- 表单组键盘：组内 input Enter=主钮（disabled 放行），Esc=失焦让
+// 全局键回归。select/checkbox 让位原生 ----
+function formKeys(root, submit) {
+  $$("input", root).forEach(el => el.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      el.blur();
+    } else if (e.key === "Enter" && submit && !submit.disabled) {
+      e.preventDefault();
+      submit.click();
+    }
+  }));
+}
+
+// ---- 列表重建保焦：焦点在列表内时记键（attr 行识别键），重建后回同键
+// 行；键没了=让位（删行场景由 removeRowNav 接管邻行）----
+function kbdKeep(el, attr) {
+  const ae = document.activeElement;
+  const k = ae && el.contains(ae) && ae.dataset[attr] !== undefined
+      ? ae.dataset[attr] : null;
+  if (k === null || k === "") return null;
+  return () => {
+    const t = [...el.children].find(c => c.dataset[attr] === k
+        && c.tabIndex >= 0);
+    if (t) t.focus();
+  };
+}
+
+// ---- 删行焦点归还：按删除前下标回落上一行（首行回落首行）；失败不动 ----
+async function removeRowNav(sel, key, div) {
+  const i = $$(sel + " .row").indexOf(div);
+  const j = await plcmd2("remove", key);
+  if (!j || !j.ok) return;
+  const after = $$(sel + " .row");
+  const t = after[Math.max(0, i - 1)];
+  if (t) t.focus();
 }
 
 // ---- 长文本跑马灯（歌名/音色名/视频名）：溢出才启用，与 #now 同源 ----
@@ -524,9 +616,11 @@ function render(st) {
   const sig = rows.length + ":" + cur + ":"
       + rows.map(r => (r.key || "") + r.name + r.dur).join("|");
   if (list.dataset.sig !== sig) {
+    const keep = kbdKeep(list, "k");
     list.dataset.sig = sig;
     list.innerHTML = "";
     rows.forEach((s, i) => list.appendChild(consoleRow(s, i, cur)));
+    if (keep) keep();     // 切歌/轮询重建不丢键盘焦点
   }
   $("#console-empty").hidden = rows.length > 0;
   $("#console-list").hidden = rows.length === 0;
@@ -549,7 +643,6 @@ function consoleRow(s, i, cur) {
   // 节拍不同（500ms vs 1.5s），借键错位曾把切歌按钮指向错曲（红队 P1）
   div.dataset.k = s.key || ((plCache && plCache.pl && plCache.pl[i])
       ? plCache.pl[i].key : "");
-  div.tabIndex = 0;              // 键盘可达：Enter=切歌（F3）
   const no = document.createElement("span");
   no.className = "no";
   no.textContent = (i + 1) + ".";
@@ -573,12 +666,7 @@ function consoleRow(s, i, cur) {
   dur.textContent = s.dur;
   div.append(no, eq, nm, go, dur);
   div.addEventListener("dblclick", () => switchTo(i, go, true, div.dataset.k));
-  div.addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      switchTo(i, go, false, div.dataset.k);
-    }
-  });
+  kbdRow(div, () => switchTo(i, go, false, div.dataset.k));
   return div;
 }
 
@@ -797,7 +885,7 @@ function libRow(s, inPl) {
     del.title = "移出播放列表";
     del.addEventListener("click", ev => {
       ev.stopPropagation();
-      armConfirm(del, () => plcmd2("remove", s.key), "确认移除？");
+      armConfirm(del, () => removeRowNav("#lib", s.key, div), "确认移除？");
     });
     tail.appendChild(del);
   } else {
@@ -810,7 +898,7 @@ function libRow(s, inPl) {
     });
   }
   div.append(tag, nm, dur, tail);
-  div.addEventListener("click", () => {
+  const pick = () => {
     // 行单击=选中该行；pt 条目选中该定位点（详情面板直接进编辑）；
     // ＋ 为唯一加入入口（防误触）
     const k = s.key;
@@ -818,7 +906,9 @@ function libRow(s, inPl) {
       const base = ptBaseOf(k);
       selectSong(k, base, ptIdOf(k), "lib");
     } else selectSong(k, k, null, "lib");
-  });
+  };
+  div.addEventListener("click", pick);
+  kbdRow(div, pick);
   return div;
 }
 function drawLib() {
@@ -831,6 +921,7 @@ function drawLib() {
       + (s.durSrc || "") + (s.dur || "")).join("|") + "#" + slQ
       + "#" + (selRowKey || "");
   if (lib.dataset.sig === sig) return;
+  const keep = kbdKeep(lib, "k");
   lib.dataset.sig = sig;
   lib.innerHTML = "";
   const shown = [];
@@ -862,6 +953,7 @@ function drawLib() {
     if (s.key === selRowKey) row.classList.add("sel");
     lib.appendChild(row);
   });
+  if (keep) keep();     // 选中/删除后重建不丢键盘焦点
 }
 // 播放列表行 ⋯ 菜单：写入时长（手动，B5）/重新识别（回工程内原值）
 function plMoreMenu(anchor, it) {
@@ -912,6 +1004,9 @@ function durPopover(anchor, it) {
     const okBtn = document.createElement("button");
     okBtn.className = "primary";
     okBtn.textContent = "写入";
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); okBtn.click(); }
+    });
     okBtn.addEventListener("click", () => {
       if (parseDur(inp.value) === null) {
         err.textContent = "格式应为 秒数 或 分:秒，如 3:33";
@@ -977,16 +1072,18 @@ function plRow(i, it) {
   const del = mk("✕", "移出播放列表", "danger");
   del.addEventListener("click", ev => {
     ev.stopPropagation();
-    armConfirm(del, () => plcmd2("remove", it.key), "确认移除？");
+    armConfirm(del, () => removeRowNav("#pl", it.key, div), "确认移除？");
   });
   div.append(handle, no, nm, dur, ops);
-  div.addEventListener("click", () => {
+  const pick = () => {
     const k = it.key;
     if (k.startsWith("pt:")) {
       const base = ptBaseOf(k);
       selectSong(k, base, ptIdOf(k), "pl");
     } else selectSong(k, k, null, "pl");
-  });
+  };
+  div.addEventListener("click", pick);
+  kbdRow(div, pick, d => movePlKey(it.key, d));
   // 拖拽排序：手柄按下才允许拖（不挡文本选择/点击）；pointerup 未进
   // dragstart 的复位（F 批：拖拽细节）
   handle.addEventListener("pointerdown", () => div.draggable = true);
@@ -1078,6 +1175,7 @@ function drawPl() {
       + "#" + plCache.pl.map(x => x.name + x.dur + (x.durSrc || ""))
           .join("~");
   if (el.dataset.sig === sig) return;
+  const keep = kbdKeep(el, "k");
   el.dataset.sig = sig;
   el.innerHTML = "";
   // 团队匹配与素材库同口径：pt 条目自带 team（_lib_view 原位展开），
@@ -1100,6 +1198,7 @@ function drawPl() {
     }
   });
   $("#pl-n").textContent = plCache.pl.length + " 首";
+  if (keep) keep();     // 选中/移行/删除后重建不丢键盘焦点
   // 空态充满列表区（U2）；真空表引导加曲、搜索无果提示清词
   $("#pl").hidden = rendered === 0;
   $("#pl-empty").hidden = rendered > 0;
@@ -1224,7 +1323,8 @@ async function plcmd2(op, key, payload) {
   if (j.ok && op === "add") toast("已加入播放列表");
   if (j.ok && op === "setdur") toast("时长已写入");
   if (j.ok && op === "redict") toast("重新识别中…");
-  refreshPlaylist();
+  await refreshPlaylist();
+  return j;
 }
 
 // ================= 定位点页 =================
@@ -1341,6 +1441,7 @@ async function refreshPoints() {
     const lsig = ptProj + ":" + dd.points.map(
         p => p.id + p.name + p.start + p.end).join("|") + ":" + ptSel;
     if (el.dataset.sig !== lsig) {
+      const keep = kbdKeep(el, "id");
       el.dataset.sig = lsig;
       el.innerHTML = "";
       dd.points.forEach(p => {
@@ -1355,12 +1456,15 @@ async function refreshPoints() {
         dur.textContent = fmtTC(p.start) + " → " + fmtTC(p.end)
             + " · 段长 " + fmtTC(p.end - p.start);
         div.append(nm, dur);
-        div.addEventListener("click", () => selectPt(p.id));
+        const pick = () => selectPt(p.id);
+        div.addEventListener("click", pick);
+        kbdRow(div, pick, d => ptcmd("move", {id: p.id, step: d}));
         el.appendChild(div);
       });
       if (!dd.points.length)
         el.innerHTML = "<div class='empty-state sm'>尚无定位点，"
             + "点「添加」以当前时码新建</div>";
+      if (keep) keep();
     }
     // 编辑卡
     const has = ptSel !== null && dd.points.some(p => p.id === ptSel);
@@ -1672,12 +1776,12 @@ function drawBinds(d) {
   const sig = JSON.stringify([d.binds, d.hid, d.gestures, learnAction]);
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
+  const keep = kbdKeep(el, "action");
   el.innerHTML = "";
   PD_ACTIONS.forEach(([a, name]) => {
     const row = document.createElement("div");
     row.className = "bind-row" + (a === learnAction ? " learning" : "");
     row.dataset.action = a;
-    row.tabIndex = 0;              // 键盘可达（音色映射卡片同款）
     const nm = document.createElement("span");
     nm.className = "b-name";
     nm.textContent = name;
@@ -1701,15 +1805,16 @@ function drawBinds(d) {
       row.append(nm, bd);
     }
     // 点行=开始学习，再点=取消（音色映射卡片「点卡开录、再点保存」同构）
-    row.addEventListener("click", () => {
+    const go = () => {
       if (a === learnAction) learnCancel();
       else startLearn(a);
-    });
-    row.addEventListener("keydown", e => {
-      if (e.key === "Enter") { e.preventDefault(); row.click(); }
-    });
+    };
+    row.addEventListener("click", go);
+    kbdRow(row, go, null, true);
     el.appendChild(row);
   });
+  // 重建后焦点回同 action 行（学习开始/结束签名变=整列重建不丢焦）
+  if (keep) keep();
 }
 
 async function refreshPedal(force) {
@@ -2250,15 +2355,8 @@ function slotRow(note, slot, inst) {
   }
   div.append(n, pc, sub, ops);
   div.title = "点击录制；再点一次停止并保存";
-  div.tabIndex = 0;
+  kbdRow(div, () => cardRecord(div, inst, note), null, true);
   div.addEventListener("click", () => cardRecord(div, inst, note));
-  // 键盘可达（F3）：Enter/Space 触发录制，与行/卡片点击同义
-  div.addEventListener("keydown", ev => {
-    if (ev.key === "Enter" || ev.key === " ") {
-      ev.preventDefault();
-      cardRecord(div, inst, note);
-    }
-  });
   return div;
 }
 async function refreshKbd(force) {
@@ -2287,9 +2385,12 @@ function buildSlots(el, slots, from, to, inst) {
       k + ":" + JSON.stringify(slots[k])).join("|");
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
+  const keep = kbdKeep(el, "note");
   el.innerHTML = "";
   for (let n = from; n <= to; n++)
     el.appendChild(slotRow(n, (slots || {})[String(n)], inst));
+  // 差量重建后焦点回同卡（他端改同曲槽位=换节点不丢焦）
+  if (keep) keep();
   // 差量重建后录制指示重挂：他端改了同曲任一槽位会换节点，红框/副行
   // 会话还在跑却消失（时序红队 P2）
   if (recInst === inst && recNote !== null) {
@@ -2471,6 +2572,7 @@ async function refreshVjMap(root, force) {
     vjMapRoot = d.videoRoot;
     vjMapRows = d.rows;
     const box = $("#vjmap");
+    const keep = kbdKeep(box, "note");
     box.innerHTML = "";
     if (!vjMapRoot) {
       box.innerHTML = "<div class='empty-state sm vj-empty'>未设置视频目录，"
@@ -2496,9 +2598,7 @@ async function refreshVjMap(root, force) {
             + " · 点击切换" + (row.loop ? "循环" : "播一遍停");
         const flip = () => toggleVjLoop(cell, row);
         cell.addEventListener("click", flip);
-        cell.addEventListener("keydown", e => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
-        });
+        kbdRow(cell, flip, null, true);
       } else {
         cell.title = row.name + "：熄灭投影画面";
       }
@@ -2516,6 +2616,8 @@ async function refreshVjMap(root, force) {
       cell.append(n, f, sub);
       box.appendChild(cell);
     });
+    // 5s 保真重建后焦点回同格（视频库扫描重建整列不丢焦）
+    if (keep) keep();
   } catch { /* 瞬断 */ }
 }
 
@@ -3145,6 +3247,16 @@ $("#web-addr").addEventListener("click", () =>
     copyText($("#web-addr").textContent, "已复制：" + $("#web-addr").textContent));
 $("#app-addr").addEventListener("click", () =>
     copyText($("#app-addr").textContent, "已复制：" + $("#app-addr").textContent));
+
+// ---- 表单组键盘：Enter=该组主钮（disabled 放行），Esc=失焦让全局键回归
+formKeys($("#pt-form"), $("#pt-save"));
+formKeys($("#dt-endcard"), $("#dt-end-save"));
+formKeys($("#p-vj"), $("#vj-save"));
+formKeys($("#p-settings"), $("#st-save"));
+formKeys($("#p-pedal"), null);    // 阈值即改即生效无提交钮，仅 Esc=失焦
+$("#sl-search").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.preventDefault(); e.target.blur(); }
+});
 
 // ---- 启动 ----
 setInterval(poll, 500);
