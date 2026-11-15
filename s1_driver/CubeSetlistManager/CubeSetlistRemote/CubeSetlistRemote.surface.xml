@@ -6,22 +6,23 @@
 	CC-TABLE: start=102 stop=103 rtz=104 save=105 close=106 -->
 <ControlSurface>
 	<Controls>
-		<Control name="startButton" title="Start" type="button" options="receive">
+		<Control name="startButton" title="Start" type="trigger" options="receive">
 			<MidiMessage status="#B0" address="#66"/>
 		</Control>
-		<Control name="stopButton" title="Stop" type="button" options="receive">
+		<Control name="stopButton" title="Stop" type="trigger" options="receive">
 			<MidiMessage status="#B0" address="#67"/>
 		</Control>
-		<Control name="rtzButton" title="Return to Zero" type="button" options="receive">
+		<Control name="rtzButton" title="Return to Zero" type="trigger" options="receive">
 			<MidiMessage status="#B0" address="#68"/>
 		</Control>
-		<Control name="saveButton" title="Save" type="button" options="receive">
+		<Control name="saveButton" title="Save" type="trigger" options="receive">
 			<MidiMessage status="#B0" address="#69"/>
 		</Control>
-		<Control name="closeButton" title="Close" type="button" options="receive">
+		<Control name="closeButton" title="Close" type="trigger" options="receive">
 			<MidiMessage status="#B0" address="#6A"/>
 		</Control>
 	</Controls>
+	<Mappings>
 	<Global>
 		<Command control="startButton" command.category="Transport" command.name="Start"/>
 		<Command control="stopButton" command.category="Transport" command.name="Stop"/>
@@ -29,4 +30,5 @@
 		<Command control="saveButton" command.category="File" command.name="Save"/>
 		<Command control="closeButton" command.category="File" command.name="Close"/>
 	</Global>
+	</Mappings>
 </ControlSurface>

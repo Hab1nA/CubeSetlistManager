@@ -2866,8 +2866,8 @@ function renderMrCard() {
   $("#st-mr-note").textContent =
       restart ? (s1 ? "Studio One 正在运行：部署后需重启 S1 加载脚本"
       : "Cubase 正在运行：部署后需重启 Cubase 加载脚本")
-      : s1 ? "首次使用：在 Studio One「设置→外部设备」添加 CubeSetlistRemote" +
-      " 设备并选「CubeSetlist Remote」口（设备列表可见=脚本加载成功）"
+      : s1 ? "首次部署后重启 Studio One 即自动注册设备并绑定端口" +
+      "（外部设备列表可见=加载成功）"
       : "";
 }
 function renderMrBanner() {

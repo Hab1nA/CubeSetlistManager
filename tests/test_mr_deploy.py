@@ -122,7 +122,7 @@ _S1_SRC = (pathlib.Path(__file__).resolve().parents[1] / "s1_driver"
 
 @pytest.fixture
 def tmp_s1_dst(monkeypatch, tmp_path):
-    dst = tmp_path / "PreSonus" / "Studio One 7" / "Devices"         / mr_deploy._S1_LOCAL
+    dst = tmp_path / "PreSonus" / "Studio One 7" / "User Devices"         / "User Devices"
     monkeypatch.setattr(mr_deploy, "s1_dst", lambda: dst)
     return dst
 

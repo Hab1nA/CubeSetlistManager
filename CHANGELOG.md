@@ -13,8 +13,8 @@
   关闭命令，与 Cubase driver 同表同口「CubeSetlist Remote」，SEQ 语义
   `mr_ctrl.SEQ` 双底座共用），不再依赖窗口聚焦，直控未就绪=动作失败报错
   （无键盘回落），全停语义与 Cubase 对齐（作用激活工程，不再逐工程窗扫描）。部署面同步：随包部署器/设置页「直控部署」卡按底座 kind
-  分派（S1 = 铺 bundle 到用户 Devices 文件夹；External Device 注册需首次
-  在 S1「设置→外部设备」手工添加并绑口，卡片有指引）；M0 真机校准探针
+  分派（S1 = 平铺 bundle 到用户设备目录，真机校准：重启即自动注册设备并按
+  端口名自动绑口，零手工）；M0 真机校准探针
   `tools/probe_s1_ctrl.py`（selftest/path/deploy/send）。
 
 - Cubase 直控部署引导自动化：安装包预铺 driver 脚本进 Cubase 用户目录

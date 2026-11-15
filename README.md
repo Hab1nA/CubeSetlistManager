@@ -82,8 +82,8 @@
     MIDI Remote 直控，驱动随安装包自动部署（就绪核对见快速开始第 4 步；
     未就绪则走带动作不可用）；
   - **PreSonus Studio One 7 Pro**（实测 7.2）——走带与切歌经控制器脚本
-    直控（与 Cubase 同口同 CC 表；首次需部署脚本并在「设置→外部设备」添加
-    CubeSetlistRemote 设备绑口，核对见快速开始第 4 步）；走带时钟需在
+    直控（与 Cubase 同口同 CC 表；首次一键部署后重启即自动注册设备并绑口，
+    核对见快速开始第 4 步）；走带时钟需在
     「歌曲选项 → 同步」勾选 **MIDI 时码输出** 到主程序的时码端口；
 - 硬件可选：Roland JUNO-DS88、Roland AX-09 Lucina（仅 USB 可接收）、
   MIDI 或蓝牙踩钉；
@@ -105,8 +105,8 @@
    三行灯全绿即就绪。未绿的点什么补什么——「一键部署」（按底座自动分派
    Cubase driver / S1 控制器脚本）或「一键创建」（loopMIDI 端口
    `CubeSetlist Remote`，写注册表后重启 loopMIDI，数秒完成）。Cubase 侧
-   脚本已随安装包预铺通常零操作；Studio One 侧首次需部署脚本并重启 S1，
-   再在「设置→外部设备」添加 CubeSetlistRemote 设备并绑口（一次性）。
+   脚本已随安装包预铺通常零操作；Studio One 侧首次需一键部署并重启 S1
+   （设备自动注册并绑口）。
    正在运行的 DAW 部署后需重启生效；绑定确认以 Cubase「Studio → MIDI
    Remote Manager」/S1「设置→外部设备」显示为准。注意：两个 DAW 不要同时
    打开（共用同一直控口与 CC 表，同时挂载会一条命令双触发）。

@@ -103,10 +103,11 @@ def s1_driver_src() -> pathlib.Path:
 
 
 def s1_dst() -> pathlib.Path:
-    r"""S1 用户 Devices 文件夹：%APPDATA%\PreSonus\Studio One <N>\Devices\
-    （Settings 目录内的 Devices 子夹；S1 启动时扫描，需重启加载）。取
-    「含 Studio One.settings 的最高版本目录」；从未运行过 S1 的机器退回
-    最高已知版本默认名（首个装机也能预铺）。"""
+    r"""S1 用户设备目录（平铺）：%APPDATA%\PreSonus\Studio One <N>\User
+    Devices\。真机校准 2026-11-16：控制器脚本 bundle 三件平铺进该目录即被
+    S1 加载，设备自动注册并按 detectorPortName 自动绑定端口，零手工；
+    Devices 子目录不被扫描。取「含 Studio One.settings 的最高版本目录」，
+    从未运行过 S1 的机器退回最高已知版本默认名。"""
     base = pathlib.Path(os.environ.get("APPDATA", "")) / "PreSonus"
     best = None
     try:
@@ -121,15 +122,16 @@ def s1_dst() -> pathlib.Path:
         m = re.search(r"(\d+)", d)
         v = int(m.group(1)) if m else 0
         if best is None or v > best[0]:
-            best = (v, base / d / "Devices")
+            best = (v, base / d / "User Devices")
     if best is None:
-        best = (7, base / "Studio One 7" / "Devices")
-    return best[1] / _S1_LOCAL
+        best = (7, base / "Studio One 7" / "User Devices")
+    return best[1]
 
 
 def deploy_s1_driver() -> str:
     """铺 S1 控制器脚本（幂等：hash 相同不重写）；返回空串=成功。
-    bundle 含 .device/.surface.xml/.js 三件，全拷（部署后需重启 S1）。"""
+    bundle 三件平铺拷入 User Devices（S1 启动扫描该目录；真机校准：设备
+    自动注册+自动绑口，部署后重启 S1 生效）。"""
     with _op_lock:
         src = s1_driver_src()
         if not src.is_dir():
@@ -222,6 +224,7 @@ def s1_status() -> dict:
                      if p.is_file()}
     except OSError:
         pass
+    dst_files = {n: b for n, b in dst_files.items() if n in src_files}
     cur = bool(src_files) and set(dst_files) == set(src_files) and \
         all(hashlib.sha1(b).digest() ==
             hashlib.sha1(src_files[n]).digest() for n, b in dst_files.items())
