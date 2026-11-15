@@ -183,39 +183,42 @@ def apply_theme(root):
         s.configure("%s.TLabel" % name, foreground=color)
     # 强调按钮：sv-ttk 的按钮外观烘焙在精灵图里（image element 运行时
     # 不可换色，官方 Accent.TButton 只有固定蓝）——assets/ 下的绿/红
-    # 按钮图由官方精灵图切片做色相重映射一次性生成（生成器已移除）
-    # 一次性生成（圆角/抗锯齿/九宫格全保真），tk 原生读 PNG 零自绘；
-    # 悬停/按压/禁用 = 图片态切换（照官方 dark.tcl 的状态表），文字色走
-    # style configure/map。frozen 时资产在 _MEIPASS。
+    # 按钮图由官方精灵图切片做色相重映射一次性生成（生成器已移除），
+    # 圆角/抗锯齿/九宫格全保真，tk 原生读 PNG 零自绘；悬停/按压/禁用 =
+    # 图片态切换（照官方 dark.tcl 的状态表），文字色走 style configure/map。
+    # 仅源码运行的 automator 窗消费 Start/Stop 样式：打包版不再随包
+    # assets，目录缺失即跳过注册（Tk 前端遗留死重已摘出 dist）。
     # 非冻结锚模块目录（仓库根），不随 CWD 漂移
     asset_dir = getattr(sys, "_MEIPASS", "") or os.path.dirname(
         os.path.abspath(__file__))
     imgs = []
-    for name, txt, dkey in (("Start", START_FG, "start"),
-                            ("Stop", "#ffffff", "stop")):
-        ph = {st: tk.PhotoImage(file=os.path.join(
-            asset_dir, "assets", "btn_%s_%s.png" % (dkey, st)), master=root)
-            for st in ("rest", "hover", "pressed", "focus", "focus-hover",
-                       "dis")}
-        imgs.extend(ph.values())
-        s.element_create(name + ".round", "image", ph["rest"],
-                         ("selected disabled", ph["dis"]),
-                         ("disabled", ph["dis"]),
-                         ("selected", ph["rest"]),
-                         ("pressed", ph["pressed"]),
-                         ("active focus", ph["focus-hover"]),
-                         ("active", ph["hover"]),
-                         ("focus", ph["focus"]),
-                         border=4, sticky="nsew")
-        s.layout(name + ".TButton", [(name + ".round",
-                 {"sticky": "nsew",
-                  "children": [("Button.padding",
-                                {"sticky": "nsew",
-                                 "children": [("Button.label",
-                                               {"sticky": "nswe"})]})]})])
-        s.configure(name + ".TButton", foreground=txt, anchor="center",
-                    padding=(8, 2, 8, 3))
-        s.map(name + ".TButton", foreground=[("disabled", MUT)])
+    if os.path.isdir(os.path.join(asset_dir, "assets")):
+        for name, txt, dkey in (("Start", START_FG, "start"),
+                                ("Stop", "#ffffff", "stop")):
+            ph = {st: tk.PhotoImage(file=os.path.join(
+                asset_dir, "assets", "btn_%s_%s.png" % (dkey, st)),
+                master=root)
+                for st in ("rest", "hover", "pressed", "focus",
+                           "focus-hover", "dis")}
+            imgs.extend(ph.values())
+            s.element_create(name + ".round", "image", ph["rest"],
+                             ("selected disabled", ph["dis"]),
+                             ("disabled", ph["dis"]),
+                             ("selected", ph["rest"]),
+                             ("pressed", ph["pressed"]),
+                             ("active focus", ph["focus-hover"]),
+                             ("active", ph["hover"]),
+                             ("focus", ph["focus"]),
+                             border=4, sticky="nsew")
+            s.layout(name + ".TButton", [(name + ".round",
+                     {"sticky": "nsew",
+                      "children": [("Button.padding",
+                                    {"sticky": "nsew",
+                                     "children": [("Button.label",
+                                                   {"sticky": "nswe"})]})]})])
+            s.configure(name + ".TButton", foreground=txt, anchor="center",
+                        padding=(8, 2, 8, 3))
+            s.map(name + ".TButton", foreground=[("disabled", MUT)])
     root._round_btn_imgs = imgs      # PhotoImage 保活（Tcl 侧不防 GC）
     # 跑马灯：平地 element（default 主题的素 field）换掉 sv-ttk 的
     # 图片 field——展示型 Entry 不是输入区，无边框、底色随所在面板；

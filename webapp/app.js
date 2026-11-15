@@ -566,7 +566,6 @@ function render(st) {
   }
   // 状态 chip + 时钟
   const chip = $("#tchip");
-  const ts = st.busy ? "busy" : (st.tstate || "stopped");
   chip.className = "chip " + (st.tstate || "stopped");
   // DAW 失联判别（审计 #2）：进程消失时不再假显「已暂停」。
   // 三态词表与 ui_text.FOLLOW 同源（VJ follow 另有 off 态，见 FOLLOW_TXT）
@@ -1826,7 +1825,7 @@ async function refreshPedal(force) {
     const c = $("#pedal-conn");
     // 状态序：无绑定 / 已静音（本页打开期 mute 会主动让出 MIDI 口，
     // 须先于「口未连」警示判定，否则静音期恒误报故障）/ 通道异常 / 已连接
-    let txt = "已静音", cls = "";
+    let txt = "", cls = "";
     if (!Object.keys(d.binds || {}).length
         && !Object.keys(d.hid || {}).length) {
       txt = "无绑定"; cls = "";
@@ -1870,12 +1869,8 @@ async function refreshPedal(force) {
 // 失败必须回读基线（表单保护会挡住轮询回写，勾选态会停在错误值）
 async function pedalApply(payload, msg) {
   const r = await post("/pedalset", payload);
-  if (r.ok) {
-    if (msg) toast(msg);
-    refreshPedal(true);
-  } else {
-    refreshPedal(true);
-  }
+  if (r.ok && msg) toast(msg);
+  refreshPedal(true);
 }
 $("#pd-dev").addEventListener("change", () =>
     pedalApply({deviceHint: $v("#pd-dev")}, "输入设备已应用"));

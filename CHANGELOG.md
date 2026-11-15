@@ -4,6 +4,15 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
+## [未发布]
+
+### 修复
+
+- 全仓死代码审计清账：删除孤儿焦点收回方法 `_regain_focus`/`_visible_own_window`（切歌/走带焦点收口已由 daw_ctrl「还原操作前前台」承担，docstring 声称的「外部激活」场景全仓无调用点）、`load_config`/`save_config` 薄包装、automator `_atomic_write` 残留、OBS `_recv_exact` 死副本；webapp 摘除永不匹配的 `.pop.menu` 死规则组、未用变量与冗余分支、无引用的死 id。
+- 打包版不再随包 `assets/` 按钮图：Start/Stop 图片样式仅源码运行的 automator 窗消费（Tk 前端遗留死重），dpi 按目录存在性跳过注册，dist 相应减重。
+- 安装器移除指向安装包布局中不存在路径的 `.mimosa` 排除项。
+- 依赖清单补 `websocket-client`（build.bat 冒烟步必需，此前新环境按清单装完依赖跑构建必挂）；`.gitignore` 补 `.pytest_cache/`。
+
 ## [0.17.0] - 2026-11-15
 
 ### 新增

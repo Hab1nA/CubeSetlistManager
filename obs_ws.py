@@ -130,15 +130,6 @@ class ObsWs:
         if b" 101 " not in head.split(b"\r\n", 1)[0]:
             raise ObsError("WebSocket 握手被拒：%r" % head[:80])
 
-    def _recv_exact(self, n):
-        while len(self._buf) < n:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ObsError("连接断开")
-            self._buf += chunk
-        out, self._buf = self._buf[:n], self._buf[n:]
-        return out
-
     def _read_frame(self):
         """积攒字节直到一帧完整：ping 回 pong、close 抛错，其余返回 JSON。"""
         while True:

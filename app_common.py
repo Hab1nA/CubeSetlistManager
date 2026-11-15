@@ -128,8 +128,6 @@ def rotate(baks, path):
         except (ValueError, OSError):
             return
         shutil.copy(str(path), str(baks[0]))
-def load_config():
-    return load_config_at(CONFIG_PATH, CONFIG_CORRUPT)
 
 
 def atomic_write(path, text, here=HERE):
@@ -153,10 +151,6 @@ def save_config_at(cfg, path, baks, corrupt, here=HERE):
     rotate(baks, path)
     atomic_write(path, json.dumps(cfg, ensure_ascii=False, indent=2),
                  here=here)
-
-
-def save_config(cfg):
-    save_config_at(cfg, CONFIG_PATH, CONFIG_BAKS, CONFIG_CORRUPT)
 
 
 def err_str(e):

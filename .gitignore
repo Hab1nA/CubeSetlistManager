@@ -57,3 +57,6 @@ ios/**/xcuserdata/
 ios/**/*.xcuserstate
 .DS_Store
 ios/build/
+
+# pytest 自生成自忽略文件失效时的兜底
+.pytest_cache/

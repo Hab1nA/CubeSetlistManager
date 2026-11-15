@@ -879,11 +879,6 @@ input.invalid { border-color: var(--err) !important; }
 .pop button.danger { background: var(--err-bg); color: var(--err); border: 0; }
 .pop .field-err { font-size: var(--f-xs); color: var(--err); min-height: 16px; }
 .pop .field-err:empty { display: none; }   /* 无错误不占位（对齐 #pt-hint 策略） */
-.pop.menu { min-width: 190px; padding: 6px; gap: 2px; }
-.pop.menu .menu-item { width: 100%; text-align: left; border: 0;
-  background: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-.pop.menu .menu-item:hover:not(:disabled) { background: var(--sur-2); }
-.pop.menu .menu-item.danger { color: var(--err); }
 
 button.armed {
   background: #5a1d22 !important;

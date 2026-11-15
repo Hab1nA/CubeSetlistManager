@@ -44,7 +44,6 @@ Source: "dist\{#SrcDir}\{#SrcDir}.exe"; \
     Flags: ignoreversion
 Source: "dist\{#SrcDir}\_internal\*"; \
     DestDir: "{app}\_internal"; \
-    Excludes: ".mimosa"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "dist\{#SrcDir}\version.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion

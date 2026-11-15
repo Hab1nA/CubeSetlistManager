@@ -84,10 +84,6 @@ def _save_config(cfg):
     _ac.save_config_at(cfg, CONFIG_PATH, _ac.CONFIG_BAKS, _ac.CONFIG_CORRUPT)
 
 
-def _atomic_write(path, text):
-    _ac.atomic_write(path, text, here=_ac.HERE)
-
-
 class Marquee(ttk.Entry):
     """跑马灯：只读 Entry + xview 像素滚动（与完整版同款组件）。
     无边框、底色随所在面板的观感由 "Marquee*.TEntry" style 族承担

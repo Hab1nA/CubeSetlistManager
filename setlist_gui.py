@@ -591,11 +591,10 @@ class App:
         self._kbd_inflight = None
         self.start_err = ""
         self._web_status = {}        # 遥控网络状态缓存（_web_status_probe 刷新）
-        # 主窗顶层 HWND 一次预取（主线程）：_regain_focus 在走带/全停/切歌
-        # worker 线程调用，禁再摸 Tk API（见其 docstring）。置顶切换不改
-        # HWND，窗口生命周期=进程生命周期，无需失效机制。GetParent 在窗口
-        # 未 realize 时实测返回 0（图标缺失分支会跳过 update_idletasks），
-        # 退回 widget 句柄本身兜底
+        # 主窗顶层 HWND 一次预取（主线程）：停摆探针 worker 侧经 lambda 读
+        # _main_hwnd，禁再摸 Tk API。置顶切换不改 HWND，窗口生命周期=进程
+        # 生命周期，无需失效机制。GetParent 在窗口未 realize 时实测返回 0
+        # （图标缺失分支会跳过 update_idletasks），退回 widget 句柄本身兜底
         self._main_hwnd = ctypes.windll.user32.GetParent(
             self.root.winfo_id()) or self.root.winfo_id()
         # 主线程停摆黑匣子：心跳由 _tick/_drain_calls 每轮喂，专职守护线程
@@ -3224,52 +3223,6 @@ class App:
                 self.web.try_reopen_midi()
         except Exception as e:
             self.q.put("联动端口自愈异常：%s" % _err(e))
-
-    def _regain_focus(self):
-        """把键盘焦点收回本程序（工作线程调用）。置顶只保视觉 Z 序，
-        不保焦点——外部事件（单实例转交等）把 Cubase 顶到前台后，若不
-        收回，用户接着打字会打进 Cubase（空格=停走带）。走带/全停/切歌
-        已由 daw_ctrl 按「还原操作前前台」收口，本方法只管这类外部激活。
-        Tk 根全程隐藏、直接聚焦必失败——枚举本进程可见顶层窗（=pywebview
-        主窗）代之。"""
-        try:
-            hwnd = self._visible_own_window()
-            if hwnd:
-                daw_ctrl.focus(hwnd, tries=2)
-        except Exception:
-            pass
-
-    def _visible_own_window(self):
-        """本进程当前可见顶层窗中面积最大者（WebUI 模式=pywebview 主窗；
-        无则 0）。取最大而非 z 序首个：/pickdir 原生对话框等同进程可见窗
-        且更顶，hits[0] 会把「收回主窗」变成「聚焦对话框」（对抗复审 P2）。
-        纯 Win32 枚举无 Tk 调用，工作线程安全；隐藏的 Tk 根被
-        IsWindowVisible 自然滤掉。"""
-        import ctypes.wintypes as wt
-
-        class _rect(ctypes.Structure):
-            _fields_ = [("l", wt.LONG), ("t", wt.LONG),
-                        ("r", wt.LONG), ("b", wt.LONG)]
-
-        u32 = ctypes.windll.user32
-        best, best_area = 0, 0
-
-        @daw_ctrl._ctypes_cb
-        def _cb(h, _l):
-            nonlocal best, best_area
-            pid = wt.DWORD()
-            u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
-            if pid.value != os.getpid() or not u32.IsWindowVisible(h):
-                return True
-            rc = _rect()
-            if u32.GetWindowRect(h, ctypes.byref(rc)):
-                area = max(0, rc.r - rc.l) * max(0, rc.b - rc.t)
-                if area > best_area:
-                    best, best_area = h, area
-            return True
-
-        u32.EnumWindows(_cb, 0)
-        return best
 
     def _transport_thread(self, action):
         # 焦点收口在 daw_ctrl.transport 内（还原操作前前台，不再事后

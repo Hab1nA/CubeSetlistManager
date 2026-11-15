@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8.0
+# build.bat 冒烟步（out/_smoke_dist.py 的 CDP 客户端）
+websocket-client>=1.0
