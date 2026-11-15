@@ -123,8 +123,11 @@ def main():
     url = "http://127.0.0.1:%d/app" % port
     print("ui:", url, flush=True)
 
+    # min_size 钉排版下限：桌面布局（侧栏+走带单行+状态栏单行）需视口
+    # ~1050x600，外框含标题栏再加余量；下限以下布局会崩（走带/歌名/状态
+    # 栏三处击穿），故不允许 <1120x640 的窗口存在（11-15 UI 红队审计）
     webview.create_window("Cube Setlist Manager", url, width=w, height=h,
-                           js_api=_Shell())
+                          min_size=(1120, 640), js_api=_Shell())
     # 侧栏「退出」只经 /exit 销毁 Tk 根——pywebview 窗口不会跟着关（用户
     # 实证「无法退出」）。看门狗：Tk mainloop 结束即主动关 Web 窗
     def _web_watchdog():

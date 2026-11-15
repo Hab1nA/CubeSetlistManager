@@ -423,7 +423,7 @@ input.invalid { border-color: var(--err) !important; }
 }
 .lamp { cursor: pointer; position: relative; font: inherit;
   background: none; border: 0; padding: 4px 6px; border-radius: 6px;
-  color: var(--fg); }
+  color: var(--fg); white-space: nowrap; }
 .lamp:hover { background: var(--sur-2); }
 .lamp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .lamp i { font-style: normal; font-size: 17px; font-weight: 700; color: #4a525b;
@@ -726,8 +726,11 @@ input.invalid { border-color: var(--err) !important; }
 #sl-tabs button.on { color: var(--ok); border-color: var(--ok-line);
   background: var(--ok-bg-dim); font-weight: 700; }
 
-/* ---- 窄窗响应式（<900px）：为平板收敛铺路 ---- */
-@media (max-width: 900px) {
+/* ---- 紧凑窗响应式（≤1080px）：平板与最小支持桌面窗收敛同一形态 ----
+   桌面窗下限由 webui.py min_size=(1120,640) 兜底（视口 ~1116>1080）；
+   ≤1080 桌面双列布局实测三处击穿（走带换行/歌名列零宽/状态栏两行），
+   统一收敛进页签模式 */
+@media (max-width: 1080px) {
   #sl-tabs { display: flex; }
   .cols { display: flex; flex-direction: column; }
   .cols .col { display: none; }
@@ -738,11 +741,39 @@ input.invalid { border-color: var(--err) !important; }
   .cards2 { grid-template-columns: 1fr; }
   .shift-cols { grid-template-columns: 1fr; }
   .pedal-grid { grid-template-columns: 1fr; }
-  .console-cols { grid-template-columns: 1fr; }
   #logcard .log { min-height: 160px; }
   .addr-grid { grid-template-columns: 1fr; }
   /* 窄屏隐藏生效范围提示：文案长会折行致 page-foot 高度跨页不齐 */
   .page-foot > span { display: none; }
+  /* 键盘快捷键提示在触屏形态无意义且必折行（≤960 实测两行） */
+  #sb-note { display: none; }
+  /* 状态栏六灯 nowrap 后极窄窗的横向压力阀（≤700 竖排字已根治） */
+  #statusbar { overflow-x: auto; gap: 10px; }
+  /* 日志头工具行窄卡收纳：工具行折到标题第二行（≤500 实测级别竖排） */
+  .md-head { flex-wrap: wrap; }
+  .log-tools { flex-wrap: wrap; }
+  /* 日志区保底降低：演出模式钉视口下 160px 保底会把卡内容顶出盒外
+     （红队实测溢盒 ~25px），120px 收进盒内 */
+  #logcard .log { min-height: 120px; }
+  /* 901-1080 走带单行收缩（全文本七钮 ~1017px > 内容区） */
+  #transport .btn.lg { padding: 9px 14px; }
+  /* 主控台驾驶舱放行自然流：钉视口在短窗把日志卡压到 ~107px 且内容
+     溢出卡盒（红队实测 sh223/ch107），紧凑态改为自然高度随页滚动 */
+  #p-console.on { height: auto; min-height: 100%; }
+  .console-cols { display: flex; flex-direction: column; }
+  .console-cols .card { min-height: 200px; }
+}
+
+/* ---- 手机/平板（≤900px）走带钮格点化：3 列两行设计化排版（「换行
+   收纳」升级为格点收纳，全停安全阀恒可达；tspacer 在格点下是空盒）---- */
+@media (max-width: 900px) {
+  #transport { display: grid; grid-template-columns: repeat(3, 1fr); }
+  #transport .tspacer { display: none; }
+}
+
+/* ---- 手机（≤560px）走带 2 列三行：3 列最小宽 ~330px 超极窄内容区 ---- */
+@media (max-width: 560px) {
+  #transport { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ---- 运行日志卡（主控台页内）：播放中同屏盯状态 ----
@@ -882,11 +913,12 @@ body.show #main { animation: show-in 200ms var(--ease); }
 /* 退出演出：走带行最右（全停右侧），仅演出模式显示 */
 #show-exit { display: none; }
 body.show #show-exit { display: inline-flex; }
-/* 演出模式构图：大字水平居中；页脚注不显。页面精确钉满视口
-   （大字与卡栈可滚动区交给内部），双列保底常驻；
-   内容不足一屏时 hero 仍垂直居中 */
+/* 演出模式构图：大字水平居中；页脚注不显。页面钉满视口，双列保底常
+   驻；内容不足一屏时 hero 仍垂直居中。overflow=auto：常规尺寸无滚动
+   条与原状一致，极小窗走带/卡栈溢出时可滚动可达（hidden 会把换行后
+   掉底的走带钮裁成不可达——11-15 红队 P2 实锤） */
 body.show #p-console.on { height: 100vh; min-height: 0;
-  box-sizing: border-box; overflow: hidden; }
+  box-sizing: border-box; overflow: auto; }
 body.show .console-cols { min-height: 0; flex: 1 1 0; overflow: auto; }
 body.show .hero { text-align: center; flex: 0 0 auto; }
 body.show .hero-top { justify-content: center; }
