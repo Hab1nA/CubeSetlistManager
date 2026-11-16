@@ -4,12 +4,13 @@
 版本号遵循语义化版本。版本由 git tag（`v0.10.x`）承载，代码内不嵌版本字符串。
 更详细的图文说明见 [GitHub Releases](https://github.com/Hab1nA/CubeSetlistManager/releases)。
 
-## [未发布]
+## [0.17.1] - 2026-11-16
 
 ### 新增
 
 - 歌单绑定 DAW 底座：导出歌单文件与 playlist.json 落盘均携带底座标记，
-  导入异底座歌单文件显式拒收并报准原因，底座名大小写与首尾空白归一；
+  导入异底座歌单文件显式拒收并报准原因（报错文案按底座显示名，查不到
+  不回退小写原文；底座名大小写、首尾空白与内空格变体归一）；
   切换底座重启后原歌单整包静默丢弃（盘上文件不重写，零操作切回旧底座
   可恢复，首次保存动作消化旧文件）；顺带修复 playlist.json 毒化形状
   （合法 JSON 但类型不对）炸启动、导入缺 durations/durSrc 段文件崩溃
@@ -22,13 +23,15 @@
   （无键盘回落），全停语义与 Cubase 对齐（作用激活工程，不再逐工程窗扫描）。部署面同步：随包部署器/设置页「直控部署」卡按底座 kind
   分派（S1 = 平铺 bundle 到用户设备目录，真机校准：重启即自动注册设备并按
   端口名自动绑口零手工，安装包同步预铺）；M0 真机校准探针
-  `tools/probe_s1_ctrl.py`（selftest/path/deploy/send）。
+  `tools/probe_s1_ctrl.py`（selftest/path/deploy/send）。用户可见文案
+  不用「S1」缩写（写全 Studio One），部署卡全绿态提示重启生效。
 
 - Cubase 直控部署引导自动化：安装包预铺 driver 脚本进 Cubase 用户目录
   （卸载不回收）；主程序设置页新增「Cubase 直控部署」卡（脚本/端口/Cubase
   三行状态灯）+ 主控台未就绪引导条，缺什么点什么——「一键部署」（hash 变
   即重铺，覆盖 driver 升级换版）、「一键创建」（写 loopMIDI 注册表名单后
-  重启 loopMIDI 立口，11-15 本机实证）；启动自检按底座补部署状态日志行。
+  重启 loopMIDI 立口，11-15 本机实证）；启动自检按底座补部署状态日志行，
+  部署卡提示文案双底座统一写法。
   README 手工三步同步改为「核对就绪」口径。
 - **OBS WebSocket 密码自动读取**：obs.password 留空时连接即读 OBS 自身配置
   （%APPDATA%\obs-studio\global.ini 的 [WebSocketServerSettings] ServerPassword），
@@ -37,6 +40,11 @@
   文件实测带 BOM），两个 OBS 诊断探针同享密码回退并改以 config.example.json
   兜底读取，build.bat 新克隆先建 dist 再走 fallback，README 启动步骤 OBS
   自动拉起口径收口（三重门：设置页配好投屏位置后才自动拉起）。
+
+### 变更
+
+- 设置页栏目按用户动线重排：目录与工程置顶（底座/路径是其余配置的前提），
+  直控部署卡随后，行为、联动端口依次，移动端遥控保持最后。
 
 ### 修复
 
