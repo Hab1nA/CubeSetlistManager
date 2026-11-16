@@ -2861,12 +2861,13 @@ function renderMrCard() {
   $("#st-mr-dawk").textContent =
       mrState.kind === "studioone" ? "Studio One" : "Cubase";
   const s1 = mrState.kind === "studioone";
+  const disp = s1 ? "Studio One" : "Cubase";
+  const reg = s1 ? "，重启即自动注册设备并绑口" : "";
   const restart = mrState.daw && (!mrState.script || mrState.stale);
   $("#st-mr-note").hidden = !(restart || (s1 && mrState.script));
   $("#st-mr-note").textContent =
-      restart ? (s1 ? "Studio One 正在运行：部署后需重启 S1 加载脚本"
-      : "Cubase 正在运行：部署后需重启 Cubase 加载脚本")
-      : s1 ? "首次部署后重启 Studio One 即自动注册设备并绑定端口" +
+      restart ? disp + " 正在运行：部署后需重启加载脚本" + reg
+      : s1 ? "首次部署后重启即自动注册设备并绑定端口" +
       "（外部设备列表可见=加载成功）"
       : "";
 }
