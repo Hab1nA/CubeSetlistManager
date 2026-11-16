@@ -106,12 +106,12 @@
    放进工程库根目录，视频放进 VJ 视频目录；歌名来源=工程文件名；
 4. **核对直控就绪**：打开主程序看主控台引导条/设置页「直控部署」卡，
    三行灯全绿即就绪。未绿的点什么补什么——「一键部署」（按底座自动分派
-   Cubase driver / S1 控制器脚本）或「一键创建」（loopMIDI 端口
+   Cubase driver / Studio One 控制器脚本）或「一键创建」（loopMIDI 端口
    `CubeSetlist Remote`，写注册表后重启 loopMIDI，数秒完成）。Cubase 侧
-   两侧脚本均已随安装包预铺通常零操作；S1 升级大版本后（如 Studio One 8）
+   两侧脚本均已随安装包预铺通常零操作；Studio One 升级大版本后
    用设置页「一键部署」按实况重铺。
    正在运行的 DAW 部署后需重启生效；绑定确认以 Cubase「Studio → MIDI
-   Remote Manager」/S1「设置→外部设备」显示为准。注意：两个 DAW 不要同时
+   Remote Manager」/Studio One「设置→外部设备」显示为准。注意：两个 DAW 不要同时
    打开（共用同一直控口与 CC 表，同时挂载会一条命令双触发）。
 5. **启动主程序**：启动自检自动拉起三大后端并写日志——loopMIDI 端口就绪、
    OBS（设置页配好投屏位置后自动拉起）并等 WebSocket（至多 30 秒）、DAW

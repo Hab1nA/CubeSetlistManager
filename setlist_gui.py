@@ -3085,7 +3085,7 @@ class App:
             self.watch.suppress_advance()   #   独立成功）——裸调用会炸队列
         if skip_keys:
             known = bool(self.clock_hint) and self.clock_port is not None
-            self.q.put("全停：%s，走带键跳过，S1 空格会反向起播；"
+            self.q.put("全停：%s，走带命令跳过（状态未知不动作）；"
                        "自动推进已抑制、视频已熄灭，如 DAW 仍在播放请手动"
                        "停止"
                        % ("本就未在播放" if known

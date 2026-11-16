@@ -2732,12 +2732,12 @@ function stDawNote() {
   const btn = $("#st-daw-restart");
   btn.disabled = !changed;            // 未改底座=灰不可点；改动=红可点
   btn.classList.toggle("danger", changed);
-  // S1 数据安全提示（11-11）：表单所选底座=Studio One 时恒显——S1 切歌
+  // 数据安全提示：表单所选底座=Studio One 时恒显——Studio One 切歌
   // 不弹保存框，未保存修改被静默丢弃；数据安全优先于切换重启提示。
   if ($("#st-daw").value === "studioone") {
     $("#st-daw-note").hidden = false;
     $("#st-daw-note").textContent =
-      "S1 切歌不弹保存框：未保存修改会被丢弃，切换前请先保存工程";
+      "Studio One 切歌不弹保存框：未保存修改会被丢弃，切换前请先保存工程";
     return;
   }
   $("#st-daw-note").hidden = !changed;
@@ -2860,16 +2860,13 @@ function renderMrCard() {
   $("#st-mr-portbtn").hidden = mrState.port;
   $("#st-mr-dawk").textContent =
       mrState.kind === "studioone" ? "Studio One" : "Cubase";
-  const s1 = mrState.kind === "studioone";
-  const disp = s1 ? "Studio One" : "Cubase";
-  const reg = s1 ? "，重启即自动注册设备并绑口" : "";
+  const disp = mrState.kind === "studioone" ? "Studio One" : "Cubase";
+  const reg = mrState.kind === "studioone"
+      ? "，重启即自动注册设备并绑口" : "";
   const restart = mrState.daw && (!mrState.script || mrState.stale);
-  $("#st-mr-note").hidden = !(restart || (s1 && mrState.script));
+  $("#st-mr-note").hidden = !restart;
   $("#st-mr-note").textContent =
-      restart ? disp + " 正在运行：部署后需重启加载脚本" + reg
-      : s1 ? "首次部署后重启即自动注册设备并绑定端口" +
-      "（外部设备列表可见=加载成功）"
-      : "";
+      restart ? disp + " 正在运行：部署后需重启加载脚本" + reg : "";
 }
 function renderMrBanner() {
   const el = $("#mr-banner");
