@@ -1596,6 +1596,8 @@ def test_load_playlist_daw_discard(tmp_path, monkeypatch):
         assert sg._load_playlist("cubase")["playlist"] == []
     # 写→读闭环：save_playlist 落 daw 标记，读侧据此丢弃
     monkeypatch.setattr(sg, "_HERE", tmp_path)   # _atomic_write 越界校验基点
+    monkeypatch.setattr(sg, "_PLAYLIST_BAKS",
+                        (tmp_path / "a.bak", tmp_path / "b.bak"))  # 备份链隔离
     sg.save_playlist(["A/歌一"], {"A/歌一": 30.0}, {}, [], daw="studioone")
     assert json.loads(f.read_text(encoding="utf-8"))["daw"] == "studioone"
     assert sg._load_playlist("cubase")["playlist"] == []

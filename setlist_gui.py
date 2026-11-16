@@ -2774,7 +2774,9 @@ class App:
         # 误导为文件坏；缺标记=旧版文件通配放行（向后兼容）
         fdaw = str(data.get("daw") or "").strip().casefold()
         if fdaw and fdaw != self.daw:
-            own = daw_ctrl.FACTS.get(fdaw, {}).get("display_name", fdaw)
+            # 内空格变体（"Studio One"）归一查显示名，查不到回退原文
+            own = daw_ctrl.FACTS.get(fdaw.replace(" ", ""), {}).get(
+                "display_name", fdaw)
             return {"error": "歌单文件是%s底座导出的，与当前%s底座不匹配，"
                     "未导入" % (own, daw_ctrl.FACTS[self.daw]["display_name"])}
         raw_beh = data.get("endBeh")
