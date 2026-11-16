@@ -1436,6 +1436,7 @@ class _PlApp:
 
     def __init__(self):
         self.q = _Q()
+        self.daw = "cubase"
         self.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
         self.durations = {"A/歌一": 120.0, "B/歌二": 90.0}
         self.dur_src = {"A/歌一": "manual"}
@@ -1463,6 +1464,7 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     assert r == {"ok": True, "count": 3}
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["version"] == 1 and data["playlist"] == a.pl_keys
+    assert data["daw"] == "cubase"              # 底座标记随文件携带
     assert data["durations"]["A/歌一"] == 120.0
     assert "D/歌四" not in data["durations"]    # 只记歌单条目信息
     assert data["endBeh"] == ["stop", "", "next"]   # 行为逐位随歌单携带
@@ -1525,6 +1527,79 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(sg.filedialog, "askopenfilename",
                         lambda **kw: str(tmp_path / "nullbeh.json"))
     assert sg.App._pl_import_web(_PlApp())["ok"] is True
+
+
+def test_plimport_daw_gate(tmp_path, monkeypatch):
+    """/plimport 底座门：异底座文件拒收并报准原因（异底座条目在本机库
+    必死，不落「全部失效」误导）；未知底座名同样拒收；同底座与缺标记
+    （旧版文件）放行。"""
+    a = _PlApp()
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "x.json"))
+
+    def feed(obj):
+        (tmp_path / "x.json").write_text(
+            json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+        return sg.App._pl_import_web(a)
+
+    base = {"version": 1, "playlist": ["A/歌一"],
+            "durations": {"A/歌一": 120.0}, "durSrc": {}}
+    # 异底座：拒收报准双方底座名，现列表零副作用
+    r = feed(dict(base, daw="studioone"))
+    assert "底座不匹配" in r["error"]
+    assert "Studio One" in r["error"] and "Cubase" in r["error"]
+    assert a.pl_keys == ["A/歌一", "pt:A/歌一#1", "B/歌二"] and a.persists == 0
+    # 手改文件填未知底座名：同样拒收，原文报出
+    r = feed(dict(base, daw="foobar"))
+    assert "底座不匹配" in r["error"] and "foobar" in r["error"]
+    # 同底座放行；大小写/尾空白变体归一后放行；缺标记=旧版文件通配放行
+    r = feed(dict(base, daw="cubase"))
+    assert r["ok"] is True and r["loaded"] == 1
+    assert a.pl_keys == ["A/歌一"] and a.persists == 1
+    a = _PlApp()
+    assert feed(dict(base, daw="Cubase "))["ok"] is True
+    a = _PlApp()
+    assert feed({"version": 1, "playlist": ["B/歌二"]})["ok"] is True
+    assert a.pl_keys == ["B/歌二"]
+
+
+def test_load_playlist_daw_discard(tmp_path, monkeypatch):
+    """playlist.json 底座标记：异底座整包静默丢弃（底座切换重启生效，
+    重启后首次装载即弃旧；durations/durSrc 一并弃）；缺标记=旧文件通配。"""
+    f = tmp_path / "playlist.json"
+    monkeypatch.setattr(sg, "PLAYLIST_PATH", f)
+
+    def write(daw):
+        data = {"playlist": ["A/歌一"], "durations": {"A/歌一": 120.0}}
+        if daw:
+            data["daw"] = daw
+        f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    write("cubase")
+    assert sg._load_playlist("studioone")["playlist"] == []      # 异底座丢弃
+    pl = sg._load_playlist("cubase")
+    assert pl["playlist"] == ["A/歌一"] and pl["durations"] == {"A/歌一": 120.0}
+    assert sg._load_playlist()["playlist"] == ["A/歌一"]   # 无参=通配（旧测试口径）
+    write("Cubase ")            # 大小写/尾空白变体：归一后不误触也不漏弃
+    assert sg._load_playlist("studioone")["playlist"] == []
+    assert sg._load_playlist("cubase")["playlist"] == ["A/歌一"]
+    write("")                                              # 旧版文件无标记
+    assert sg._load_playlist("studioone")["playlist"] == ["A/歌一"]
+    write("cubase")
+    assert sg._load_playlist("studioone") == {
+        "playlist": [], "durations": {}, "endBeh": [], "durSrc": {},
+        "daw": "cubase", "discarded": True}   # 丢弃包连缓存一并弃，存 daw+discarded
+    # 毒化形状（合法 JSON 但类型不对）降级为空，不炸启动
+    for shape in ({"playlist": 5, "daw": "cubase"}, {"durations": 5},
+                  {"durSrc": [1]}, []):
+        f.write_text(json.dumps(shape), encoding="utf-8")
+        assert sg._load_playlist("cubase")["playlist"] == []
+    # 写→读闭环：save_playlist 落 daw 标记，读侧据此丢弃
+    monkeypatch.setattr(sg, "_HERE", tmp_path)   # _atomic_write 越界校验基点
+    sg.save_playlist(["A/歌一"], {"A/歌一": 30.0}, {}, [], daw="studioone")
+    assert json.loads(f.read_text(encoding="utf-8"))["daw"] == "studioone"
+    assert sg._load_playlist("cubase")["playlist"] == []
+    assert sg._load_playlist("studioone")["playlist"] == ["A/歌一"]
 
 
 def test_plexport_plimport_endpoints():

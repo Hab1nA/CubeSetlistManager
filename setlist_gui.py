@@ -292,11 +292,16 @@ def _protect_obs_password(cfg):
     return pwd
 
 
-def _load_playlist():
+def _load_playlist(daw=""):
     """{"playlist": [key…], "durations": {key: 秒}, "durSrc": {key: manual},
     "endBeh": [与 playlist 逐位平行的行为表；""=默认播完停止]}
     durSrc 里登记的是手动设定；不在表里=自动识别；无时长=未知。
-    兼容旧 schema 的 order 键。"""
+    daw 参数=当前生效底座：文件带底座标记且与它异 → 整包静默丢弃返回空
+    （底座切换重启生效，重启后首次装载即弃旧歌单；盘上文件不重写，旧
+    数据留 .bak 链）。丢弃包带 "discarded": True——启动自检（_probe_
+    durations）见此只暖缓存不落盘，不替用户覆写旧底座文件；任何用户动
+    作经 _persist 成功写盘后解除。文件缺标记=旧版文件通配接受（向后兼
+    容）。兼容旧 schema 的 order 键。"""
     if PLAYLIST_PATH.exists():
         try:
             with open(PLAYLIST_PATH, encoding="utf-8") as f:
@@ -313,20 +318,38 @@ def _load_playlist():
             # 杀软/同步盘短锁等 IO 错：内容可能完全健康，只降级不改名——
             # 健康文件被误隔离（复审攻击轮 Important）
             data = {}
+        # 手改毒化（合法 JSON 但形状不对）同损坏降级为空，不炸启动
+        if not isinstance(data, dict):
+            data = {}
+        # 底座标记大小写/首尾空白不敏感（手改 "Cubase " 不得误触丢弃门）
+        stored_daw = str(data.get("daw") or "").strip().casefold()
+        if stored_daw and daw and stored_daw != daw:
+            return {"playlist": [], "durations": {}, "endBeh": [],
+                    "durSrc": {}, "daw": stored_daw, "discarded": True}
         keys = data.get("playlist") or data.get("order") or []
+        if not isinstance(keys, list):
+            keys = []
+        raw_dur = data.get("durations")
+        if not isinstance(raw_dur, dict):
+            raw_dur = {}
         durations = {}
-        for k, v in data.get("durations", {}).items():
+        for k, v in raw_dur.items():
             d = cpr_meta.safe_dur(v)   # 历史毒化（NaN/Infinity/超界）归零
             if d > 0:
                 durations[str(k)] = d
         end_beh = _end_beh_from_file(data.get("endBeh"), keys)
+        raw_src = data.get("durSrc")
+        if not isinstance(raw_src, dict):
+            raw_src = {}
         return {"playlist": [str(k) for k in keys],
                 "durations": durations,
                 "endBeh": end_beh,
                 "durSrc": {k: "manual"
-                           for k, v in data.get("durSrc", {}).items()
-                           if v == "manual"}}
-    return {"playlist": [], "durations": {}, "endBeh": [], "durSrc": {}}
+                           for k, v in raw_src.items()
+                           if v == "manual"},
+                "daw": stored_daw}
+    return {"playlist": [], "durations": {}, "endBeh": [], "durSrc": {},
+            "daw": ""}
 
 
 def _end_beh_from_file(raw, keys):
@@ -392,8 +415,10 @@ def _end_beh_collapse(keys, behs, lib_key):
     return out
 
 
-def save_playlist(keys, durations, dur_src, end_beh=None):
+def save_playlist(keys, durations, dur_src, end_beh=None, daw=""):
     data = {"playlist": keys, "durations": durations, "durSrc": dur_src}
+    if daw:
+        data["daw"] = daw      # 底座标记：装载时异底座静默丢弃（App.__init__）
     if end_beh and any(end_beh):
         data["endBeh"] = [str(b) for b in end_beh]
     data = json.dumps(data, ensure_ascii=False, indent=2)
@@ -539,7 +564,8 @@ class App:
         self.web_cfg.update(cfg.get("webRemote") or {})
         self.web = None
         self._web_snap = {}     # /state 快照（_tick_banner 每 400ms 重建）
-        pl = _load_playlist()
+        pl = _load_playlist(daw=self.daw)
+        self._pl_discarded = bool(pl.get("discarded"))   # 丢弃态：探测不落盘
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
         self.durations = pl["durations"]
         self.dur_src = pl["durSrc"]     # "manual"=手填；不在表=自动；无时长=未知
@@ -1149,6 +1175,10 @@ class App:
         if not fresh:
             return
         self.durations.update(fresh)
+        if self._pl_discarded:
+            # 底座切换丢弃态：只暖内存缓存不落盘——启动自检不得替用户触发
+            # 「覆写旧底座文件」（否则切走再切回时旧歌单已被空表覆写出链）
+            return
         self._persist()
         self.q.put("已重探工程时长：%d 首有更新，%d 首未知，需手填"
                    % (len(fresh),
@@ -2675,8 +2705,9 @@ class App:
         """/plexport：播放列表导出为可携带 JSON（Tk 主线程弹保存对话框）。
         只搬歌单条目自身的信息：durations/durSrc 过滤到条目及其宿主（点
         条目的宿主歌仍是歌单曲目）——全库时长缓存不外带（键含团队/歌名，
-        外带=泄露素材库清单）；工程路径/定位点/VJ 槽位在各工程目录的
-        sidecar 里随工程走，不进歌单文件。"""
+        外带=泄露素材库清单）；daw=底座标记（导入端异底座拒收）；工程
+        路径/定位点/VJ 槽位在各工程目录的 sidecar 里随工程走，不进歌单
+        文件。"""
         try:
             path = filedialog.asksaveasfilename(
                 parent=None, title="导出歌单",
@@ -2693,7 +2724,7 @@ class App:
             pt = points.parse_pt_key(k)
             if pt:
                 hosts.add(pt[0])
-        data = {"version": 1, "playlist": self.pl_keys,
+        data = {"version": 1, "daw": self.daw, "playlist": self.pl_keys,
                 "durations": {k: self.durations[k] for k in hosts
                               if k in self.durations},
                 "durSrc": {k: self.dur_src[k] for k in hosts
@@ -2738,6 +2769,14 @@ class App:
                 or not (isinstance(data.get("endBeh"), (list, dict))
                         or data.get("endBeh") is None):
             return {"error": "歌单文件无效：不是本软件导出的歌单"}
+        # 底座门：带底座标记且与当前底座异 → 拒收。异底座条目在本机库
+        # 必死（扫描按底座取扩展名），先在这里报准原因，不落「全部失效」
+        # 误导为文件坏；缺标记=旧版文件通配放行（向后兼容）
+        fdaw = str(data.get("daw") or "").strip().casefold()
+        if fdaw and fdaw != self.daw:
+            own = daw_ctrl.FACTS.get(fdaw, {}).get("display_name", fdaw)
+            return {"error": "歌单文件是%s底座导出的，与当前%s底座不匹配，"
+                    "未导入" % (own, daw_ctrl.FACTS[self.daw]["display_name"])}
         raw_beh = data.get("endBeh")
         if isinstance(raw_beh, dict):
             for k, v in raw_beh.items():
@@ -2777,11 +2816,11 @@ class App:
         # 补导入条目；手动来源照搬（manual 语义跟着文件走）
         dur = dict(self.durations)
         src = dict(self.dur_src)
-        for k, v in data["durations"].items():
+        for k, v in (data.get("durations") or {}).items():
             d = cpr_meta.safe_dur(v)
             if d > 0 and k in self.pl_keys and k not in dur:
                 dur[k] = d
-                if data["durSrc"].get(k) == "manual":
+                if (data.get("durSrc") or {}).get(k) == "manual":
                     src[k] = "manual"
         self.durations, self.dur_src = dur, src
         # 播完行为=逐位替换：行为绑定条目随歌单走（不同歌单同歌可异），
@@ -2813,7 +2852,8 @@ class App:
         with self._persist_lock:
             try:
                 save_playlist(self.pl_keys, self.durations, self.dur_src,
-                              getattr(self, "end_beh", None))
+                              getattr(self, "end_beh", None), daw=self.daw)
+                self._pl_discarded = False   # 盘上已属当前底座，丢弃态解除
             except (ValueError, OSError, RuntimeError) as e:
                 self.q.put("播放列表保存失败：%s" % e)
 
