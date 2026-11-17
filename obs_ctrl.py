@@ -316,7 +316,8 @@ class ObsController:
 
     def set_looping(self, on):
         """热应用循环标记到在播媒体源（仅合并 looping，不 RESTART——正在播
-        的画面零中断；ENDED 定格不会因合并复活，语义=下次触发生效）。"""
+        的画面零中断）。真机实证 2026-11-17：在播源合并 looping 即时生效，
+        越过视频末尾续播；ENDED 定格不因合并复活，该态语义=下次触发生效。"""
         def do(ws):
             ws.request("SetInputSettings", {
                 "inputName": self.cfg.get("mediaInput", "舞台视频"),
