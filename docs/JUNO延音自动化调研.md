@@ -33,7 +33,7 @@
 
 ### 路线 1（推荐）：5-pin 回环线 + Local Control OFF
 
-一根 5-pin MIDI 线把琴的 **MIDI OUT 直连它自己的 MIDI IN**，面板 SYSTEM:MIDI 把 Local Switch 关掉。手弹的音绕一圈变成「MIDI 进来的音」，落入 CC64 管辖，应用现有踏板自动化即可真正延手弹的音。
+一根 5-pin MIDI 线把琴的 **MIDI OUT 直连它自己的 MIDI IN**，面板 SYSTEM:MIDI 把 Local Switch 关掉。手弹的音绕一圈变成「MIDI 进来的音」，落入 CC64 管辖，恢复延音自动化（原 CC64 延音触发键已于 10-18 下线，走此路线时先行恢复）即可真正延手弹的音。
 
 - 优点：延迟约 1ms；演奏链路不依赖电脑（纯硬件回环）；电脑只负责在时间点注入 CC64（走 USB「JUNO-DS」口）；真踏板（CC64 经回环）照常可用，与应用自动化可叠加。
 - 坑（两条都必须落实）：
