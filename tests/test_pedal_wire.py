@@ -343,10 +343,17 @@ def test_s10_app_restart_seq_reset():
         h.sim.pulse("next", width_ms=10)                       # 旧会话 seq=1
         h.wait_actions(1, 2.0)
         assert h.app.names() == ["next"]
+        time.sleep(0.05)               # 引擎 30ms 回弹闸（BOUNCE_GATE）外：
+                                       # wait_actions 轮询粒度偶踩闸内，第二脚
+                                       # 会被当触点抖动在引擎层吞掉（包 200 动
+                                       # 作不发，CI/本地 2% 偶发根因，11-17）
         h.sim.app_restart()            # 进程死亡重启：seq 归零 + sid 换新
         h.sim.pulse("next", width_ms=10)                       # 新会话 seq=1
         h.wait_actions(2, 2.0)
-        assert h.settle(0.3) == ["next", "next"], h.app.names()
+        assert h.settle(0.3) == ["next", "next"], \
+            "names=%s attempts=%s drops=%s" % (
+                h.app.names(), h.sim.attempts,
+                list(getattr(h.sim, "drops", [])))
         # 新会话送达断言放宽到「重启后存在一次 200 且未被吞」（负载下同
         # seq 合法重试会让 attempts 错位）；「新 sid 不被旧基准吞」这一
         # 核心回归由 dup is not True 钉死
