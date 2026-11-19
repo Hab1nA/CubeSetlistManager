@@ -854,6 +854,9 @@ let slQ = "", dragKey = null;
 // 工程路径含 # 时按首个 # 切会把 base 与 id 全解错（红队 P2）
 const ptBaseOf = k => k.slice(3, k.lastIndexOf("#"));
 const ptIdOf = k => Number(k.slice(k.lastIndexOf("#") + 1));
+// 行键 → 歌身份：裸键原样、pt 键归一宿主（勿用 ptBaseOf(k)||k——裸键
+// 经 slice(3,-1) 产出非空垃圾串，两首不同歌可能撞成同块）
+const songBaseOf = k => k.startsWith("pt:") ? ptBaseOf(k) : k;
 const durCls = src => src === "manual" ? "dur-manual"
     : src === "unknown" ? "dur-unknown" : "dur-auto";
 const durText = it => it.durSrc === "unknown" ? "未知" : (it.dur || "未知");
@@ -1533,10 +1536,10 @@ async function ptcmd(op, payload) {
   // 启停/删点重构该歌行键空间（裸↔pt）：选中键随家族重映射，行为卡与
   // 蓝框跟着落位——不重映射则卡片停在已消亡键上，保存必被后端驳回
   if (j.ok && (op === "toggle" || op === "del")) {
-    const base = ptBaseOf(selRowKey) || selRowKey;
+    const base = songBaseOf(selRowKey);
     if (base === ptProj) {
       const rows = (plCache && plCache.pl) || [];
-      const row = rows.find(r => (ptBaseOf(r.key) || r.key) === base);
+      const row = rows.find(r => songBaseOf(r.key) === base);
       selRowKey = row ? row.key : null;
       markPlSel();
       refreshEndBeh();
@@ -2471,7 +2474,6 @@ async function refreshKbdDetail() {
 
 // ---- 详情面板「播完行为」卡（绑定播放列表条目；素材库选中不显示）----
 let endBehDirty = false;    // 未保存的下拉改动：轮询回填跳过（防静默重置）
-let endBehPrev = "";        // 最近一次生效的选择：末条目驳回时回退到此
 function refreshEndBeh() {
   const sel = $("#dt-end-sel");
   if (!sel) return;
@@ -2495,28 +2497,10 @@ function refreshEndBeh() {
     $("#dt-end-delay").value = "";
     wrap.hidden = true;
   }
-  endBehPrev = sel.value;
 }
 $("#dt-end-sel").addEventListener("change", () => {
-  const sel = $("#dt-end-sel");
-  // 末块出口无下一首可推进（后端按块出口判，前端同口径预拦）：选中行所在
-  // 连续同歌块延伸到列表末行即视为末位——段中位不再漏放行到保存才被驳
-  const songBase = k => ptBaseOf(k) || k;
-  const rows = (plCache && plCache.pl) || [];
-  const idx = rows.findIndex(r => r.key === selRowKey);
-  let last = idx;
-  if (idx >= 0)
-    while (last + 1 < rows.length
-           && songBase(rows[last + 1].key) === songBase(rows[idx].key)) last++;
-  const isLast = idx >= 0 && last === rows.length - 1 && rows.length > 0;
-  if (isLast && sel.value !== "") {
-    toast("已是播放列表末尾，仅可播完停止", "err");
-    sel.value = endBehPrev;
-  } else {
-    endBehPrev = sel.value;
-    endBehDirty = true;
-  }
-  $("#dt-end-delay-wrap").hidden = sel.value !== "delay";
+  $("#dt-end-delay-wrap").hidden = $("#dt-end-sel").value !== "delay";
+  endBehDirty = true;
 });
 $("#dt-end-save").addEventListener("click", async () => {
   const base = selRowKey;   // 行键（pt 行=完整 pt 键）：后端按键套用
@@ -2536,12 +2520,15 @@ $("#dt-end-save").addEventListener("click", async () => {
   if (j.ok) {
     endBehDirty = false;
     toast("播完行为已保存");
-    if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
-      (plCache.pl || []).forEach(r => { if (r.key === base) r.beh = beh; });
+    if (plCache) {              // 本地即时回写整块：不等 1.5s 轮询（防编辑中
+      const sb = songBaseOf(base);   // 回弹），与后端按曲套用+投影同口径
+      (plCache.pl || []).forEach(r => {
+        if (songBaseOf(r.key) === sb) r.beh = beh;
+      });
     }
   } else {
-    endBehDirty = false;        // 被驳（如它端重排进末位）：按服务端现值
-    toast(j.error || "保存失败", "err");   // 重同步，防 endBehPrev 中毒回错值
+    endBehDirty = false;        // 被驳（如它端已删该条目）：按服务端现值
+    toast(j.error || "保存失败", "err");   // 重同步，防下拉残留旧值
   }
   refreshEndBeh();
 });

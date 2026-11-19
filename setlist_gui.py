@@ -370,10 +370,11 @@ def _song_run(pl_keys, resolve, i):
 
 def _end_beh_renormalize(pl_keys, resolve, behs):
     """行为表按连续同歌块归一：出口位（块末位）已有值则保留，否则晋升
-    块内最后一个非空值，块内其余位清空（段中位值永不生效=潜伏死值）；
-    列表末位出口不得携带推进行为（与 setend 末位闸同口径）。结构编辑
-    （add/remove/move）、导入与装载的统一收口——出口由列表结构派生，
-    任何使出口位移的操作后必须重算。原地改写 behs。"""
+    块内最后一个非空值，块内其余位清空（段中位值永不生效=潜伏死值）。
+    结构编辑（add/remove/move）、导入与装载的统一收口——出口由列表结构
+    派生，任何使出口位移的操作后必须重算。列表末位出口不特判：推进行为
+    照存，运行时无下一首自然落空（先排后加歌的预配置照常生效）。
+    原地改写 behs。"""
     behs += [""] * (len(pl_keys) - len(behs))
     del behs[len(pl_keys):]
     i = 0
@@ -383,10 +384,7 @@ def _end_beh_renormalize(pl_keys, resolve, behs):
             (behs[j] for j in range(hi - 1, lo - 1, -1) if behs[j]), "")
         for j in range(lo, hi + 1):
             behs[j] = ""
-        if keep and not (hi == len(pl_keys) - 1
-                         and advance.parse_end_beh(keep)[0]
-                         in ("next", "playnext", "delay")):
-            behs[hi] = keep
+        behs[hi] = keep
         i = hi + 1
 
 
@@ -2712,7 +2710,9 @@ class App:
             # 播完行为按曲套用：点击位所在连续同歌块的行为出口=块末位
             #（段间链进不读行为，块内其余位的行为永无生效路径——段式
             # 歌按曲表达，写到出口、块内其余位清空；离散多块=各自出口），
-            # 空 beh=清除回默认（播完停止）
+            # 空 beh=清除回默认（播完停止）。列表末位不再驳回推进行为：
+            # 无下一首时运行时自然落空（_switch 落「已在播放列表末尾」
+            # 日志），先排后加歌的预配置照常生效
             beh = str(payload.get("beh") or "")
             if beh and not advance.valid_end_beh(beh):
                 return "未知播完行为：%s" % beh
@@ -2722,9 +2722,6 @@ class App:
             runs = {hi: lo for lo, hi in
                     (_song_run(self.pl_keys, self._resolve_entry, i)
                      for i in idxs)}
-            # 出口无下一首可推进：仅可播完停止（驳回其它行为）
-            if beh and len(self.pl_keys) - 1 in runs:
-                return "已是播放列表末尾，仅可播完停止"
             # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再套用
             self.end_beh += [""] * (len(self.pl_keys) - len(self.end_beh))
             self.end_beh = self.end_beh[:len(self.pl_keys)]

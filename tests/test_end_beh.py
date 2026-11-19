@@ -139,13 +139,15 @@ def test_plcmd_setend():
     app = _setend_app(["pt:A#1", "pt:A#2", "B", "pt:A#3"], ["", "", "", ""])
     assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": "next"}) is None
     assert app.end_beh == ["", "next", "", ""]
-    # 末块的段中位套用推进行为：出口=末条目，驳回（仅可播完停止）
+    # 末块的段中位套用推进行为：存到出口（无下一首运行时落空，先排后
+    # 加歌即生效——末位限制已按用户工作流废除）
     app = _setend_app(["B", "pt:A#1", "pt:A#2"])
     assert sg.App._pl_cmd_web(app, "setend", "pt:A#1",
-                              {"beh": "next"}) == "已是播放列表末尾，仅可播完停止"
-    assert app.end_beh == ["", "", ""]          # 驳回不落盘
+                              {"beh": "next"}) is None
+    assert app.end_beh == ["", "", "next"]
     assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": ""}) is None
-    # 不在播放列表 / 非法值 / 非末条目不受限
+    assert app.end_beh == ["", "", ""]
+    # 不在播放列表 / 非法值
     app = _setend_app(["A/歌一", "B/歌二"])
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
                               {"beh": "next"}) is None
@@ -195,11 +197,11 @@ def _plcmd_app(pl=None, beh=None):
 
 def test_end_beh_renormalize():
     """归一：出口值优先保留、否则块内最后一个非空值晋升、段中位清空、
-    列表末位出口不带推进行为（与 setend 末位闸同口径）、长度对齐。"""
+    列表末位出口不特判（推进行为照存，运行时无下一首自然落空）、长度对齐。"""
     app = _plcmd_app(["pt:A#1", "pt:A#2", "pt:A#3", "B"])
-    b = ["stop", "", "", "next"]           # 旧版死值在段中位+末位推进值
+    b = ["stop", "", "", "next"]           # 旧版死值在段中位；末位推进值保留
     sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
-    assert b == ["", "", "stop", ""]
+    assert b == ["", "", "stop", "next"]
     b = ["", "playnext", "", ""]
     sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
     assert b == ["", "", "playnext", ""]
@@ -224,30 +226,30 @@ def test_plcmd_struct_moves_exit_beh():
     assert sg.App._pl_cmd_web(app, "remove", "pt:A#1") is None
     assert app.pl_keys == ["pt:A#2", "B"]
     assert app.end_beh == ["next", ""]
-    # add 只在表尾追加：并入尾块时旧出口值随块迁到新出口——但新出口已是
-    # 末位，推进行为按末位闸清空（旧值本就越权：追加前它就在末位上）
+    # add 只在表尾追加：并入尾块时旧出口值随块迁到新出口（末位不特判，
+    # 推进行为照存——加歌后即生效）
     app = _plcmd_app(["B", "pt:A#1", "pt:A#2"], ["", "", "playnext"])
     assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
     assert app.pl_keys == ["B", "pt:A#1", "pt:A#2", "pt:A#3"]
-    assert app.end_beh == ["", "", "", ""]
+    assert app.end_beh == ["", "", "", "playnext"]
     # add 追加到表尾而他曲之后：自成新块，原块出口行为不动
     app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
     assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
     assert app.pl_keys == ["pt:A#1", "pt:A#2", "B", "pt:A#3"]
     assert app.end_beh == ["", "next", "", ""]
-    # move 把出口段拖去列表末尾：源块幸存出口接管；落到末位的随行值按
-    # 末位闸清空（无下一首可推进）
+    # move 把出口段拖去列表末尾：源块幸存出口接管；随行值落末位照存
     app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
     assert sg.App._pl_cmd_web(app, "move", "pt:A#2",
                               {"from": 1, "to": 2, "key": "pt:A#2"}) is None
     assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
-    assert app.end_beh == ["next", "", ""]
-    # move 他曲插入块中：拆块后各块出口就位（首块无值=播完停止是编排事实）
+    assert app.end_beh == ["next", "", "next"]
+    # move 他曲插入块中：拆块后行为随槽位走（A#2 带走出口值；把 B 拖回
+    # 即恢复原块出口，可逆）
     app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
     assert sg.App._pl_cmd_web(app, "move", "B",
                               {"from": 2, "to": 1, "key": "B"}) is None
     assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
-    assert app.end_beh == ["", "", ""]
+    assert app.end_beh == ["", "", "next"]
 
 
 def test_plcmd_add_rejects_bare_of_enabled():
