@@ -7,9 +7,13 @@ Bank Select+Program Change 切音色。
 输入捕获，记到工程文件夹 keyboard_automation.json（"slots"=JUNO，"ax"=AX-09）。
 JUNO 发回的模式问题（官方 MIDI Implementation 实测）：BS/PC 只在当前声音模式
 语境生效，且 Performance 组只认 Performance Control 通道、其余组只认
-Patch Rx/Tx 通道——所以按 MSB 推断模式（85→PERFORM、86/87/92/93→PATCH、
-GM→GM1）先发模式 SysEx（DT1 写 Setup:Sound Mode，地址 01 00 00 00，
+Patch Rx/Tx 通道——所以按 MSB 推断模式（85→PERFORM、其余含 GM 组→PATCH）
+先发模式 SysEx（DT1 写 Setup:Sound Mode，地址 01 00 00 00，
 设备ID默认 17=0x10），再按组路由通道发 BS/PC，消息间留间隔。
+GM 组不进 GM 声音模式：官方 Bank Map 里 GM Patch/鼓本质是 patch 组，面板
+Favorite 就在 PATCH 模式 BS/PC 直选；进 GM 模式反而装载模板 Performance
+（面板看似 PERFORM）且琴停在模板默认音色 Piano 1、BS/PC 不生效
+（2026-11-19 真机翻案；官方 MIDI Imple 明示 GM 模式即 Performance 模式）。
 AX-09 只能经 USB COMPUTER 口接收（DIN 口 OUT-only），无模式概念：
 BS(MSB 恒 87)+PC 直接寻址 144 个常规音色（1-128 号 LSB=0，129-144 号
 LSB=1）；Favorite/Special Tone 不在 PC 映射表里，MIDI 不可直达。
@@ -69,9 +73,10 @@ DEFAULT_AX = dict(inHint="AX-09", outHint="AX-09", ch=1, ax=True, dev=0)
 AX_GROUPS = ("SYNTH/PAD", "PIANO/KEYBOARD", "ORGAN/ACCORDION",
              "STRINGS/CHOIR", "BRASS/WINDS", "GUITAR/BASS")
 
-# MSB → (组名, {LSB: 子库名}, 声音模式 0=PATCH 1=PERFORM 2=GM2 3=GM1)
+# MSB → (组名, {LSB: 子库名}, 声音模式 0=PATCH 1=PERFORM 2=GM1 3=GM2 4=GS)
 # 组表来自官方 MIDI Implementation 的 Bank Map（PC 列 1 基，显示时 +1）；
-# Sound Mode 取值官方地址表实锤：2=GM2、3=GM1（Roland Clan 帖记反了）
+# Sound Mode 官方值序=PATCH/PERFORM/GM1/GM2/GS（旧注释把 GM1/GM2 读反，
+# Roland Clan 帖是对的）；GM 组归 PATCH 直选不进 GM 模式（见文件头说明）
 BANK_MAP = {
     85: ("Performance", {0: "用户", 64: "预置"}, 1),
     86: ("鼓组", {0: "用户", 64: "预置", 65: "DS"}, 0),
@@ -80,8 +85,8 @@ BANK_MAP = {
                    72: "PRST", 73: "DS", 74: "DS"}, 0),
     92: ("EXP 鼓组", {}, 0),
     93: ("EXP Patch", {}, 0),
-    0: ("GM", {}, 3), 63: ("GM", {}, 3), 121: ("GM", {}, 3),
-    120: ("GM 鼓", {}, 3),
+    0: ("GM", {}, 0), 63: ("GM", {}, 0), 121: ("GM", {}, 0),
+    120: ("GM 鼓", {}, 0),
 }
 
 
@@ -198,8 +203,8 @@ def describe_slot(slot):
     if msb in (0, 63, 121, 120):
         # GM 真机实测（2026-09-25）：MSB 0/121=标准组 0001-0128（PC0→Piano 1），
         # MSB 63=扩展组 0129-0256（PC0→European Pf）、120=鼓组（PC0→GM2
-        # STANDARD 套鼓）。已知差异：面板 GM 模式只显示模板 Performance
-        # 界面（无 GM 编号），此处编号为程序内区分，与面板对不上属预期
+        # STANDARD 套鼓）。编号为程序内区分口径；录制与回放字节对称（捕获
+        # 即面板 Favorite TX 原样），面板以 PATCH 模式直选
         if msb == 63:
             return "GM:%04d" % (129 + pc)
         if msb == 120:

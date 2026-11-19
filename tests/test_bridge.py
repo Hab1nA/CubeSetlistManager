@@ -622,11 +622,14 @@ def test_kbd_auto():
     assert mb._pick([(0, "Keyboard Automation"), (1, "loopMIDI Port")])[1] \
         == "loopMIDI Port"
 
-    # 模式推断（官方 Bank Map：85=Performance→PERFORM，87=Patch→PATCH，GM→GM1）
-    # Sound Mode 官方地址表：2=GM2、3=GM1（Roland Clan 帖记反，2026-09-25 真机实锤）
+    # 模式推断（官方 Bank Map：85=Performance→PERFORM，其余含 GM 组→PATCH）
+    # GM 组不进 GM 模式：GM Patch/鼓本质是 patch 组，进 GM 模式反被模板
+    # Performance 默认音色顶掉 BS/PC（2026-11-19 真机翻案）
     assert kbd_auto.mode_for_msb(85) == 1
     assert kbd_auto.mode_for_msb(87) == 0
-    assert kbd_auto.mode_for_msb(121) == 3
+    assert kbd_auto.mode_for_msb(121) == 0
+    assert kbd_auto.mode_for_msb(63) == 0
+    assert kbd_auto.mode_for_msb(120) == 0
     assert kbd_auto.mode_for_msb(None) is None
 
     # 模式 SysEx：F0 41 dev 00 00 3A 12 01 00 00 00 mode ck F7（校验和实测值）
@@ -646,6 +649,9 @@ def test_kbd_auto():
     m87 = kbd_auto.switch_msgs({"msb": 87, "lsb": 73, "pc": 0}, cfg)
     assert m87[0][1][12] == 0x7F                                # PATCH SysEx
     assert m87[3][1] == 0xC0                                    # PC 在 1 通道
+    m121 = kbd_auto.switch_msgs({"msb": 121, "lsb": 1, "pc": 80}, cfg)
+    assert m121[0][1][12] == 0x7F          # GM 组同 PATCH SysEx，不进 GM 模式
+    assert m121[3][1] == 0xC0 | 80 << 8    # PC 在 1 通道（patchCh）
     mpc = kbd_auto.switch_msgs({"pc": 7}, cfg)                  # 纯 PC：无 SysEx
     assert len(mpc) == 1 and mpc[0][1] == 0xC0 | 7 << 8
 
