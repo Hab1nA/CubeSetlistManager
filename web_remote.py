@@ -1887,21 +1887,11 @@ class _Handler(BaseHTTPRequestHandler):
                     v["team"] = s["team"]
                     lib.append(v)
                 pl = []
-                # 段式歌行为投影：段中位显示块出口行为（行为只从出口生效，
-                # 与 setend 写出口对称——编辑面按曲表达，段中位不再显示
-                # 永不生效的死槽位值）
-                exits = list(range(len(app.pl_keys)))
-                for i in range(len(app.pl_keys) - 2, -1, -1):
-                    a, b_ = resolve(app.pl_keys[i]), resolve(app.pl_keys[i + 1])
-                    if a and b_ and a["lib_key"] == b_["lib_key"]:
-                        exits[i] = exits[i + 1]
                 for i, k in enumerate(app.pl_keys):
-                    b = end_beh[exits[i]] if exits[i] < len(end_beh) else ""
+                    b = end_beh[i] if i < len(end_beh) else ""
                     pl.append(view(k, None, b))
                 break
-            except (RuntimeError, IndexError):
-                # IndexError：len() 取值与索引之间列表被 Tk 线程收缩——
-                # 与迭代 RuntimeError 同源，同走重试
+            except RuntimeError:
                 lib, pl = [], []
                 continue
         self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})

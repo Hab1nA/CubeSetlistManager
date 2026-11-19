@@ -2474,6 +2474,7 @@ async function refreshKbdDetail() {
 
 // ---- 详情面板「播完行为」卡（绑定播放列表条目；素材库选中不显示）----
 let endBehDirty = false;    // 未保存的下拉改动：轮询回填跳过（防静默重置）
+let endBehPrev = "";        // 最近一次生效的选择：队尾驳回时回退到此
 function refreshEndBeh() {
   const sel = $("#dt-end-sel");
   if (!sel) return;
@@ -2493,14 +2494,26 @@ function refreshEndBeh() {
     $("#dt-end-delay").value = v.slice(6);
     wrap.hidden = false;
   } else {
-    sel.value = v === "stop" ? "" : v;   // ""=播完停止（未定义行为亦同）
+    sel.value = v === "stop" ? "" : v;   // ""=默认过渡（未定义行为亦同）
     $("#dt-end-delay").value = "";
     wrap.hidden = true;
   }
+  endBehPrev = sel.value;
 }
 $("#dt-end-sel").addEventListener("change", () => {
-  $("#dt-end-delay-wrap").hidden = $("#dt-end-sel").value !== "delay";
-  endBehDirty = true;
+  const sel = $("#dt-end-sel");
+  // 队尾条目无下一行可推进：非默认过渡的选择即时报错驳回（0.17.0 原闸
+  // 恢复——逐行语义下末位=列表最后一行，与后端 len-1 in idxs 同口径）
+  const rows = (plCache && plCache.pl) || [];
+  const lastRow = rows.length ? rows[rows.length - 1] : null;
+  if (lastRow && lastRow.key === selRowKey && sel.value !== "") {
+    toast("已是播放列表末尾，仅可播完停止", "err");
+    sel.value = endBehPrev;
+  } else {
+    endBehPrev = sel.value;
+    endBehDirty = true;
+  }
+  $("#dt-end-delay-wrap").hidden = sel.value !== "delay";
 });
 $("#dt-end-save").addEventListener("click", async () => {
   const base = selRowKey;   // 行键（pt 行=完整 pt 键）：后端按键套用
@@ -2520,11 +2533,8 @@ $("#dt-end-save").addEventListener("click", async () => {
   if (j.ok) {
     endBehDirty = false;
     toast("播完行为已保存");
-    if (plCache) {              // 本地即时回写整块：不等 1.5s 轮询（防编辑中
-      const sb = songBaseOf(base);   // 回弹），与后端按曲套用+投影同口径
-      (plCache.pl || []).forEach(r => {
-        if (songBaseOf(r.key) === sb) r.beh = beh;
-      });
+    if (plCache) {              // 本地即时回写：不等 1.5s 轮询（防编辑中回弹）
+      (plCache.pl || []).forEach(r => { if (r.key === base) r.beh = beh; });
     }
   } else {
     endBehDirty = false;        // 被驳（如它端已删该条目）：按服务端现值

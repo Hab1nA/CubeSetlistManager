@@ -352,42 +352,6 @@ def _load_playlist(daw=""):
             "daw": ""}
 
 
-def _song_run(pl_keys, resolve, i):
-    """播放列表第 i 位所在连续同歌块 (lo, hi)（lib_key 相同=同曲段链，
-    裸条目与点条目同判；解析失败/失效条目自成块）。hi=行为出口位。"""
-    def lk(j):
-        e = resolve(pl_keys[j])
-        return e["lib_key"] if e else None
-    base = lk(i)
-    lo = hi = i
-    if base is not None:
-        while lo > 0 and lk(lo - 1) == base:
-            lo -= 1
-        while hi + 1 < len(pl_keys) and lk(hi + 1) == base:
-            hi += 1
-    return lo, hi
-
-
-def _end_beh_renormalize(pl_keys, resolve, behs):
-    """行为表按连续同歌块归一：出口位（块末位）已有值则保留，否则晋升
-    块内最后一个非空值，块内其余位清空（段中位值永不生效=潜伏死值）。
-    结构编辑（add/remove/move）、导入与装载的统一收口——出口由列表结构
-    派生，任何使出口位移的操作后必须重算。列表末位出口不特判：推进行为
-    照存，运行时无下一首自然落空（先排后加歌的预配置照常生效）。
-    原地改写 behs。"""
-    behs += [""] * (len(pl_keys) - len(behs))
-    del behs[len(pl_keys):]
-    i = 0
-    while i < len(pl_keys):
-        lo, hi = _song_run(pl_keys, resolve, i)
-        keep = behs[hi] or next(
-            (behs[j] for j in range(hi - 1, lo - 1, -1) if behs[j]), "")
-        for j in range(lo, hi + 1):
-            behs[j] = ""
-        behs[hi] = keep
-        i = hi + 1
-
-
 def _end_beh_from_file(raw, keys):
     """endBeh 载荷 → 与 keys 等长的行为表。列表=逐位绑定播放列表条目
     （本版格式）；字典=旧格式（lib_key→行为，键归一宿主随条目走）。
@@ -1162,9 +1126,6 @@ class App:
                            % k.split("/")[-1])
         self.pl_keys = [k for k, _ in alive]
         self.end_beh = [b for _, b in alive]
-        # 旧版文件段中位死值装载即归一（出口位已有值则保留=与既有实效
-        # 一致；否则晋升块内最后一个非空值），重启/重扫各过一遍（幂等）
-        _end_beh_renormalize(self.pl_keys, self._resolve_entry, self.end_beh)
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表。仅启动线程
         # 执行（_startup_done 尚 False）——重扫线程触发时跳过：恢复段在
         # 后台线程直写装载态（cur/slots/watch），与主线程切歌/对位并发=
@@ -1693,42 +1654,19 @@ class App:
 
             # 节目单=用户裁剪（11-19 定案）：定义编辑不增不排——新点不
             # 自动上节目单（加段走素材库＋按钮）、定义内重排不动节目单
-            # 顺序，只下架点已删的条目。旧「收起→按定义全集展开」的镜像
-            # 重置会复活已删段、合并离散块、丢非首块出口行为，废弃。
+            # 顺序，只下架点已删的条目（其行为随行消亡——行为逐行独立，
+            # 不做块出口迁移）。旧「收起→按定义全集展开」的镜像重置会
+            # 复活已删段、合并离散块，废弃。
             def alive_pt(k):
                 pt = points.parse_pt_key(k)
                 return pt is None or pt[0] != lib_key \
                     or points.get_point(data, pt[1]) is not None
 
-            def run_key(k):     # 同歌判键：删除中的点解析不出，按宿主归
-                pt = points.parse_pt_key(k)
-                if pt:
-                    return pt[0]
-                e = self._resolve_entry(k)
-                return e["lib_key"] if e else None
-
-            # 出口段被删（块内还有幸存段）：行为先迁到幸存出口再下架
-            # （remove 同律；run 用 run_key 判，被删的 pt 仍归本块）
-            n = len(old)
-            for i in range(n):
-                if alive_pt(old[i]) or run_key(old[i]) != lib_key:
-                    continue
-                base = lib_key
-                lo = hi = i
-                while lo > 0 and run_key(old[lo - 1]) == base:
-                    lo -= 1
-                while hi + 1 < n and run_key(old[hi + 1]) == base:
-                    hi += 1
-                surv = [x for x in range(lo, hi + 1) if alive_pt(old[x])]
-                if i == hi and surv and i < len(old_behs) and old_behs[i]:
-                    old_behs[surv[-1]] = old_behs[surv[-1]] or old_behs[i]
             keep = [(k, old_behs[i] if i < len(old_behs) else "")
                     for i, k in enumerate(old) if alive_pt(k)]
             self.pl_keys = [k for k, _ in keep]
             self.end_beh = [b for _, b in keep]
             self.cur = points.remap_cur(old, self.pl_keys, self.cur, lib_key)
-            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
-                                 self.end_beh)
             # 当前装载条目被下架（如删除正在播放的点）：粒度标签已死，
             # 按落点条目重装载映射——防滞留死点段（对位规则①会抑制自愈）、
             # song_key=None 的保存不再写孤儿段；落点未变（增删他点/改时码）
@@ -2707,28 +2645,24 @@ class App:
         redict）。返回 None=成功。"""
         payload = payload or {}
         if op == "setend":
-            # 播完行为按曲套用：点击位所在连续同歌块的行为出口=块末位
-            #（段间链进不读行为，块内其余位的行为永无生效路径——段式
-            # 歌按曲表达，写到出口、块内其余位清空；离散多块=各自出口），
-            # 空 beh=清除回默认（播完停止）。列表末位不再驳回推进行为：
-            # 无下一首时运行时自然落空（_switch 落「已在播放列表末尾」
-            # 日志），先排后加歌的预配置照常生效
+            # 播完行为逐行独立（0.17.0 原语义恢复）：按键套用该键的全部
+            # 条目位（应用层禁同键重复；导入文件含同键多位时逐位可异、
+            # 编辑面按键表达），空 beh=清除回默认（""=下一行同歌链进、
+            # 跨歌停止）。队尾拦截：末位条目无下一行可推进，推进行为驳回
             beh = str(payload.get("beh") or "")
             if beh and not advance.valid_end_beh(beh):
                 return "未知播完行为：%s" % beh
             idxs = [i for i, k in enumerate(self.pl_keys) if k == key]
             if not idxs:
                 return "条目不在播放列表里"
-            runs = {hi: lo for lo, hi in
-                    (_song_run(self.pl_keys, self._resolve_entry, i)
-                     for i in idxs)}
-            # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再套用
+            # 末位条目无下一行可推进：仅可播完停止（驳回其它行为）
+            if beh and len(self.pl_keys) - 1 in idxs:
+                return "已是播放列表末尾，仅可播完停止"
+            # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再逐位套用
             self.end_beh += [""] * (len(self.pl_keys) - len(self.end_beh))
             self.end_beh = self.end_beh[:len(self.pl_keys)]
-            for hi, lo in runs.items():
-                for j in range(lo, hi + 1):
-                    self.end_beh[j] = ""
-                self.end_beh[hi] = beh
+            for i in idxs:
+                self.end_beh[i] = beh
             self._persist()
             return None
         if op == "clear":
@@ -2794,11 +2728,8 @@ class App:
             mv_key = str(payload.get("key") or "")
             if mv_key and mv_key != self.pl_keys[frm]:
                 return "列表刚变化，未能移动"
-            # 出口位被移走：行为随歌迁到幸存出口（歌还在列表里，播完行为
-            # 不因拖走一段而丢——与 remove 同律）；随行值再经收口归位
-            lo, hi = _song_run(self.pl_keys, self._resolve_entry, frm)
-            if frm == hi and hi > lo and frm < len(self.end_beh):
-                self.end_beh[frm - 1] = self.end_beh[frm]
+            # 行为逐行独立：随槽位走（拖走出口段=该行的过渡值跟着行走，
+            # 不迁——迁=把 A 行的意图写到 B 行，逐行语义下是错的）
             item = self.pl_keys.pop(frm)
             self.pl_keys.insert(to, item)
             if frm < len(self.end_beh):
@@ -2813,8 +2744,6 @@ class App:
                     self.cur -= 1
                 elif to <= self.cur < frm:
                     self.cur += 1
-            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
-                                 self.end_beh)
             self._persist()
             return None
         if op == "add":
@@ -2837,21 +2766,15 @@ class App:
             if key in self.pl_keys:
                 return "已在播放列表里"
             self.pl_keys.append(key)
-            self.end_beh.append("")      # 新条目默认（播完停止），行为卡再定
-            # 末尾扩块（同歌追加）：旧出口值随块迁到新出口，不沦为死槽位
-            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
-                                 self.end_beh)
+            self.end_beh.append("")      # 新条目默认（""=默认过渡），行为卡再定
         else:
             try:
                 i = self.pl_keys.index(key)
             except ValueError:
                 return "条目不在播放列表里"
             if op == "remove":
-                # 出口段被删：行为随歌迁到幸存出口（块内还有成员=这首歌
-                # 还在；整块删光=行为随歌一起走）
-                lo, hi = _song_run(self.pl_keys, self._resolve_entry, i)
-                if i == hi and hi > lo and i < len(self.end_beh):
-                    self.end_beh[i - 1] = self.end_beh[i]
+                # 行为逐行独立：随行删（删出口段=这首歌的末行过渡值随行走，
+                # 不迁——迁=把 A 行的意图写到 B 行，逐行语义下是错的）
                 self.pl_keys.pop(i)
                 if i < len(self.end_beh):
                     self.end_beh.pop(i)
@@ -2861,8 +2784,6 @@ class App:
                     elif i == self.cur:
                         self.cur = (min(self.cur, len(self.pl_keys) - 1)
                                     if self.pl_keys else None)
-                _end_beh_renormalize(self.pl_keys, self._resolve_entry,
-                                     self.end_beh)
             else:
                 return "未知操作"
         self._persist()
@@ -3004,10 +2925,9 @@ class App:
                     src[k] = "manual"
         self.durations, self.dur_src = dur, src
         # 播完行为=逐位替换：行为绑定条目随歌单走（不同歌单同歌可异），
-        # 本机旧行为不保留——它是节目单编排决定，不是本地缓存；旧版/
-        # 旧字典格式可带段中位死值，装载即按块归一到出口
+        # 本机旧行为不保留——它是节目单编排决定，不是本地缓存（逐行独立，
+        # 原样装载不归一）
         self.end_beh = live_beh
-        _end_beh_renormalize(self.pl_keys, self._resolve_entry, self.end_beh)
         self._persist()
         self.q.put("已导入歌单：%d 首%s" % (
             len(live), "，跳过失效条目 %d 个" % len(skipped)
@@ -3062,10 +2982,11 @@ class App:
             self.q.put("已在播放列表开头")
 
     def _advance(self):
-        """播完推进出口（AdvanceWatch 资格闩闭合后调用）：按当前条目所属歌
-        的播完行为分发；未定义行为=播完停止（全局两开关已删）。同歌段间
-        链进（点→点）不算歌尾——行为只在推进跨出该歌（末点→下一首/裸条目
-        播完/已到列表末尾）时生效，段间无条件接续播放。"""
+        """播完推进出口（AdvanceWatch 资格闩闭合后调用）：按当前条目自身的
+        播完行为分发——每行=一个独立条目，行值管辖「本行播完→下一行」的
+        过渡，显式 stop/next/playnext/delay 在任意行生效（段中 stop=停在
+        段间空档不再链进；next=切下一行不起播）。未定义行为（""）沿用
+        0.17.0 默认：下一行同歌（段间）→ 链进接播；跨歌/表尾 → 播完停止。"""
         if self.ctrl is not None and self.ctrl.busy:
             self.q.put("自动切换：正在切换中，跳过")
             return
@@ -3074,22 +2995,22 @@ class App:
                    if self.cur is not None and 0 <= self.cur < len(self.pl_keys)
                    else None)
         e = self._resolve_entry(cur_key) if cur_key else None
-        nxt = self.pl_keys[i] if i < len(self.pl_keys) else None
-        nxt_e = self._resolve_entry(nxt) if nxt else None
-        song_end = nxt_e is None \
-            or (e is None or nxt_e["lib_key"] != e["lib_key"])
-        if not song_end:
-            self._switch(i, "自动", play_after=True)
-            return
         beh = (self.end_beh[self.cur]
                if self.cur is not None
                and 0 <= self.cur < len(self.end_beh) else "")
         kind, delay = advance.parse_end_beh(beh or None)
         if kind == "follow":
+            nxt = self.pl_keys[i] if i < len(self.pl_keys) else None
+            nxt_e = self._resolve_entry(nxt) if nxt else None
+            song_end = nxt_e is None \
+                or (e is None or nxt_e["lib_key"] != e["lib_key"])
+            if not song_end:
+                self._switch(i, "自动", play_after=True)
+                return
             kind = "stop"
         if kind == "stop":
-            self.q.put("《%s》播完停止：按该曲播完行为"
-                       % (e["song_name"] if e else "未知条目"))
+            self.q.put("《%s》播完停止：按条目播完行为"
+                       % (e["display"] if e else "未知条目"))
             return
         if kind == "delay":
             if self._switch(i, "自动"):

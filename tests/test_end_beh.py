@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""播完行为（endBeh，与播放列表逐位平行）：解析、playlist.json endBeh 段
-存取往返（新列表/旧字典格式）、/plcmd setend 按键套用、展开/收起变换。
+"""播完行为（endBeh，与播放列表逐位平行，逐行独立）：解析、playlist.json
+endBeh 段存取往返（新列表/旧字典格式）、/plcmd setend 逐行套用+队尾拦截、
+运行时行为优先分发（显式值任意行生效、""=段间链进/跨歌停止默认）。
 fake app 走真实 App 方法（unbound 调用，同 test_webapp._pl_app 模式）。"""
 import types
 
@@ -66,14 +67,15 @@ def test_playlist_endbeh_omitted_when_empty(tmp_path, monkeypatch):
 
 
 def test_end_beh_expand_collapse():
-    """展开/收起变换：歌槽位行为迁移到点块出口（末位），收起反向。"""
+    """启停定位点的展开/收起变换：歌槽位行为=整曲播完的过渡，展开落
+    末点（song-end 过渡点），收起反向取块末位。"""
     # 展开：歌槽位行为 → 块末位（块位置=歌槽位原位）
     assert sg._end_beh_expand(["A", "B"], ["delay:5", ""], "A",
                               ["pt:A#1", "pt:A#2"]) == ["", "delay:5", ""]
     # 歌不在表 / 无点：原样
     assert sg._end_beh_expand(["A"], [""], "Z", ["pt:Z#1"]) == [""]
     assert sg._end_beh_expand(["A"], ["next"], "A", []) == ["next"]
-    # 收起：块末位（出口）行为 → 歌槽位
+    # 收起：块末位行为 → 歌槽位
     assert sg._end_beh_collapse(["pt:A#1", "pt:A#2", "B"],
                                 ["", "next", "delay:5"], "A") \
         == ["next", "delay:5"]
@@ -82,10 +84,10 @@ def test_end_beh_expand_collapse():
                                 ["", "", "delay:5"], "A") == ["", "delay:5"]
     # 裸条目在场（expand_replace 同款守卫）：块行为丢弃
     assert sg._end_beh_collapse(["A", "pt:A#1"], ["", "next"], "A") == [""]
-    # 离散多块（与 collapse_restore 镜像）：仅首块出口晋升，其余块随位丢弃
+    # 离散多块（与 collapse_restore 镜像）：仅首块末位晋升，其余块随位丢弃
     assert sg._end_beh_collapse(["pt:A#2", "B", "pt:A#1"],
                                 ["next", "", "delay:5"], "A")         == ["next", ""]
-    # 行为缺位（长度漂移）容忍：出口=末位，末位缺位按 "" 处理
+    # 行为缺位（长度漂移）容忍：末位缺位按 "" 处理
     assert sg._end_beh_collapse(["pt:A#1", "pt:A#2"], ["next"], "A") \
         == [""]
 
@@ -107,46 +109,36 @@ def _setend_app(pl=None, beh=None):
     return app
 
 
-def test_song_run():
-    """连续同歌块 (lo, hi)：pt/裸条目同判、失效条目自成块、离散块各归各。"""
-    keys = ["pt:A#1", "pt:A#2", "B", "pt:A#3", "?", "pt:A#4"]
-    resolve = _setend_app(keys)._resolve_entry
-    assert [sg._song_run(keys, resolve, i) for i in range(6)] \
-        == [(0, 1), (0, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
-    keys = ["pt:A#1", "?", "pt:A#2"]           # 失效条目截断块
-    assert sg._song_run(keys, resolve, 0) == (0, 0)
-    assert sg._song_run(keys, resolve, 2) == (2, 2)
-
-
 def test_plcmd_setend():
-    """/plcmd setend：按曲套用——行为写点击位所在连续同歌块的出口（段中位
-    永无生效路径）/清除/非法值与不在列表拒绝。"""
+    """/plcmd setend：逐行独立（0.17.0 原语义恢复）——按键套用该键全部
+    条目位、清除、队尾拦截、非法值与不在列表拒绝。"""
     app = _setend_app()
-    # 同键相邻多位=一个连续块：只写块出口（末位），块内其余位清空
+    # 同键相邻多位（导入文件可含）：按键套用到全部位
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
                               {"beh": "delay:15"}) is None
-    assert app.end_beh == ["", "delay:15", ""]
-    # 空 beh=清除回默认（播完停止）
+    assert app.end_beh == ["delay:15", "delay:15", ""]
+    # 空 beh=清除回默认
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一", {"beh": ""}) is None
     assert app.end_beh == ["", "", ""]
-    # 段式歌：段中位（用户点歌的首段行）套用 → 写块出口、段中位清空
+    # 段式歌：每段行独立——改 #1 只动 #1 的槽位
     app = _setend_app(["pt:A/歌一#1", "pt:A/歌一#2", "pt:A/歌一#3", "B/歌二"],
                       ["next", "", "", ""])
     assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#1",
                               {"beh": "delay:15"}) is None
-    assert app.end_beh == ["", "", "delay:15", ""]
-    # 离散多块：套用只动点击块的出口，他块不动
-    app = _setend_app(["pt:A#1", "pt:A#2", "B", "pt:A#3"], ["", "", "", ""])
-    assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": "next"}) is None
-    assert app.end_beh == ["", "next", "", ""]
-    # 末块的段中位套用推进行为：存到出口（无下一首运行时落空，先排后
-    # 加歌即生效——末位限制已按用户工作流废除）
+    assert app.end_beh == ["delay:15", "", "", ""]
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#3",
+                              {"beh": "playnext"}) is None
+    assert app.end_beh == ["delay:15", "", "playnext", ""]
+    # 队尾拦截（0.17.0 原闸恢复）：末位条目推进行为驳回，"" 放行
     app = _setend_app(["B", "pt:A#1", "pt:A#2"])
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A#2",
+                              {"beh": "next"}) == "已是播放列表末尾，仅可播完停止"
+    assert app.end_beh == ["", "", ""]          # 驳回不落盘
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A#2", {"beh": ""}) is None
+    # 段中位推进行为不再拦截（逐行语义下段中值有运行时意义）
     assert sg.App._pl_cmd_web(app, "setend", "pt:A#1",
                               {"beh": "next"}) is None
-    assert app.end_beh == ["", "", "next"]
-    assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": ""}) is None
-    assert app.end_beh == ["", "", ""]
+    assert app.end_beh == ["", "next", ""]
     # 不在播放列表 / 非法值
     app = _setend_app(["A/歌一", "B/歌二"])
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
@@ -195,61 +187,25 @@ def _plcmd_app(pl=None, beh=None):
     return app
 
 
-def test_end_beh_renormalize():
-    """归一：出口值优先保留、否则块内最后一个非空值晋升、段中位清空、
-    列表末位出口不特判（推进行为照存，运行时无下一首自然落空）、长度对齐。"""
-    app = _plcmd_app(["pt:A#1", "pt:A#2", "pt:A#3", "B"])
-    b = ["stop", "", "", "next"]           # 旧版死值在段中位；末位推进值保留
-    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
-    assert b == ["", "", "stop", "next"]
-    b = ["", "playnext", "", ""]
-    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
-    assert b == ["", "", "playnext", ""]
-    b = ["", "", "next", ""]               # 出口值已在对的位置：幂等
-    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
-    assert b == ["", "", "next", ""]
-    b = ["delay:5"]                        # 长度漂移：补齐后块重算
-    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
-    assert b == ["", "", "delay:5", ""]
-
-
-def test_plcmd_struct_moves_exit_beh():
-    """结构编辑（add/remove/move）迁移块出口行为——出口由列表结构派生，
-    位移后行为随块走，不静默丢、不沦为死槽位。"""
-    # remove 删出口段：行为迁到幸存出口
+def test_plcmd_struct_slots_carry():
+    """结构编辑（add/remove/move）：行为逐行独立随槽位走——删哪行删哪值、
+    拖哪行带哪值，不做任何块级迁移（迁=把 A 行意图写到 B 行）。"""
+    # remove：删哪行删哪值
     app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "delay:15", ""])
     assert sg.App._pl_cmd_web(app, "remove", "pt:A#2") is None
     assert app.pl_keys == ["pt:A#1", "B"]
-    assert app.end_beh == ["delay:15", ""]
-    # remove 删段中段：出口行为不动
-    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
-    assert sg.App._pl_cmd_web(app, "remove", "pt:A#1") is None
-    assert app.pl_keys == ["pt:A#2", "B"]
-    assert app.end_beh == ["next", ""]
-    # add 只在表尾追加：并入尾块时旧出口值随块迁到新出口（末位不特判，
-    # 推进行为照存——加歌后即生效）
-    app = _plcmd_app(["B", "pt:A#1", "pt:A#2"], ["", "", "playnext"])
-    assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
-    assert app.pl_keys == ["B", "pt:A#1", "pt:A#2", "pt:A#3"]
-    assert app.end_beh == ["", "", "", "playnext"]
-    # add 追加到表尾而他曲之后：自成新块，原块出口行为不动
-    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
-    assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
-    assert app.pl_keys == ["pt:A#1", "pt:A#2", "B", "pt:A#3"]
-    assert app.end_beh == ["", "next", "", ""]
-    # move 把出口段拖去列表末尾：源块幸存出口接管；随行值落末位照存
+    assert app.end_beh == ["", ""]
+    # move：拖哪行带哪值
     app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
     assert sg.App._pl_cmd_web(app, "move", "pt:A#2",
                               {"from": 1, "to": 2, "key": "pt:A#2"}) is None
     assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
-    assert app.end_beh == ["next", "", "next"]
-    # move 他曲插入块中：拆块后行为随槽位走（A#2 带走出口值；把 B 拖回
-    # 即恢复原块出口，可逆）
-    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
-    assert sg.App._pl_cmd_web(app, "move", "B",
-                              {"from": 2, "to": 1, "key": "B"}) is None
-    assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
     assert app.end_beh == ["", "", "next"]
+    # add 追加新行=""（默认过渡）
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
+    assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
+    assert app.pl_keys == ["pt:A#1", "pt:A#2", "B", "pt:A#3"]
+    assert app.end_beh == ["", "next", "", ""]
 
 
 def test_plcmd_add_rejects_bare_of_enabled():
@@ -272,7 +228,7 @@ def _advance_app(lib_of, pl, cur, end_beh=None):
         _delay_seq=0,
         switches=[], delayed=[], logs=_Log(),
         _resolve_entry=lambda k: ({"lib_key": lib_of[k],
-                                   "song_name": k}
+                                   "song_name": k, "display": k}
                                   if k in lib_of else None),
         _switch=lambda i, via, play_after=False:
             app.switches.append((i, play_after)) or True,
@@ -295,22 +251,36 @@ class _Log(list):
 
 
 def test_advance_song_end_semantics():
-    """歌尾行为读当前条目槽位：段间链进（点→点）不解析行为，无条件接续
-    播放；末点（出口）槽位的行为在跨出该歌时解析（未定义=停止不切）。"""
+    """运行时行为优先分发：显式值任意行生效；""=默认过渡（下一行同歌
+    链进接播、跨歌/表尾停止）。段中显式 stop=停在段间不再链进。"""
     app = _advance_app({"pt:A#1": "A", "pt:A#2": "A", "B": "B"},
                        ["pt:A#1", "pt:A#2", "B"], cur=0,
                        end_beh=["", "stop", ""])
     sg.App._advance(app)
-    assert app.switches == [(1, True)]          # 段间：无条件接续播放
+    assert app.switches == [(1, True)]          # 段间 ""：默认链进接播
     app.cur = 1
     app.switches = []                           # 清第一段记录：只看本次推进
     sg.App._advance(app)
-    assert app.switches == []                   # 歌尾：出口槽位 stop → 不切
+    assert app.switches == []                   # 段中显式 stop：停，不链进
     assert any("播完停止" in m for m in app.logs)
-    # 未定义行为=播完停止：不切
+    # 未定义行为 + 跨歌：播完停止
     app2 = _advance_app({"A": "A", "B": "B"}, ["A", "B"], cur=0)
     sg.App._advance(app2)
     assert app2.switches == [] and any("播完停止" in m for m in app2.logs)
+
+
+def test_advance_mid_song_explicit_values():
+    """段中显式值有运行时意义（逐行语义核心）：next=切下一段不起播、
+    playnext=切下一段并起播、delay=切下一段+排定延迟起播。"""
+    for beh, want_play, delayed in (("next", False, []),
+                                    ("playnext", True, []),
+                                    ("delay:15", False, [(1, 15.0)])):
+        app = _advance_app({"pt:A#1": "A", "pt:A#2": "A", "B": "B"},
+                           ["pt:A#1", "pt:A#2", "B"], cur=0,
+                           end_beh=[beh, "", ""])
+        sg.App._advance(app)
+        assert app.switches == [(1, want_play)], beh
+        assert app.delayed == delayed, beh
 
 
 def test_advance_delay_and_stop_paths():

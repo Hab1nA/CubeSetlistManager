@@ -191,14 +191,13 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     assert app.pl_keys == ["pt:L#2"]        # 新点 P3 不复活/不追加
     assert app.cur_point_id == 2 and app.slots == {72: {"pc": 1}}
     assert app.end_beh == [""]
-    # 出口段被删（块内还有幸存段）：行为迁到幸存出口（同 remove 律）；
-    # 出口非列表末位，推进行为保留
+    # 删点的行=该行行为随行消亡（逐行独立，不做块级迁移）
     app.pl_keys = ["pt:L#2", "pt:L#3", "X"]
     app.end_beh = ["", "delay:5", ""]
     app.points["L"]["points"] = app.points["L"]["points"][:-1]  # 删 P3
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.pl_keys == ["pt:L#2", "X"]
-    assert app.end_beh == ["delay:5", ""]   # 出口行为迁到幸存出口
+    assert app.end_beh == ["", ""]          # P3 的行为随行删除
 
 
 def test_sync_list_keeps_curation(tmp_path):

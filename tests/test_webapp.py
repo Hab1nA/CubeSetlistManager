@@ -206,10 +206,8 @@ def test_playlist_points_log_endpoints():
         assert [x["key"] for x in pl["pl"]] == app.pl_keys
         assert pl["pl"][1]["pt"] is True and pl["pl"][1]["name"] == "歌一 · 定位点1"
         assert len(pl["lib"]) == 2
-        # 行为投影随行携带：同歌块（裸条目+两段定位点）段中位一律显示
-        # 块出口行为（delay:5），永不生效的死槽位值（next）不再露出
-        assert [x["beh"] for x in pl["pl"]] == ["delay:5", "delay:5",
-                                                "delay:5", ""]
+        # 行为逐行携带（逐行独立语义）：各显示各的值
+        assert [x["beh"] for x in pl["pl"]] == ["next", "", "delay:5", ""]
         assert "endBeh" not in pl
 
         pts = _get(port, "/points")
