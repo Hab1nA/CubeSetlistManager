@@ -368,6 +368,28 @@ def _song_run(pl_keys, resolve, i):
     return lo, hi
 
 
+def _end_beh_renormalize(pl_keys, resolve, behs):
+    """行为表按连续同歌块归一：出口位（块末位）已有值则保留，否则晋升
+    块内最后一个非空值，块内其余位清空（段中位值永不生效=潜伏死值）；
+    列表末位出口不得携带推进行为（与 setend 末位闸同口径）。结构编辑
+    （add/remove/move）、导入与装载的统一收口——出口由列表结构派生，
+    任何使出口位移的操作后必须重算。原地改写 behs。"""
+    behs += [""] * (len(pl_keys) - len(behs))
+    del behs[len(pl_keys):]
+    i = 0
+    while i < len(pl_keys):
+        lo, hi = _song_run(pl_keys, resolve, i)
+        keep = behs[hi] or next(
+            (behs[j] for j in range(hi - 1, lo - 1, -1) if behs[j]), "")
+        for j in range(lo, hi + 1):
+            behs[j] = ""
+        if keep and not (hi == len(pl_keys) - 1
+                         and advance.parse_end_beh(keep)[0]
+                         in ("next", "playnext", "delay")):
+            behs[hi] = keep
+        i = hi + 1
+
+
 def _end_beh_from_file(raw, keys):
     """endBeh 载荷 → 与 keys 等长的行为表。列表=逐位绑定播放列表条目
     （本版格式）；字典=旧格式（lib_key→行为，键归一宿主随条目走）。
@@ -1125,6 +1147,9 @@ class App:
                  for i, k in enumerate(self.pl_keys) if self._entry_alive(k)]
         self.pl_keys = [k for k, _ in alive]
         self.end_beh = [b for _, b in alive]
+        # 旧版文件段中位死值装载即归一（出口位已有值则保留=与既有实效
+        # 一致；否则晋升块内最后一个非空值），重启/重扫各过一遍（幂等）
+        _end_beh_renormalize(self.pl_keys, self._resolve_entry, self.end_beh)
         # 重启恢复：Cubase 里还开着的工程按标题对回播放列表。仅启动线程
         # 执行（_startup_done 尚 False）——重扫线程触发时跳过：恢复段在
         # 后台线程直写装载态（cur/slots/watch），与主线程切歌/对位并发=
@@ -1310,7 +1335,7 @@ class App:
         """切到播放列表第 i 项；返回 False=没开始（越界/正忙/库缺项）。"""
         self._delay_play_cancel()   # 新切换使在途延迟起播失效（含本次 delay 流程再重排）
         if not (0 <= i < len(self.pl_keys)):
-            if via == "advance":
+            if via == "自动":
                 self.q.put("自动切换：已到播放列表末尾，不切换")
             elif not self.pl_keys:
                 self.q.put("播放列表为空：先从素材库加入歌曲")
@@ -1334,8 +1359,16 @@ class App:
                 and self.cur_song_path == entry["path"] \
                 and self.mmc_out is not None:
             self.q.put("切换到《%s》：同工程定位，无需重开" % entry["display"])
+            was_live = (self.watch is not None
+                        and self.watch.is_transport_live())
+            if self.watch is not None:
+                self.watch.reset()  # 主线程同步闭合纪元（同跨工程分支）：
+                #   finish 走 calls 异步执行，窗口内旧段坐标+旧 _reached 闩
+                #   残留——GOTO 全帧把位置挪到新段起点恰好武装 played 条件，
+                #   poll 先于 finish 判 finished 会把手动选的段直接跳过。
+                #   停止键需求在 reset 前采样的 was_live 里（S1 开关语义）
             threading.Thread(target=self._goto_worker,
-                             args=(i, entry, play_after),
+                             args=(i, entry, play_after, was_live),
                              daemon=True).start()
             return True
         if self.ctrl is None or not self.ctrl.switch_to(
@@ -1369,10 +1402,14 @@ class App:
                    % (entry["display"], "已排队" if via == "排队" else via))
         return True
 
-    def _goto_worker(self, i, entry, play_after):
+    def _goto_worker(self, i, entry, play_after, was_live):
         """同工程定位点切换（工作线程）：停走带→GOTO→主线程装载段区间。
         停止键失焦偶发失败仅记日志——GOTO 在播放中落地光标仍会跳，自愈。"""
-        self.ctrl.transport("stop")
+        # 已停态不发停止（_point_play 同款守卫）：段间链进到达时走带已停，
+        # S1 停止键是开关——停了再停反起播，从旧光标位续播空档素材。
+        # was_live 由 _switch 在 watch.reset 之前采样传入
+        if was_live:
+            self.ctrl.transport("stop")
         self._goto_send(entry["point"]["start"], entry["display"])
 
         def finish():
@@ -1518,6 +1555,8 @@ class App:
             self.pl_keys = points.collapse_restore(old_keys, lib_key)
             self.end_beh = _end_beh_collapse(old_keys, old_behs, lib_key)
         self.cur = points.remap_cur(old_keys, self.pl_keys, self.cur, lib_key)
+        if on:
+            self._repick_cur_by_position(lib_key)
         self._sync_watch_span()
         if self._pending_switch is not None:
             # 排队切换以 key 记账：宿主被 toggle 时跟随家族首键；它端删掉则弃
@@ -1596,6 +1635,24 @@ class App:
             self.watch.set_duration(
                 self.durations.get(entry["lib_key"], 0.0) or 0.0, 0.0)
 
+    def _repick_cur_by_position(self, lib_key):
+        """启用/定义变更后的重锚辅助：指针按当前位置落回该歌含位置的点
+        条目（找不到=不动，沿用 remap_cur 落点）。100ms 推进 poll 先于
+        400ms 对位 tick——盲锚首段会在位置处于后续段时误判播完（早停+
+        跳回段头重播）。非该歌在播/位置未知时不动作。"""
+        if self.watch is None or self.cur_song_path != \
+                (self.by_key.get(lib_key) or {}).get("path"):
+            return
+        pos = self.watch.position()
+        if pos is None:
+            return
+        for j, k in enumerate(self.pl_keys):
+            e = self._resolve_entry(k)
+            if e and e["lib_key"] == lib_key and e["point"] \
+                    and points.contains(e["point"], pos):
+                self.cur = j
+                return
+
     def _points_sync_list(self, lib_key):
         """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
         持久化刷新（/ptcmd 同链）。"""
@@ -1638,6 +1695,12 @@ class App:
                         self._load_gen = getattr(self, "_load_gen", 0) + 1
                     self.cur_point_id = None    # 落点非本工程/指针空：粒度
                     #   清零，映射由后续切换/对位接管（remap 不跨工程，守卫）
+            # 定义变更（改起止/增删点重排）后段坐标重锚：元组判等只管槽位
+            # 粒度，watch 的 duration/left 无人更新则旧段照旧计时——缩短
+            # 晚切、放长早切（041556a 引入、4710c2a 改槽位时失落的调用）；
+            # 删的是在播点时 remap 落首段，先按位置选段再重锚
+            self._repick_cur_by_position(lib_key)
+            self._sync_watch_span()
         self._persist()
         return None
 
@@ -2670,6 +2733,11 @@ class App:
             mv_key = str(payload.get("key") or "")
             if mv_key and mv_key != self.pl_keys[frm]:
                 return "列表刚变化，未能移动"
+            # 出口位被移走：行为随歌迁到幸存出口（歌还在列表里，播完行为
+            # 不因拖走一段而丢——与 remove 同律）；随行值再经收口归位
+            lo, hi = _song_run(self.pl_keys, self._resolve_entry, frm)
+            if frm == hi and hi > lo and frm < len(self.end_beh):
+                self.end_beh[frm - 1] = self.end_beh[frm]
             item = self.pl_keys.pop(frm)
             self.pl_keys.insert(to, item)
             if frm < len(self.end_beh):
@@ -2684,6 +2752,8 @@ class App:
                     self.cur -= 1
                 elif to <= self.cur < frm:
                     self.cur += 1
+            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
+                                 self.end_beh)
             self._persist()
             return None
         if op == "add":
@@ -2691,6 +2761,10 @@ class App:
             if pt is None:
                 if key not in self.by_key:
                     return "素材库里没有该工程"
+                # 已启用定位点的歌加裸条目=制造「裸+点块」混合态（再展开
+                # 会造出重复 pt 行键）——加入走素材库的展开段条目
+                if (self.points.get(key) or {}).get("enabled"):
+                    return "该歌已启用定位点：请从展开的段条目加入"
             else:       # 定位点条目（素材库已展开视图的加入路径）
                 song = self.by_key.get(pt[0])
                 data = self.points.get(pt[0])
@@ -2703,12 +2777,20 @@ class App:
                 return "已在播放列表里"
             self.pl_keys.append(key)
             self.end_beh.append("")      # 新条目默认（播完停止），行为卡再定
+            # 末尾扩块（同歌追加）：旧出口值随块迁到新出口，不沦为死槽位
+            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
+                                 self.end_beh)
         else:
             try:
                 i = self.pl_keys.index(key)
             except ValueError:
                 return "条目不在播放列表里"
             if op == "remove":
+                # 出口段被删：行为随歌迁到幸存出口（块内还有成员=这首歌
+                # 还在；整块删光=行为随歌一起走）
+                lo, hi = _song_run(self.pl_keys, self._resolve_entry, i)
+                if i == hi and hi > lo and i < len(self.end_beh):
+                    self.end_beh[i - 1] = self.end_beh[i]
                 self.pl_keys.pop(i)
                 if i < len(self.end_beh):
                     self.end_beh.pop(i)
@@ -2718,6 +2800,8 @@ class App:
                     elif i == self.cur:
                         self.cur = (min(self.cur, len(self.pl_keys) - 1)
                                     if self.pl_keys else None)
+                _end_beh_renormalize(self.pl_keys, self._resolve_entry,
+                                     self.end_beh)
             else:
                 return "未知操作"
         self._persist()
@@ -2848,8 +2932,10 @@ class App:
                     src[k] = "manual"
         self.durations, self.dur_src = dur, src
         # 播完行为=逐位替换：行为绑定条目随歌单走（不同歌单同歌可异），
-        # 本机旧行为不保留——它是节目单编排决定，不是本地缓存
+        # 本机旧行为不保留——它是节目单编排决定，不是本地缓存；旧版/
+        # 旧字典格式可带段中位死值，装载即按块归一到出口
         self.end_beh = live_beh
+        _end_beh_renormalize(self.pl_keys, self._resolve_entry, self.end_beh)
         self._persist()
         self.q.put("已导入歌单：%d 首%s" % (
             len(live), "，跳过失效条目 %d 个" % len(skipped)
@@ -3353,6 +3439,9 @@ class App:
             self._goto_send(entry["point"]["start"], entry["display"])
             time.sleep(0.15)   # GOTO 落地缓冲：START 抢在 DAW 处理 MMC 前
                                # 会从旧光标位起播，定位白做（宁稳勿快）
+        if self.watch is not None:
+            self.watch.reset()      # 全停抑制闩（suppress 的 _fired）随手动
+            #   重播解除：残留=本段播完不停走带不推进，空档素材漏出
         self.ctrl.transport("resume")
         return True
 

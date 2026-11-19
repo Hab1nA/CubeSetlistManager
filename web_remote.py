@@ -1899,7 +1899,9 @@ class _Handler(BaseHTTPRequestHandler):
                     b = end_beh[exits[i]] if exits[i] < len(end_beh) else ""
                     pl.append(view(k, None, b))
                 break
-            except RuntimeError:
+            except (RuntimeError, IndexError):
+                # IndexError：len() 取值与索引之间列表被 Tk 线程收缩——
+                # 与迭代 RuntimeError 同源，同走重试
                 lib, pl = [], []
                 continue
         self._json(200, {"lib": lib, "pl": pl, "cur": app.cur})

@@ -434,14 +434,18 @@ def test_app_asset_whitelist():
 
 
 def _pl_app():
-    return types.SimpleNamespace(
+    app = types.SimpleNamespace(
         pl_keys=["B/歌二"], end_beh=[""], cur=0,
         by_key={"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
-                           "path": "/p1"}},
+                           "path": "/p1"},
+                "B/歌二": {"key": "B/歌二", "team": "B", "name": "歌二",
+                           "path": "/p2"}},
         points={"A/歌一": {"enabled": True, "counter": 1, "points": [
             {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}},
         durations={}, dur_src={}, watch=None, q=_Q(),
         _persist=lambda: None, _refresh=lambda: None)
+    app._resolve_entry = lambda k: sg.App._resolve_entry(app, k)
+    return app
 
 
 def test_plcmd_add_pt_key():

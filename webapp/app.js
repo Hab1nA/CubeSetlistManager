@@ -1530,6 +1530,18 @@ async function ptcmd(op, payload) {
   refreshPoints();
   // 删点/停用会作废当前编辑目标（editKey 回落宿主）：映射面板随落
   if (op === "del" || op === "toggle") refreshKbdDetail();
+  // 启停/删点重构该歌行键空间（裸↔pt）：选中键随家族重映射，行为卡与
+  // 蓝框跟着落位——不重映射则卡片停在已消亡键上，保存必被后端驳回
+  if (j.ok && (op === "toggle" || op === "del")) {
+    const base = ptBaseOf(selRowKey) || selRowKey;
+    if (base === ptProj) {
+      const rows = (plCache && plCache.pl) || [];
+      const row = rows.find(r => (ptBaseOf(r.key) || r.key) === base);
+      selRowKey = row ? row.key : null;
+      markPlSel();
+      refreshEndBeh();
+    }
+  }
   return j;
 }
 let ptOnPending = false;    // 启用钮在途：轮询回写跳过（防视觉回弹诱发双击）
@@ -2487,9 +2499,16 @@ function refreshEndBeh() {
 }
 $("#dt-end-sel").addEventListener("change", () => {
   const sel = $("#dt-end-sel");
-  // 末条目无下一首可推进：非播完停止的选择即时报错并驳回回退
-  const isLast = plCache && selRowKey && (plCache.pl || []).length > 0
-      && plCache.pl[plCache.pl.length - 1].key === selRowKey;
+  // 末块出口无下一首可推进（后端按块出口判，前端同口径预拦）：选中行所在
+  // 连续同歌块延伸到列表末行即视为末位——段中位不再漏放行到保存才被驳
+  const songBase = k => ptBaseOf(k) || k;
+  const rows = (plCache && plCache.pl) || [];
+  const idx = rows.findIndex(r => r.key === selRowKey);
+  let last = idx;
+  if (idx >= 0)
+    while (last + 1 < rows.length
+           && songBase(rows[last + 1].key) === songBase(rows[idx].key)) last++;
+  const isLast = idx >= 0 && last === rows.length - 1 && rows.length > 0;
   if (isLast && sel.value !== "") {
     toast("已是播放列表末尾，仅可播完停止", "err");
     sel.value = endBehPrev;
@@ -2522,7 +2541,8 @@ $("#dt-end-save").addEventListener("click", async () => {
     }
   } else {
     endBehDirty = false;        // 被驳（如它端重排进末位）：按服务端现值
-  }                             // 重同步，防 endBehPrev 中毒回错值
+    toast(j.error || "保存失败", "err");   // 重同步，防 endBehPrev 中毒回错值
+  }
   refreshEndBeh();
 });
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
@@ -3342,7 +3362,8 @@ setInterval(poll, 500);
 poll();
 setInterval(() => {
   // 落地即放门已下沉到 refreshPlaylist 自身，这里只管拉取
-  if (pageOn("console", "setlist")) refreshPlaylist();
+  if (pageOn("console", "setlist"))
+    refreshPlaylist().then(() => { if (!endBehDirty) refreshEndBeh(); });
 }, 1500);
 setInterval(() => {
   if (pageOn("setlist")) { refreshPoints(); refreshKbdDetail(); }

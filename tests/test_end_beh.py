@@ -156,6 +156,110 @@ def test_plcmd_setend():
                               {"beh": "hax"}) == "未知播完行为：hax"
 
 
+def _plcmd_app(pl=None, beh=None):
+    """结构操作单测宿主：A=已启用定位点的歌（3 点）、B/X=裸歌；「?」失效。"""
+    pl = ["pt:A#1", "pt:A#2", "B"] if pl is None else list(pl)
+    app = types.SimpleNamespace(
+        pl_keys=list(pl),
+        end_beh=[""] * len(pl) if beh is None else list(beh),
+        cur=None, _persist=lambda: None,
+        by_key={"A": {"key": "A", "name": "A", "path": "/a", "team": "T"},
+                "B": {"key": "B", "name": "B", "path": "/b", "team": "T"},
+                "X": {"key": "X", "name": "X", "path": "/x", "team": "T"}},
+        points={"A": {"enabled": True, "counter": 3, "points": [
+            {"id": 1, "name": "p1", "start": 0.0, "end": 10.0},
+            {"id": 2, "name": "p2", "start": 10.0, "end": 20.0},
+            {"id": 3, "name": "p3", "start": 20.0, "end": 30.0}]},
+            "X": {"enabled": False, "counter": 0, "points": []}})
+
+    def resolve(key):
+        if key.startswith("?"):
+            return None
+        if key.startswith("pt:"):
+            host, _, pid = key[3:].rpartition("#")
+            p = next((x for x in app.points.get(host, {}).get("points", [])
+                      if x["id"] == int(pid)), None)
+            if p is None or host not in app.by_key:
+                return None
+            return {"lib_key": host, "song_name": host, "point": p,
+                    "display": "%s · %s" % (host, p["name"]),
+                    "path": app.by_key[host]["path"]}
+        if key not in app.by_key:
+            return None
+        return {"lib_key": key, "song_name": key, "point": None,
+                "display": key, "path": app.by_key[key]["path"]}
+
+    app._resolve_entry = resolve
+    return app
+
+
+def test_end_beh_renormalize():
+    """归一：出口值优先保留、否则块内最后一个非空值晋升、段中位清空、
+    列表末位出口不带推进行为（与 setend 末位闸同口径）、长度对齐。"""
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "pt:A#3", "B"])
+    b = ["stop", "", "", "next"]           # 旧版死值在段中位+末位推进值
+    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
+    assert b == ["", "", "stop", ""]
+    b = ["", "playnext", "", ""]
+    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
+    assert b == ["", "", "playnext", ""]
+    b = ["", "", "next", ""]               # 出口值已在对的位置：幂等
+    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
+    assert b == ["", "", "next", ""]
+    b = ["delay:5"]                        # 长度漂移：补齐后块重算
+    sg._end_beh_renormalize(app.pl_keys, app._resolve_entry, b)
+    assert b == ["", "", "delay:5", ""]
+
+
+def test_plcmd_struct_moves_exit_beh():
+    """结构编辑（add/remove/move）迁移块出口行为——出口由列表结构派生，
+    位移后行为随块走，不静默丢、不沦为死槽位。"""
+    # remove 删出口段：行为迁到幸存出口
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "delay:15", ""])
+    assert sg.App._pl_cmd_web(app, "remove", "pt:A#2") is None
+    assert app.pl_keys == ["pt:A#1", "B"]
+    assert app.end_beh == ["delay:15", ""]
+    # remove 删段中段：出口行为不动
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
+    assert sg.App._pl_cmd_web(app, "remove", "pt:A#1") is None
+    assert app.pl_keys == ["pt:A#2", "B"]
+    assert app.end_beh == ["next", ""]
+    # add 只在表尾追加：并入尾块时旧出口值随块迁到新出口——但新出口已是
+    # 末位，推进行为按末位闸清空（旧值本就越权：追加前它就在末位上）
+    app = _plcmd_app(["B", "pt:A#1", "pt:A#2"], ["", "", "playnext"])
+    assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
+    assert app.pl_keys == ["B", "pt:A#1", "pt:A#2", "pt:A#3"]
+    assert app.end_beh == ["", "", "", ""]
+    # add 追加到表尾而他曲之后：自成新块，原块出口行为不动
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
+    assert sg.App._pl_cmd_web(app, "add", "pt:A#3") is None
+    assert app.pl_keys == ["pt:A#1", "pt:A#2", "B", "pt:A#3"]
+    assert app.end_beh == ["", "next", "", ""]
+    # move 把出口段拖去列表末尾：源块幸存出口接管；落到末位的随行值按
+    # 末位闸清空（无下一首可推进）
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
+    assert sg.App._pl_cmd_web(app, "move", "pt:A#2",
+                              {"from": 1, "to": 2, "key": "pt:A#2"}) is None
+    assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
+    assert app.end_beh == ["next", "", ""]
+    # move 他曲插入块中：拆块后各块出口就位（首块无值=播完停止是编排事实）
+    app = _plcmd_app(["pt:A#1", "pt:A#2", "B"], ["", "next", ""])
+    assert sg.App._pl_cmd_web(app, "move", "B",
+                              {"from": 2, "to": 1, "key": "B"}) is None
+    assert app.pl_keys == ["pt:A#1", "B", "pt:A#2"]
+    assert app.end_beh == ["", "", ""]
+
+
+def test_plcmd_add_rejects_bare_of_enabled():
+    """已启用定位点的歌加裸条目=「裸+点块」混合态工厂（再展开造重复
+    pt 行键）：拒绝，加入走展开段条目。"""
+    app = _plcmd_app(["B"])
+    assert sg.App._pl_cmd_web(app, "add", "X") is None      # 未启用：可加
+    assert sg.App._pl_cmd_web(app, "add", "A") == \
+        "该歌已启用定位点：请从展开的段条目加入"
+    assert "A" not in app.pl_keys
+
+
 def _advance_app(lib_of, pl, cur, end_beh=None):
     """_advance 单测宿主：lib_of={key: lib_key} 映射；end_beh=逐位列表。
     _switch/_transport/定时器全部捕获式 stub。"""

@@ -121,7 +121,7 @@ def test_goto_worker_reloads_point_slots(tmp_path):
         setlist_gui.App._reload_entry_slots(app, e)
     app._goto_send = lambda start, label: None
     setlist_gui.App._goto_worker(app, 1,
-                                 app._resolve_entry("pt:L#2"), False)
+                                 app._resolve_entry("pt:L#2"), False, False)
     # finish 已入 calls 队列：排干执行（主线程语义）
     while True:
         try:
@@ -153,12 +153,15 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
             {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
             {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
         pl_keys=["pt:L#1", "pt:L#2"], end_beh=["", ""], cur=0,
-        cur_song_path=str(cpr), cur_point_id=1,
+        cur_song_path=str(cpr), cur_point_id=1, watch=None,
         slots={72: {"pc": 2}}, ax_slots={},
         _load_lock=threading.Lock(), _persist=lambda: None)
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
     app._reload_entry_slots = lambda e: \
         setlist_gui.App._reload_entry_slots(app, e)
+    app._repick_cur_by_position = lambda k: \
+        setlist_gui.App._repick_cur_by_position(app, k)
+    app._sync_watch_span = lambda: setlist_gui.App._sync_watch_span(app)
     app.points["L"]["points"] = app.points["L"]["points"][1:]  # 删点1
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.cur_point_id == 2            # 粒度跟随落点（点2 无段→回落）
@@ -175,3 +178,46 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     app.points["L"]["points"] = app.points["L"]["points"][:-1]  # 删 P3
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.end_beh == ["delay:5"]       # 出口行为迁到新末位
+
+
+def test_points_sync_reanchors_watch(tmp_path):
+    """定义变更（改在播段终点）后段坐标重锚+按位置选段：旧时长继续用会
+    缩短晚切、放长早切（4710c2a 改槽位时失落的调用）；位置在后续段时
+    盲锚首段会在 100ms poll 误判播完（早停+跳回段头重播）。"""
+    import threading
+    import types
+    import setlist_gui
+    cpr = tmp_path / "song.cpr"
+    cpr.write_text("", encoding="utf-8")
+    spans = []
+
+    class W:
+        def reset(self):
+            pass
+
+        def set_duration(self, sec, left=None):
+            spans.append((sec, left))
+
+        def position(self):
+            return 35.0                    # 在播：位置落在 P2 段内
+
+    app = types.SimpleNamespace(
+        by_key={"L": {"key": "L", "name": "歌", "path": str(cpr)}},
+        points={"L": {"enabled": True, "counter": 2, "points": [
+            {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
+            {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
+        pl_keys=["pt:L#1", "pt:L#2"], end_beh=["", ""], cur=0,
+        cur_song_path=str(cpr), cur_point_id=2, watch=W(),
+        slots={}, ax_slots={}, durations={},
+        _load_lock=threading.Lock(), _persist=lambda: None)
+    app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app._reload_entry_slots = lambda e: \
+        setlist_gui.App._reload_entry_slots(app, e)
+    app._repick_cur_by_position = lambda k: \
+        setlist_gui.App._repick_cur_by_position(app, k)
+    app._sync_watch_span = lambda: setlist_gui.App._sync_watch_span(app)
+    # 在播段 P2 终点 60→90（放长）：重锚取新段长，不再沿用装载时旧值
+    app.points["L"]["points"][1]["end"] = 90.0
+    assert setlist_gui.App._points_sync_list(app, "L") is None
+    assert app.cur == 1                    # 位置选段：35 落 P2
+    assert spans[-1] == (60.0, 30.0)       # 新段长 90-30、左偏移 30
