@@ -57,6 +57,8 @@ def _app(tmp_path):
     app._reload_entry_slots = lambda e: \
         setlist_gui.App._reload_entry_slots(app, e)
     app._goto_send = lambda start, label: None
+    app._transport_state = lambda: "stopped"
+    app._cur_point_entry = lambda: setlist_gui.App._cur_point_entry(app)
     return app
 
 
@@ -127,3 +129,24 @@ def test_switch_done_same_position_corner(tmp_path):
     assert app.cur_song_path == str(tmp_path / "s.cpr") or True
     assert app.watch.position() == 30.0    # 修复前=None（同位 GOTO 无补帧）
     assert app.watch.duration == 30.0 and app.watch.left == 30.0
+
+
+def test_point_rewind_at_head_keeps_position(tmp_path):
+    """回零已在段头（跳过 GOTO）仍 reset——修复后回灌兜住显示（真机实测
+    rewind 后退化裸工程名的第三处同族洞）。"""
+    app = _app(tmp_path)
+    app.cur = 1                            # 指针在 P2
+    app.mtc._pos = 30.0                    # 光标已在 P2 段头（Decoder 在值）
+    setlist_gui.App._point_rewind(app)
+    assert app.watch.position() == 30.0    # 修复前=None
+    assert app.watch.duration == 0.0       # 回零不动段坐标（原样保留）
+
+
+def test_point_play_at_head_keeps_position(tmp_path):
+    """开始已在段头（跳过 GOTO）reset 后回灌：起播前显示即正确。"""
+    app = _app(tmp_path)
+    app.cur = 1                            # 指针在 P2
+    app.mtc._pos = 30.0
+    setlist_gui.App._point_play(app)
+    assert app.watch.position() == 30.0    # 修复前=None（resume 前 None 窗）
+    assert app.watch.duration == 0.0       # play 只收闩+回灌，不动段坐标

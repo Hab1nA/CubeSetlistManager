@@ -3451,6 +3451,7 @@ class App:
         if self.watch is not None:
             self.watch.reset()      # 全停抑制闩（suppress 的 _fired）随手动
             #   重播解除：残留=本段播完不停走带不推进，空档素材漏出
+            self._reseed_landed(entry["point"]["start"])  # 同位不补帧/竞态
         self.ctrl.transport("resume")
         return True
 
@@ -3471,6 +3472,7 @@ class App:
         if self.watch is not None:
             self.watch.reset()  # 显示立即归段零（同通用回零的纪元复位；
                                 # 段坐标 duration/left 原样保留）
+            self._reseed_landed(entry["point"]["start"])  # 同位不补帧/竞态
         return True
 
     def _persist_config(self, **kv):

@@ -41,6 +41,9 @@ class _FakeWatch:
     def position(self):
         return self.pos
 
+    def on_full_position(self, sec):
+        self.pos = sec
+
     def played(self):
         return self.pos or 0.0
 
@@ -486,6 +489,8 @@ def _play_app(monkeypatch, stop_ok=True, cur_song_path="/pA"):
     app._cur_point_entry = lambda: setlist_gui.App._cur_point_entry(app)
     app._goto_send = lambda start, label: \
         setlist_gui.App._goto_send(app, start, label)
+    app._reseed_landed = lambda start: \
+        setlist_gui.App._reseed_landed(app, start)
     sent = []
     monkeypatch.setattr(setlist_gui.mb, "send_sysex_h",
                         lambda h, data, timeout=1.0: sent.append((h, data))
