@@ -669,6 +669,14 @@ def test_kbd_auto():
     cap2.feed(0xB1, 7, 100)             # 无关 CC 不收
     cap2.feed(0xC5, 5, 0)               # 任意通道的 PC 都定格
     assert cap2.slot == {"pc": 5}
+    # PC 先到 BS 后到：回写配对（终态=最后一组而非新旧混搭）
+    cap3 = kbd_auto.SlotCapture()
+    cap3.feed(0xC0, 40, 0)
+    cap3.feed(0xB0, 0, 87)
+    cap3.feed(0xB0, 32, 1)
+    assert cap3.slot == {"pc": 40, "msb": 87, "lsb": 1}
+    cap3.feed(0xC0, 41, 0)              # 随后 PC 覆盖仍带最新 bank
+    assert cap3.slot == {"pc": 41, "msb": 87, "lsb": 1}
 
     # 持久化 roundtrip（tempdir 充当工程文件夹）
     with tempfile.TemporaryDirectory() as d:
@@ -705,6 +713,12 @@ def test_kbd_auto():
     pv = [(0, "USB-Midi 2"), (1, "USB-Midi")]
     assert kbd_auto.pick_hit(pv, "USB-Midi") == (1, "USB-Midi")
     assert kbd_auto.pick_hit(pv, "USB-Midi 2") == (0, "USB-Midi 2")
+    # 宽 hint 子串回退排除 DAW CTRL 口（BS/PC 发进 DAW 控制协议口=静默失效）；
+    # 全名精确命中不受限（显式选择优先）
+    jd = [(0, "JUNO-DS"), (1, "JUNO-DS DAW CTRL")]
+    assert kbd_auto.pick_hit(jd, "JUNO") == (0, "JUNO-DS")
+    assert kbd_auto.pick_hit(jd, "JUNO-DS DAW CTRL") == (1, "JUNO-DS DAW CTRL")
+    assert kbd_auto.pick_hit([(0, "JUNO-DS DAW CTRL")], "JUNO") is None
     assert kbd_auto.pick_hit([(0, "JUNO-DS")], "JUNO") == (0, "JUNO-DS")
     # 手编 config 的敌意 dev 收敛：脏类型不炸、不静默错绑（bool 排除——
     # true 静默等于 1 会错绑第 2 个同名口）

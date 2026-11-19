@@ -289,17 +289,29 @@ def load_slots(cpr_path, key="slots", point_id=None):
             if slot is not None:
                 out[int(k)] = slot
         # 2026-11-09 触发音锚点整体升八度（对齐 Cubase 显示口径）；旧工程
-        # 槽位文件读入自动迁移，段落独立判别（旧 JUNO 60-69/旧 AX 72-77 与
-        # 新锚点区间不相交，检测到旧号即整段 +12）
+        # 槽位文件读入自动迁移，段落独立判别（检测到旧号即整段 +12）。
+        # 旧新混存（手改/双版本写）时 +12 目标可能撞上已有新号：该旧号原地
+        # 保留（落 60-69/72-77 死区不触发，数据零丢失；盲迁移会静默顶掉新号）
         old = _OLD_ANCHORS.get(key, frozenset())
         if old and any(k in old for k in out):
-            out = {(k + 12 if k in old else k): v for k, v in out.items()}
+            out = {((k + 12) if (k in old and (k + 12) not in out) else k): v
+                   for k, v in out.items()}
         return out
     except (OSError, ValueError):
         return {}
 
 
+_STORE_LOCK = threading.Lock()    # 同进程串行化读改写（web 线程/后台落盘
+                                  # 线程并发写会把对方整段抹掉）；跨进程靠
+                                  # 临时名防交错，无版本比对属已知取舍
+
+
 def save_slots(cpr_path, slots, key="slots", point_id=None):
+    with _STORE_LOCK:
+        return _save_slots_locked(cpr_path, slots, key, point_id)
+
+
+def _save_slots_locked(cpr_path, slots, key, point_id):
     p = _slot_path(cpr_path).resolve()
     if p.parent != pathlib.Path(cpr_path).resolve().parent:  # 只准落在工程文件夹
         raise ValueError("音色映射文件路径越界：%s" % p)
@@ -332,6 +344,11 @@ def save_slots(cpr_path, slots, key="slots", point_id=None):
 def delete_point_slots(cpr_path, point_id):
     """定位点删除时清掉它的槽位段（防孤儿段随删点-重建累积；点 id 不复用，
     留着只会是死数据）。文件不存在/无段=无操作。"""
+    with _STORE_LOCK:
+        _delete_point_slots_locked(cpr_path, point_id)
+
+
+def _delete_point_slots_locked(cpr_path, point_id):
     p = _slot_path(cpr_path)
     if not p.exists():
         return
@@ -388,7 +405,12 @@ def pick_hit(devs, hint, dev=0):
     if not isinstance(hint, str) or not hint:
         return None
     hits = ([(i, n) for i, n in devs if n == hint]
-            or [(i, n) for i, n in devs if hint in n])
+            or [(i, n) for i, n in devs
+                if hint in n and "DAW CTRL" not in n])
+    # 子串回退排除 DAW CTRL 口：宽 hint（如「JUNO」）同时命中「JUNO-DS」
+    # 与「JUNO-DS DAW CTRL」，winmm 枚举序随插拔漂移时可把 BS/PC 静默发进
+    # DAW 控制协议口（发送成功表象+音色不动，GM 案同构失效）。全名精确
+    # 命中不受限（显式选择优先）
     if not hits:
         return None
     return hits[min(max(norm_dev(dev), 0), len(hits) - 1)]
@@ -500,7 +522,11 @@ def _send_long(h, data):
     hdr.dwBufferLength = len(data)
     if mb._winmm.midiOutPrepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)):
         return True
-    mb._winmm.midiOutLongMsg(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    r = mb._winmm.midiOutLongMsg(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    if r:                  # 未入队：头可立即回收，不必等 DONE 白耗 2s
+        mb._winmm.midiOutUnprepareHeader(h, ctypes.byref(hdr),
+                                         ctypes.sizeof(hdr))
+        return True
     deadline = time.time() + 2
     while not (hdr.dwFlags & WHDR_DONE) and time.time() < deadline:
         time.sleep(0.005)
@@ -534,7 +560,9 @@ def send_slot(slot, cfg, msgs=None):
                 if _send_long(h, payload):
                     return "SysEx 发送失败"
             else:
-                mb._winmm.midiOutShortMsg(h, payload)
+                r = mb._winmm.midiOutShortMsg(h, payload)
+                if r:              # 热拔/驱动失联：不检查=失败静默报成功
+                    return "短消息发送失败，code %d" % r
             if gap:
                 time.sleep(gap)
     finally:
@@ -572,16 +600,32 @@ class ToneSwitcher:
         self.cfg = cfg
         self._log = log
         self.on_result = on_result
+        self.epoch = 0             # 代际：换歌/换点装载新槽位时 bump，队列里
+                                   # 旧代际槽位请求作废（防切歌后旧歌音色迟到）
+        self._stopping = False
         self._q = queue.Queue()
         threading.Thread(target=self._loop, daemon=True).start()
 
+    def bump(self):
+        """槽位换装完成时调用：作废队列中旧代际的槽位请求（移调/全停静音
+        等 msgs 项为全局意图不代际，照发）。"""
+        self.epoch += 1
+
+    def stop(self):
+        """重建收发器前调用：唤醒并结束旧发送线程（无 stop 时旧线程携 cfg
+        活引用驻留，重建窗口可与新线程并发发送）。"""
+        if self._stopping:
+            return
+        self._stopping = True
+        self._q.put(None)          # 哨兵
+
     def submit(self, slot, why=""):
         if slot:
-            self._q.put((slot, why))
+            self._q.put((slot, why, self.epoch))
 
     def submit_msgs(self, msgs, why=""):
-        """预构造消息序列（两琴全局移调）走同一串行队列。"""
-        self._q.put((msgs, why))
+        """预构造消息序列（全局移调/全停静音）：全局意图不代际，永不作废。"""
+        self._q.put((msgs, why, None))
 
     def submit_shift(self, total, why=""):
         """全局移调走同一串行队列（预构造消息序列）。"""
@@ -589,7 +633,12 @@ class ToneSwitcher:
 
     def _loop(self):
         while True:
-            item, why = self._q.get()
+            got = self._q.get()
+            if got is None:        # stop 哨兵
+                return
+            item, why, gen = got
+            if gen is not None and gen != self.epoch:
+                continue           # 换歌/换点后旧歌槽位请求已过期：静默丢弃
             try:
                 if isinstance(item, list):      # 预构造序列（全局移调）
                     err = send_slot(None, self.cfg, msgs=item)
@@ -634,8 +683,13 @@ class SlotCapture:
         if st == 0xB0:
             if d1 == 0:
                 self.msb = d2
+                if self.slot is not None:
+                    self.slot["msb"] = d2   # PC 先到 BS 后到：回写配对，终态=
+                                            # 最后一组（BS,PC）而非新旧混搭
             elif d1 == 32:
                 self.lsb = d2
+                if self.slot is not None:
+                    self.slot["lsb"] = d2
         elif st == 0xC0:
             self.slot = {"pc": d1}
             if self.msb is not None:

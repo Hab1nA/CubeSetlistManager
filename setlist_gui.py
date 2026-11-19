@@ -1334,14 +1334,17 @@ class App:
         if self.ctrl is not None and self.ctrl.busy:
             self.q.put("切歌中，忽略音色音符 %s" % kbd_auto.note_name(d1))
             return
-        slot = slots.get(d1)
+        # 取槽+提交须与 _reload_entry_slots 的换装+代际 bump 同锁原子序：
+        # 否则读旧槽→bump→提交的交错会把旧歌槽位按新代际放行（迟到错歌）
+        with self._load_lock:
+            slot = slots.get(d1)
+            if slot:
+                switcher.submit(slot, why=kbd_auto.note_name(d1))
         if not slot:
             if d1 not in self._kb_warned:   # 循环播放时同一告警只记一次
                 self._kb_warned.add(d1)
                 self.q.put("音符 %s 未配置音色映射，在「编排」页录制"
                            % kbd_auto.note_name(d1))
-            return
-        switcher.submit(slot, why=kbd_auto.note_name(d1))
 
     def _on_kb_result(self, desc, err):
         """ToneSwitcher 线程回调：最近一次音色切换结果（只写属性）。
@@ -2578,6 +2581,11 @@ class App:
                 pass
         if kb_changed:
             self.kb_port = None
+            for old_sw in (getattr(self, "switcher", None),
+                           getattr(self, "ax_switcher", None)):
+                if old_sw:
+                    old_sw.stop()   # 唤醒退出旧发送线程（否则携 cfg 活引用
+                                    # 驻留，重建窗口可与新线程并发发送）
             try:
                 self.switcher = kbd_auto.ToneSwitcher(self.jcfg, self.q.put,
                                                       on_result=self.
@@ -2628,7 +2636,12 @@ class App:
             return "未找到含「%s」的 MIDI 输出端口；现有：%s" % (
                 cfg.get("outHint", ""),
                 "、".join(n for _, n in devs) or "无")
-        sw.submit(slot, why="web 测试")
+        with self._load_lock:   # 取槽+提交与换装+bump 同锁原子序（防旧槽
+            if not song_key or song_key == self._kbd_song_key():
+                slot = (self.ax_slots if inst == "ax" else self.slots).get(
+                    note)       # 按新代际放行）；异歌分支用读盘新槽
+            if slot is not None:
+                sw.submit(slot, why="web 测试")
         return None
 
     def _slots_save_web(self, inst, slots, song_key=None):
@@ -3794,6 +3807,10 @@ class App:
             self.ax_slots = ax
             self.cur_song_path = e["path"]
             self.cur_point_id = pid
+            for sw in (getattr(self, "switcher", None),
+                       getattr(self, "ax_switcher", None)):
+                if sw:
+                    sw.bump()   # 作废队列里旧代际槽位请求（防切歌后旧音色迟到）
 
     def _repoint(self, j, e, why):
         """指针改指同工程点条目 j（时长缓存复用；音色映射按点粒度重装载

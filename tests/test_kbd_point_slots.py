@@ -19,6 +19,20 @@ def test_point_section_roundtrip(tmp_path):
     assert kbd_auto.load_slots(cpr, point_id=3)[72]["msb"] == 1
 
 
+def test_mixed_anchor_migration_no_clobber(tmp_path):
+    """旧新锚号混存：+12 会撞上已有新号的旧号原地保留（死区不触发），
+    不盲迁移静默顶掉新号。"""
+    cpr = _cpr(tmp_path)
+    kbd_auto.save_slots(cpr, {60: {"pc": 1}, 72: {"pc": 2}})  # 60=旧号（文件原样）
+    # 文件里手工混入旧号 60 与新号 72（save 原样写）——load 时 60+12 撞 72
+    s = kbd_auto.load_slots(cpr)
+    assert s[72] == {"pc": 2}          # 新号保留
+    assert s[60] == {"pc": 1}          # 旧号原地保留（60 不在触发区）
+    # 纯旧号段照旧整段迁移
+    kbd_auto.save_slots(cpr, {61: {"pc": 3}})
+    assert kbd_auto.load_slots(cpr) == {73: {"pc": 3}}
+
+
 def test_lazy_inherit_fallback(tmp_path):
     cpr = _cpr(tmp_path)
     kbd_auto.save_slots(cpr, {72: {"pc": 5}, 84: {"pc": 6}})

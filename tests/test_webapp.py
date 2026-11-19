@@ -759,6 +759,7 @@ def test_kbd_test_web_song_key(tmp_path, monkeypatch):
         cur_song_path=str(a_cpr), slots={72: {"pc": 63}}, ax_slots={},
         cur_point_id=None,
         switcher=sw, ax_switcher=None, _kbd_song_key=lambda: None,
+        _load_lock=threading.Lock(),
         jcfg=dict(kbd_auto.DEFAULT_JUNO),
         axcfg=dict(kbd_auto.DEFAULT_AX))
     fake._kbd_edit_target = (
