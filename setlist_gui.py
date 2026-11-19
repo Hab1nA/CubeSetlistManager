@@ -1405,7 +1405,16 @@ class App:
             # 11-13 真机翻案=此处漏装=踩钉/跳点后琴上仍发旧点音色）
             self._reload_entry_slots(entry)
             if self.watch is not None:
-                self.watch.reset()  # 清推进闩；位置由 GOTO 补发全帧重灌
+                self.watch.reset()  # 清推进闩
+                # 全帧往返（~10-40ms）常快于 calls 50ms 节拍：位置可能已灌
+                # 又被上面 reset 清成 None——Decoder 现值回灌（contains 校验
+                # 挡住切歌窗内旧播头的 stale 位置）；全帧后到则自行重灌，
+                # 两序皆自洽。不回灌=停止态无人再灌，NOW/时长恒退化（真机
+                # 11-20 症状：段头光标显工程名+时长未知，微拖即愈）
+                landed = self.mtc.position() if self.mtc is not None else None
+                if landed is not None \
+                        and points.contains(entry["point"], landed):
+                    self.watch.on_full_position(landed)
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])
