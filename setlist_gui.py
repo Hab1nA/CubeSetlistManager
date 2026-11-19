@@ -1406,15 +1406,9 @@ class App:
             self._reload_entry_slots(entry)
             if self.watch is not None:
                 self.watch.reset()  # 清推进闩
-                # 全帧往返（~10-40ms）常快于 calls 50ms 节拍：位置可能已灌
-                # 又被上面 reset 清成 None——Decoder 现值回灌（contains 校验
-                # 挡住切歌窗内旧播头的 stale 位置）；全帧后到则自行重灌，
-                # 两序皆自洽。不回灌=停止态无人再灌，NOW/时长恒退化（真机
-                # 11-20 症状：段头光标显工程名+时长未知，微拖即愈）
-                landed = self.mtc.position() if self.mtc is not None else None
-                if landed is not None \
-                        and points.contains(entry["point"], landed):
-                    self.watch.on_full_position(landed)
+                # 全帧先到又被本 reset 清掉（真机 11-20 症状：段头光标显
+                # 工程名+时长未知，微拖光标即愈）——回灌见 _reseed_landed
+                self._reseed_landed(entry["point"]["start"])
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])
@@ -1445,6 +1439,18 @@ class App:
         else:
             self._goto_ack = (pre, time.time(), label)
 
+    def _reseed_landed(self, start):
+        """GOTO 收尾回灌：全帧先到又被收尾 reset 清掉时（finish 走 calls
+        50ms 节拍，全帧往返常更快），或光标已在目标位（同位 GOTO 不补帧，
+        跨工程首切光标恰在段头时退化）——用 Decoder 现值回灌 watch。门=
+        |现值-目标|≤0.1s（_point_play 同位判定同门）：只认「已落位」的
+        现值，切歌窗内旧播头 stale 位置一律不洗白；全帧后到则自行重灌，
+        两种时序皆自洽。"""
+        pos = self.mtc.position() if self.mtc is not None else None
+        if pos is not None and abs(pos - start) <= 0.1 \
+                and self.watch is not None:
+            self.watch.on_full_position(pos)
+
     def _switch_done(self, name):
         key = self._switch_key
         self._switch_key = None
@@ -1460,6 +1466,7 @@ class App:
             # 后光标停在上次保存位，必须补 GOTO 到段起点
             if self.watch is not None:
                 self.watch.reset()
+                self._reseed_landed(entry["point"]["start"])  # 同位不补帧
                 self.watch.set_duration(
                     entry["point"]["end"] - entry["point"]["start"],
                     entry["point"]["start"])

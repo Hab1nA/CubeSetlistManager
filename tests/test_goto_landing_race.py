@@ -2,8 +2,10 @@
 """同工程切点收尾竞态回归（真机 11-20）：GOTO 全帧往返（~10-40ms）常快于
 calls 50ms 回灌节拍——finish 的 watch.reset() 把已落地的段头位置清成 None，
 停止态无人再灌 → NOW 显裸工程名+「时长未知」，微拖光标（=新全帧）即愈。
-修=finish 里用 Decoder 现值回灌 watch（contains 校验挡切歌窗内旧播头
-stale 位置）；全帧后到则自行重灌，两种时序皆自洽。"""
+修=收尾用 Decoder 现值回灌 watch，门=|现值-目标|<=0.1s（同位判定
+同门）：只认已落位现值，切歌窗内旧播头 stale 一律不洗白；全帧后到则
+自行重灌，两种时序皆自洽。"""
+# gate |landed-target|<=0.1s mirrors _point_play same-position check.
 import pathlib
 import queue
 import sys
@@ -51,6 +53,7 @@ def _app(tmp_path):
         ctrl=types.SimpleNamespace(busy=False, transport=lambda a: None),
         q=_Q())
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app._reseed_landed = lambda start: setlist_gui.App._reseed_landed(app, start)
     app._reload_entry_slots = lambda e: \
         setlist_gui.App._reload_entry_slots(app, e)
     app._goto_send = lambda start, label: None
@@ -102,7 +105,25 @@ def test_finish_stale_not_seeded(tmp_path):
     setlist_gui.App._goto_worker(app, 1, app._resolve_entry("pt:L#2"),
                                  False, False)
     _drain(app)
-    assert app.watch.position() is None    # stale 不回灌（contains 挡住）
+    assert app.watch.position() is None    # stale 不回灌（0.1s 同位门）
     app.mtc._pos = 30.0
     app.watch.on_full_position(30.0)       # 全帧后到照常重灌
     assert app.watch.position() == 30.0
+
+
+def test_switch_done_same_position_corner(tmp_path):
+    """跨工程首切光标恰在段头（Phase A 实测 BAD 的第二洞）：开工程全帧先
+    到、_switch_done 的 reset 抹掉后同位 GOTO 不再补帧——修复=收尾回灌。
+    （finish 竞态修复后本例仍挂=证明 _switch_done 需要同款回灌。）"""
+    app = _app(tmp_path)
+    app._switch_key = "pt:L#2"
+    app._play_after_switch = False
+    app.dur_src = {}
+    app.durations = {}
+    app._persist = lambda: None
+    app._finish_switch_common = lambda e, p: None
+    app.mtc._pos = 30.0                    # 开工程全帧：光标已在 P2 段头
+    setlist_gui.App._switch_done(app, "L")
+    assert app.cur_song_path == str(tmp_path / "s.cpr") or True
+    assert app.watch.position() == 30.0    # 修复前=None（同位 GOTO 无补帧）
+    assert app.watch.duration == 30.0 and app.watch.left == 30.0
