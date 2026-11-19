@@ -90,37 +90,66 @@ def test_end_beh_expand_collapse():
         == [""]
 
 
-def _setend_app():
-    return types.SimpleNamespace(
-        end_beh=["", "", ""], pl_keys=["A/歌一", "A/歌一", "B/歌二"],
-        cur=None, _persist=lambda: None)
+def _setend_app(pl=None, beh=None):
+    """setend 单测宿主：resolve 以键前缀/裸键为 lib_key；「?」开头=失效条目。"""
+    pl = ["A/歌一", "A/歌一", "B/歌二"] if pl is None else list(pl)
+    app = types.SimpleNamespace(
+        end_beh=[""] * len(pl) if beh is None else list(beh),
+        pl_keys=pl, cur=None, _persist=lambda: None)
+
+    def resolve(key):
+        if key.startswith("?"):
+            return None
+        lib = key[3:].rpartition("#")[0] if key.startswith("pt:") else key
+        return {"lib_key": lib, "song_name": key}
+
+    app._resolve_entry = resolve
+    return app
+
+
+def test_song_run():
+    """连续同歌块 (lo, hi)：pt/裸条目同判、失效条目自成块、离散块各归各。"""
+    keys = ["pt:A#1", "pt:A#2", "B", "pt:A#3", "?", "pt:A#4"]
+    resolve = _setend_app(keys)._resolve_entry
+    assert [sg._song_run(keys, resolve, i) for i in range(6)] \
+        == [(0, 1), (0, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+    keys = ["pt:A#1", "?", "pt:A#2"]           # 失效条目截断块
+    assert sg._song_run(keys, resolve, 0) == (0, 0)
+    assert sg._song_run(keys, resolve, 2) == (2, 2)
 
 
 def test_plcmd_setend():
-    """/plcmd setend：按键套用全部同键条目位/清除/非法值与不在列表拒绝。"""
+    """/plcmd setend：按曲套用——行为写点击位所在连续同歌块的出口（段中位
+    永无生效路径）/清除/非法值与不在列表拒绝。"""
     app = _setend_app()
-    # 同键多位（导入文件可含）：按键套用到全部位
+    # 同键相邻多位=一个连续块：只写块出口（末位），块内其余位清空
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
                               {"beh": "delay:15"}) is None
-    assert app.end_beh == ["delay:15", "delay:15", ""]
+    assert app.end_beh == ["", "delay:15", ""]
     # 空 beh=清除回默认（播完停止）
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一", {"beh": ""}) is None
     assert app.end_beh == ["", "", ""]
-    # pt 条目键=独立条目位
-    app.pl_keys = ["pt:A/歌一#3", "A/歌一"]
-    app.end_beh = ["", "next"]
-    assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#3",
+    # 段式歌：段中位（用户点歌的首段行）套用 → 写块出口、段中位清空
+    app = _setend_app(["pt:A/歌一#1", "pt:A/歌一#2", "pt:A/歌一#3", "B/歌二"],
+                      ["next", "", "", ""])
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A/歌一#1",
                               {"beh": "delay:15"}) is None
-    assert app.end_beh == ["delay:15", "next"]
-    # 不在播放列表 / 非法值 / 末条目仅可播完停止
-    app.pl_keys = ["A/歌一", "B/歌二"]
-    app.end_beh = ["", ""]
-    assert sg.App._pl_cmd_web(app, "setend", "B/歌二",
+    assert app.end_beh == ["", "", "delay:15", ""]
+    # 离散多块：套用只动点击块的出口，他块不动
+    app = _setend_app(["pt:A#1", "pt:A#2", "B", "pt:A#3"], ["", "", "", ""])
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": "next"}) is None
+    assert app.end_beh == ["", "next", "", ""]
+    # 末块的段中位套用推进行为：出口=末条目，驳回（仅可播完停止）
+    app = _setend_app(["B", "pt:A#1", "pt:A#2"])
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A#1",
                               {"beh": "next"}) == "已是播放列表末尾，仅可播完停止"
-    assert app.end_beh == ["", ""]              # 驳回不落盘
-    assert sg.App._pl_cmd_web(app, "setend", "B/歌二", {"beh": ""}) is None
+    assert app.end_beh == ["", "", ""]          # 驳回不落盘
+    assert sg.App._pl_cmd_web(app, "setend", "pt:A#1", {"beh": ""}) is None
+    # 不在播放列表 / 非法值 / 非末条目不受限
+    app = _setend_app(["A/歌一", "B/歌二"])
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",
-                              {"beh": "next"}) is None   # 非末条目不受限
+                              {"beh": "next"}) is None
+    assert app.end_beh == ["next", ""]
     assert sg.App._pl_cmd_web(app, "setend", "X/无",
                               {"beh": "stop"}) == "条目不在播放列表里"
     assert sg.App._pl_cmd_web(app, "setend", "A/歌一",

@@ -38,16 +38,17 @@ class _FakeWebApp:
         self.lite = False
         self.calls = queue.Queue()
         self.q = _Q()
-        self.pl_keys = ["A/歌一", "pt:A/歌一#1", "B/歌二"]
-        self.end_beh = ["next", "", "delay:5"]
+        self.pl_keys = ["A/歌一", "pt:A/歌一#1", "pt:A/歌一#2", "B/歌二"]
+        self.end_beh = ["next", "", "delay:5", ""]
         self.durations = {"A/歌一": 120.0}
         self.by_key = {"A/歌一": {"key": "A/歌一", "team": "A", "name": "歌一",
                                  "path": "/p1"},
                        "B/歌二": {"key": "B/歌二", "team": "B", "name": "歌二",
                                  "path": "/p2"}}
         self.points = {"A/歌一": {
-            "enabled": True, "counter": 1, "points": [
-                {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0}]}}
+            "enabled": True, "counter": 2, "points": [
+                {"id": 1, "name": "定位点1", "start": 0.0, "end": 60.0},
+                {"id": 2, "name": "定位点2", "start": 60.0, "end": 120.0}]}}
         # 2 元组=旧形状（lenient 兼容），3 元组=产生端定级
         self.log_ring = [(100.0, "启动", ""),
                          (105.0, "界面异常：X", "err"),
@@ -205,8 +206,10 @@ def test_playlist_points_log_endpoints():
         assert [x["key"] for x in pl["pl"]] == app.pl_keys
         assert pl["pl"][1]["pt"] is True and pl["pl"][1]["name"] == "歌一 · 定位点1"
         assert len(pl["lib"]) == 2
-        # 行为逐位随行携带（""=默认播完停止；顶层 endBeh 键已删）
-        assert [x["beh"] for x in pl["pl"]] == ["next", "", "delay:5"]
+        # 行为投影随行携带：同歌块（裸条目+两段定位点）段中位一律显示
+        # 块出口行为（delay:5），永不生效的死槽位值（next）不再露出
+        assert [x["beh"] for x in pl["pl"]] == ["delay:5", "delay:5",
+                                                "delay:5", ""]
         assert "endBeh" not in pl
 
         pts = _get(port, "/points")
@@ -234,7 +237,7 @@ def test_playlist_points_log_endpoints():
             if app.switch_log:
                 break
             time.sleep(0.02)
-        assert app.switch_log[-1] == (2, "手动")   # 不是 index 0
+        assert app.switch_log[-1] == (3, "手动")   # 不是 index 0
         app.pl_keys = ["A/歌一"]                    # 模拟另一端移除该曲
         st, r = _req("POST", port, "/cmd",
                      {"action": "switch", "index": 0, "key": "B/歌二"})

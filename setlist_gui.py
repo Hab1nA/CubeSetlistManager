@@ -352,6 +352,22 @@ def _load_playlist(daw=""):
             "daw": ""}
 
 
+def _song_run(pl_keys, resolve, i):
+    """播放列表第 i 位所在连续同歌块 (lo, hi)（lib_key 相同=同曲段链，
+    裸条目与点条目同判；解析失败/失效条目自成块）。hi=行为出口位。"""
+    def lk(j):
+        e = resolve(pl_keys[j])
+        return e["lib_key"] if e else None
+    base = lk(i)
+    lo = hi = i
+    if base is not None:
+        while lo > 0 and lk(lo - 1) == base:
+            lo -= 1
+        while hi + 1 < len(pl_keys) and lk(hi + 1) == base:
+            hi += 1
+    return lo, hi
+
+
 def _end_beh_from_file(raw, keys):
     """endBeh 载荷 → 与 keys 等长的行为表。列表=逐位绑定播放列表条目
     （本版格式）；字典=旧格式（lib_key→行为，键归一宿主随条目走）。
@@ -2566,23 +2582,29 @@ class App:
         redict）。返回 None=成功。"""
         payload = payload or {}
         if op == "setend":
-            # 播完行为绑定播放列表条目：按键套用到全部同键条目位
-            #（应用层禁止同键重复加入；导入文件含同键多位时逐位可异、
-            # 编辑面按 key 表达），空 beh=清除回默认（播完停止）
+            # 播完行为按曲套用：点击位所在连续同歌块的行为出口=块末位
+            #（段间链进不读行为，块内其余位的行为永无生效路径——段式
+            # 歌按曲表达，写到出口、块内其余位清空；离散多块=各自出口），
+            # 空 beh=清除回默认（播完停止）
             beh = str(payload.get("beh") or "")
             if beh and not advance.valid_end_beh(beh):
                 return "未知播完行为：%s" % beh
             idxs = [i for i, k in enumerate(self.pl_keys) if k == key]
             if not idxs:
                 return "条目不在播放列表里"
-            # 末条目无下一首可推进：仅可播完停止（驳回其它行为）
-            if beh and len(self.pl_keys) - 1 in idxs:
+            runs = {hi: lo for lo, hi in
+                    (_song_run(self.pl_keys, self._resolve_entry, i)
+                     for i in idxs)}
+            # 出口无下一首可推进：仅可播完停止（驳回其它行为）
+            if beh and len(self.pl_keys) - 1 in runs:
                 return "已是播放列表末尾，仅可播完停止"
             # 平行表先补齐/裁齐到 pl_keys 长度（历史漂移兜底），再套用
             self.end_beh += [""] * (len(self.pl_keys) - len(self.end_beh))
             self.end_beh = self.end_beh[:len(self.pl_keys)]
-            for i in idxs:
-                self.end_beh[i] = beh
+            for hi, lo in runs.items():
+                for j in range(lo, hi + 1):
+                    self.end_beh[j] = ""
+                self.end_beh[hi] = beh
             self._persist()
             return None
         if op == "clear":
