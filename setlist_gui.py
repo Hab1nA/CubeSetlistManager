@@ -1068,7 +1068,9 @@ class App:
         self._web_status = out
 
     def _entry_alive(self, key):
-        """播放列表条目存活判定：pt 条目 ⇔ 宿主在库且启用且点存在。"""
+        """播放列表条目存活判定：pt 条目 ⇔ 宿主在库且启用且点存在；裸条目
+        ⇔ 在库且未启用定位点（已启用歌的裸条目=混合态，装载即失效——
+        与 add 拒入同口径）。"""
         pt = points.parse_pt_key(key)
         if pt:
             lib_key, pid = pt
@@ -1076,7 +1078,8 @@ class App:
             return bool(data and data["enabled"]
                         and points.get_point(data, pid)
                         and lib_key in self.by_key)
-        return key in self.by_key
+        return key in self.by_key \
+            and not (self.points.get(key) or {}).get("enabled")
 
     def _resolve_entry(self, key):
         """播放列表条目统一解析 → {display, path, lib_key, song_name,
@@ -1142,9 +1145,23 @@ class App:
                 self.q.put("《%s》%s" % (s["name"], err))
             pts[s["key"]] = data
         self.points = pts
-        # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删）；行为表逐位平行
-        alive = [(k, self.end_beh[i] if i < len(self.end_beh) else "")
-                 for i, k in enumerate(self.pl_keys) if self._entry_alive(k)]
+        # 播放列表清掉已失效的项（库缺项 / 定位点停用或点已删 / 已启用歌
+        # 的裸条目）；行为表逐位平行。重复键保首现——只可能来自手改文件，
+        # 保首现与全部消费端 index(key) 取首现的现状一致
+        seen = set()
+        alive = []
+        for i, k in enumerate(self.pl_keys):
+            b = self.end_beh[i] if i < len(self.end_beh) else ""
+            if k in seen:
+                self.q.put("播放列表重复条目已忽略（保留首个）：%s" % k)
+                continue
+            if self._entry_alive(k):
+                seen.add(k)
+                alive.append((k, b))
+            elif not points.parse_pt_key(k) and k in self.by_key \
+                    and (self.points.get(k) or {}).get("enabled"):
+                self.q.put("《%s》已启用定位点，整曲条目已从播放列表移除"
+                           % k.split("/")[-1])
         self.pl_keys = [k for k, _ in alive]
         self.end_beh = [b for _, b in alive]
         # 旧版文件段中位死值装载即归一（出口位已有值则保留=与既有实效
@@ -1231,8 +1248,11 @@ class App:
         f8_hinted = False
         while True:
             try:
-                self.sync.poll()
+                # watch 先于 sync：段尾两者同轮触发（断流超时同时到期），
+                # sync 的 OBS 网络 IO（pause_media 秒级超时）排前会把推进
+                # 判定顺延一个网络超时；watch 判完推进后 sync 慢多少都无碍
                 self.watch.poll()
+                self.sync.poll()
                 m = self.mtc
                 if m is not None and m.qf_seen:
                     f8_mark = None      # 时码已到：F8 计数是残留，撤销计窗
@@ -1654,8 +1674,8 @@ class App:
                 return
 
     def _points_sync_list(self, lib_key):
-        """定位点定义变更后同步：落盘 + 启用态重排播放列表点条目块 +
-        持久化刷新（/ptcmd 同链）。"""
+        """定位点定义变更后同步：落盘 + 启用态就地下架点已删的条目（不
+        重排、不补新点——节目单是用户裁剪）+ 持久化刷新（/ptcmd 同链）。"""
         song = self.by_key.get(lib_key)
         data = self.points.get(lib_key)
         if song is None or data is None:
@@ -1669,17 +1689,48 @@ class App:
         if data["enabled"]:
             old = list(self.pl_keys)
             old_behs = list(self.end_beh)
-            pt_keys = points.pt_keys_for(lib_key, data)
-            # 收起→展开两步：中间态=裸键在场（expand 守卫要求展开前键表）
-            mid = points.collapse_restore(old, lib_key)
-            mid_behs = _end_beh_collapse(old, old_behs, lib_key)
-            new = points.expand_replace(mid, lib_key, pt_keys)
-            self.pl_keys = new
-            self.end_beh = _end_beh_expand(mid, mid_behs, lib_key, pt_keys)
-            self.cur = points.remap_cur(old, new, self.cur, lib_key)
-            # 当前装载条目被重排掉（如删除正在播放的点）：粒度标签已死，
+
+            # 节目单=用户裁剪（11-19 定案）：定义编辑不增不排——新点不
+            # 自动上节目单（加段走素材库＋按钮）、定义内重排不动节目单
+            # 顺序，只下架点已删的条目。旧「收起→按定义全集展开」的镜像
+            # 重置会复活已删段、合并离散块、丢非首块出口行为，废弃。
+            def alive_pt(k):
+                pt = points.parse_pt_key(k)
+                return pt is None or pt[0] != lib_key \
+                    or points.get_point(data, pt[1]) is not None
+
+            def run_key(k):     # 同歌判键：删除中的点解析不出，按宿主归
+                pt = points.parse_pt_key(k)
+                if pt:
+                    return pt[0]
+                e = self._resolve_entry(k)
+                return e["lib_key"] if e else None
+
+            # 出口段被删（块内还有幸存段）：行为先迁到幸存出口再下架
+            # （remove 同律；run 用 run_key 判，被删的 pt 仍归本块）
+            n = len(old)
+            for i in range(n):
+                if alive_pt(old[i]) or run_key(old[i]) != lib_key:
+                    continue
+                base = lib_key
+                lo = hi = i
+                while lo > 0 and run_key(old[lo - 1]) == base:
+                    lo -= 1
+                while hi + 1 < n and run_key(old[hi + 1]) == base:
+                    hi += 1
+                surv = [x for x in range(lo, hi + 1) if alive_pt(old[x])]
+                if i == hi and surv and i < len(old_behs) and old_behs[i]:
+                    old_behs[surv[-1]] = old_behs[surv[-1]] or old_behs[i]
+            keep = [(k, old_behs[i] if i < len(old_behs) else "")
+                    for i, k in enumerate(old) if alive_pt(k)]
+            self.pl_keys = [k for k, _ in keep]
+            self.end_beh = [b for _, b in keep]
+            self.cur = points.remap_cur(old, self.pl_keys, self.cur, lib_key)
+            _end_beh_renormalize(self.pl_keys, self._resolve_entry,
+                                 self.end_beh)
+            # 当前装载条目被下架（如删除正在播放的点）：粒度标签已死，
             # 按落点条目重装载映射——防滞留死点段（对位规则①会抑制自愈）、
-            # song_key=None 的保存不再写孤儿段；落点未变（增删他点/改排）
+            # song_key=None 的保存不再写孤儿段；落点未变（增删他点/改时码）
             # 时元组相等，零动作
             cur_key = (self.pl_keys[self.cur]
                        if self.cur is not None and self.cur < len(self.pl_keys)
@@ -1695,10 +1746,10 @@ class App:
                         self._load_gen = getattr(self, "_load_gen", 0) + 1
                     self.cur_point_id = None    # 落点非本工程/指针空：粒度
                     #   清零，映射由后续切换/对位接管（remap 不跨工程，守卫）
-            # 定义变更（改起止/增删点重排）后段坐标重锚：元组判等只管槽位
-            # 粒度，watch 的 duration/left 无人更新则旧段照旧计时——缩短
-            # 晚切、放长早切（041556a 引入、4710c2a 改槽位时失落的调用）；
-            # 删的是在播点时 remap 落首段，先按位置选段再重锚
+            # 定义变更（改起止/删点）后段坐标重锚：元组判等只管槽位粒度，
+            # watch 的 duration/left 无人更新则旧段照旧计时——缩短晚切、
+            # 放长早切（041556a 引入、4710c2a 改槽位时失落的调用）；删的
+            # 是在播点时 remap 落同歌首个条目，先按位置选段再重锚
             self._repick_cur_by_position(lib_key)
             self._sync_watch_span()
         self._persist()
@@ -2897,23 +2948,34 @@ class App:
                     return {"error": "歌单文件无效：endBeh 段含非法值"}
         keys = data["playlist"]
         live, skipped, live_beh = [], [], []
+        seen = set()
         for i, k in enumerate(keys):
+            # 重复键保首现（消费端 index(key) 全取首现）；已启用歌的裸
+            # 条目=混合态（与 add 拒入同口径），各自跳过并报给前端
+            if k in seen:
+                skipped.append("%s（重复条目，保留首个）" % k)
+                continue
+            seen.add(k)
+            if not points.parse_pt_key(k) and k in self.by_key \
+                    and (self.points.get(k) or {}).get("enabled"):
+                skipped.append("%s（该歌已启用定位点：整曲条目不支持）" % k)
+                continue
             if self._resolve_entry(k) is None:
                 skipped.append("%s（%s）" % (
                     k, "定位点不存在或未启用" if points.parse_pt_key(k)
                     else "工程不在素材库"))
-            else:
-                live.append(k)
-                # 行为按原文件位取值（失效位过滤不得引起索引错位）
-                if isinstance(raw_beh, list):
-                    v = str(raw_beh[i]) if i < len(raw_beh) else ""
-                    live_beh.append(v if advance.valid_end_beh(v) else "")
-                else:                   # 旧字典格式：按键归一宿主
-                    pt = points.parse_pt_key(k)
-                    d = {str(kk): str(vv) for kk, vv in
-                         (raw_beh or {}).items()
-                         if advance.valid_end_beh(str(vv))}
-                    live_beh.append(d.get(pt[0] if pt else k, ""))
+                continue
+            live.append(k)
+            # 行为按原文件位取值（失效位过滤不得引起索引错位）
+            if isinstance(raw_beh, list):
+                v = str(raw_beh[i]) if i < len(raw_beh) else ""
+                live_beh.append(v if advance.valid_end_beh(v) else "")
+            else:                   # 旧字典格式：按键归一宿主
+                pt = points.parse_pt_key(k)
+                d = {str(kk): str(vv) for kk, vv in
+                     (raw_beh or {}).items()
+                     if advance.valid_end_beh(str(vv))}
+                live_beh.append(d.get(pt[0] if pt else k, ""))
         if not live and keys:      # 空歌单=合法清空（与导出端对称）
             return {"error": "歌单里 %d 个条目全部失效，未导入"
                     % len(skipped)}

@@ -360,3 +360,19 @@ def test_delay_play_fire_gates():
     app.ctrl = types.SimpleNamespace(busy=True)
     sg.App._delay_play_fire(app, 7, "k")
     assert app.rearms[-1] == (7, "k", 1, 0)     # 装载中：重探
+
+
+def test_entry_alive_bare_of_enabled():
+    """存活判定：已启用定位点的歌的裸条目=混合态（装载即失效，与 add
+    拒入同口径）；未启用裸条目/库缺/点缺各自判死。"""
+    app = types.SimpleNamespace(
+        by_key={"A": {"key": "A"}, "B": {"key": "B"}},
+        points={"A": {"enabled": True, "counter": 1, "points": [
+                     {"id": 1, "name": "p1", "start": 0.0, "end": 9.0}]},
+                "B": {"enabled": False, "counter": 0, "points": []}})
+    assert sg.App._entry_alive(app, "A") is False       # 已启用：裸条目=混合态
+    assert sg.App._entry_alive(app, "B") is True
+    assert sg.App._entry_alive(app, "C") is False       # 库缺
+    assert sg.App._entry_alive(app, "pt:A#1") is True
+    assert sg.App._entry_alive(app, "pt:A#9") is False  # 点缺
+    assert sg.App._entry_alive(app, "pt:B#1") is False  # 未启用

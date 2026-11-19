@@ -139,7 +139,8 @@ class _Q:
 
 def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     """删掉正在播放的定位点：粒度标签跟随落点条目重装载（原实现滞留死点
-    段且对位规则①抑制自愈）。"""
+    段且对位规则①抑制自愈）；节目单=用户裁剪——定义编辑只下架点已删的
+    条目，不补新点、不复活已删段（旧全量镜像语义废弃）。"""
     import threading
     import types
     import setlist_gui
@@ -148,7 +149,8 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     kbd_auto.save_slots(str(cpr), {72: {"pc": 1}})
     kbd_auto.save_slots(str(cpr), {72: {"pc": 2}}, point_id=1)
     app = types.SimpleNamespace(
-        by_key={"L": {"key": "L", "name": "歌", "path": str(cpr)}},
+        by_key={"L": {"key": "L", "name": "歌", "path": str(cpr)},
+                "X": {"key": "X", "name": "他歌", "path": str(cpr)}},
         points={"L": {"enabled": True, "counter": 2, "points": [
             {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
             {"id": 2, "name": "P2", "start": 30.0, "end": 60.0}]}},
@@ -166,18 +168,62 @@ def test_sync_list_reloads_after_deleting_current_point(tmp_path):
     assert setlist_gui.App._points_sync_list(app, "L") is None
     assert app.cur_point_id == 2            # 粒度跟随落点（点2 无段→回落）
     assert app.slots == {72: {"pc": 1}}     # 点2 回落工程级映射
+    assert app.pl_keys == ["pt:L#2"]        # 裁剪同步：只下架被删的段
     assert app.end_beh == [""]              # 行为表逐位对齐未漂移（2 点块缩 1 位）
-    # 增删他点不动当前装载：零动作
+    # 编辑器加点不自动上节目单（加段走素材库＋按钮）；增删他点不动装载
     app.points["L"]["points"].append(
         {"id": 3, "name": "P3", "start": 60.0, "end": 90.0})
     assert setlist_gui.App._points_sync_list(app, "L") is None
+    assert app.pl_keys == ["pt:L#2"]        # 新点 P3 不复活/不追加
     assert app.cur_point_id == 2 and app.slots == {72: {"pc": 1}}
-    assert app.end_beh == ["", ""]          # 增点=块扩一位
-    # 出口行为随删末点保留（删 P3 → 行为迁回新出口 P2）
-    app.end_beh = ["", "delay:5"]           # 出口（末点 P3）带延迟行为
+    assert app.end_beh == [""]
+    # 出口段被删（块内还有幸存段）：行为迁到幸存出口（同 remove 律）；
+    # 出口非列表末位，推进行为保留
+    app.pl_keys = ["pt:L#2", "pt:L#3", "X"]
+    app.end_beh = ["", "delay:5", ""]
     app.points["L"]["points"] = app.points["L"]["points"][:-1]  # 删 P3
     assert setlist_gui.App._points_sync_list(app, "L") is None
-    assert app.end_beh == ["delay:5"]       # 出口行为迁到新末位
+    assert app.pl_keys == ["pt:L#2", "X"]
+    assert app.end_beh == ["delay:5", ""]   # 出口行为迁到幸存出口
+
+
+def test_sync_list_keeps_curation(tmp_path):
+    """节目单裁剪与离散块不受定义编辑侵扰：改时码/改名不触发任何下架，
+    离散块（同歌两块中间隔着别歌）不会被合并回首块（旧镜像会）。"""
+    import threading
+    import types
+    import setlist_gui
+    cpr = tmp_path / "song.cpr"
+    cpr.write_text("", encoding="utf-8")
+    app = types.SimpleNamespace(
+        by_key={"L": {"key": "L", "name": "歌", "path": str(cpr)},
+                "X": {"key": "X", "name": "他歌", "path": str(cpr)}},
+        points={"L": {"enabled": True, "counter": 3, "points": [
+            {"id": 1, "name": "P1", "start": 0.0, "end": 30.0},
+            {"id": 2, "name": "P2", "start": 30.0, "end": 60.0},
+            {"id": 3, "name": "P3", "start": 60.0, "end": 90.0}]}},
+        pl_keys=["pt:L#2", "X", "pt:L#3"],   # 离散块：P3 排在别歌后（返场）
+        end_beh=["next", "", ""], cur=None, watch=None,
+        cur_song_path=None, cur_point_id=None,
+        slots={}, ax_slots={}, durations={},
+        _load_lock=threading.Lock(), _persist=lambda: None)
+    app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
+    app._reload_entry_slots = lambda e: \
+        setlist_gui.App._reload_entry_slots(app, e)
+    app._repick_cur_by_position = lambda k: \
+        setlist_gui.App._repick_cur_by_position(app, k)
+    app._sync_watch_span = lambda: setlist_gui.App._sync_watch_span(app)
+    # 改时码/改点名：节目单原样
+    app.points["L"]["points"][0]["end"] = 25.0
+    app.points["L"]["points"][0]["name"] = "P2 改名"
+    assert setlist_gui.App._points_sync_list(app, "L") is None
+    assert app.pl_keys == ["pt:L#2", "X", "pt:L#3"]
+    assert app.end_beh == ["next", "", ""]
+    # 删一个不在节目单里的点（P1 本就没上列表）：无影响
+    app.points["L"]["points"] = [
+        p for p in app.points["L"]["points"] if p["id"] != 1]
+    assert setlist_gui.App._points_sync_list(app, "L") is None
+    assert app.pl_keys == ["pt:L#2", "X", "pt:L#3"]
 
 
 def test_points_sync_reanchors_watch(tmp_path):

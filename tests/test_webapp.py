@@ -1476,9 +1476,10 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     assert "D/歌四" not in data["durations"]    # 只记歌单条目信息
     assert data["endBeh"] == ["stop", "", "next"]   # 行为逐位随歌单携带
 
-    # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键）；行为表随
-    # playlist 逐位对齐重写（C 的 next 随失效位落空）
-    data["playlist"] = ["B/歌二", "C/不存在", "pt:B/歌二#9", "A/歌一"]
+    # 导入到新宿主（不含 pt:B/歌二#9 与 C/不存在 两条毒键；A/歌一 已启用
+    # 定位点，用 pt 键导入——裸键属混合态被跳过）；行为表随 playlist 逐位
+    # 对齐重写（C 的 next 随失效位落空）
+    data["playlist"] = ["B/歌二", "C/不存在", "pt:B/歌二#9", "pt:A/歌一#1"]
     data["endBeh"] = ["", "next", "", "stop"]
     bad = tmp_path / "bad.cubesetlist.json"
     bad.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -1488,7 +1489,7 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     b.durations["D/歌四"] = 55.0                # 未进本次歌单的库内缓存
     r = sg.App._pl_import_web(b)
     assert r["ok"] is True and r["loaded"] == 2
-    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.cur is None
+    assert b.pl_keys == ["B/歌二", "pt:A/歌一#1"] and b.cur is None
     assert b.persists == 1 and len(r["skipped"]) == 2
     assert b.durations["B/歌二"] == 90.0 and b.dur_src["A/歌一"] == "manual"
     assert b.durations["D/歌四"] == 55.0        # 未进歌单的库内歌时长不裁剪
@@ -1498,7 +1499,7 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
     # 用户取消：canceled、零副作用
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: "")
     assert sg.App._pl_import_web(b) == {"canceled": True}
-    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.persists == 1
+    assert b.pl_keys == ["B/歌二", "pt:A/歌一#1"] and b.persists == 1
 
     # 坏文件：现列表原封不动
     junk = tmp_path / "junk.json"
@@ -1517,7 +1518,7 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
                                ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(sg.filedialog, "askopenfilename", lambda **kw: str(dead))
     assert "全部失效" in sg.App._pl_import_web(b)["error"]
-    assert b.pl_keys == ["B/歌二", "A/歌一"] and b.persists == 1
+    assert b.pl_keys == ["B/歌二", "pt:A/歌一#1"] and b.persists == 1
 
     # endBeh 段校验（独立宿主：不扰动上面 b 的取消/坏文件断言）：
     # 非法值拒绝、null 视同缺省
@@ -1535,6 +1536,21 @@ def test_pl_export_and_import_roundtrip(tmp_path, monkeypatch):
                         lambda **kw: str(tmp_path / "nullbeh.json"))
     assert sg.App._pl_import_web(_PlApp())["ok"] is True
 
+    # 重复键保首现（与消费端 index(key) 取首现一致）；已启用歌的裸条目
+    # =混合态，跳过并逐条报告
+    data["playlist"] = ["B/歌二", "B/歌二", "A/歌一"]
+    data["endBeh"] = ["stop", "", "delay:5"]
+    (tmp_path / "dup.json").write_text(json.dumps(data, ensure_ascii=False),
+                                       encoding="utf-8")
+    monkeypatch.setattr(sg.filedialog, "askopenfilename",
+                        lambda **kw: str(tmp_path / "dup.json"))
+    c = _PlApp()
+    r = sg.App._pl_import_web(c)
+    assert r["ok"] is True and r["loaded"] == 1
+    assert c.pl_keys == ["B/歌二"] and c.end_beh == ["stop"]   # 首现位的值
+    msgs = "；".join(r["skipped"])
+    assert "重复条目，保留首个" in msgs and "已启用定位点：整曲条目不支持" in msgs
+
 
 def test_plimport_daw_gate(tmp_path, monkeypatch):
     """/plimport 底座门：异底座文件拒收并报准原因（异底座条目在本机库
@@ -1549,8 +1565,8 @@ def test_plimport_daw_gate(tmp_path, monkeypatch):
             json.dumps(obj, ensure_ascii=False), encoding="utf-8")
         return sg.App._pl_import_web(a)
 
-    base = {"version": 1, "playlist": ["A/歌一"],
-            "durations": {"A/歌一": 120.0}, "durSrc": {}}
+    base = {"version": 1, "playlist": ["B/歌二"],
+            "durations": {"B/歌二": 90.0}, "durSrc": {}}
     # 异底座：拒收报准双方底座名，现列表零副作用
     r = feed(dict(base, daw="studioone"))
     assert "底座不匹配" in r["error"]
@@ -1560,9 +1576,10 @@ def test_plimport_daw_gate(tmp_path, monkeypatch):
     r = feed(dict(base, daw="foobar"))
     assert "底座不匹配" in r["error"] and "foobar" in r["error"]
     # 同底座放行；大小写/尾空白变体归一后放行；缺标记=旧版文件通配放行
+    # （条目用未启用定位点的裸键——已启用歌的裸键按混合态跳过）
     r = feed(dict(base, daw="cubase"))
     assert r["ok"] is True and r["loaded"] == 1
-    assert a.pl_keys == ["A/歌一"] and a.persists == 1
+    assert a.pl_keys == ["B/歌二"] and a.persists == 1
     a = _PlApp()
     assert feed(dict(base, daw="Cubase "))["ok"] is True
     a = _PlApp()
