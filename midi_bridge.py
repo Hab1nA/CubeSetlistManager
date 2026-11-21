@@ -613,6 +613,8 @@ class MidiIn:
 
 class TransportSync:
     """跟随 Cubase 走带同步视频：收到走带脉冲=在播放；脉冲断流=暂停/停止。
+    幕间循环视频例外：不随走带暂停（切定位点/工程走带停了也持续循环），
+    只被新的 VJ 触发音符/熄屏/全停打断。
     首个脉冲到来才启用——没开时钟发送的工程行为与旧版完全一致（不会误暂停）。
     video_state: playing(在播) / paused(被走带暂停) / stopped(未触发或已熄屏)。
     回调线程只记账，所有 OBS 操作都在看门狗线程做（winmm 回调里禁网络）。"""
@@ -638,6 +640,14 @@ class TransportSync:
         with self._lock:
             self._last_note = time.time()
 
+    def blackout(self):
+        """程序侧熄屏（全停/黑场）后的状态收敛：这些路径直调 ctl.stop_media()
+        不经音符 worker，循环豁免又让 poll 不再借走带断流兜底收敛，必须显式
+        归位，否则 UI 恒显「播放中」盖住真实黑场。"""
+        with self._lock:
+            self.video_state = "stopped"
+            self.current_video = None
+
     def on_clock(self):
         with self._lock:
             self._enabled = True
@@ -659,30 +669,51 @@ class TransportSync:
         if not enabled:
             return
         if not live and self.video_state == "playing":
+            # 幕间循环视频不随走带暂停：走带停了也持续循环，只被新的 VJ
+            # 触发音符/熄屏/全停打断。loop_for 读运行时 cfg——webapp 循环
+            # 开关热改后，在播槽位的豁免即时跟着变。
+            if self.ctl.loop_for(self.current_video):
+                return
             if self.ctl.pause_media():
                 self.set_state("paused")
                 self.on_event("走带暂停 → 视频已暂停")
-        elif live and self.video_state == "paused":
-            self._resume_if_worth()
+        elif self.video_state == "paused" and (
+                live or self.ctl.loop_for(self.current_video)):
+            # 循环槽位完全脱离走带：走带停着也不保持定格（在播槽位热开
+            # 循环 → 立即复活续循环）。_resume_if_worth 先问 OBS 实况，
+            # 已播完/已停的照旧不复活。
+            self._resume_if_worth("走带恢复" if live else "循环槽位")
 
-    def _resume_if_worth(self):
+    def _resume_if_worth(self, why="走带恢复"):
         """恢复前先问 OBS 实况：已播完/已停/出错的视频不复活——PLAY 会把
         播完的视频从头再放一遍盖在画面上；只有真在暂停态才继续。
         刚收到触发音符（磁吸对齐音符起播的瞬间）则不恢复，切换归音符管。
-        OBS 查不到（重启中）就等下一轮轮询。"""
+        OBS 查不到（重启中）就等下一轮轮询。why=事件文案语境（走带恢复/
+        循环槽位）。"""
         with self._lock:
             if time.time() - self._last_note < NOTE_SUPPRESS:
                 return
         st = self.ctl.media_state()
         if st == "OBS_MEDIA_STATE_PAUSED":
-            if self.ctl.resume_media():
-                self.set_state("playing")
-                self.on_event("走带恢复 → 视频继续")
+            # 翻牌前复核仍处 paused：resume 的网络往返期间熄屏（blackout）
+            # 可能已把三态收敛为 stopped，迟到回写不得盖掉它
+            if self.ctl.resume_media() and self._set_state_if("paused",
+                                                              "playing"):
+                self.on_event("%s → 视频继续" % why)
         elif st == "OBS_MEDIA_STATE_PLAYING":
-            self.set_state("playing")   # 实况在播，对齐本地标记
+            self._set_state_if("paused", "playing")   # 实况在播，对齐本地标记
         elif st is not None:
             self.set_state("stopped")
             self.on_event("视频已播完或停止，不随走带恢复")
+
+    def _set_state_if(self, expect, new):
+        """条件翻牌：仅当仍处 expect 态才置 new（与 blackout 的迟到写竞态
+        收口）。"""
+        with self._lock:
+            if self.video_state == expect:
+                self.video_state = new
+                return True
+        return False
 
 
 def note_handler(ctl, sync, report=print):
@@ -717,8 +748,11 @@ def note_handler(ctl, sync, report=print):
                 else:
                     ok = ctl.set_media(target, ctl.loop_for(target))
                     if ok:
-                        sync.set_state("playing")
+                        # 先落 current_video 再翻 playing：poll 的循环豁免判
+                        # 定读它，反序的微窗口会把刚触发的循环视频当旧槽位
+                        # 暂停掉
                         sync.current_video = target
+                        sync.set_state("playing")
                 report("音符 %d → %s%s" % (
                     note, "熄屏" if target is None else target,
                     "" if ok else " 失败：%s" % ctl.last_error))

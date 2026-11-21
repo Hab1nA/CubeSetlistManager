@@ -3192,7 +3192,10 @@ class App:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
                 # 竞争），主线程直跑=全停按钮最坏卡 10s+（黑面+指令积压）
-                ctl.stop_media()
+                # 熄屏成功才 blackout 收敛（与 automator _blackout 同款条件
+                # 式）：失败保真旧态，置 stopped 反而让 poll 对在投画面失明
+                if ctl.stop_media() and self.sync is not None:
+                    self.sync.blackout()
             # 焦点收口在 daw_ctrl.panic 内（还原操作前前台）；skip_keys 路
             # 径没碰 DAW 焦点，不事后抢——本就未在播放时按全停不该把用户
             # 从当前窗口拽走

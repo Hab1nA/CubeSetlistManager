@@ -34,6 +34,9 @@ class FakeCtl:
     def __init__(self):
         self.calls = []
         self.state = None
+        self.cfg = {}
+    def loop_for(self, f):                          # 借真实现（只摸 self.cfg）
+        return ObsController.loop_for(self, f)
     def pause_media(self):
         self.calls.append("pause")
         return True
@@ -83,6 +86,63 @@ def test_transport_sync():
     s.on_clock()
     s.poll()
     assert ctl.calls.count("resume") == 2 and s.video_state == "playing"
+
+
+def test_transport_sync_loop_exempt():
+    """幕间循环视频不随走带暂停（切定位点/工程走带停了也持续循环）；
+    解除循环标记后恢复走带跟随（运行时 cfg 热读，webapp 开关即时生效）。"""
+    ctl = FakeCtl()
+    ctl.cfg = {"videoLoops": {"3": True}}
+    s = mb.TransportSync(ctl)
+
+    s.set_state("playing")
+    s.current_video = "3 幕间.mp4"
+    s.on_clock()
+    time.sleep(0.15)                     # 时钟断流（CLOCK_TIMEOUT 打桩 0.08）
+    s.poll()
+    assert ctl.calls == [] and s.video_state == "playing"
+
+    s.current_video = "4 独奏.mp4"       # 无循环标记的槽位照常跟随走带
+    s.poll()
+    assert ctl.calls == ["pause"] and s.video_state == "paused"
+
+    s.set_state("playing")
+    s.current_video = "3 幕间.mp4"       # 在播循环槽位热解除循环 → 豁免即时消失
+    ctl.cfg["videoLoops"] = {}
+    s.poll()
+    assert ctl.calls == ["pause", "pause"]
+
+
+def test_transport_sync_loop_revival_and_blackout():
+    """循环槽位完全脱离走带：走带停着也不保持定格（被走带定格后热开循环
+    → 立即复活续循环）；程序侧熄屏经 blackout() 收敛三态，UI 不恒显播放中。"""
+    ctl = FakeCtl()
+    ctl.cfg = {"videoLoops": {"3": True}}
+    s = mb.TransportSync(ctl)
+
+    s.set_state("paused")                # 非循环期被走带定格
+    s.current_video = "3 幕间.mp4"
+    s.on_clock()
+    time.sleep(0.15)                     # 走带已停（断流）
+    ctl.state = "OBS_MEDIA_STATE_PAUSED"
+    s.poll()                             # 无需走带恢复即复活
+    assert ctl.calls == ["resume"] and s.video_state == "playing"
+
+    ctl.state = "OBS_MEDIA_STATE_ENDED"  # 已播完的循环槽位照旧不复活
+    s.set_state("paused")                # （ENDED 闸门在复活路径同样生效）
+    s.poll()
+    assert s.video_state == "stopped" and ctl.calls == ["resume"]
+
+    ctl.state = "OBS_MEDIA_STATE_PAUSED"  # 音符刚触发的窗口内复活让位切换
+    s.set_state("paused")
+    s.note_seen()
+    s.poll()
+    assert ctl.calls == ["resume"] and s.video_state == "paused"
+
+    s.blackout()                         # 全停/黑场熄屏 → 状态收敛
+    assert s.video_state == "stopped" and s.current_video is None
+    s.poll()                             # 收敛后不再有任何动作
+    assert ctl.calls == ["resume"]
 
 
 def test_numbered_match():
