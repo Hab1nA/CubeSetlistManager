@@ -2730,7 +2730,10 @@ async function toggleVjLoop(cell, row) {
       const grid2 = cell.parentElement;
       if (mode === "default") {
         grid2.querySelectorAll(".vj-cell.default").forEach(c => {
-          if (c !== cell) c.classList.remove("default");
+          if (c !== cell) {
+            c.classList.remove("default");
+            c.setAttribute("aria-pressed", "false");  // 摘类同步摘 aria
+          }
         });
       }
     } else paint(rowMode());

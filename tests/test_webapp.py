@@ -430,8 +430,10 @@ def test_set_video_mode_method(monkeypatch):
 
 def test_set_video_mode_terminates_fallback(monkeypatch):
     """改档终结回落态：回落中（旗标 True）把在播默认槽位切 off/loop →
-    sync.note_playing 收敛旗标（否则悬置旗标拦死新默认的 ENDED 看守+
-    poll 误豁免走带暂停，审计 A-P1-1）；切 default 不动回落态。"""
+    fallback_end 只清旗标（否则悬置旗标拦死新默认的 ENDED 看守+poll 误
+    豁免走带暂停，审计 A-P1-1）；三态与 current_video 不动——paused 槽位
+    被覆写成 playing 会冻死热开循环的复活路径（复审 R1）；切 default 不
+    动回落态。"""
     import obs_ctrl as _oc
     monkeypatch.setattr(sg, "_load_config", lambda: {"obs": {}})
     monkeypatch.setattr(sg, "_save_config", lambda cfg: None)
@@ -450,6 +452,42 @@ def test_set_video_mode_terminates_fallback(monkeypatch):
     sync.fallback_start("3.mp4")
     assert sg.App._set_video_mode(app, 74, "default") is None
     assert sync._fallback_active is True            # default 档回落态保持
+    # paused 槽位改档：三态保持 paused（不被覆写成 playing）
+    sync2 = mb.TransportSync(ctl)
+    sync2.set_state("paused")
+    sync2.current_video = "3.mp4"
+    sync2._fallback_active = True
+    app2 = types.SimpleNamespace(ctl=ctl, sync=sync2, q=_Q())
+    assert sg.App._set_video_mode(app2, 74, "loop") is None
+    assert sync2.video_state == "paused" \
+        and sync2.current_video == "3.mp4" \
+        and sync2._fallback_active is False
+
+
+def test_paused_slot_loop_revive():
+    """paused 槽位热开循环 → poll 立即复活续循环（f6b035d 行为回归锚：
+    改档收敛不得把它冻死，复审 R1）。"""
+
+    class _C(_ResetCtl):
+        def __init__(self):
+            super().__init__({"videoLoops": {"3": True}})
+            self.resumes = 0
+        def loop_for(self, f):                      # 借真实现（只摸 self.cfg）
+            return obs_ctrl.ObsController.loop_for(self, f)
+        def resume_media(self):
+            self.resumes += 1
+            return True
+        def media_state(self):
+            return "OBS_MEDIA_STATE_PAUSED"
+
+    ctl = _C()
+    sync = mb.TransportSync(ctl)
+    sync.on_clock()
+    time.sleep(mb.CLOCK_TIMEOUT + 0.05)             # 走带断流
+    sync.set_state("paused")
+    sync.current_video = "3.mp4"
+    sync.poll()                                     # 循环槽位脱离走带：复活
+    assert ctl.resumes == 1 and sync.video_state == "playing"
 
 
 def test_set_video_mode_rollback_on_save_failure(monkeypatch):

@@ -268,8 +268,9 @@ class ObsController:
         # 动作失败/探活失败/停用/循环异常漏复位=重连后投影不恢复，11-13 C2）
         self._connected_notified = False
         # A/B 双源（无黑闪切换）：A=mediaInput、B=mediaInput+" B"，_active=
-        # 当前可见侧；_item_ids=输入名→sceneItemId（连接期校准，断链作废）；
-        # _hidden_file=隐藏侧当前装载文件（预载态展示，触发路径不依赖它）
+        # 当前可见侧；_item_ids=输入名→(scene, sceneItemId)（连接期校准，
+        # 断链作废，值带 scene 防跨场景用旧 id）；_hidden_file=隐藏侧当前
+        # 装载文件（预载态展示，触发路径不依赖它）
         self._active = "A"
         self._item_ids = {}
         self._hidden_file = None

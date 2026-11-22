@@ -1881,9 +1881,9 @@ class App:
                 old = str(ctl.cfg.get("mediaInput") or "")
                 ctl.cfg["mediaInput"] = media
                 if old and old != media:
-                    # 改名：删旧 A/B 源对（含场景项），防孤儿源叠画；新名
-                    # 源对由连接校准自动补建。未连接=跳过（重连校准只建
-                    # 不删，孤儿待下次改名清理）
+                    # 改名：删旧 A/B 源对（含场景项），防孤儿源叠画；删除
+                    # 后就地补建新名源对（见 retire_names）。未连接=跳过
+                    # （重连校准只建不删，孤儿待下次改名清理）
                     ctl.retire_names(old)
             mon_prev = None
             if mon is not None:
@@ -1946,10 +1946,10 @@ class App:
             obs["videoDefault"] = new_default
             cfg["obs"] = obs
             _save_config(cfg)
-        except (ValueError, OSError) as e:
+        except (ValueError, OSError, RuntimeError) as e:
             # 落盘失败回滚运行时 cfg：不回滚则热路径已生效而 HTTP 400 让
             # 前端回滚——运行时/磁盘/前端三方分叉，重启后又回退（审计
-            # A-P2-1）
+            # A-P2-1）；捕获面与 _persist_config 同口径（复审 R4）
             self.ctl.cfg["videoLoops"] = old_loops
             self.ctl.cfg["videoDefault"] = old_default
             self.q.put("VJ 模式保存失败：%s" % e)
@@ -1963,8 +1963,9 @@ class App:
                 if mode != "default" and self.sync is not None:
                     # 在播槽位被改离默认档=回落态终结：不清 _fallback_active
                     # 则旗标悬置，poll 误豁免走带暂停+新默认的 ENDED 看守
-                    # 被拦死（黑屏等触发，审计 A-P1-1）
-                    self.sync.note_playing(cur)
+                    # 被拦死（审计 A-P1-1）。只清旗标不动三态——paused 槽位
+                    # 被覆写成 playing 会冻死热开循环的复活路径（复审 R1）
+                    self.sync.fallback_end()
                 if mode != "default":
 
                     def _apply():

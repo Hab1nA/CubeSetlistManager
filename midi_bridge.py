@@ -706,6 +706,13 @@ class TransportSync:
             self.video_state = "playing"
             self._fallback_active = True
 
+    def fallback_end(self):
+        """回落态终结（UI 改档热应用等写点）：只清回落旗标，不动
+        video_state/current_video——paused 在播槽位被 note_playing 覆写
+        成 playing 会冻死「热开循环立即复活」的 poll 路径（复审 R1）。"""
+        with self._lock:
+            self._fallback_active = False
+
     def poll(self):
         with self._lock:
             enabled, live = self._enabled, (
@@ -766,11 +773,15 @@ class TransportSync:
                     or self._last_note != t_note):
                 return
         if self.ctl.set_media(target, True):
-            # set_media 的网络往返期间新触发可能已到（双查之后到达的
-            # 迟到者）：不复验会把刚落地的触发盖成回落态——这里只拦
-            # 状态落账，画面由下一次触发自愈（审计 A-P2-2）
+            # set_media 的网络往返期间新触发/熄屏/回零清台可能已改现场
+            # （双查之后到达的迟到者）：复验磁吸窗（触发意图已记）与
+            # 状态面（blackout 等非音符写者）——只拦回落旗标落账，不
+            # 撒谎（画面由下一次触发自愈）。预载音符不记磁吸窗（on_note
+            # 口径）不会被误算（复审 R2/R3）
             with self._lock:
-                if self._last_note != t_note:
+                if (self._last_note != t_note
+                        or self.video_state != "playing"
+                        or self.current_video != cur):
                     return
             self.fallback_start(target)
             self.on_event("视频播完 → 默认 VJ 循环")
@@ -823,8 +834,13 @@ def note_handler(ctl, sync, report=print):
     q = queue.Queue()
 
     def on_note(note, vel):
-        if note in NOTE_MAP or note in PRELOAD_MAP:
+        if note in NOTE_MAP:
             sync.note_seen()
+            q.put(note)
+        elif note in PRELOAD_MAP:
+            # 预载不记磁吸窗（note_seen）：_last_note 语义=「换画面的触发
+            # 意图到达」——预载不换画面，记了会误拦回落双查/postcheck 的
+            # 迟到者判定（复审 R2）
             q.put(note)
         elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
             report("音符 %d 不在 VJ 映射：触发音已整体升八度，请检查工程" % note)

@@ -284,17 +284,26 @@ def test_default_fallback_note_race():
 
 
 def test_default_fallback_postcheck():
-    """双查通过后、set_media 往返期间新音符到达（迟到者）：set_media 照发
-    （画面由下一次触发自愈）但回落旗标不得落账——状态面不撒谎（审计
-    A-P2-2）。"""
+    """双查通过后、set_media 往返期间现场已变（触发/blackout 等迟到
+    写者）：set_media 照发（画面由下一次触发自愈）但回落旗标不得落账
+    ——状态面不撒谎（审计 A-P2-2，复验状态面覆盖非音符写者=复审 R3）。"""
     ctl = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
     s = mb.TransportSync(ctl)
     s.note_playing("2.mp4")
-    ctl.on_set_media = s.note_seen                  # 双查后才到的音符
+    ctl.on_set_media = s.note_seen                  # 双查后才到的触发
     s.poll()
     assert ctl.sets == [("3.mp4", True)]            # set_media 已发
     assert s._fallback_active is False              # 但不落回落旗标
-    assert s.video_state == "playing" and s.current_video == "2.mp4"
+    assert s.current_video == "2.mp4"
+
+    # 往返期间 blackout（回零清台/全停线程）：stopped 覆写同样拦截
+    ctl2 = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s2 = mb.TransportSync(ctl2)
+    s2.note_playing("2.mp4")
+    ctl2.on_set_media = s2.blackout
+    s2.poll()
+    assert s2._fallback_active is False \
+        and s2.video_state == "stopped"             # blackout 不被盖回 playing
 
 
 def test_resume_stopped_clears_flag():
@@ -712,7 +721,10 @@ def test_preload_note_worker():
 
     fire(103, "1.mp4", ctl.pre)          # 103 = 槽位1 预载
     fire(132, "30.mp4", ctl.pre)          # 132 = 槽位30 预载
-    fire(74, ("3.mp4", False), ctl.sets)  # 触发不受影响
+    assert sync._last_note == 0.0         # 预载不记磁吸窗（复审 R2）：
+    #   _last_note 只属于「换画面的触发意图」，回落双查/postcheck 不被
+    #   预载音符误拦
+    fire(74, ("3.mp4", False), ctl.sets)  # 触发不受影响（且会记磁吸窗）
     assert any("预载1.mp4" in ln for ln in lines)
 
 
