@@ -1336,9 +1336,14 @@ class App:
                 self.q.put("《%s》已是当前工程，不重载" % entry["song_name"])
                 return False
         # 同工程定位点：免开关工程，停走带→GOTO→按需播放（不占 ctrl.busy）
+        # 活体门：DAW 已被手动关闭/崩掉时下面四个条件全不失效（ctrl 是本
+        # 软件自己的对象、cur_song_path 是记账值）→ GOTO 发进虚空只剩 ACK
+        # 告警，永不拉起；门不过走完整切换（含冷启动拉起）。用户在 DAW 里
+        # 手开他工程也被此门拦截（否则 GOTO 挪错工程的光标）
         if entry["point"] is not None and self.ctrl is not None \
                 and not self.ctrl.busy \
                 and self.cur_song_path == entry["path"] \
+                and self._daw_proj_here(entry["song_name"]) \
                 and self.mmc_out is not None:
             self.q.put("切换到《%s》：同工程定位，无需重开" % entry["display"])
             was_live = (self.watch is not None
@@ -1383,6 +1388,14 @@ class App:
         self.q.put("切换到《%s》…：%s"
                    % (entry["display"], "已排队" if via == "排队" else via))
         return True
+
+    def _daw_proj_here(self, song_name):
+        """同工程免重开分支的活体门：DAW 在场且当前打开的正是这首歌的
+        工程（窗口标题对名，:1332 「已是当前工程」同款口径）。枚举有成本
+        但只按用户动作级频率调用。"""
+        ws = daw_ctrl.current_project()
+        return ws is not None and daw_ctrl.project_name_from_title(ws[1]) \
+            == song_name
 
     def _goto_worker(self, i, entry, play_after, was_live):
         """同工程定位点切换（工作线程）：停走带→GOTO→主线程装载段区间。
@@ -1894,29 +1907,39 @@ class App:
             # 配置了显示器=保持投影（仅显式改「无」才关，上方分支已覆盖）；
             # 此处不得 close——否则保存任意 VJ 配置都会打灭投影
 
-    def _set_video_loop(self, note, on):
-        """VJ 槽位循环开关（Tk 线程执行，/vjloop 端点经 _run_on_app 投递）：
-        改运行时 cfg（琴键触发热路径即时读）→ obs 段单键合并落盘（不整段
-        替换，防洗掉 host/port 等）→ 在播槽位热应用（OBS 网络动作走工作
-        线程，不占主线程——与 panic/settings 同纪律）。None=成功（_run_on_app
-        约定），str=错误文案。"""
+    def _set_video_mode(self, note, mode):
+        """VJ 槽位三态（Tk 线程执行，/vjloop 端点经 _run_on_app 投递）：
+        off=播一遍停 / loop=循环 / default=默认回落。default 全局单值：设即
+        顶掉旧默认槽位；与同槽 loop 互斥（不变量在写入点强制；两标记并存
+        的手改配置运行期表现为纯循环——永不 ENDED、回落不触发，下次写入
+        自愈）。改运行时 cfg（琴键触发热路径即时读）→ obs 段单键合并落盘
+        （不整段替换，防洗掉 host/port 等）→ 在播槽位循环热应用（OBS 网络
+        动作走工作线程，不占主线程——与 panic/settings 同纪律）。None=成功
+        （_run_on_app 约定），str=错误文案。"""
         if self.ctl is None:
             return "OBS 控制器未就绪"
+        if mode not in ("off", "loop", "default"):
+            return "mode 应为 off/loop/default"
         loops = dict(self.ctl.cfg.get("videoLoops") or {})
+        cur_default = str(self.ctl.cfg.get("videoDefault") or "")
         n = str(note - 71)
-        if on:
+        if mode == "loop":
             loops[n] = True
         else:
             loops.pop(n, None)
+        new_default = n if mode == "default" else (
+            "" if cur_default == n else cur_default)
         self.ctl.cfg["videoLoops"] = loops
+        self.ctl.cfg["videoDefault"] = new_default
         try:
             cfg = _load_config()
             obs = cfg.get("obs") or {}
             obs["videoLoops"] = loops
+            obs["videoDefault"] = new_default
             cfg["obs"] = obs
             _save_config(cfg)
         except (ValueError, OSError) as e:
-            self.q.put("循环设置保存失败：%s" % e)
+            self.q.put("VJ 模式保存失败：%s" % e)
             return "保存失败：%s" % e
         cur = getattr(self.sync, "current_video", None) \
             if self.sync is not None else None
@@ -1926,7 +1949,7 @@ class App:
                 ctl = self.ctl
 
                 def _apply():
-                    if not ctl.set_looping(on):
+                    if not ctl.set_looping(mode == "loop"):
                         self.q.put("循环热应用未生效：%s" % ctl.last_error)
                 threading.Thread(target=_apply, daemon=True).start()
         return None
@@ -3410,12 +3433,41 @@ class App:
         if action == "play" and self._point_play():
             return
         if action == "rewind" and self._point_rewind():
+            self._vj_reset_stage()
             return
-        if self.ctrl.transport(action) \
-                and action == "rewind" \
-                and self.watch is not None:
-            self.watch.reset()      # 回零=停在零点：纪元复位让显示立即归零，
-                                    # 不等下一条时码（播放/暂停无需复位——位置自证）
+        ok = self.ctrl.transport(action)
+        if action == "rewind":
+            if ok and self.watch is not None:
+                self.watch.reset()  # 回零=停在零点：纪元复位让显示立即归零，
+                                    # 不等下一条时码（播放/暂停无需复位——
+                                    # 位置自证）
+            # 回零清台：熄屏归黑（或默认 VJ 回落），不再定格在旧视频画面。
+            # 与 DAW 送达与否无关——清的是投影画面；GOTO 切点/工程不走此
+            # 路（幕间循环不被打断，f6b035d 语义保留）
+            self._vj_reset_stage()
+
+    def _vj_reset_stage(self):
+        """回零清台（_transport_thread 的 rewind 两路收口处调用）：有默认
+        VJ → 回落循环它；否则熄屏归黑。OBS 动作走工作线程（与 panic/
+        settings 同纪律，不占主线程）；state 收敛仅在动作成功时（与 note
+        worker 同款纪律——失败画面未动，不撒谎）。"""
+        ctl, sync = self.ctl, self.sync
+        if ctl is None:
+            return
+        target = mb.default_target(ctl.cfg)
+
+        def apply():
+            if target and ctl.set_media(target, True):
+                if sync is not None:
+                    sync.fallback_start(target)
+                self.q.put("回零 → 默认 VJ 循环")
+                return
+            if target:
+                self.q.put("回零默认回落失败：%s，已熄屏" % ctl.last_error)
+            if ctl.stop_media() and sync is not None:
+                sync.blackout()
+
+        threading.Thread(target=apply, daemon=True).start()
 
     def _cur_point_entry(self):
         """指针条目解析：属定位点模式且正是已装载工程时返回 entry，否则

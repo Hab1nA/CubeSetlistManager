@@ -22,6 +22,14 @@ class _FakeWs:
             raise ObsError("注入失败")
         if method == "GetInputList":
             return {"inputs": [{"inputName": "舞台视频"}]}
+        if method == "GetCurrentProgramScene":
+            return {"currentProgramSceneName": "场景"}
+        if method == "GetSceneItemList":
+            return {"sceneItems": [   # A/B 双侧场景项（A 可见 B 隐藏）
+                {"sourceName": "舞台视频", "sceneItemId": 1,
+                 "sceneItemEnabled": True},
+                {"sourceName": "舞台视频 B", "sceneItemId": 2,
+                 "sceneItemEnabled": False}]}
         return {}
 
     def close(self):

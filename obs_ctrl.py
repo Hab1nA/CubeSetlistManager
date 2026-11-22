@@ -267,6 +267,10 @@ class ObsController:
         # 连接纪元标志：只在「断开→连上」跃迁时通知（全部断开路径都要复位，
         # 动作失败/探活失败/停用/循环异常漏复位=重连后投影不恢复，11-13 C2）
         self._connected_notified = False
+        # A/B 双源（无黑闪切换）：A=mediaInput、B=mediaInput+" B"，_active=
+        # 当前可见侧；_item_ids=输入名→sceneItemId（连接期校准，断链作废）
+        self._active = "A"
+        self._item_ids = {}
 
     # ---- 生命周期 ----
 
@@ -291,21 +295,109 @@ class ObsController:
     # ---- 对外动作（永不抛） ----
 
     def set_media(self, file_rel, loop):
-        """切媒体源文件并从头播放；loop=True 即幕间循环模式。"""
+        """切到 file_rel 从头播放；loop=True 即幕间循环模式。A/B 双源换切
+        （无黑闪）：文件先装载到隐藏侧（装载不可见），开隐藏侧、等它真正
+        起播、再关旧侧——旧画面持续在屏直到新画面就绪，消除单源换文件的
+        重载空窗（黑闪根因，2026-11-22 改双源）。"""
         path = self._abs_path(file_rel)
         if path is None:
             self.last_error = "视频文件不存在：%s" % file_rel
             return False
         def do(ws):
+            new_name = self._hidden_name()
             ws.request("SetInputSettings", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
+                "inputName": new_name,
                 "inputSettings": {"local_file": path, "is_local_file": True,
                                   "looping": bool(loop)},
                 "overlay": True})
-            ws.request("TriggerMediaInputAction", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
-                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
+            self._swap(ws, new_name)
         return self._act(file_rel + ("（循环）" if loop else ""), do)
+
+    # ---- A/B 双源辅助 ----
+
+    def _b_name(self):
+        return self.cfg.get("mediaInput", "舞台视频") + " B"
+
+    def _active_name(self):
+        return self._b_name() if self._active == "B" else \
+            self.cfg.get("mediaInput", "舞台视频")
+
+    def _hidden_name(self):
+        return self.cfg.get("mediaInput", "舞台视频") \
+            if self._active == "B" else self._b_name()
+
+    def _swap(self, ws, new_name):
+        """可见性换切到 new_name：先开新侧（旧侧还压着画面，装载/起播都
+        不可见），等新侧 PLAYING 再关旧侧——装载期旧画面持续在屏，无空窗。
+        等不到 PLAYING（大文件超时/静图/错误态）2 秒后照常收尾：最坏退化为
+        旧画面多停 2 秒，不卡死切换。z 序不管理：新侧在上=装载期透明透出
+        旧画面，在下=关旧侧时新侧已在播，两种摆位都无黑帧。"""
+        scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
+        old_name = self._active_name() if new_name != self._active_name() \
+            else None
+        new_id = self._item_id(ws, scene, new_name)
+        old_id = self._item_id(ws, scene, old_name) if old_name else None
+        ws.request("SetSceneItemEnabled", {
+            "sceneName": scene, "sceneItemId": new_id,
+            "sceneItemEnabled": True})
+        self._wait_playing(ws, new_name)
+        if old_id is not None:
+            ws.request("SetSceneItemEnabled", {
+                "sceneName": scene, "sceneItemId": old_id,
+                "sceneItemEnabled": False})
+        self._active = "B" if new_name == self._b_name() else "A"
+
+    def _wait_playing(self, ws, name, timeout=2.0):
+        """等新侧真正起播（装载+解码开）再关旧侧；拿不到 PLAYING（超时/
+        静图/错误态）返回 False 由调用方照常收尾。持 _act 锁最坏 2 秒——
+        切换期间其它 OBS 动作排队等（切换优先于走带暂停）。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r = ws.request("GetMediaInputStatus", {"inputName": name})
+            if r.get("mediaState") == "OBS_MEDIA_STATE_PLAYING":
+                return True
+            time.sleep(0.02)
+        return False
+
+    def _item_id(self, ws, scene, name):
+        """输入 name 在 scene 的场景项 id（连接期缓存；缺席即地补建——
+        用户在 OBS 里删源/换场景后自愈）。"""
+        if name not in self._item_ids:
+            self._item_ids[name] = self._ensure_side(ws, scene, name)
+        return self._item_ids[name]
+
+    def _ensure_side(self, ws, scene, name):
+        """输入+场景项双确保在场，返回场景项 id（幂等）。新建的 B 侧隐藏
+        （可见性由 swap 管，防残文件自动播到画面上），A 侧保持原行为可见
+        建出（空源无画面，视觉等价）。"""
+        items = ws.request("GetSceneItemList", {"sceneName": scene})
+        hit = next((i for i in items["sceneItems"]
+                    if i["sourceName"] == name), None)
+        if hit is not None:
+            return hit["sceneItemId"]
+        have = any(i["inputName"] == name
+                   for i in ws.request("GetInputList")["inputs"])
+        if have:
+            item = ws.request("CreateSceneItem", {
+                "sceneName": scene, "sourceName": name,
+                "sceneItemEnabled": name != self._b_name()})
+        else:
+            item = ws.request("CreateInput", {
+                "sceneName": scene, "inputName": name,
+                "inputKind": "ffmpeg_source",
+                "inputSettings": {"is_local_file": True},
+                "sceneItemEnabled": name != self._b_name()})
+        ws.request("SetSceneItemTransform", {
+            "sceneName": scene, "sceneItemId": item["sceneItemId"],
+            "sceneItemTransform": {
+                "position": {"x": 0, "y": 0}, "alignment": 5,
+                "boundsType": "OBS_BOUNDS_SCALE_INNER",
+                "bounds": self._canvas(ws)}})
+        return item["sceneItemId"]
+
+    def _canvas(self, ws):
+        vid = ws.request("GetVideoSettings")
+        return {"x": vid["baseWidth"], "y": vid["baseHeight"]}
 
     def loop_for(self, file_rel):
         """槽位编号查循环标记：basename 前导数字（与 _abs_path 宽松匹配、
@@ -314,45 +406,55 @@ class ObsController:
         loops = self.cfg.get("videoLoops") or {}
         return bool(m and loops.get(str(int(m.group(1)))))
 
+    def default_for(self, file_rel):
+        """槽位编号查默认回落标记（全局单值 videoDefault，与 videoLoops
+        同编号口径）：命中=该槽位是默认 VJ——其它触发视频播完（ENDED）后
+        回落循环它，而不是黑屏等下一条触发。"""
+        m = re.match(r"(\d+)", os.path.basename(str(file_rel or "")))
+        d = self.cfg.get("videoDefault")
+        return bool(m and d == str(int(m.group(1))))
+
     def set_looping(self, on):
-        """热应用循环标记到在播媒体源（仅合并 looping，不 RESTART——正在播
+        """热应用循环标记到在播媒体源（仅合并 looping，不重载——正在播
         的画面零中断）。真机实证 2026-11-17：在播源合并 looping 即时生效，
         越过视频末尾续播；ENDED 定格不因合并复活，该态语义=下次触发生效。"""
         def do(ws):
             ws.request("SetInputSettings", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
+                "inputName": self._active_name(),
                 "inputSettings": {"looping": bool(on)}, "overlay": True})
         return self._act("循环%s" % ("开" if on else "关"), do)
 
     def _stop_and_forget(self, ws):
-        """停媒体源并清空其文件。OBS 媒体源只要存着文件，随场景激活就会
-        自动播（没有「启动不自动播放」开关），忘掉文件才能根治下次启动
-        自动续播上次的视频。"""
-        name = self.cfg.get("mediaInput", "舞台视频")
-        ws.request("SetInputSettings", {
-            "inputName": name,
-            "inputSettings": {"local_file": "", "is_local_file": True},
-            "overlay": True})
-        ws.request("TriggerMediaInputAction", {
-            "inputName": name,
-            "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"})
+        """停双侧媒体源并清空其文件。OBS 媒体源只要存着文件，随场景激活
+        就会自动播（没有「启动不自动播放」开关），忘掉文件才能根治下次
+        启动自动续播上次的视频；B 侧虽隐藏，残文件会在下次 swap 开可见时
+        自动播——双侧都清。"""
+        for name in (self.cfg.get("mediaInput", "舞台视频"),
+                     self._b_name()):
+            ws.request("SetInputSettings", {
+                "inputName": name,
+                "inputSettings": {"local_file": "", "is_local_file": True},
+                "overlay": True})
+            ws.request("TriggerMediaInputAction", {
+                "inputName": name,
+                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"})
 
     def stop_media(self):
-        """熄屏：停掉媒体源并忘掉文件（显示空/黑，OBS 下次启动不续播）。"""
+        """熄屏：停掉双侧媒体源并忘掉文件（显示空/黑，OBS 下次启动不续播）。"""
         return self._act("熄屏", self._stop_and_forget)
 
     def pause_media(self):
-        """暂停媒体源（画面定格在当前位置）。"""
+        """暂停媒体源（画面定格在当前位置；只动可见侧）。"""
         return self._act("暂停", lambda ws: ws.request(
             "TriggerMediaInputAction", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
+                "inputName": self._active_name(),
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE"}))
 
     def resume_media(self):
-        """恢复媒体源（从暂停位置继续播）。"""
+        """恢复媒体源（从暂停位置继续播；只动可见侧）。"""
         return self._act("恢复", lambda ws: ws.request(
             "TriggerMediaInputAction", {
-                "inputName": self.cfg.get("mediaInput", "舞台视频"),
+                "inputName": self._active_name(),
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY"}))
 
     def _set_mute(self, ws):
@@ -365,11 +467,14 @@ class ObsController:
         # 同口径——原缺省 False 使「从未保存过 OBS 设置」的运行态与勾选态
         # 相反（UI 显示静音、实际每轮连接强写不静音+开监听）
         mute = bool(self.cfg.get("vjMute", True))
-        ws.request("SetInputMute", {"inputName": name, "inputMuted": mute})
-        ws.request("SetInputAudioMonitorType", {
-            "inputName": name,
-            "monitorType": "OBS_MONITORING_TYPE_NONE" if mute
-            else "OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT"})
+        for name in (self.cfg.get("mediaInput", "舞台视频"),
+                     self._b_name()):
+            ws.request("SetInputMute", {"inputName": name,
+                                        "inputMuted": mute})
+            ws.request("SetInputAudioMonitorType", {
+                "inputName": name,
+                "monitorType": "OBS_MONITORING_TYPE_NONE" if mute
+                else "OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT"})
 
     def apply_mute(self):
         """按 cfg['vjMute'] 同步媒体源静音/监听（设置页勾选即时生效；连接
@@ -377,34 +482,37 @@ class ObsController:
         return self._act("VJ静音", self._set_mute)
 
     def _ensure_media_input(self, ws):
-        """OBS 里缺配置的媒体源时，在当前活动场景自动补建（等比铺满画布），
-        连接后即可用，无需手动摆源。幂等：已存在直接返回。"""
-        name = self.cfg.get("mediaInput", "舞台视频")
-        if any(i["inputName"] == name
-               for i in ws.request("GetInputList")["inputs"]):
-            return
+        """OBS 里缺配置的媒体源（A/B 双侧）时在当前活动场景自动补建（等比
+        铺满画布），连接后即可用，无需手动摆源；并按 OBS 实况校准活动侧：
+        单侧可见=该侧活动；双显归一为 A（关 B）；双侧隐藏只记账 A——首次
+        swap 自会摆正可见性。幂等。"""
         scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
-        vid = ws.request("GetVideoSettings")
-        item = ws.request("CreateInput", {
-            "sceneName": scene, "inputName": name,
-            "inputKind": "ffmpeg_source",
-            "inputSettings": {"is_local_file": True},
-            "sceneItemEnabled": True})
-        ws.request("SetSceneItemTransform", {
-            "sceneName": scene, "sceneItemId": item["sceneItemId"],
-            "sceneItemTransform": {
-                "position": {"x": 0, "y": 0}, "alignment": 5,
-                "boundsType": "OBS_BOUNDS_SCALE_INNER",
-                "bounds": {"x": vid["baseWidth"], "y": vid["baseHeight"]}}})
+        a = self.cfg.get("mediaInput", "舞台视频")
+        ids = {a: self._ensure_side(ws, scene, a),
+               self._b_name(): self._ensure_side(ws, scene, self._b_name())}
+        self._item_ids = ids
+        items = ws.request("GetSceneItemList", {"sceneName": scene})
+        ena = {i["sourceName"]: i["sceneItemEnabled"]
+               for i in items["sceneItems"] if i["sourceName"] in ids}
+        if ena.get(self._b_name()) and not ena.get(a):
+            self._active = "B"
+        else:
+            self._active = "A"
+            if ena.get(self._b_name()):
+                ws.request("SetSceneItemEnabled", {
+                    "sceneName": scene,
+                    "sceneItemId": ids[self._b_name()],
+                    "sceneItemEnabled": False})
 
     def media_state(self):
-        """查媒体源实况（OBS_MEDIA_STATE_* 字符串），连不上返回 None。"""
+        """查媒体源实况（OBS_MEDIA_STATE_* 字符串，可见侧），连不上返回
+        None。"""
         with self._lock:
             if not self._ws:
                 return None
             try:
                 return self._ws.request("GetMediaInputStatus", {
-                    "inputName": self.cfg.get("mediaInput", "舞台视频")
+                    "inputName": self._active_name()
                 }).get("mediaState")
             except (ObsError, OSError):
                 return None
@@ -487,6 +595,7 @@ class ObsController:
                     pass
                 self._ws = None
                 self._connected_notified = False   # 断链=纪元复位，重连必再通知
+                self._item_ids = {}    # 场景项 id 缓存作废：重连后按实况重建
                 return False
 
     def _abs_path(self, file_rel):

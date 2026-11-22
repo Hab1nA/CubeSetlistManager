@@ -41,6 +41,17 @@ NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸�
 NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
 NOTE_MAP[102] = None  # F#6 → 熄屏
 
+
+def default_target(cfg):
+    """cfg.obs.videoDefault 槽位号 → NOTE_MAP 名义文件（"4"→"4.mp4"，实际
+    文件由 set_media/_abs_path 宽松匹配解析）；未设/非数字/槽位无效=None
+    （31→102 是熄屏位：默认回落没有熄屏语义）。"""
+    d = str(cfg.get("videoDefault") or "").strip()
+    if not d.isdigit():
+        return None
+    f = NOTE_MAP.get(int(d) + 71)
+    return f if isinstance(f, str) else None
+
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
 _MIM_MOREDATA = 0x3C5     # 回调跟不上时改投此码，载荷与 DATA 相同——不同样处理就会静默丢消息
@@ -615,6 +626,9 @@ class TransportSync:
     """跟随 Cubase 走带同步视频：收到走带脉冲=在播放；脉冲断流=暂停/停止。
     幕间循环视频例外：不随走带暂停（切定位点/工程走带停了也持续循环），
     只被新的 VJ 触发音符/熄屏/全停打断。
+    默认回落（videoDefault）同族例外：一遍停视频播完（ENDED）后自动切到
+    默认槽位循环填画面，回落中的视频同样不随走带暂停（_fallback_active
+    旗标），只被新触发/熄屏/全停/回零收敛打断。
     首个脉冲到来才启用——没开时钟发送的工程行为与旧版完全一致（不会误暂停）。
     video_state: playing(在播) / paused(被走带暂停) / stopped(未触发或已熄屏)。
     回调线程只记账，所有 OBS 操作都在看门狗线程做（winmm 回调里禁网络）。"""
@@ -627,6 +641,7 @@ class TransportSync:
         self._last_note = 0.0
         self.video_state = "stopped"
         self.current_video = None   # 最近成功触发的视频文件名（仅展示用）
+        self._fallback_active = False   # 在播的是默认回落（poll 豁免判它）
         self._lock = threading.Lock()
 
     def is_following(self):
@@ -641,12 +656,14 @@ class TransportSync:
             self._last_note = time.time()
 
     def blackout(self):
-        """程序侧熄屏（全停/黑场）后的状态收敛：这些路径直调 ctl.stop_media()
-        不经音符 worker，循环豁免又让 poll 不再借走带断流兜底收敛，必须显式
-        归位，否则 UI 恒显「播放中」盖住真实黑场。"""
+        """程序侧熄屏（全停/黑场/回零收敛）后的状态收敛：这些路径直调
+        ctl.stop_media() 不经音符 worker，循环豁免又让 poll 不再借走带
+        断流兜底收敛，必须显式归位，否则 UI 恒显「播放中」盖住真实黑场。
+        回落旗标一并清（显式熄屏/清台优先于默认回落）。"""
         with self._lock:
             self.video_state = "stopped"
             self.current_video = None
+            self._fallback_active = False
 
     def on_clock(self):
         with self._lock:
@@ -662,27 +679,91 @@ class TransportSync:
             self._enabled = False
             self._last_pulse = 0.0
 
+    def note_playing(self, target):
+        """触发落地（note worker 成功后）：先落 current_video 再翻 playing
+        （poll 的循环豁免判定读它，反序的微窗口会把刚触发的循环视频当旧
+        槽位暂停掉）；回落旗标同步清零（音符触发=回落态终结）。"""
+        with self._lock:
+            self.current_video = target
+            self.video_state = "playing"
+            self._fallback_active = False
+
+    def fallback_start(self, target):
+        """默认回落起播（ENDED 看守/回零收敛共用）：playing+回落旗标——
+        poll 的走带暂停豁免判旗标（该槽位自身 loop 标记 False，loop_for
+        判不到它）。"""
+        with self._lock:
+            self.current_video = target
+            self.video_state = "playing"
+            self._fallback_active = True
+
     def poll(self):
         with self._lock:
             enabled, live = self._enabled, (
                 time.time() - self._last_pulse < CLOCK_TIMEOUT)
+        self._default_fallback()   # 回落看守先于暂停判定：走带恰在视频播完
+        #   的同一拍停也不丢回落（先暂停会把 ENDED 源记成 paused、看守
+        #   只认 playing）；看守不依赖走带跟随（无时钟工程的 VJ 触发同样
+        #   需要默认回落），放在 enabled 门外
         if not enabled:
             return
         if not live and self.video_state == "playing":
-            # 幕间循环视频不随走带暂停：走带停了也持续循环，只被新的 VJ
-            # 触发音符/熄屏/全停打断。loop_for 读运行时 cfg——webapp 循环
-            # 开关热改后，在播槽位的豁免即时跟着变。
-            if self.ctl.loop_for(self.current_video):
+            # 幕间循环/默认回落视频不随走带暂停：走带停了也持续，只被新的
+            # VJ 触发音符/熄屏/全停/回零收敛打断。loop_for 读运行时 cfg
+            # ——webapp 开关热改后，在播槽位的豁免即时跟着变；回落视频的
+            # 槽位自身 loop 标记为 False（互斥），豁免靠 _fallback_active
+            # 旗标（同文件被音符正常触发时旗标已清，该停就停）。
+            if self._fallback_active or self.ctl.loop_for(self.current_video):
                 return
+            with self._lock:
+                # 发暂停前锁内复核：复核到发送的微窗口里回零收敛/回落起播
+                # 可能已改现场，迟到的 pause 会把刚起的默认视频冻一帧
+                # （复活分支自愈，复核把这个窗口压到网络往返级）
+                if self.video_state != "playing" or self._fallback_active:
+                    return
             if self.ctl.pause_media():
                 self.set_state("paused")
                 self.on_event("走带暂停 → 视频已暂停")
         elif self.video_state == "paused" and (
-                live or self.ctl.loop_for(self.current_video)):
-            # 循环槽位完全脱离走带：走带停着也不保持定格（在播槽位热开
-            # 循环 → 立即复活续循环）。_resume_if_worth 先问 OBS 实况，
-            # 已播完/已停的照旧不复活。
-            self._resume_if_worth("走带恢复" if live else "循环槽位")
+                live or self._fallback_active
+                or self.ctl.loop_for(self.current_video)):
+            # 循环槽位/默认回落完全脱离走带：走带停着也不保持定格（在播
+            # 槽位热开循环 → 立即复活续循环）。_resume_if_worth 先问 OBS
+            # 实况，已播完/已停的照旧不复活。
+            self._resume_if_worth("走带恢复" if live else (
+                "默认回落" if self._fallback_active else "循环槽位"))
+
+    def _default_fallback(self):
+        """默认 VJ 回落看守：一遍停视频播完（OBS clear_on_media_end 已把
+        画面清黑）后自动切到默认槽位循环，把「黑屏等下一条触发」填成默认
+        画面。只认 playing 态——熄屏/全停/回零收敛置 stopped 天然抑制
+        （显式熄屏优先于回落），暂停定格也不抢；循环槽位永不 ENDED、不经
+        此路。默认已设（armed）才查 OBS——media_state 是一个网络往返，
+        未设默认的常规场次零开销。"""
+        target = default_target(self.ctl.cfg)
+        if target is None:
+            return
+        with self._lock:
+            if self.video_state != "playing" or self._fallback_active:
+                return
+            cur, t_note = self.current_video, self._last_note
+        if self.ctl.media_state() != "OBS_MEDIA_STATE_ENDED":
+            return
+        with self._lock:
+            # 双查：查 OBS 的往返期间新触发/熄屏可能已改现场——迟到的回落
+            # 不得盖掉更新的意图（_last_note 在音符到达即记，早于 worker
+            # 的 set_media）
+            if (self.video_state != "playing" or self.current_video != cur
+                    or self._last_note != t_note):
+                return
+        if self.ctl.set_media(target, True):
+            self.fallback_start(target)
+            self.on_event("视频播完 → 默认 VJ 循环")
+        else:
+            # 默认文件缺失/断连：收敛 stopped 免百毫秒级重试风暴（画面本
+            # 已黑），失败原因浮 last_error
+            self.set_state("stopped")
+            self.on_event("默认 VJ 回落失败：%s" % self.ctl.last_error)
 
     def _resume_if_worth(self, why="走带恢复"):
         """恢复前先问 OBS 实况：已播完/已停/出错的视频不复活——PLAY 会把
@@ -743,16 +824,11 @@ def note_handler(ctl, sync, report=print):
                 if target is None:
                     ok = ctl.stop_media()
                     if ok:
-                        sync.set_state("stopped")
-                        sync.current_video = None
+                        sync.blackout()      # stopped+清回落旗标（熄屏优先）
                 else:
                     ok = ctl.set_media(target, ctl.loop_for(target))
                     if ok:
-                        # 先落 current_video 再翻 playing：poll 的循环豁免判
-                        # 定读它，反序的微窗口会把刚触发的循环视频当旧槽位
-                        # 暂停掉
-                        sync.current_video = target
-                        sync.set_state("playing")
+                        sync.note_playing(target)
                 report("音符 %d → %s%s" % (
                     note, "熄屏" if target is None else target,
                     "" if ok else " 失败：%s" % ctl.last_error))

@@ -13,6 +13,7 @@ import types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import kbd_auto
+import midi_bridge as mb
 import obs_ctrl
 import pedal
 import setlist_gui as sg
@@ -309,7 +310,8 @@ def test_vjmap_endpoint(tmp_path):
     vroot.mkdir()
     (vroot / "1 开场钢琴.mp4").write_bytes(b"x")
     app.ctl = obs_ctrl.ObsController(
-        {"videoRoot": str(vroot), "videoLoops": {"1": True}})
+        {"videoRoot": str(vroot), "videoLoops": {"1": True},
+         "videoDefault": "2"})
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
                                lambda: 0, page="")
     port = srv.server_address[1]
@@ -323,13 +325,16 @@ def test_vjmap_endpoint(tmp_path):
         assert r72["name"] == "C4" and r72["file"] == "1 开场钢琴.mp4"
         assert r72["hit"] and r72["blackout"] is False
         assert r72["loop"] is True                    # 槽位1 已标循环
+        assert r72["default"] is False
         r2 = next(r for r in d["rows"] if r["note"] == 73)
         assert r2["name"] == "C#4" and r2["file"] == "2.mp4"
         assert r2["hit"] is None and r2["loop"] is False   # 库里没有
+        assert r2["default"] is True                   # 槽位2 = 默认回落
         r102 = next(r for r in d["rows"] if r["note"] == 102)
         assert r102["name"] == "F#6" and r102["blackout"] is True
         assert r102["file"] == "熄屏"
         assert r102["loop"] is False                  # 熄屏无循环语义
+        assert r102["default"] is False               # 也无默认回落语义
         app.lite = True
         code, _b = _req("GET", port, "/vjmap")
         assert code == 403
@@ -338,11 +343,12 @@ def test_vjmap_endpoint(tmp_path):
 
 
 def test_vjloop_endpoint():
-    """/vjloop：格子点击切换循环——合法载荷经 calls 投递到 App 方法；
-    熄屏音符/非布尔 on 400；简化版 403。"""
+    """/vjloop：格子点击三态——合法载荷经 calls 投递到 App 方法；熄屏
+    音符/非法 mode/旧 on 载荷 400；简化版 403。"""
     app = _FakeWebApp()
     got = []
-    app._set_video_loop = lambda note, on: got.append((note, on)) or None
+    app._set_video_mode = lambda note, mode: got.append(
+        (note, mode)) or None
     srv = web_remote.WebServer(("127.0.0.1", 0), app, None,
                                lambda: 0, page="")
     port = srv.server_address[1]
@@ -350,26 +356,34 @@ def test_vjloop_endpoint():
                      kwargs={"poll_interval": 0.2}, daemon=True).start()
     threading.Thread(target=_drain, args=(app,), daemon=True).start()
     try:
-        assert _post(port, "/vjloop", {"note": 74, "on": True})["ok"] is True
-        assert got == [(74, True)]
-        assert _post(port, "/vjloop", {"note": 101, "on": False})["ok"] is True
-        assert got == [(74, True), (101, False)]
-        code, _b = _req("POST", port, "/vjloop", {"note": 102, "on": True})
+        assert _post(port, "/vjloop",
+                     {"note": 74, "mode": "loop"})["ok"] is True
+        assert got == [(74, "loop")]
+        assert _post(port, "/vjloop",
+                     {"note": 101, "mode": "default"})["ok"] is True
+        assert got == [(74, "loop"), (101, "default")]
+        assert _post(port, "/vjloop",
+                     {"note": 101, "mode": "off"})["ok"] is True
+        assert got[-1] == (101, "off")
+        code, _b = _req("POST", port, "/vjloop",
+                        {"note": 102, "mode": "loop"})
         assert code == 400                            # 熄屏无循环语义
-        code, _b = _req("POST", port, "/vjloop", {"note": 74, "on": "yes"})
-        assert code == 400                            # on 必须布尔
-        code, _b = _req("POST", port, "/vjloop", {"note": 71, "on": True})
+        code, _b = _req("POST", port, "/vjloop", {"note": 74, "mode": "on"})
+        assert code == 400                            # 旧 on 载荷已废
+        code, _b = _req("POST", port, "/vjloop", {"note": 71, "mode": "off"})
         assert code == 400                            # 音域外
         app.lite = True
-        code, _b = _req("POST", port, "/vjloop", {"note": 74, "on": True})
+        code, _b = _req("POST", port, "/vjloop",
+                        {"note": 74, "mode": "loop"})
         assert code == 403
     finally:
         srv.shutdown()
 
 
-def test_set_video_loop_method(monkeypatch):
-    """App._set_video_loop：改运行时 cfg（琴键热路径即时读）+ obs 段单键
-    合并落盘（不洗 host 等既有键）；sync 缺席=无热应用分支。"""
+def test_set_video_mode_method(monkeypatch):
+    """App._set_video_mode：改运行时 cfg（琴键热路径即时读）+ obs 段单键
+    合并落盘（不洗 host 等既有键）；default 全局单值顶掉旧默认、与同槽
+    loop 互斥（不变量在写入点强制）；sync 缺席=无热应用分支。"""
     import obs_ctrl as _oc
     store = {"obs": {"host": "127.0.0.1", "port": 4455,
                      "videoLoops": {"2": True}}}
@@ -380,15 +394,113 @@ def test_set_video_loop_method(monkeypatch):
     app = types.SimpleNamespace(
         ctl=_oc.ObsController({"videoLoops": {"2": True}}),
         q=_Q(), sync=None)
-    assert sg.App._set_video_loop(app, 76, True) is None   # 槽位5 开循环
+    assert sg.App._set_video_mode(app, 76, "loop") is None   # 槽位5 开循环
     assert app.ctl.cfg["videoLoops"] == {"2": True, "5": True}
     assert saved[-1]["obs"]["host"] == "127.0.0.1"          # 单键合并不洗段
     assert saved[-1]["obs"]["videoLoops"] == {"2": True, "5": True}
-    assert sg.App._set_video_loop(app, 73, False) is None   # 槽位2 关循环
+    assert sg.App._set_video_mode(app, 73, "off") is None   # 槽位2 关循环
     assert app.ctl.cfg["videoLoops"] == {"5": True}         # 关=删键
     assert saved[-1]["obs"]["videoLoops"] == {"5": True}
+    assert sg.App._set_video_mode(app, 76, "default") is None  # 槽位5=默认
+    assert app.ctl.cfg["videoLoops"] == {}                  # 互斥：清同槽 loop
+    assert app.ctl.cfg["videoDefault"] == "5"
+    assert saved[-1]["obs"]["videoDefault"] == "5"
+    assert sg.App._set_video_mode(app, 78, "default") is None  # 换默认槽位
+    assert app.ctl.cfg["videoDefault"] == "7"               # 单值：顶掉旧默认
+    assert sg.App._set_video_mode(app, 78, "loop") is None  # 槽位7=循环
+    assert app.ctl.cfg["videoDefault"] == ""                # 互斥：清同槽默认
+    assert app.ctl.cfg["videoLoops"] == {"7": True}
+    assert isinstance(sg.App._set_video_mode(app, 74, "bad"), str)  # 坏 mode
     app2 = types.SimpleNamespace(ctl=None, q=_Q(), sync=None)
-    assert isinstance(sg.App._set_video_loop(app2, 74, True), str)  # 无 ctl
+    assert isinstance(sg.App._set_video_mode(app2, 74, "loop"), str)
+
+
+class _ResetCtl:
+    """回零清台用假 ctl：set/stop/pause 记账，成败可配。"""
+    def __init__(self, cfg=None, ok=True):
+        self.cfg = cfg or {}
+        self.sets = []
+        self.stops = 0
+        self.pauses = 0
+        self.ok = ok
+        self.last_error = ""
+    def set_media(self, f, loop):
+        self.sets.append((f, loop))
+        if not self.ok:
+            self.last_error = "视频文件不存在：9.mp4"
+        return self.ok
+    def stop_media(self):
+        self.stops += 1
+        return True
+    def pause_media(self):
+        self.pauses += 1
+        return True
+
+
+def _wait(cond, sec=3.0):
+    deadline = time.time() + sec
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_vj_reset_stage_default():
+    """回零清台：有默认 VJ → 回落循环它（playing+回落旗标，走带停了也
+    不被 poll 暂停）；不熄屏。"""
+    ctl = _ResetCtl({"videoDefault": "3"})
+    sync = mb.TransportSync(ctl)
+    app = types.SimpleNamespace(ctl=ctl, sync=sync, q=_Q())
+    sg.App._vj_reset_stage(app)
+    assert _wait(lambda: ctl.sets == [("3.mp4", True)])
+    assert _wait(lambda: sync.video_state == "playing"
+                 and sync._fallback_active is True
+                 and sync.current_video == "3.mp4")
+    assert ctl.stops == 0
+    sync.on_clock()
+    time.sleep(mb.CLOCK_TIMEOUT + 0.05)
+    sync.poll()                                     # 走带断流：回落豁免
+    assert ctl.pauses == 0
+
+
+def test_vj_reset_stage_black():
+    """回零清台：无默认 VJ → 熄屏归黑（stopped+旗标清）。"""
+    ctl = _ResetCtl({})
+    sync = mb.TransportSync(ctl)
+    sync.note_playing("2.mp4")
+    app = types.SimpleNamespace(ctl=ctl, sync=sync, q=_Q())
+    sg.App._vj_reset_stage(app)
+    assert _wait(lambda: ctl.stops == 1 and ctl.sets == [])
+    assert _wait(lambda: sync.video_state == "stopped"
+                 and sync._fallback_active is False)
+
+
+def test_vj_reset_stage_default_missing_file():
+    """回零清台：默认文件缺失 → 退熄屏归黑（不卡在失败重试）。"""
+    ctl = _ResetCtl({"videoDefault": "9"}, ok=False)
+    sync = mb.TransportSync(ctl)
+    app = types.SimpleNamespace(ctl=ctl, sync=sync, q=_Q())
+    sg.App._vj_reset_stage(app)
+    assert _wait(lambda: ctl.sets == [("9.mp4", True)] and ctl.stops == 1)
+    assert _wait(lambda: sync.video_state == "stopped")
+
+
+def test_daw_proj_here(monkeypatch):
+    """同工程免重开分支的活体门：DAW 不在=过不了门（走完整切换含冷启动
+    拉起，11-22 修「DAW 关闭后同工程切点永不拉起」）；窗口在且标题对名
+    =过门；手开了别的工程=拦截（GOTO 不挪错工程光标）。"""
+    monkeypatch.setattr(sg.daw_ctrl, "project_name_from_title",
+                        lambda t: t.split(".cpr")[0] if ".cpr" in t else None)
+    app = types.SimpleNamespace()
+    monkeypatch.setattr(sg.daw_ctrl, "current_project", lambda: None)
+    assert sg.App._daw_proj_here(app, "歌一") is False    # DAW 已关/崩
+    monkeypatch.setattr(sg.daw_ctrl, "current_project",
+                        lambda: (1, "歌一.cpr*"))
+    assert sg.App._daw_proj_here(app, "歌一") is True     # 在场且对名
+    monkeypatch.setattr(sg.daw_ctrl, "current_project",
+                        lambda: (1, "歌二.cpr"))
+    assert sg.App._daw_proj_here(app, "歌一") is False    # 手开了他工程
 
 
 def test_checkpath_endpoint(tmp_path):

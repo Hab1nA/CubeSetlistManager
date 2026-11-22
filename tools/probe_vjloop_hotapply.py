@@ -120,10 +120,10 @@ def main():
     print("基线起播 ✓（looping=False）")
 
     # 2. 在播中热合并 looping=True
-    st, d = post("/vjloop", {"note": 72, "on": True})
+    st, d = post("/vjloop", {"note": 72, "mode": "loop"})
     assert st == 200, "POST /vjloop -> %s %s" % (st, d)
     merge_t = time.time()
-    print("已在播中切「循环」（/vjloop on=true）")
+    print("已在播中切「循环」（/vjloop mode=loop）")
 
     # 3. 盯过视频末尾（12s 视频已在播数秒；盯到 merge 后 30s）
     merged_live = False
@@ -187,7 +187,7 @@ def main():
         passed = False
 
     # 5. 清理：标记复位 + 熄屏
-    post("/vjloop", {"note": 72, "on": False})
+    post("/vjloop", {"note": 72, "mode": "off"})
     ctl.stop_media()
     print("清理完成：槽位标记 off、熄屏（停媒体+忘文件）")
     if launched:

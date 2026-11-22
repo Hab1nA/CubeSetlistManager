@@ -213,6 +213,270 @@ def test_note_loop_flag():
     fire(74, ("3.mp4", True))                      # 再触发同位仍循环
 
 
+class _FCtl:
+    """默认回落看守用假 ctl：cfg/实况态可控、set/pause 记账。"""
+    def __init__(self, cfg=None, state=None):
+        self.cfg = cfg or {}
+        self.state = state
+        self.sets = []
+        self.pauses = []
+        self.last_error = ""
+        self.on_state_query = None
+    def loop_for(self, f):                          # 借真实现（只摸 self.cfg）
+        return ObsController.loop_for(self, f)
+    def media_state(self):
+        if self.on_state_query:
+            self.on_state_query()
+        return self.state
+    def set_media(self, f, loop):
+        self.sets.append((f, loop))
+        return True
+    def pause_media(self):
+        self.pauses.append(1)
+        return True
+
+
+def test_default_target():
+    """videoDefault 槽位号 → NOTE_MAP 名义文件；未设/非数字/熄屏位(31)或
+    音域外=None（默认回落没有熄屏语义）。"""
+    assert mb.default_target({"videoDefault": "4"}) == "4.mp4"
+    assert mb.default_target({"videoDefault": 4}) == "4.mp4"   # 容 int
+    assert mb.default_target({"videoDefault": "30"}) == "30.mp4"
+    assert mb.default_target({}) is None
+    assert mb.default_target({"videoDefault": ""}) is None
+    assert mb.default_target({"videoDefault": "31"}) is None   # 102=熄屏
+    assert mb.default_target({"videoDefault": "0"}) is None
+    assert mb.default_target({"videoDefault": "x"}) is None
+
+
+def test_default_fallback_ended():
+    """默认回落看守：一遍停视频 ENDED → 切默认槽位循环（playing+回落
+    旗标）；旗标在=不重触发、走带停了也不暂停（poll 豁免）。"""
+    ctl = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.note_playing("2.mp4")
+    s.poll()
+    assert ctl.sets == [("3.mp4", True)]
+    assert s.video_state == "playing" and s.current_video == "3.mp4"
+    assert s._fallback_active is True
+    ctl.sets.clear()
+    s.poll()
+    assert ctl.sets == [] and ctl.pauses == []     # 回落中不重触发
+    s.on_clock()
+    time.sleep(mb.CLOCK_TIMEOUT + 0.05)
+    s.poll()                                        # 走带断流：回落不暂停
+    assert ctl.pauses == []
+
+
+def test_default_fallback_note_race():
+    """查 ENDED 的往返窗口里新音符到达：迟到回落不得盖掉新触发
+    （_last_note 双查拦截——音符到达即记，早于 worker 的 set_media）。"""
+    ctl = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.note_playing("2.mp4")
+    ctl.on_state_query = s.note_seen                # 模拟查询期间音符到达
+    s.poll()
+    assert ctl.sets == []
+    assert s.video_state == "playing" and s.current_video == "2.mp4"
+
+
+def test_default_fallback_missing_file():
+    """默认文件缺失：失败即收敛 stopped（免百毫秒级重试风暴），只试一次。"""
+    class _C(_FCtl):
+        def set_media(self, f, loop):
+            self.sets.append((f, loop))
+            self.last_error = "视频文件不存在：9.mp4"
+            return False
+    ctl = _C({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.note_playing("2.mp4")
+    s.poll()
+    assert len(ctl.sets) == 1 and s.video_state == "stopped"
+    s.poll()
+    assert len(ctl.sets) == 1                       # stopped 门：不再重试
+
+
+def test_fallback_flag_lifecycle():
+    """回落旗标生命周期：未设默认不触发；熄屏（blackout）清旗标；音符
+    触发（note_playing）终结回落态。"""
+    ctl = _FCtl({}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.note_playing("2.mp4")
+    s.poll()
+    assert ctl.sets == []                           # 未设默认（not armed）
+    ctl.cfg["videoDefault"] = "3"
+    s.note_playing("5.mp4")
+    s.poll()
+    assert ctl.sets == [("3.mp4", True)] and s._fallback_active is True
+    s.blackout()                                    # 显式熄屏优先于回落
+    assert s.video_state == "stopped" and s._fallback_active is False
+    s.note_playing("2.mp4")                         # worker 落地路径
+    assert s._fallback_active is False \
+        and s.video_state == "playing"
+
+
+def test_default_for_parsing():
+    """槽位默认回落标记解析：与 loop_for 同编号口径、全局单值比对。"""
+    ctl = ObsController({"videoDefault": "3"})
+    assert ctl.default_for("3.mp4") is True
+    assert ctl.default_for("03.mp4") is True        # 前导零归一
+    assert ctl.default_for("3 描述.mp4") is True
+    assert ctl.default_for("30.mp4") is False
+    assert ctl.default_for("x.mp4") is False        # 无编号
+    assert ctl.default_for(None) is False
+    assert ObsController({}).default_for("3.mp4") is False
+
+
+class _FakeWS:
+    """A/B 双源测试桩：预设双侧场景项（A=舞台视频 可见，B=舞台视频 B
+    隐藏）与各侧媒体态。"""
+    def __init__(self):
+        self.calls = []
+        self.items = {"舞台视频": [7, True], "舞台视频 B": [9, False]}
+        self.media = {"舞台视频": "OBS_MEDIA_STATE_PLAYING",
+                      "舞台视频 B": "OBS_MEDIA_STATE_PLAYING"}
+    def request(self, kind, payload=None, **kw):
+        self.calls.append((kind, payload))
+        if kind == "GetCurrentProgramScene":
+            return {"currentProgramSceneName": "S"}
+        if kind == "GetSceneItemList":
+            return {"sceneItems": [
+                {"sourceName": n, "sceneItemId": v[0],
+                 "sceneItemEnabled": v[1]} for n, v in self.items.items()]}
+        if kind == "GetInputList":
+            return {"inputs": [{"inputName": n} for n in self.items]}
+        if kind == "GetMediaInputStatus":
+            return {"mediaState": self.media.get(payload["inputName"])}
+        if kind == "SetSceneItemEnabled":
+            for v in self.items.values():
+                if v[0] == payload["sceneItemId"]:
+                    v[1] = payload["sceneItemEnabled"]
+            return {}
+        return {}
+
+
+def _ab_ctl(tmp_path):
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    (root / "4.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    ws = _FakeWS()
+    ctl._ws = ws
+    ctl._ensure_media_input(ws)                     # 校准 ids/活动侧
+    return ctl, ws
+
+
+def test_ab_swap_seamless(tmp_path):
+    """A/B 双源换切：文件装载打隐藏侧 → 先开新侧 → 等新侧 PLAYING →
+    后关旧侧；活动侧翻转，再切回 A 侧对称。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    assert ctl._active == "A"
+    assert ctl.set_media("3.mp4", False) is True
+    s1 = [c for c in ws.calls if c[0] == "SetInputSettings"][-1]
+    assert s1[1]["inputName"] == "舞台视频 B"       # 装载在隐藏侧
+    assert s1[1]["inputSettings"]["local_file"].endswith("3.mp4")
+    en = [c for c in ws.calls if c[0] == "SetSceneItemEnabled"]
+    assert en[0][1]["sceneItemId"] == 9 \
+        and en[0][1]["sceneItemEnabled"] is True    # 先开新
+    assert en[1][1]["sceneItemId"] == 7 \
+        and en[1][1]["sceneItemEnabled"] is False   # 后关旧
+    assert ctl._active == "B"
+    # 关旧前问过新侧起播态（无空窗换切的等待环节）
+    assert any(c[0] == "GetMediaInputStatus"
+               and c[1]["inputName"] == "舞台视频 B" for c in ws.calls)
+    assert ctl.set_media("4.mp4", True) is True     # 再切：翻回 A 侧
+    assert ctl._active == "A"
+    s2 = [c for c in ws.calls if c[0] == "SetInputSettings"][-1]
+    assert s2[1]["inputName"] == "舞台视频"
+    assert s2[1]["inputSettings"]["looping"] is True
+
+
+def test_stop_forget_clears_both(tmp_path):
+    """熄屏清双侧：A/B 都停+清文件（B 侧残文件会在下次换切开可见时
+    自动播——老 bug 复活面）。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl._stop_and_forget(ws)
+    clears = [c for c in ws.calls if c[0] == "SetInputSettings"]
+    assert {c[1]["inputName"] for c in clears} == {"舞台视频", "舞台视频 B"}
+    assert all(c[1]["inputSettings"]["local_file"] == "" for c in clears)
+    assert len([c for c in ws.calls
+                if c[0] == "TriggerMediaInputAction"]) == 2
+
+
+def test_mute_both_sides(tmp_path):
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl._set_mute(ws)
+    mutes = [c for c in ws.calls if c[0] == "SetInputMute"]
+    assert {c[1]["inputName"] for c in mutes} == {"舞台视频", "舞台视频 B"}
+
+
+def test_active_side_targeting(tmp_path):
+    """media_state/set_looping/pause/resume 只打可见侧（活动侧随换切
+    翻转）。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl.set_looping(True)
+    assert [c for c in ws.calls
+            if c[0] == "SetInputSettings"][-1][1]["inputName"] == "舞台视频"
+    ctl.set_media("3.mp4", False)                   # 翻到 B
+    ctl.set_looping(False)
+    assert [c for c in ws.calls
+            if c[0] == "SetInputSettings"][-1][1]["inputName"] == "舞台视频 B"
+    ctl.pause_media()
+    ctl.resume_media()
+    acts = [c for c in ws.calls if c[0] == "TriggerMediaInputAction"]
+    assert acts and all(a[1]["inputName"] == "舞台视频 B" for a in acts)
+    ctl.media_state()
+    assert [c for c in ws.calls if c[0] == "GetMediaInputStatus"][-1][1][
+        "inputName"] == "舞台视频 B"
+
+
+def test_ensure_normalizes_visibility(tmp_path):
+    """连接校准：双显归一为 A（关 B）；仅 B 可见=认 B（断链前断在 B 侧）。"""
+    ctl = ObsController({})
+    ws = _FakeWS()
+    ws.items["舞台视频"][1] = True
+    ws.items["舞台视频 B"][1] = True                # 双显异常态
+    ctl._ensure_media_input(ws)
+    assert ctl._active == "A"
+    assert ws.items["舞台视频 B"][1] is False
+    ws2 = _FakeWS()
+    ws2.items["舞台视频"][1] = False
+    ws2.items["舞台视频 B"][1] = True               # 上次换切断在 B
+    ctl._ensure_media_input(ws2)
+    assert ctl._active == "B"
+
+
+def test_ensure_creates_missing_sides():
+    """双侧缺失时在活动场景补建（A 可见、B 隐藏、等比铺满），幂等。"""
+
+    class _W(_FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.items = {}
+            self.kinds = []
+        def request(self, kind, payload=None, **kw):
+            self.kinds.append(kind)
+            if kind == "CreateInput":
+                self.items[payload["inputName"]] = [
+                    100 + len(self.items), payload["sceneItemEnabled"]]
+                return {"sceneItemId": self.items[payload["inputName"]][0]}
+            if kind == "GetVideoSettings":
+                return {"baseWidth": 1920, "baseHeight": 1080}
+            return super().request(kind, payload, **kw)
+
+    ctl = ObsController({})
+    ws = _W()
+    ctl._ensure_media_input(ws)
+    assert set(ws.items) == {"舞台视频", "舞台视频 B"}
+    assert ws.items["舞台视频"][1] is True          # A 可见建出
+    assert ws.items["舞台视频 B"][1] is False       # B 隐藏建出
+    assert "SetSceneItemTransform" in ws.kinds      # 等比铺满画布
+    assert ctl._active == "A"
+    ctl._ensure_media_input(ws)                     # 幂等：不重建
+    assert ws.kinds.count("CreateInput") == 2
+
+
 def test_natural_sort():
     assert sorted(["10 a", "2 a", "1 a"], key=natural_key) == \
         ["1 a", "2 a", "10 a"]

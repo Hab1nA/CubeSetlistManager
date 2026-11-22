@@ -1277,7 +1277,7 @@ $("#pl-more").addEventListener("click", ev => {
       if (j.ok) toast(`已导出 ${j.count} 首`);
     });
     menuItem(box, "导入歌单文件…", "", b => {
-      armConfirm(b, async () => {
+      const run = async () => {
         close();
         const j = await post("/plimport", {});
         // 非 2xx（400/403/504）的 error 已由 post() toast，这里只补
@@ -1292,7 +1292,12 @@ $("#pl-more").addEventListener("click", ev => {
                     (j.skipped.length > 3 ? ` 等 ${j.skipped.length} 个` : "")
                   : ""), j.skipped?.length ? "err" : "");
         refreshPlaylist();
-      }, `将覆盖当前 ${(plCache?.pl || []).length} 首？`);
+      };
+      // 空播放列表直接执行：没有可被覆盖的内容，二次确认徒增一步（须验
+      // plCache 真值——拉取失败时它是 undefined，假空表漏确认会静默
+      // 覆盖真歌单）
+      if (plCache && !(plCache.pl || []).length) { run(); return; }
+      armConfirm(b, run, `将覆盖当前 ${(plCache?.pl || []).length} 首？`);
     });
     menuItem(box, "清空播放列表", "danger", b =>
         armConfirm(b, () => { plcmd2("clear", ""); close(); }, "确认清空？"));
@@ -2592,22 +2597,27 @@ async function refreshVjMap(root, force) {
       return;
     }
     // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
-    // 非熄屏格点击=切换循环/播一遍停（乐观更新，失败回滚）
+    // 非熄屏格点击=三态循环切换（播一遍停→循环→默认回落，乐观更新，
+    // 失败回滚）
     d.rows.forEach(row => {
       const cell = document.createElement("div");
+      const mode = row.default ? "default" : (row.loop ? "loop" : "off");
       cell.className = "slot vj-cell"
           + (row.blackout ? " blackout" : "")
           + (row.hit || row.blackout ? "" : " miss")
-          + (!row.blackout && row.loop ? " loop" : "");
+          + (!row.blackout && mode !== "off" ? " " + mode : "");
       cell.dataset.file = row.file || "";
       if (!row.blackout) {
         cell.dataset.note = row.note;
         cell.setAttribute("role", "button");
-        cell.setAttribute("aria-pressed", row.loop ? "true" : "false");
+        cell.setAttribute("aria-pressed", mode !== "off" ? "true" : "false");
         cell.tabIndex = 0;
         cell.title = (row.hit ? "视频库：" + row.hit
             : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录")
-            + " · 点击切换" + (row.loop ? "循环" : "播一遍停");
+            + " · 现况" + (mode === "default" ? "默认回落"
+                : mode === "loop" ? "循环" : "播一遍停")
+            + "，点击切换为" + (mode === "default" ? "播一遍停"
+                : mode === "loop" ? "默认回落" : "循环");
         const flip = () => toggleVjLoop(cell, row);
         cell.addEventListener("click", flip);
         kbdRow(cell, flip, null, true);
@@ -2633,22 +2643,29 @@ async function refreshVjMap(root, force) {
   } catch { /* 瞬断 */ }
 }
 
-// VJ 循环开关：整格点击切换，乐观更新（同格在途忽略；post 失败自带
-// toast，此处只回滚视觉态）。成功回写行数据，5s 重建保真。
+// VJ 槽位三态：整格点击循环切换 播一遍停→循环→默认回落→播一遍停，
+// 乐观更新（同格在途忽略；post 失败自带 toast，此处只回滚视觉态）。
+// 成功回写行数据，5s 重建保真。
 const vjLoopBusy = new Set();
 async function toggleVjLoop(cell, row) {
   if (vjLoopBusy.has(row.note)) return;
   vjLoopBusy.add(row.note);
-  const on = !row.loop;
-  const paint = v => {
-    cell.classList.toggle("loop", v);
-    cell.setAttribute("aria-pressed", v ? "true" : "false");
+  const mode = row.default ? "off" : (row.loop ? "default" : "loop");
+  const rowMode = () => row.default ? "default"
+      : (row.loop ? "loop" : "off");
+  const paint = m => {
+    cell.classList.toggle("loop", m === "loop");
+    cell.classList.toggle("default", m === "default");
+    cell.setAttribute("aria-pressed", m !== "off" ? "true" : "false");
   };
-  paint(on);
+  paint(mode);
   try {
-    const j = await post("/vjloop", {note: row.note, on});
-    if (j.ok) row.loop = on; else paint(row.loop);
-  } catch { paint(row.loop); }
+    const j = await post("/vjloop", {note: row.note, mode});
+    if (j.ok) {
+      row.loop = mode === "loop";
+      row.default = mode === "default";
+    } else paint(rowMode());
+  } catch { paint(rowMode()); }
   finally { vjLoopBusy.delete(row.note); }
 }
 
