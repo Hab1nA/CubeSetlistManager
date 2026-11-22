@@ -264,8 +264,9 @@ def project_windows():
 
 def project_name_from_title(title):
     """工程窗口标题 → 歌名（方向由事实表 name_after_mark 定：Cubase=
-    标记后段「Cubase Pro 工程 - アイドル」→'アイドル'；S1 推断格式=
-    标记前段「アイドル — Studio One」）；非工程标题 → None。"""
+    标记后段「Cubase Pro 工程 - アイドル」→'アイドル'；S1=标记后段
+    「Studio One - lingo演出5.16」→'lingo演出5.16'，真机采样）；非工程
+    标题 → None。"""
     mark = ACTIVE["title_mark"]
     if mark not in title:
         return None

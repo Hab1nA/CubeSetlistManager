@@ -766,12 +766,18 @@ class TransportSync:
                     or self._last_note != t_note):
                 return
         if self.ctl.set_media(target, True):
+            # set_media 的网络往返期间新触发可能已到（双查之后到达的
+            # 迟到者）：不复验会把刚落地的触发盖成回落态——这里只拦
+            # 状态落账，画面由下一次触发自愈（审计 A-P2-2）
+            with self._lock:
+                if self._last_note != t_note:
+                    return
             self.fallback_start(target)
             self.on_event("视频播完 → 默认 VJ 循环")
         else:
-            # 默认文件缺失/断连：收敛 stopped 免百毫秒级重试风暴（画面本
-            # 已黑），失败原因浮 last_error
-            self.set_state("stopped")
+            # 默认文件缺失/断连：收敛 stopped 免百毫秒级重试风暴（画面
+            # 本已黑/定格），失败原因浮 last_error
+            self.blackout()
             self.on_event("默认 VJ 回落失败：%s" % self.ctl.last_error)
 
     def _resume_if_worth(self, why="走带恢复"):
@@ -793,7 +799,10 @@ class TransportSync:
         elif st == "OBS_MEDIA_STATE_PLAYING":
             self._set_state_if("paused", "playing")   # 实况在播，对齐本地标记
         elif st is not None:
-            self.set_state("stopped")
+            # 播完/停止的收敛也清回落旗标：paused+flag 竞态态（迟到 pause
+            # 覆写 fallback_start 产生）走此分支时旗标悬置会拦死 ENDED
+            # 看守（审计 A-P2-3）
+            self.blackout()
             self.on_event("视频已播完或停止，不随走带恢复")
 
     def _set_state_if(self, expect, new):
@@ -948,7 +957,10 @@ def main():
         if hit is None:
             sys.exit("没找到 %s 输出端口" % PORT_HINT)
         send_note(hit[0], note)
-        print("已发 note %d（映射 %s）" % (note, NOTE_MAP.get(note)), flush=True)
+        m = NOTE_MAP.get(note)
+        if m is None and note in PRELOAD_MAP:
+            m = "预载" + PRELOAD_MAP[note]
+        print("已发 note %d（映射 %s）" % (note, m), flush=True)
         return
     ctl = ObsController(load_obs_cfg())
     sync = TransportSync(ctl, on_event=lambda m: print(m, flush=True))

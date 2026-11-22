@@ -1926,8 +1926,10 @@ class App:
             return "OBS 控制器未就绪"
         if mode not in ("off", "loop", "default"):
             return "mode 应为 off/loop/default"
-        loops = dict(self.ctl.cfg.get("videoLoops") or {})
-        cur_default = str(self.ctl.cfg.get("videoDefault") or "")
+        old_loops = dict(self.ctl.cfg.get("videoLoops") or {})
+        old_default = str(self.ctl.cfg.get("videoDefault") or "")
+        loops = dict(old_loops)
+        cur_default = old_default
         n = str(note - 71)
         if mode == "loop":
             loops[n] = True
@@ -1945,6 +1947,11 @@ class App:
             cfg["obs"] = obs
             _save_config(cfg)
         except (ValueError, OSError) as e:
+            # 落盘失败回滚运行时 cfg：不回滚则热路径已生效而 HTTP 400 让
+            # 前端回滚——运行时/磁盘/前端三方分叉，重启后又回退（审计
+            # A-P2-1）
+            self.ctl.cfg["videoLoops"] = old_loops
+            self.ctl.cfg["videoDefault"] = old_default
             self.q.put("VJ 模式保存失败：%s" % e)
             return "保存失败：%s" % e
         cur = getattr(self.sync, "current_video", None) \
@@ -1953,11 +1960,17 @@ class App:
             m = re.match(r"(\d+)", os.path.basename(str(cur)))
             if m and str(int(m.group(1))) == n:
                 ctl = self.ctl
+                if mode != "default" and self.sync is not None:
+                    # 在播槽位被改离默认档=回落态终结：不清 _fallback_active
+                    # 则旗标悬置，poll 误豁免走带暂停+新默认的 ENDED 看守
+                    # 被拦死（黑屏等触发，审计 A-P1-1）
+                    self.sync.note_playing(cur)
+                if mode != "default":
 
-                def _apply():
-                    if not ctl.set_looping(mode == "loop"):
-                        self.q.put("循环热应用未生效：%s" % ctl.last_error)
-                threading.Thread(target=_apply, daemon=True).start()
+                    def _apply():
+                        if not ctl.set_looping(mode == "loop"):
+                            self.q.put("循环热应用未生效：%s" % ctl.last_error)
+                    threading.Thread(target=_apply, daemon=True).start()
         return None
 
     def _settings_apply_web(self, p):

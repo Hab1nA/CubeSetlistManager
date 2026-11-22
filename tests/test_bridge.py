@@ -222,6 +222,7 @@ class _FCtl:
         self.pauses = []
         self.last_error = ""
         self.on_state_query = None
+        self.on_set_media = None
     def loop_for(self, f):                          # 借真实现（只摸 self.cfg）
         return ObsController.loop_for(self, f)
     def media_state(self):
@@ -230,6 +231,8 @@ class _FCtl:
         return self.state
     def set_media(self, f, loop):
         self.sets.append((f, loop))
+        if self.on_set_media:
+            self.on_set_media()
         return True
     def pause_media(self):
         self.pauses.append(1)
@@ -278,6 +281,33 @@ def test_default_fallback_note_race():
     s.poll()
     assert ctl.sets == []
     assert s.video_state == "playing" and s.current_video == "2.mp4"
+
+
+def test_default_fallback_postcheck():
+    """双查通过后、set_media 往返期间新音符到达（迟到者）：set_media 照发
+    （画面由下一次触发自愈）但回落旗标不得落账——状态面不撒谎（审计
+    A-P2-2）。"""
+    ctl = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.note_playing("2.mp4")
+    ctl.on_set_media = s.note_seen                  # 双查后才到的音符
+    s.poll()
+    assert ctl.sets == [("3.mp4", True)]            # set_media 已发
+    assert s._fallback_active is False              # 但不落回落旗标
+    assert s.video_state == "playing" and s.current_video == "2.mp4"
+
+
+def test_resume_stopped_clears_flag():
+    """paused+回落旗标竞态态经 _resume_if_worth 收敛 stopped 时旗标一并清
+    （否则 ENDED 看守被拦死，审计 A-P2-3）。"""
+    ctl = _FCtl({"videoDefault": "3"}, "OBS_MEDIA_STATE_ENDED")
+    s = mb.TransportSync(ctl)
+    s.set_state("paused")                          # 竞态产生的 paused
+    s._fallback_active = True                       # + 覆写残留的旗标
+    s.on_clock()
+    s.poll()
+    assert s.video_state == "stopped" and s._fallback_active is False
+    assert s.current_video is None                  # blackout 全收敛
 
 
 def test_default_fallback_missing_file():
@@ -355,6 +385,17 @@ class _FakeWS:
             if payload["inputName"] not in self.settings:
                 raise obs_ctrl.ObsError("输入不存在")
             return self.settings[payload["inputName"]]
+        if kind == "GetVideoSettings":
+            return {"baseWidth": 1920, "baseHeight": 1080}
+        if kind in ("CreateInput", "CreateSceneItem"):
+            name = payload["inputName"] if kind == "CreateInput" \
+                else payload["sourceName"]
+            new_id = 100 + len(self.items) + len(self.calls)
+            self.items[name] = [new_id, payload.get("sceneItemEnabled",
+                                                    True)]
+            self.settings[name] = {"inputKind": "ffmpeg_source",
+                                   "inputSettings": {"local_file": ""}}
+            return {"sceneItemId": new_id}
         if kind == "SetInputSettings":
             s = self.settings[payload["inputName"]]["inputSettings"]
             for k, v in payload["inputSettings"].items():
@@ -516,6 +557,7 @@ def test_preload_loads_hidden_side(tmp_path):
     assert len(sets) == 1 and sets[0][1]["inputName"] == "舞台视频 B"
     assert sets[0][1]["inputSettings"]["local_file"].endswith("3.mp4")
     assert sets[0][1]["inputSettings"]["restart_on_activate"] is False
+    assert sets[0][1]["inputSettings"]["clear_on_media_end"] is True
     assert ws.items["舞台视频 B"][1] is False     # 不开可见
     assert ctl.hidden_file() == "3.mp4"
     assert ctl.clear_preload() is True
@@ -561,25 +603,78 @@ def test_swap_resets_hidden_bookkeeping(tmp_path):
 
 
 def test_ensure_reconciles_hidden_file(tmp_path):
-    """重连校准对账：OBS 实况（隐藏侧 local_file）刷新预载记账——OBS
-    重启源重建为空时 UI 不假显「已预载」。"""
+    """重连校准对账只降级不升级：预载意图在场时按 OBS 实况验证（源空/
+    文件不符→清意图，UI 不假显）；无意图不反推——换切后隐藏侧残留的
+    上一条视频不得亮成「已预载」（审计 P2-1）。"""
     ctl, ws = _ab_ctl(tmp_path)
     ctl.preload("3.mp4")
     ws.settings["舞台视频 B"]["inputSettings"]["local_file"] = ""
     ctl._ensure_media_input(ws)                     # 模拟重连校准
-    assert ctl.hidden_file() is None
+    assert ctl.hidden_file() is None                # 意图在但源空→清
     ws.settings["舞台视频 B"]["inputSettings"]["local_file"] = "C:/v/4.mp4"
     ctl._ensure_media_input(ws)
-    assert ctl.hidden_file() == "4.mp4"
+    assert ctl.hidden_file() is None                # 无意图不反推（P2-1）
+    ctl.preload("3.mp4")
+    ws.settings["舞台视频 B"]["inputSettings"]["local_file"] = "C:/v/9.mp4"
+    ctl._ensure_media_input(ws)
+    assert ctl.hidden_file() is None                # 意图 3 实况 9→降级清
+
+
+def test_preload_forces_hidden_disabled(tmp_path):
+    """预载前强制隐藏侧归位：用户手开过 B 侧可见时，装载即自动播出叠画
+    （审计 P2-7）——preload 第一步先把隐藏侧 SetSceneItemEnabled=False。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ws.items["舞台视频 B"][1] = True                 # 模拟用户手开了 B 侧
+    assert ctl.preload("3.mp4") is True
+    assert ws.items["舞台视频 B"][1] is False        # 已归位再装载
+    assert ctl.hidden_file() == "3.mp4"
+
+
+def test_item_id_scene_scoped(tmp_path):
+    """场景项缓存带 scene：用户切节目场景后同名项 id 不同，值里记 scene
+    不符即重建（防旧场景 id 打新场景被拒断链，审计 P2-2）。"""
+
+    class _W(_FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.scenes = {"S": dict(self.items), "T": None}
+            self.cur = "S"
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetCurrentProgramScene":
+                self.calls.append((kind, payload))
+                return {"currentProgramSceneName": self.cur}
+            if kind == "GetSceneItemList":
+                self.calls.append((kind, payload))
+                if payload["sceneName"] == "T" and self.scenes["T"] is None:
+                    self.scenes["T"] = {}           # 新场景没有媒体源项
+                    return {"sceneItems": []}
+                return {"sceneItems": [
+                    {"sourceName": n, "sceneItemId": v[0] + 100,
+                     "sceneItemEnabled": v[1]}
+                    for n, v in self.scenes[payload["sceneName"]].items()]}
+            return super().request(kind, payload, **kw)
+
+    ctl = ObsController({})
+    ws = _W()
+    ctl._ensure_media_input(ws)
+    id_s = ctl._item_id(ws, "S", "舞台视频 B")
+    ws.cur = "T"                                    # 用户切了节目场景
+    ctl._ensure_media_input(ws)                     # 重连校准发现 T 场景
+    id_t = ctl._item_id(ws, "T", "舞台视频 B")
+    assert id_s != id_t                             # 不同场景不同 id
 
 
 def test_retire_names_removes_old_pair(tmp_path):
-    """改名清理：旧 A/B 输入连同场景项删除、缓存作废。"""
+    """改名清理：旧 A/B 输入连同场景项删除、缓存作废；删除后就地重跑
+    校准补建新名源对（防改名后首次媒体动作对不存在输入报错断链，
+    审计 P1-1）。"""
     ctl, ws = _ab_ctl(tmp_path)
+    ctl.cfg["mediaInput"] = "新名"                   # 模拟热应用先改了名
     assert ctl.retire_names("舞台视频") is True
-    assert "舞台视频" not in ws.items
-    assert "舞台视频 B" not in ws.items
-    assert ctl._item_ids == {}
+    assert "舞台视频" not in ws.items                # 旧对已删
+    assert "新名" in ws.items and "新名 B" in ws.items   # 新对就地补建
+    assert "舞台视频" not in ctl._item_ids
+    assert ctl._item_ids["新名"][0] == "S"
 
 
 def test_preload_note_worker():

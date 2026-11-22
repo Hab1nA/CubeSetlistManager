@@ -1276,7 +1276,7 @@ $("#pl-more").addEventListener("click", ev => {
       if (j.error && j._st === 200) { toast(j.error, "err"); return; }
       if (j.ok) toast(`已导出 ${j.count} 首`);
     });
-    menuItem(box, "导入歌单文件…", "", b => {
+    menuItem(box, "导入歌单文件…", "", async b => {
       const run = async () => {
         close();
         const j = await post("/plimport", {});
@@ -1293,11 +1293,16 @@ $("#pl-more").addEventListener("click", ev => {
                   : ""), j.skipped?.length ? "err" : "");
         refreshPlaylist();
       };
-      // 空播放列表直接执行：没有可被覆盖的内容，二次确认徒增一步（须验
-      // plCache 真值——拉取失败时它是 undefined，假空表漏确认会静默
-      // 覆盖真歌单）
-      if (plCache && !(plCache.pl || []).length) { run(); return; }
-      armConfirm(b, run, `将覆盖当前 ${(plCache?.pl || []).length} 首？`);
+      // 空播放列表直接执行：没有可被覆盖的内容，二次确认徒增一步。
+      // 免确认以一次新鲜拉取为准——plCache 可能是他端（桌面 GUI/另一
+      // 客户端）填充前的陈旧空表且刷新失败不写缓存，盲信旧值会静默
+      // 覆盖真歌单（审计 P1）；拉取失败/被取代按非空处理走确认（
+      // 安全方向误伤）
+      const fresh = await refreshPlaylist();
+      if (fresh && !(plCache?.pl || []).length) { run(); return; }
+      armConfirm(b, run, plCache
+          ? `将覆盖当前 ${(plCache.pl || []).length} 首？`
+          : "播放列表状态未知，确认覆盖？");
     });
     menuItem(box, "清空播放列表", "danger", b =>
         armConfirm(b, () => { plcmd2("clear", ""); close(); }, "确认清空？"));
@@ -2588,6 +2593,8 @@ async function refreshVjMap(root, force) {
     const d = await r.json();
     vjMapRoot = d.videoRoot;
     vjMapRows = d.rows;
+    $("#vj-libnote").textContent = "支持「N 描述」命名 · 库内 "
+        + (d.files || 0) + " 个";
     const box = $("#vjmap");
     const keep = kbdKeep(box, "note");
     box.innerHTML = "";
@@ -2661,6 +2668,9 @@ $("#vj-premode").addEventListener("click", () => {
   b.setAttribute("aria-pressed", vjPreMode ? "true" : "false");
   toast(vjPreMode ? "预载模式：点击格子预载/取消预载（隐藏源提前装载）"
       : "预载模式已关：点击恢复循环/默认切换");
+  refreshVjMap(vjMapRoot, true);   // 立即重建：格子 title 的「点击…」段
+                                   // 按构建时 vjPreMode 定稿，不重建则最长
+                                   // 5s 提示与实际点击行为相反（审计 P2-5）
 });
 
 // 格子预载：乐观更新（同格在途忽略；预载全局只一格有效——隐藏侧单槽，
@@ -2680,8 +2690,15 @@ async function toggleVjPreload(cell, row) {
   paint(on);
   try {
     const j = await post("/vjpreload", {note: row.note, on});
-    if (j.ok) row.preloaded = on;
-    else refreshVjMap(vjMapRoot, true);
+    if (j.ok) {
+      row.preloaded = on;
+      // 预载全局单槽：其它行的 row 数据同步摘除——否则 5s 窗口内点旧
+      // 预载格会按陈旧 row.preloaded=true 发取消，把新预载清掉（审计
+      // A-P2-4）
+      (vjMapRows || []).forEach(r => {
+        if (r.note !== row.note) r.preloaded = false;
+      });
+    } else refreshVjMap(vjMapRoot, true);
   } catch { refreshVjMap(vjMapRoot, true); }
   finally { vjPreBusy.delete(row.note); }
 }
@@ -2707,6 +2724,15 @@ async function toggleVjLoop(cell, row) {
     if (j.ok) {
       row.loop = mode === "loop";
       row.default = mode === "default";
+      // default 全局单值：本格设默认=摘其它格角标；本格改档=若旧默认在
+      // 他格仍保（后端 cfg 没动他格）——只摘「本格曾是默认」之外的场景
+      // 不成立，直接按 mode 归一视觉（跨格 row 数据 5s 重建保真）
+      const grid2 = cell.parentElement;
+      if (mode === "default") {
+        grid2.querySelectorAll(".vj-cell.default").forEach(c => {
+          if (c !== cell) c.classList.remove("default");
+        });
+      }
     } else paint(rowMode());
   } catch { paint(rowMode()); }
   finally { vjLoopBusy.delete(row.note); }

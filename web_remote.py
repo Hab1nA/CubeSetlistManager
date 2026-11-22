@@ -1825,19 +1825,23 @@ class _Handler(BaseHTTPRequestHandler):
             if f is None:
                 rows.append({"note": n, "name": nm, "file": "熄屏",
                              "blackout": True, "hit": None, "loop": False,
-                             "default": False, "preloaded": False,
-                             "preNote": n + 31})
+                             "default": False, "preloaded": False})
                 continue
             base = os.path.basename(f)
             num = _re.match(r"(\d+)", base)
             hit = by_base.get(base) or (by_num.get(num.group(1))
                                         if num else None)
             slot = num.group(1) if num else None
+            is_loop = bool(ctl.loop_for(f)) if ctl else False
             rows.append({"note": n, "name": nm, "file": hit or base,
                          "blackout": False, "hit": hit,
-                         "loop": bool(ctl.loop_for(f)) if ctl else False,
-                         "default": bool(ctl.default_for(f))
-                         if ctl else False,
+                         "loop": is_loop,
+                         # 两标记并存=手改配置：运行期表现为纯循环（永不
+                         # ENDED、回落不触发），徽标按真实语义归一（审计
+                         # A-P2-8）
+                         "default": (not is_loop
+                                     and (bool(ctl.default_for(f))
+                                          if ctl else False)),
                          "preloaded": slot is not None and slot == pre_slot,
                          "preNote": n + 31})
         self._json(200, {"videoRoot": root, "files": len(files),

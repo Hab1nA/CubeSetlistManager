@@ -338,6 +338,11 @@ def test_vjmap_endpoint(tmp_path):
         assert r74["preloaded"] is True and r74["preNote"] == 105
         r72b = next(r for r in d["rows"] if r["note"] == 72)
         assert r72b["preloaded"] is False
+        app.ctl.cfg["videoLoops"] = {"2": True}        # 手改出并存（槽2 双标）
+        d = _get(port, "/vjmap")
+        r2x = next(r for r in d["rows"] if r["note"] == 73)
+        assert r2x["loop"] is True \
+            and r2x["default"] is False                # 徽标按真实语义归一
         r102 = next(r for r in d["rows"] if r["note"] == 102)
         assert r102["name"] == "F#6" and r102["blackout"] is True
         assert r102["file"] == "熄屏"
@@ -421,6 +426,47 @@ def test_set_video_mode_method(monkeypatch):
     assert isinstance(sg.App._set_video_mode(app, 74, "bad"), str)  # 坏 mode
     app2 = types.SimpleNamespace(ctl=None, q=_Q(), sync=None)
     assert isinstance(sg.App._set_video_mode(app2, 74, "loop"), str)
+
+
+def test_set_video_mode_terminates_fallback(monkeypatch):
+    """改档终结回落态：回落中（旗标 True）把在播默认槽位切 off/loop →
+    sync.note_playing 收敛旗标（否则悬置旗标拦死新默认的 ENDED 看守+
+    poll 误豁免走带暂停，审计 A-P1-1）；切 default 不动回落态。"""
+    import obs_ctrl as _oc
+    monkeypatch.setattr(sg, "_load_config", lambda: {"obs": {}})
+    monkeypatch.setattr(sg, "_save_config", lambda cfg: None)
+    ctl = _oc.ObsController({})
+    ctl.set_looping = lambda on: True               # 热应用打桩
+    sync = mb.TransportSync(ctl)
+    sync.fallback_start("3.mp4")                    # 槽位3 回落中
+    app = types.SimpleNamespace(ctl=ctl, sync=sync, q=_Q())
+    assert sg.App._set_video_mode(app, 74, "off") is None   # 74=槽位3
+    assert sync._fallback_active is False \
+        and sync.video_state == "playing" \
+        and sync.current_video == "3.mp4"
+    sync.fallback_start("3.mp4")
+    assert sg.App._set_video_mode(app, 74, "loop") is None
+    assert sync._fallback_active is False
+    sync.fallback_start("3.mp4")
+    assert sg.App._set_video_mode(app, 74, "default") is None
+    assert sync._fallback_active is True            # default 档回落态保持
+
+
+def test_set_video_mode_rollback_on_save_failure(monkeypatch):
+    """落盘失败回滚运行时 cfg（不回滚则热路径已生效而 400 让前端回滚=
+    三方分叉，审计 A-P2-1）。"""
+    import obs_ctrl as _oc
+    monkeypatch.setattr(sg, "_load_config", lambda: {"obs": {}})
+
+    def boom(cfg):
+        raise OSError("disk full")
+    monkeypatch.setattr(sg, "_save_config", boom)
+    ctl = _oc.ObsController({"videoLoops": {"2": True}})
+    app = types.SimpleNamespace(ctl=ctl, sync=None, q=_Q())
+    r = sg.App._set_video_mode(app, 76, "loop")     # 槽位5 开循环
+    assert isinstance(r, str)
+    assert ctl.cfg["videoLoops"] == {"2": True}     # 回滚（5 未留）
+    assert ctl.cfg.get("videoDefault", "") == ""
 
 
 class _ResetCtl:
