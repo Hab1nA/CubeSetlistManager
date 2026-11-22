@@ -329,9 +329,11 @@ class ObsController:
     def _swap(self, ws, new_name):
         """可见性换切到 new_name：先开新侧（旧侧还压着画面，装载/起播都
         不可见），等新侧 PLAYING 再关旧侧——装载期旧画面持续在屏，无空窗。
-        等不到 PLAYING（大文件超时/静图/错误态）2 秒后照常收尾：最坏退化为
-        旧画面多停 2 秒，不卡死切换。z 序不管理：新侧在上=装载期透明透出
-        旧画面，在下=关旧侧时新侧已在播，两种摆位都无黑帧。"""
+        开新侧即翻活动侧记账：断链恰在换切半途（新侧已开旧侧未关）时，
+        重连归一按记账侧=换切意图的落点侧走，不会把关到一半的新画面关掉。
+        等不到 PLAYING（大文件超时/静图/错误态）2 秒后照常收尾：最坏退化
+        为旧画面多停 2 秒，不卡死切换。z 序不管理：新侧在上=装载期透明透
+        出旧画面，在下=关旧侧时新侧已在播，两种摆位都无黑帧。"""
         scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
         old_name = self._active_name() if new_name != self._active_name() \
             else None
@@ -340,12 +342,12 @@ class ObsController:
         ws.request("SetSceneItemEnabled", {
             "sceneName": scene, "sceneItemId": new_id,
             "sceneItemEnabled": True})
+        self._active = "B" if new_name == self._b_name() else "A"
         self._wait_playing(ws, new_name)
         if old_id is not None:
             ws.request("SetSceneItemEnabled", {
                 "sceneName": scene, "sceneItemId": old_id,
                 "sceneItemEnabled": False})
-        self._active = "B" if new_name == self._b_name() else "A"
 
     def _wait_playing(self, ws, name, timeout=2.0):
         """等新侧真正起播（装载+解码开）再关旧侧；拿不到 PLAYING（超时/
@@ -484,8 +486,9 @@ class ObsController:
     def _ensure_media_input(self, ws):
         """OBS 里缺配置的媒体源（A/B 双侧）时在当前活动场景自动补建（等比
         铺满画布），连接后即可用，无需手动摆源；并按 OBS 实况校准活动侧：
-        单侧可见=该侧活动；双显归一为 A（关 B）；双侧隐藏只记账 A——首次
-        swap 自会摆正可见性。幂等。"""
+        单侧可见=认该侧；双显（断链断在换切半途）=按记账侧归一——_swap
+        开新侧即翻账，记账侧=换切意图的落点侧，关掉另一侧；双侧隐藏只记
+        账不动可见性——首次 swap 自会摆正。幂等。"""
         scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
         a = self.cfg.get("mediaInput", "舞台视频")
         ids = {a: self._ensure_side(ws, scene, a),
@@ -494,15 +497,16 @@ class ObsController:
         items = ws.request("GetSceneItemList", {"sceneName": scene})
         ena = {i["sourceName"]: i["sceneItemEnabled"]
                for i in items["sceneItems"] if i["sourceName"] in ids}
-        if ena.get(self._b_name()) and not ena.get(a):
-            self._active = "B"
-        else:
+        ena_a, ena_b = bool(ena.get(a)), bool(ena.get(self._b_name()))
+        if ena_a and not ena_b:
             self._active = "A"
-            if ena.get(self._b_name()):
-                ws.request("SetSceneItemEnabled", {
-                    "sceneName": scene,
-                    "sceneItemId": ids[self._b_name()],
-                    "sceneItemEnabled": False})
+        elif ena_b and not ena_a:
+            self._active = "B"
+        elif ena_a and ena_b:
+            other = self._b_name() if self._active == "A" else a
+            ws.request("SetSceneItemEnabled", {
+                "sceneName": scene, "sceneItemId": ids[other],
+                "sceneItemEnabled": False})
 
     def media_state(self):
         """查媒体源实况（OBS_MEDIA_STATE_* 字符串，可见侧），连不上返回

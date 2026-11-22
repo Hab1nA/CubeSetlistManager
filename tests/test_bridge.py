@@ -432,19 +432,29 @@ def test_active_side_targeting(tmp_path):
 
 
 def test_ensure_normalizes_visibility(tmp_path):
-    """连接校准：双显归一为 A（关 B）；仅 B 可见=认 B（断链前断在 B 侧）。"""
+    """连接校准：双显按记账侧归一（记账=B=断链断在换切半途，关 A 保新
+    画面）；仅 B 可见=认 B（上次换切落在 B 侧）。"""
     ctl = ObsController({})
+    ctl._active = "B"                               # 模拟 _swap 开新侧即翻账
     ws = _FakeWS()
     ws.items["舞台视频"][1] = True
-    ws.items["舞台视频 B"][1] = True                # 双显异常态
+    ws.items["舞台视频 B"][1] = True                # 双显=换切半途断链
     ctl._ensure_media_input(ws)
-    assert ctl._active == "A"
-    assert ws.items["舞台视频 B"][1] is False
+    assert ctl._active == "B"
+    assert ws.items["舞台视频"][1] is False         # 关旧侧，保住新画面
+    assert ws.items["舞台视频 B"][1] is True
     ws2 = _FakeWS()
     ws2.items["舞台视频"][1] = False
-    ws2.items["舞台视频 B"][1] = True               # 上次换切断在 B
+    ws2.items["舞台视频 B"][1] = True               # 上次换切落在 B
     ctl._ensure_media_input(ws2)
     assert ctl._active == "B"
+    ws3 = _FakeWS()                                 # 记账 A + 双显 → 关 B
+    ws3.items["舞台视频"][1] = True
+    ws3.items["舞台视频 B"][1] = True
+    ctl2 = ObsController({})
+    ctl2._ensure_media_input(ws3)
+    assert ctl2._active == "A"
+    assert ws3.items["舞台视频 B"][1] is False
 
 
 def test_ensure_creates_missing_sides():
