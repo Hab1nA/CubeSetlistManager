@@ -1783,7 +1783,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_kbd_record, "/kbdrecord"),
                           (self._h_checkpath, "/checkpath"),
                           (self._h_slot_set, "/slotset"),
-                          (self._h_vjloop, "/vjloop")):
+                          (self._h_vjloop, "/vjloop"),
+                          (self._h_vjpreload, "/vjpreload")):
                 if path == p:
                     fn(body, ip)
                     return
@@ -1814,23 +1815,31 @@ class _Handler(BaseHTTPRequestHandler):
             if m:
                 by_num.setdefault(m.group(1), rel)
         rows = []
+        pre_file = os.path.basename(str(ctl.hidden_file() or "")) \
+            if ctl else ""
+        m_pre = _re.match(r"(\d+)", pre_file)
+        pre_slot = str(int(m_pre.group(1))) if m_pre else None
         for n in range(72, 103):
             f = __import__("midi_bridge").NOTE_MAP[n]
             nm = kbd_auto.note_name(n)
             if f is None:
                 rows.append({"note": n, "name": nm, "file": "熄屏",
                              "blackout": True, "hit": None, "loop": False,
-                             "default": False})
+                             "default": False, "preloaded": False,
+                             "preNote": n + 31})
                 continue
             base = os.path.basename(f)
             num = _re.match(r"(\d+)", base)
             hit = by_base.get(base) or (by_num.get(num.group(1))
                                         if num else None)
+            slot = num.group(1) if num else None
             rows.append({"note": n, "name": nm, "file": hit or base,
                          "blackout": False, "hit": hit,
                          "loop": bool(ctl.loop_for(f)) if ctl else False,
                          "default": bool(ctl.default_for(f))
-                         if ctl else False})
+                         if ctl else False,
+                         "preloaded": slot is not None and slot == pre_slot,
+                         "preNote": n + 31})
         self._json(200, {"videoRoot": root, "files": len(files),
                          "rows": rows})
 
@@ -1849,6 +1858,21 @@ class _Handler(BaseHTTPRequestHandler):
                                       "mode(off/loop/default)"})
             return
         self._run_on_app(lambda: app._set_video_mode(note, mode))
+
+    def _h_vjpreload(self, body, _ip):
+        """VJ 槽位预载开关（webapp 预载模式下格子点击）：note 72..101、
+        on 布尔；on=False=清隐藏侧（取消预载）。运行态不落盘；执行在 Tk
+        线程（OBS 网络动作纪律）。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无 VJ 联动"})
+            return
+        note, on = body.get("note"), body.get("on")
+        if not isinstance(note, int) or not 72 <= note <= 101 \
+                or not isinstance(on, bool):
+            self._json(400, {"error": "参数应为 note(72..101) 与 on(布尔)"})
+            return
+        self._run_on_app(lambda: app._vj_preload(note, on))
 
     def _h_playlist(self):
         """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+

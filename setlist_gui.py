@@ -1878,7 +1878,13 @@ class App:
             if vid is not None:      # 空串=显式清空（与 mediaInput 同口径）
                 ctl.cfg["videoRoot"] = vid
             if media is not None:
+                old = str(ctl.cfg.get("mediaInput") or "")
                 ctl.cfg["mediaInput"] = media
+                if old and old != media:
+                    # 改名：删旧 A/B 源对（含场景项），防孤儿源叠画；新名
+                    # 源对由连接校准自动补建。未连接=跳过（重连校准只建
+                    # 不删，孤儿待下次改名清理）
+                    ctl.retire_names(old)
             mon_prev = None
             if mon is not None:
                 mon_prev = ctl.cfg.get("projectorMonitor", "") or ""
@@ -3468,6 +3474,26 @@ class App:
                 sync.blackout()
 
         threading.Thread(target=apply, daemon=True).start()
+
+    def _vj_preload(self, note, on):
+        """VJ 槽位预载开关（Tk 线程执行，/vjpreload 端点经 _run_on_app
+        投递）：on=装载该槽位视频到隐藏侧（disabled 场景项不播不响），
+        off=清隐藏侧。运行态不落盘（预载是演出场次的临时准备）。OBS 网络
+        动作走工作线程（同纪律）。None=成功，str=错误文案。"""
+        ctl = self.ctl
+        if ctl is None:
+            return "OBS 控制器未就绪"
+        target = mb.NOTE_MAP.get(note) if isinstance(note, int) else None
+        if not isinstance(target, str):
+            return "音符 %s 无视频槽位" % note
+
+        def apply(on=on, target=target):
+            ok = ctl.preload(target) if on else ctl.clear_preload()
+            if not ok:
+                self.q.put("预载%s失败：%s" % ("" if on else "取消",
+                                              ctl.last_error))
+        threading.Thread(target=apply, daemon=True).start()
+        return None
 
     def _cur_point_entry(self):
         """指针条目解析：属定位点模式且正是已装载工程时返回 entry，否则

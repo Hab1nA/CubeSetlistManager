@@ -329,12 +329,16 @@ def test_default_for_parsing():
 
 class _FakeWS:
     """A/B 双源测试桩：预设双侧场景项（A=舞台视频 可见，B=舞台视频 B
-    隐藏）与各侧媒体态。"""
+    隐藏）与各侧媒体态；settings 记录各输入 local_file（装载/对账）。"""
     def __init__(self):
         self.calls = []
         self.items = {"舞台视频": [7, True], "舞台视频 B": [9, False]}
         self.media = {"舞台视频": "OBS_MEDIA_STATE_PLAYING",
                       "舞台视频 B": "OBS_MEDIA_STATE_PLAYING"}
+        self.settings = {"舞台视频": {"inputKind": "ffmpeg_source",
+                                      "inputSettings": {"local_file": ""}},
+                         "舞台视频 B": {"inputKind": "ffmpeg_source",
+                                        "inputSettings": {"local_file": ""}}}
     def request(self, kind, payload=None, **kw):
         self.calls.append((kind, payload))
         if kind == "GetCurrentProgramScene":
@@ -347,10 +351,25 @@ class _FakeWS:
             return {"inputs": [{"inputName": n} for n in self.items]}
         if kind == "GetMediaInputStatus":
             return {"mediaState": self.media.get(payload["inputName"])}
+        if kind == "GetInputSettings":
+            if payload["inputName"] not in self.settings:
+                raise obs_ctrl.ObsError("输入不存在")
+            return self.settings[payload["inputName"]]
+        if kind == "SetInputSettings":
+            s = self.settings[payload["inputName"]]["inputSettings"]
+            for k, v in payload["inputSettings"].items():
+                s[k] = v
+            return {}
         if kind == "SetSceneItemEnabled":
             for v in self.items.values():
                 if v[0] == payload["sceneItemId"]:
                     v[1] = payload["sceneItemEnabled"]
+            return {}
+        if kind == "RemoveSceneItem":
+            return {}
+        if kind == "RemoveInput":
+            self.settings.pop(payload["inputName"], None)
+            self.items.pop(payload["inputName"], None)
             return {}
         return {}
 
@@ -485,6 +504,121 @@ def test_ensure_creates_missing_sides():
     assert ctl._active == "A"
     ctl._ensure_media_input(ws)                     # 幂等：不重建
     assert ws.kinds.count("CreateInput") == 2
+
+
+def test_preload_loads_hidden_side(tmp_path):
+    """预载：文件装载到隐藏侧（含 restart_on_activate=False——上屏重播
+    由显式 RESTART 管），不换可见性、不上屏；clear 清空隐藏侧。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    assert ctl._active == "A"
+    assert ctl.preload("3.mp4") is True
+    sets = [c for c in ws.calls if c[0] == "SetInputSettings"]
+    assert len(sets) == 1 and sets[0][1]["inputName"] == "舞台视频 B"
+    assert sets[0][1]["inputSettings"]["local_file"].endswith("3.mp4")
+    assert sets[0][1]["inputSettings"]["restart_on_activate"] is False
+    assert ws.items["舞台视频 B"][1] is False     # 不开可见
+    assert ctl.hidden_file() == "3.mp4"
+    assert ctl.clear_preload() is True
+    sets2 = [c for c in ws.calls if c[0] == "SetInputSettings"]
+    assert sets2[-1][1]["inputSettings"]["local_file"] == ""
+    assert ctl.hidden_file() is None
+
+
+def test_preload_then_trigger_seamless(tmp_path):
+    """预载后触发的准点路径：SetInputSettings 同值（幂等零重载）+ RESTART
+    + swap；装载耗时已花在预载时。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl.preload("3.mp4")
+    n0 = len(ws.calls)
+    assert ctl.set_media("3.mp4", False) is True
+    sets = [c for c in ws.calls[n0:] if c[0] == "SetInputSettings"]
+    assert sets and sets[0][1]["inputName"] == "舞台视频 B"
+    assert sets[0][1]["inputSettings"]["restart_on_activate"] is False
+    restarts = [c for c in ws.calls[n0:]
+                if c[0] == "TriggerMediaInputAction"]
+    assert restarts and restarts[0][1]["inputName"] == "舞台视频 B"
+    assert restarts[0][1]["mediaAction"].endswith("RESTART")
+    en = [c for c in ws.calls[n0:] if c[0] == "SetSceneItemEnabled"]
+    assert en[0][1]["sceneItemEnabled"] is True     # 先开新
+    assert en[1][1]["sceneItemEnabled"] is False    # 后关旧
+    assert ctl._active == "B"
+
+
+def test_preload_missing_file(tmp_path):
+    """预载缺文件：失败记账 last_error，不动隐藏侧。"""
+    ctl, _ws = _ab_ctl(tmp_path)
+    assert ctl.preload("999.mp4") is False
+    assert "999" in ctl.last_error
+
+
+def test_swap_resets_hidden_bookkeeping(tmp_path):
+    """换侧后预载记账归零（隐藏侧=旧视频文件，非用户预载意图）。"""
+    ctl, _ws = _ab_ctl(tmp_path)
+    ctl.preload("3.mp4")
+    assert ctl.hidden_file() == "3.mp4"
+    ctl.set_media("4.mp4", False)
+    assert ctl.hidden_file() is None
+
+
+def test_ensure_reconciles_hidden_file(tmp_path):
+    """重连校准对账：OBS 实况（隐藏侧 local_file）刷新预载记账——OBS
+    重启源重建为空时 UI 不假显「已预载」。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl.preload("3.mp4")
+    ws.settings["舞台视频 B"]["inputSettings"]["local_file"] = ""
+    ctl._ensure_media_input(ws)                     # 模拟重连校准
+    assert ctl.hidden_file() is None
+    ws.settings["舞台视频 B"]["inputSettings"]["local_file"] = "C:/v/4.mp4"
+    ctl._ensure_media_input(ws)
+    assert ctl.hidden_file() == "4.mp4"
+
+
+def test_retire_names_removes_old_pair(tmp_path):
+    """改名清理：旧 A/B 输入连同场景项删除、缓存作废。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    assert ctl.retire_names("舞台视频") is True
+    assert "舞台视频" not in ws.items
+    assert "舞台视频 B" not in ws.items
+    assert ctl._item_ids == {}
+
+
+def test_preload_note_worker():
+    """预载音符区 103..132 → 槽位 1..30 预载（触发音符+31 口径）；预载
+    与触发同 worker 串行。"""
+
+    class _Ctl:
+        def __init__(self):
+            self.cfg = {}
+            self.pre = []
+            self.sets = []
+            self.last_error = None
+        def preload(self, f):
+            self.pre.append(f)
+            return True
+        def loop_for(self, f):                      # 借真实现（只摸 self.cfg）
+            return ObsController.loop_for(self, f)
+        def set_media(self, f, loop):
+            self.sets.append((f, loop))
+            return True
+        def stop_media(self):
+            return True
+
+    ctl = _Ctl()
+    sync = mb.TransportSync(ctl)
+    lines = []
+    on_note = mb.note_handler(ctl, sync, report=lines.append)
+
+    def fire(note, want_list, lst):
+        on_note(note, 100)
+        deadline = time.time() + 2
+        while time.time() < deadline and lst[-1:] != [want_list]:
+            time.sleep(0.01)
+        assert lst[-1] == want_list
+
+    fire(103, "1.mp4", ctl.pre)          # 103 = 槽位1 预载
+    fire(132, "30.mp4", ctl.pre)          # 132 = 槽位30 预载
+    fire(74, ("3.mp4", False), ctl.sets)  # 触发不受影响
+    assert any("预载1.mp4" in ln for ln in lines)
 
 
 def test_natural_sort():

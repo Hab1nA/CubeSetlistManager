@@ -2598,14 +2598,16 @@ async function refreshVjMap(root, force) {
     }
     // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
     // 非熄屏格点击=三态循环切换（播一遍停→循环→默认回落，乐观更新，
-    // 失败回滚）
+    // 失败回滚）；预载模式下点击=预载/取消预载（提前装载到隐藏源，
+    // 触发时零装载开销、准点切换；预载音符=触发音符+31，如 72 触发↔103 预载）
     d.rows.forEach(row => {
       const cell = document.createElement("div");
       const mode = row.default ? "default" : (row.loop ? "loop" : "off");
       cell.className = "slot vj-cell"
           + (row.blackout ? " blackout" : "")
           + (row.hit || row.blackout ? "" : " miss")
-          + (!row.blackout && mode !== "off" ? " " + mode : "");
+          + (!row.blackout && mode !== "off" ? " " + mode : "")
+          + (!row.blackout && row.preloaded ? " pre" : "");
       cell.dataset.file = row.file || "";
       if (!row.blackout) {
         cell.dataset.note = row.note;
@@ -2616,9 +2618,14 @@ async function refreshVjMap(root, force) {
             : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录")
             + " · 现况" + (mode === "default" ? "默认回落"
                 : mode === "loop" ? "循环" : "播一遍停")
-            + "，点击切换为" + (mode === "default" ? "播一遍停"
-                : mode === "loop" ? "默认回落" : "循环");
-        const flip = () => toggleVjLoop(cell, row);
+            + (row.preloaded ? " · 已预载" : "")
+            + " · 预载音符 " + noteName(row.preNote)
+            + " · 点击" + (vjPreMode
+                ? (row.preloaded ? "取消预载" : "预载")
+                : "切换为" + (mode === "default" ? "播一遍停"
+                    : mode === "loop" ? "默认回落" : "循环"));
+        const flip = () => vjPreMode ? toggleVjPreload(cell, row)
+                                     : toggleVjLoop(cell, row);
         cell.addEventListener("click", flip);
         kbdRow(cell, flip, null, true);
       } else {
@@ -2634,13 +2641,49 @@ async function refreshVjMap(root, force) {
       const sub = document.createElement("span");
       sub.className = "s-sub";
       sub.textContent = row.blackout ? "熄灭投影画面"
-          : (row.hit ? "已就位" : "缺视频");
+          : (row.hit ? "已就位" : "缺视频")
+            + (row.preloaded ? " · 已预载" : "");
       cell.append(n, f, sub);
       box.appendChild(cell);
     });
     // 5s 保真重建后焦点回同格（视频库扫描重建整列不丢焦）
     if (keep) keep();
   } catch { /* 瞬断 */ }
+}
+
+// 预载模式：开启时格子点击=预载/取消预载（与三态模式互斥的点击语义），
+// 关闭时恢复三态。会话内状态（不落盘——预载是演出场次的临时准备）
+let vjPreMode = false;
+$("#vj-premode").addEventListener("click", () => {
+  vjPreMode = !vjPreMode;
+  const b = $("#vj-premode");
+  b.classList.toggle("on", vjPreMode);
+  b.setAttribute("aria-pressed", vjPreMode ? "true" : "false");
+  toast(vjPreMode ? "预载模式：点击格子预载/取消预载（隐藏源提前装载）"
+      : "预载模式已关：点击恢复循环/默认切换");
+});
+
+// 格子预载：乐观更新（同格在途忽略；预载全局只一格有效——隐藏侧单槽，
+// 切目标=覆盖，其它格的已预载高亮一并摘除）。失败回滚走 vjmap 强刷
+// （服务端态保真——别格可能是真预载格，本地行数据不含它）。
+const vjPreBusy = new Set();
+async function toggleVjPreload(cell, row) {
+  if (vjPreBusy.has(row.note)) return;
+  vjPreBusy.add(row.note);
+  const on = !row.preloaded;
+  const grid = cell.parentElement;
+  const paint = v => {
+    grid.querySelectorAll(".vj-cell.pre").forEach(c =>
+        c.classList.remove("pre"));
+    if (v) cell.classList.add("pre");
+  };
+  paint(on);
+  try {
+    const j = await post("/vjpreload", {note: row.note, on});
+    if (j.ok) row.preloaded = on;
+    else refreshVjMap(vjMapRoot, true);
+  } catch { refreshVjMap(vjMapRoot, true); }
+  finally { vjPreBusy.delete(row.note); }
 }
 
 // VJ 槽位三态：整格点击循环切换 播一遍停→循环→默认回落→播一遍停，

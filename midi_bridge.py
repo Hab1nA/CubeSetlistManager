@@ -2,7 +2,8 @@
 """MIDI→OBS 触发桥：监听 loopMIDI 虚拟端口，音符→播放/停止指定视频。
 
 链路：Cubase MIDI 轨(指定位置画音符) → loopMIDI 虚拟端口 → 本脚本
-     → 复用 obs_ctrl.ObsController → obs-websocket → OBS 媒体源「舞台视频」
+     → 复用 obs_ctrl.ObsController → obs-websocket → OBS 媒体源 A/B 双侧
+     （「舞台视频」+「舞台视频 B」，双源无黑闪换切，见 obs_ctrl）
 纯标准库：MIDI 收发走 win32 winmm(ctypes) 短消息，不依赖 mido/rtmidi
 （python-rtmidi 1.5.8 在本机 Python 3.14 下 import 即崩，实测）。
 用法：
@@ -11,6 +12,10 @@
 Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port，
 在触发位置画音符：C4(72)→1.mp4、C#4(73)→2.mp4 …（只认 Note On，音符长度
 无所谓；0.16.2 起锚点对齐 Cubase 显示，72 起才是 VJ 区）。
+预载音符：103→预载1.mp4 … 132→预载30.mp4（=触发音符+31）。在正式
+触发前 1-2 小节画预载音符=视频提前装载到隐藏源（不播不响），触发到达时
+零装载开销、准点切换；不预载则触发时现装载（无黑闪，但切换时机随装载
+时长延后）。VJ 页「预载模式」开关下点格子可手动预载。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
 暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“MIDI 时码输出”
@@ -40,6 +45,10 @@ NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸�
 # C4(72) → 1.mp4，向上每个音顺延：C#4(73) → 2.mp4 … F6(101) → 30.mp4
 NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
 NOTE_MAP[102] = None  # F#6 → 熄屏
+# 预载区：note 103..132 = 提前装载槽位 1..30 到隐藏侧（触发音符+31）。
+# 演出准点切换的支撑：DAW 触发轨里在正式触发前 1-2 小节画预载音符，
+# 触发到达时文件已装载（同值合并零重载+RESTART 毫秒级起播）。
+PRELOAD_MAP = {n: "%d.mp4" % (n - 102) for n in range(103, 133)}
 
 
 def default_target(cfg):
@@ -805,7 +814,7 @@ def note_handler(ctl, sync, report=print):
     q = queue.Queue()
 
     def on_note(note, vel):
-        if note in NOTE_MAP:
+        if note in NOTE_MAP or note in PRELOAD_MAP:
             sync.note_seen()
             q.put(note)
         elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
@@ -815,11 +824,17 @@ def note_handler(ctl, sync, report=print):
         while True:
             note = q.get()
             try:
-                while True:             # 倒掉积压：切换归最新音符管
-                    try:
-                        note = q.get_nowait()
+                while True:             # 倒掉积压：切换归最新音符管（预载
+                    try:                #   与触发几乎同到=留触发，触发自会
+                        note = q.get_nowait()   # 装载，预载本就为提前量而设）
                     except queue.Empty:
                         break
+                if note in PRELOAD_MAP:
+                    pre = PRELOAD_MAP[note]
+                    ok = ctl.preload(pre)
+                    report("音符 %d → 预载%s%s" % (
+                        note, pre, "" if ok else " 失败：%s" % ctl.last_error))
+                    continue
                 target = NOTE_MAP[note]
                 if target is None:
                     ok = ctl.stop_media()

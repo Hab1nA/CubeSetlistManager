@@ -268,9 +268,11 @@ class ObsController:
         # 动作失败/探活失败/停用/循环异常漏复位=重连后投影不恢复，11-13 C2）
         self._connected_notified = False
         # A/B 双源（无黑闪切换）：A=mediaInput、B=mediaInput+" B"，_active=
-        # 当前可见侧；_item_ids=输入名→sceneItemId（连接期校准，断链作废）
+        # 当前可见侧；_item_ids=输入名→sceneItemId（连接期校准，断链作废）；
+        # _hidden_file=隐藏侧当前装载文件（预载态展示，触发路径不依赖它）
         self._active = "A"
         self._item_ids = {}
+        self._hidden_file = None
 
     # ---- 生命周期 ----
 
@@ -296,22 +298,46 @@ class ObsController:
 
     def set_media(self, file_rel, loop):
         """切到 file_rel 从头播放；loop=True 即幕间循环模式。A/B 双源换切
-        （无黑闪）：文件先装载到隐藏侧（装载不可见），开隐藏侧、等它真正
-        起播、再关旧侧——旧画面持续在屏直到新画面就绪，消除单源换文件的
-        重载空窗（黑闪根因，2026-11-22 改双源）。"""
+        （无黑闪）：文件先装载到隐藏侧（装载不可见；同值合并不重载——
+        预载过的槽位零装载开销），显式 RESTART 从头起播（不赌
+        restart_on_activate 默认值，装载时已统一关掉该隐式重播），开新侧、
+        等真正起播、再关旧侧——旧画面持续在屏直到新画面就绪，消除单源
+        换文件的重载空窗（黑闪根因，2026-11-22 改双源；11-23 加预载）。"""
         path = self._abs_path(file_rel)
         if path is None:
             self.last_error = "视频文件不存在：%s" % file_rel
             return False
         def do(ws):
             new_name = self._hidden_name()
-            ws.request("SetInputSettings", {
+            self._load_hidden(ws, new_name, path, loop)
+            ws.request("TriggerMediaInputAction", {
                 "inputName": new_name,
-                "inputSettings": {"local_file": path, "is_local_file": True,
-                                  "looping": bool(loop)},
-                "overlay": True})
+                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
             self._swap(ws, new_name)
         return self._act(file_rel + ("（循环）" if loop else ""), do)
+
+    def preload(self, file_rel):
+        """预载：把 file_rel 装载到隐藏侧（disabled 场景项不播不响=纯装载），
+        触发该槽位时同值合并零重载、RESTART 毫秒级起播=准点切换。装载耗时
+        （大头）提前到预载时花掉。幂等：重复预载/换预载目标都是覆盖。"""
+        path = self._abs_path(file_rel)
+        if path is None:
+            self.last_error = "视频文件不存在：%s" % file_rel
+            return False
+        def do(ws):
+            self._load_hidden(ws, self._hidden_name(), path, False)
+        return self._act("预载%s" % file_rel, do)
+
+    def clear_preload(self):
+        """取消预载：清隐藏侧文件（消除残文件在下次换切开可见时的自动播
+        ——与熄屏同款根治口径）。"""
+        def do(ws):
+            self._load_hidden(ws, self._hidden_name(), "", False)
+        return self._act("取消预载", do)
+
+    def hidden_file(self):
+        """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
+        return self._hidden_file
 
     # ---- A/B 双源辅助 ----
 
@@ -325,6 +351,19 @@ class ObsController:
     def _hidden_name(self):
         return self.cfg.get("mediaInput", "舞台视频") \
             if self._active == "B" else self._b_name()
+
+    def _load_hidden(self, ws, name, path, loop):
+        """装载（或清空）隐藏侧文件：统一合并 restart_on_activate=False——
+        上屏重播由显式 RESTART 管，不赌 OBS 默认值（enable 隐式重播会与
+        RESTART 叠一次开头重闪）。同值合并不触发重载=预载的核心机制。
+        成功后记账 _hidden_file（swap 换侧后由调用方刷新）。"""
+        ws.request("SetInputSettings", {
+            "inputName": name,
+            "inputSettings": {"local_file": path, "is_local_file": True,
+                              "looping": bool(loop),
+                              "restart_on_activate": False},
+            "overlay": True})
+        self._hidden_file = os.path.basename(path) if path else None
 
     def _swap(self, ws, new_name):
         """可见性换切到 new_name：先开新侧（旧侧还压着画面，装载/起播都
@@ -343,6 +382,9 @@ class ObsController:
             "sceneName": scene, "sceneItemId": new_id,
             "sceneItemEnabled": True})
         self._active = "B" if new_name == self._b_name() else "A"
+        # 换侧后隐藏侧=旧视频文件，不是用户预载意图的落点；预载态展示
+        # 归零（触发路径不依赖此记账——SetInputSettings 幂等装载）
+        self._hidden_file = None
         self._wait_playing(ws, new_name)
         if old_id is not None:
             ws.request("SetSceneItemEnabled", {
@@ -440,6 +482,7 @@ class ObsController:
             ws.request("TriggerMediaInputAction", {
                 "inputName": name,
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"})
+        self._hidden_file = None
 
     def stop_media(self):
         """熄屏：停掉双侧媒体源并忘掉文件（显示空/黑，OBS 下次启动不续播）。"""
@@ -464,7 +507,6 @@ class ObsController:
         输出，声音进 OBS「设置→音频→高级→监视输出设备」，默认=系统默认
         播放设备）。媒体源默认监听是关的——声音只进混音器/录制，不进任何
         播放设备，所以听不听得到由监听决定，两者一起按勾选状态同步。"""
-        name = self.cfg.get("mediaInput", "舞台视频")
         # 缺省 True=静音：与三处 UI（Tk 两版/webapp）的 get("vjMute", True)
         # 同口径——原缺省 False 使「从未保存过 OBS 设置」的运行态与勾选态
         # 相反（UI 显示静音、实际每轮连接强写不静音+开监听）
@@ -488,7 +530,8 @@ class ObsController:
         铺满画布），连接后即可用，无需手动摆源；并按 OBS 实况校准活动侧：
         单侧可见=认该侧；双显（断链断在换切半途）=按记账侧归一——_swap
         开新侧即翻账，记账侧=换切意图的落点侧，关掉另一侧；双侧隐藏只记
-        账不动可见性——首次 swap 自会摆正。幂等。"""
+        账不动可见性——首次 swap 自会摆正。预载记账也按 OBS 实况对账
+        （OBS 重启=源重建为空，防 UI 假显「已预载」）。幂等。"""
         scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
         a = self.cfg.get("mediaInput", "舞台视频")
         ids = {a: self._ensure_side(ws, scene, a),
@@ -507,6 +550,43 @@ class ObsController:
             ws.request("SetSceneItemEnabled", {
                 "sceneName": scene, "sceneItemId": ids[other],
                 "sceneItemEnabled": False})
+        try:
+            st = ws.request("GetInputSettings", {
+                "inputName": self._hidden_name()})
+            f = st.get("inputSettings", {}).get("local_file") or ""
+            self._hidden_file = os.path.basename(f) if f else None
+        except (ObsError, OSError, KeyError):
+            self._hidden_file = None
+
+    def retire_names(self, old_a):
+        """mediaInput 改名后的旧源对清理（设置保存链调用，工作线程执行）：
+        旧 A/旧 B 输入连同场景项删除——留着会在场景里成为孤儿源（B 侧若
+        手动开过可见性还会叠画）。改名后新源对由连接校准自动补建。"""
+        if not old_a:
+            return
+        def do(ws):
+            scene = None
+            for name in (old_a, old_a + " B"):
+                try:
+                    r = ws.request("GetInputSettings", {"inputName": name})
+                except (ObsError, OSError):
+                    continue                       # 本来就不存在
+                _kind = r.get("inputKind")
+                scene = ws.request("GetCurrentProgramScene")[
+                    "currentProgramSceneName"]
+                items = ws.request("GetSceneItemList", {"sceneName": scene})
+                for it in items["sceneItems"]:
+                    if it["sourceName"] == name:
+                        try:
+                            # 协议要完整场景项对象（GetSceneItemList 条目
+                            # 即该形状），不是裸 id
+                            ws.request("RemoveSceneItem", {"sceneItem": it})
+                        except (ObsError, OSError):
+                            pass
+                ws.request("RemoveInput", {"inputName": name})
+                self._item_ids.pop(name, None)
+            self._hidden_file = None
+        return self._act("清理旧媒体源", do)
 
     def media_state(self):
         """查媒体源实况（OBS_MEDIA_STATE_* 字符串，可见侧），连不上返回

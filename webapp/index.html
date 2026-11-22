@@ -339,14 +339,16 @@
           <div class="dim sm-txt mq" id="vj-video"></div></div>
       </div>
       <div class="card"><h3>触发槽位
-        <span class="h3-note">支持「N 描述」命名</span></h3>
+        <span class="h3-note">支持「N 描述」命名</span>
+        <button id="vj-premode" class="tgl"
+          title="开启后点击格子=预载/取消预载该视频到隐藏源（提前装载，触发时零装载开销、准点切换）；关闭后点击=切换循环/默认模式">预载模式</button></h3>
         <div id="vjmap" class="slot-grid vj-grid"></div>
       </div>
-      <div class="card"><h3>视频联动<span class="h3-note">媒体输入名须与 OBS 源名一致</span></h3>
+      <div class="card"><h3>视频联动<span class="h3-note">A/B 双源：B 源自动派生为「名称 B」，改媒体输入名后旧源对自动清理</span></h3>
         <div class="grid2">
           <div class="field"><label for="vj-mon">VJ 显示位置</label>
             <select id="vj-mon"></select></div>
-          <div class="field"><label for="vj-media">媒体输入名</label>
+          <div class="field"><label for="vj-media">媒体输入名（A 源）</label>
             <input id="vj-media"></div>
           <div class="field wide"><label for="vj-root">视频目录</label>
             <div class="input-row">

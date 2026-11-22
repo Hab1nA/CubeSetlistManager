@@ -706,6 +706,10 @@ input.invalid { border-color: var(--err) !important; }
 .vj-cell.miss { border-style: dashed; }
 .vj-cell.miss .s-pc { color: var(--warn); }
 .vj-cell.blackout .s-pc { color: var(--err); }
+/* 预载态：隐藏源已装载该视频（提前装载=触发时零装载开销）。紫色描边
+   与循环绿/默认蓝不撞；不加 ring——那是 .live 在播的专属语言 */
+.vj-cell.pre { border-color: #a882d6; }
+.vj-cell.pre .s-sub { color: #a882d6; }
 
 /* ---- VJ / 设置页 ---- */
 .card + .card { margin-top: 14px; }
