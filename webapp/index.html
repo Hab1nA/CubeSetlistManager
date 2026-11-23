@@ -339,10 +339,21 @@
           <div class="dim sm-txt mq" id="vj-video"></div></div>
       </div>
       <div class="card"><h3>触发槽位
-        <span class="h3-note" id="vj-libnote">支持「N 描述」命名</span>
+        <span class="h3-note" id="vj-libnote">支持「N 描述」命名</span></h3>
+        <div id="vjmap" class="slot-grid vj-grid"></div>
+      </div>
+      <div class="card"><h3>预载信号
+        <span class="h3-note">C2 按住时槽位音符 = 预载</span>
         <button id="vj-premode" class="tgl"
           title="开启后点击格子=预载/取消预载该视频到隐藏源（提前装载，触发时零装载开销、准点切换）；关闭后点击=切换循环/默认模式">预载模式</button></h3>
-        <div id="vjmap" class="slot-grid vj-grid"></div>
+        <div class="slot-grid vj-grid">
+          <div class="slot vj-cell pre-signal"
+            title="C2(48) 是预载修饰键：按住期间到达的槽位音符（C4–F6）= 预载该视频到隐藏源，不播不响；单独到达的槽位音符 = 正常触发（已预载的槽位零装载准点上屏）。DAW 画法：C2 从预载点画长音延伸过触发音符，或与槽位音符同起点">
+            <span class="s-note">C2</span>
+            <span class="s-pc">预载修饰键</span>
+            <span class="s-sub">按住时槽位音符 = 预载</span>
+          </div>
+        </div>
       </div>
       <div class="card"><h3>视频联动<span class="h3-note">A/B 双源：B 源自动派生为「名称 B」，改媒体输入名后旧源对自动清理</span></h3>
         <div class="grid2">

@@ -1842,8 +1842,7 @@ class _Handler(BaseHTTPRequestHandler):
                          "default": (not is_loop
                                      and (bool(ctl.default_for(f))
                                           if ctl else False)),
-                         "preloaded": slot is not None and slot == pre_slot,
-                         "preNote": n + 31})
+                         "preloaded": slot is not None and slot == pre_slot})
         self._json(200, {"videoRoot": root, "files": len(files),
                          "rows": rows})
 

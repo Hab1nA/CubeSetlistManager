@@ -710,6 +710,10 @@ input.invalid { border-color: var(--err) !important; }
    与循环绿/默认蓝不撞；不加 ring——那是 .live 在播的专属语言 */
 .vj-cell.pre { border-color: #a882d6; }
 .vj-cell.pre .s-sub { color: #a882d6; }
+/* 预载信号格（VJ 页「预载信号」卡里的 C2 修饰键说明格）：信息格不可点，
+   主字用预载族紫色——与 .pre 态同色系，色彩语义同源 */
+.vj-cell.pre-signal { cursor: default; }
+.vj-cell.pre-signal .s-pc { color: #a882d6; }
 
 /* ---- VJ / 设置页 ---- */
 .card + .card { margin-top: 14px; }

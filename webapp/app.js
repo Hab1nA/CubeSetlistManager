@@ -2606,7 +2606,7 @@ async function refreshVjMap(root, force) {
     // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
     // 非熄屏格点击=三态循环切换（播一遍停→循环→默认回落，乐观更新，
     // 失败回滚）；预载模式下点击=预载/取消预载（提前装载到隐藏源，
-    // 触发时零装载开销、准点切换；预载音符=触发音符+31，如 72 触发↔103 预载）
+    // 触发时零装载开销、准点切换；MIDI 侧=C2 修饰键，见「预载信号」卡）
     d.rows.forEach(row => {
       const cell = document.createElement("div");
       const mode = row.default ? "default" : (row.loop ? "loop" : "off");
@@ -2626,7 +2626,6 @@ async function refreshVjMap(root, force) {
             + " · 现况" + (mode === "default" ? "默认回落"
                 : mode === "loop" ? "循环" : "播一遍停")
             + (row.preloaded ? " · 已预载" : "")
-            + " · 预载音符 " + noteName(row.preNote)
             + " · 点击" + (vjPreMode
                 ? (row.preloaded ? "取消预载" : "预载")
                 : "切换为" + (mode === "default" ? "播一遍停"

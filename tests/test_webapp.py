@@ -330,12 +330,12 @@ def test_vjmap_endpoint(tmp_path):
         assert r2["name"] == "C#4" and r2["file"] == "2.mp4"
         assert r2["hit"] is None and r2["loop"] is False   # 库里没有
         assert r2["default"] is True                   # 槽位2 = 默认回落
-        assert r2["preloaded"] is False and r2["preNote"] == 104
+        assert r2["preloaded"] is False
         app.ctl.cfg["videoDefault"] = ""               # 清默认便于下方断言
         app.ctl._hidden_file = "3.mp4"                 # 模拟已预载槽位3
         d = _get(port, "/vjmap")
         r74 = next(r for r in d["rows"] if r["note"] == 74)
-        assert r74["preloaded"] is True and r74["preNote"] == 105
+        assert r74["preloaded"] is True
         r72b = next(r for r in d["rows"] if r["note"] == 72)
         assert r72b["preloaded"] is False
         app.ctl.cfg["videoLoops"] = {"2": True}        # 手改出并存（槽2 双标）

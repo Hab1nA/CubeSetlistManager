@@ -686,15 +686,17 @@ def test_retire_names_removes_old_pair(tmp_path):
     assert ctl._item_ids["新名"][0] == "S"
 
 
-def test_preload_note_worker():
-    """预载音符区 103..132 → 槽位 1..30 预载（触发音符+31 口径）；预载
-    与触发同 worker 串行。"""
+def test_c2_preload_modifier():
+    """C2(48) 预载修饰键：按住期间槽位音符=预载（不记磁吸窗）；note-off
+    松开后=正常触发（记磁吸窗）；同拍容差（槽位先到、C2 在窗内后到）=
+    预载；C2 单独到达=no-op；102 熄屏不被修饰。"""
 
     class _Ctl:
         def __init__(self):
             self.cfg = {}
             self.pre = []
             self.sets = []
+            self.stops = 0
             self.last_error = None
         def preload(self, f):
             self.pre.append(f)
@@ -705,27 +707,69 @@ def test_preload_note_worker():
             self.sets.append((f, loop))
             return True
         def stop_media(self):
+            self.stops += 1
             return True
 
     ctl = _Ctl()
     sync = mb.TransportSync(ctl)
     lines = []
     on_note = mb.note_handler(ctl, sync, report=lines.append)
+    on_note_off = on_note.note_off
 
-    def fire(note, want_list, lst):
-        on_note(note, 100)
-        deadline = time.time() + 2
-        while time.time() < deadline and lst[-1:] != [want_list]:
-            time.sleep(0.01)
-        assert lst[-1] == want_list
+    def wait(lst, want, sec=2):
+        deadline = time.time() + sec
+        while time.time() < deadline and lst[-1:] != [want]:
+            time.sleep(0.005)
+        assert lst[-1] == want, (lst, want)
 
-    fire(103, "1.mp4", ctl.pre)          # 103 = 槽位1 预载
-    fire(132, "30.mp4", ctl.pre)          # 132 = 槽位30 预载
-    assert sync._last_note == 0.0         # 预载不记磁吸窗（复审 R2）：
-    #   _last_note 只属于「换画面的触发意图」，回落双查/postcheck 不被
-    #   预载音符误拦
-    fire(74, ("3.mp4", False), ctl.sets)  # 触发不受影响（且会记磁吸窗）
-    assert any("预载1.mp4" in ln for ln in lines)
+    # 1) C2 按住 + 槽位音符 = 预载；不记磁吸窗
+    on_note(48, 100)
+    on_note(74, 100)                            # 槽位3
+    wait(ctl.pre, "3.mp4")
+    assert ctl.sets == [] and sync._last_note == 0.0
+    assert any("C2+音符 74 → 预载3.mp4" in ln for ln in lines)
+
+    # 2) C2 按住期间另一槽位 = 换预载目标（隐藏侧单槽覆盖）
+    on_note(73, 100)
+    wait(ctl.pre, "2.mp4")
+
+    # 3) note-off 松开后槽位音符 = 正常触发（记磁吸窗）
+    on_note_off(48)
+    on_note(74, 100)
+    wait(ctl.sets, ("3.mp4", False))
+    assert sync._last_note > 0.0
+
+    # 4) 同拍容差：槽位先到、C2 窗内后到 = 预载
+    on_note(76, 100)                            # 槽位5 先到（C2 未按住）
+    time.sleep(0.005)
+    on_note(48, 100)                            # 5ms 后 C2 到（窗内）
+    wait(ctl.pre, "5.mp4")
+    assert ("5.mp4", False) not in ctl.sets
+    on_note_off(48)
+
+    # 5) 超窗 = 触发（容差窗外 C2 才到）
+    on_note(77, 100)                            # 槽位6 先到
+    time.sleep(mb.PRELOAD_TOL + 0.05)           # 窗过后 worker 已按触发执行
+    wait(ctl.sets, ("6.mp4", False))
+    on_note(48, 100)                            # 迟到的 C2：对已处理音符无效
+    on_note_off(48)
+
+    # 6) C2 单独到达/松开 = no-op
+    n0 = (len(ctl.pre), len(ctl.sets))
+    on_note(48, 100)
+    on_note_off(48)
+    time.sleep(0.05)
+    assert (len(ctl.pre), len(ctl.sets)) == n0
+
+    # 7) 熄屏(102) 不被 C2 修饰（按住也照常熄屏）
+    on_note(48, 100)
+    on_note(102, 100)
+    deadline = time.time() + 2
+    while time.time() < deadline and ctl.stops == 0:
+        time.sleep(0.005)
+    assert ctl.stops == 1
+    on_note_off(48)
+    assert ctl.pre == ["3.mp4", "2.mp4", "5.mp4"]   # 熄屏没进预载
 
 
 def test_natural_sort():

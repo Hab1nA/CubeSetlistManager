@@ -12,10 +12,11 @@
 Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port，
 在触发位置画音符：C4(72)→1.mp4、C#4(73)→2.mp4 …（只认 Note On，音符长度
 无所谓；0.16.2 起锚点对齐 Cubase 显示，72 起才是 VJ 区）。
-预载音符：103→预载1.mp4 … 132→预载30.mp4（=触发音符+31）。在正式
-触发前 1-2 小节画预载音符=视频提前装载到隐藏源（不播不响），触发到达时
-零装载开销、准点切换；不预载则触发时现装载（无黑闪，但切换时机随装载
-时长延后）。VJ 页「预载模式」开关下点格子可手动预载。
+预载修饰键 C2(48)：按住期间到达的槽位音符=预载该视频到隐藏源（不播不
+响）；单独到达的槽位音符=正常触发（已预载的槽位零装载开销、准点切换，
+未预载则触发时现装载——无黑闪但时机随装载时长延后）。DAW 画法：C2 从
+预载点画长音延伸过触发音符，或与槽位音符同起点（同拍容差 20ms 内按住
+即算）。VJ 页「预载模式」开关下点格子可手动预载。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
 暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“MIDI 时码输出”
@@ -45,10 +46,14 @@ NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸�
 # C4(72) → 1.mp4，向上每个音顺延：C#4(73) → 2.mp4 … F6(101) → 30.mp4
 NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
 NOTE_MAP[102] = None  # F#6 → 熄屏
-# 预载区：note 103..132 = 提前装载槽位 1..30 到隐藏侧（触发音符+31）。
-# 演出准点切换的支撑：DAW 触发轨里在正式触发前 1-2 小节画预载音符，
-# 触发到达时文件已装载（同值合并零重载+RESTART 毫秒级起播）。
-PRELOAD_MAP = {n: "%d.mp4" % (n - 102) for n in range(103, 133)}
+# 预载修饰键：C2(48) 按住期间到达的槽位音符 = 预载该视频到隐藏源
+# （Shift+字母同构的组合语义）；单独到达的槽位音符 = 正常触发——已
+# 预载的槽位触发时同值合并零装载+RESTART 毫秒级上屏（准点切换）。
+# DAW 画法：C2 画长音（从预载点延伸过触发音符）或与槽位同起点；
+# 同拍时槽位可能先到几毫秒，判定前留 PRELOAD_TOL 容差窗。熄屏(102)
+# 不被修饰。VJ 端口上 48 此前零定义（60-90 提示区不含），无冲突。
+PRELOAD_KEY = 48
+PRELOAD_TOL = 0.02   # 同拍容差：槽位先到而 C2 未按住时等这么久再定
 
 
 def default_target(cfg):
@@ -505,6 +510,10 @@ class MidiIn:
                      % name_sub)
         idx, self.name = found
         self._on_note = on_note
+        # note-off 分发按需挂载：note_handler 的返回函数带 .note_off 属性
+        # （C2 预载修饰键的按住判定）；其它口（翻谱/时钟）的 on_note 无
+        # 此属性=note-off 照旧被丢弃，零行为变化
+        self._on_note_off = getattr(on_note, "note_off", None)
         self._on_mtc = on_mtc
         self._on_f8 = on_f8
         self._on_sysex = on_sysex
@@ -554,6 +563,11 @@ class MidiIn:
                     self._on_f8()
             elif status & 0xF0 == 0x90 and (p1 >> 16) & 0xFF:
                 self._on_note((p1 >> 8) & 0xFF, (p1 >> 16) & 0xFF)
+            elif self._on_note_off is not None and (
+                    status & 0xF0 == 0x80
+                    or (status & 0xF0 == 0x90
+                        and not (p1 >> 16) & 0xFF)):   # 0x90 vel0=note-off
+                self._on_note_off((p1 >> 8) & 0xFF)
         elif msg in (_MIM_LONGDATA, _MIM_LONGERROR) and p1:
             self._done_push(int(p1), msg == _MIM_LONGERROR)
         elif msg == _MIM_CLOSE and not self._closing:
@@ -830,37 +844,48 @@ def note_handler(ctl, sync, report=print):
     """音符→OBS 动作的标准处理器；report 输出事件行（print 或 GUI 日志）。
     winmm 回调线程只记带入队，OBS 网络动作由内部串行工作线程执行——
     回调里做网络会拖住同一端口的时钟投递（winmm 按序回调），时钟停
-    超 CLOCK_TIMEOUT 就误判暂停；连发积压时只执行最新的一个触发。"""
+    超 CLOCK_TIMEOUT 就误判暂停；连发积压时只执行最新的一个触发。
+    C2(48)=预载修饰键：按住期间到达的槽位音符=预载（不换画面不记
+    磁吸窗）；note-off 判定挂在返回函数的 .note_off 属性上（MidiIn
+    duck-typing 识别，非 VJ 口的 on_note 无此属性=note-off 照旧丢弃）。"""
     q = queue.Queue()
+    held = [False]      # C2 按住标志：回调线程写、worker 读（GIL 原子布尔）
 
     def on_note(note, vel):
+        if note == PRELOAD_KEY:
+            held[0] = vel > 0
+            return
         if note in NOTE_MAP:
-            sync.note_seen()
-            q.put(note)
-        elif note in PRELOAD_MAP:
-            # 预载不记磁吸窗（note_seen）：_last_note 语义=「换画面的触发
-            # 意图到达」——预载不换画面，记了会误拦回落双查/postcheck 的
-            # 迟到者判定（复审 R2）
-            q.put(note)
+            q.put(note)     # 磁吸窗（note_seen）由 worker 触发分支记——
+            #   C2 组合预载不换画面不得记（复审 R2 语义），判定后才知情
         elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
             report("音符 %d 不在 VJ 映射：触发音已整体升八度，请检查工程" % note)
+
+    def on_note_off(note):
+        if note == PRELOAD_KEY:
+            held[0] = False
 
     def worker():
         while True:
             note = q.get()
             try:
-                while True:             # 倒掉积压：切换归最新音符管（预载
-                    try:                #   与触发几乎同到=留触发，触发自会
-                        note = q.get_nowait()   # 装载，预载本就为提前量而设）
+                while True:             # 倒掉积压：切换归最新音符管
+                    try:
+                        note = q.get_nowait()
                     except queue.Empty:
                         break
-                if note in PRELOAD_MAP:
-                    pre = PRELOAD_MAP[note]
-                    ok = ctl.preload(pre)
-                    report("音符 %d → 预载%s%s" % (
-                        note, pre, "" if ok else " 失败：%s" % ctl.last_error))
-                    continue
                 target = NOTE_MAP[note]
+                # C2 修饰判定（熄屏不修饰）：按住=预载；未按住=留同拍
+                # 容差窗等迟到的 C2（同起点两音符的发送顺序 DAW 不保证）
+                if target is not None and not held[0]:
+                    time.sleep(PRELOAD_TOL)
+                if target is not None and held[0]:
+                    ok = ctl.preload(target)
+                    report("C2+音符 %d → 预载%s%s" % (
+                        note, target,
+                        "" if ok else " 失败：%s" % ctl.last_error))
+                    continue
+                sync.note_seen()
                 if target is None:
                     ok = ctl.stop_media()
                     if ok:
@@ -880,6 +905,7 @@ def note_handler(ctl, sync, report=print):
                 except Exception:
                     pass
     threading.Thread(target=worker, daemon=True).start()
+    on_note.note_off = on_note_off
     return on_note
 
 
@@ -974,8 +1000,8 @@ def main():
             sys.exit("没找到 %s 输出端口" % PORT_HINT)
         send_note(hit[0], note)
         m = NOTE_MAP.get(note)
-        if m is None and note in PRELOAD_MAP:
-            m = "预载" + PRELOAD_MAP[note]
+        if m is None and note == PRELOAD_KEY:
+            m = "预载修饰键（按住+槽位音符=预载）"
         print("已发 note %d（映射 %s）" % (note, m), flush=True)
         return
     ctl = ObsController(load_obs_cfg())
