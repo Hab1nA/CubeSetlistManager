@@ -338,13 +338,6 @@ class ObsController:
             self._load_hidden(ws, name, path, False)
         return self._act("预载%s" % file_rel, do)
 
-    def clear_preload(self):
-        """取消预载：清隐藏侧文件（消除残文件在下次换切开可见时的自动播
-        ——与熄屏同款根治口径）。"""
-        def do(ws):
-            self._load_hidden(ws, self._hidden_name(), "", False)
-        return self._act("取消预载", do)
-
     def hidden_file(self):
         """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
         return self._hidden_file

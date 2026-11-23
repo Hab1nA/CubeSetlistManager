@@ -558,7 +558,7 @@ def test_ensure_creates_missing_sides():
 
 def test_preload_loads_hidden_side(tmp_path):
     """预载：文件装载到隐藏侧（含 restart_on_activate=False——上屏重播
-    由显式 RESTART 管），不换可见性、不上屏；clear 清空隐藏侧。"""
+    由显式 RESTART 管），不换可见性、不上屏。"""
     ctl, ws = _ab_ctl(tmp_path)
     assert ctl._active == "A"
     assert ctl.preload("3.mp4") is True
@@ -569,10 +569,6 @@ def test_preload_loads_hidden_side(tmp_path):
     assert sets[0][1]["inputSettings"]["clear_on_media_end"] is True
     assert ws.items["舞台视频 B"][1] is False     # 不开可见
     assert ctl.hidden_file() == "3.mp4"
-    assert ctl.clear_preload() is True
-    sets2 = [c for c in ws.calls if c[0] == "SetInputSettings"]
-    assert sets2[-1][1]["inputSettings"]["local_file"] == ""
-    assert ctl.hidden_file() is None
 
 
 def test_preload_then_trigger_seamless(tmp_path):

@@ -2331,7 +2331,7 @@ function slotRow(note, slot, inst) {
   div.dataset.note = note;
   const n = document.createElement("span");
   n.className = "s-note";
-  n.textContent = noteName(note);   // 裸音名：与全局移调/VJ 触发槽位统一
+  n.textContent = noteName(note);   // 裸音名：与移调信号/VJ 触发信号统一
   const pc = document.createElement("span");
   pc.className = "s-pc mq";
   pc.textContent = slot ? (slot.desc || "PC " + slot.pc) : "未设置";
@@ -2603,10 +2603,10 @@ async function refreshVjMap(root, force) {
           + "先在下方「视频联动」里选择</div>";
       return;
     }
-    // 全局移调同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
+    // 移调信号同款卡片语言：键帽音名 + 目标大字 + 状态副行，网格多列；
     // 非熄屏格点击=三态循环切换（播一遍停→循环→默认回落，乐观更新，
-    // 失败回滚）；预载模式下点击=预载/取消预载（提前装载到隐藏源，
-    // 触发时零装载开销、准点切换；MIDI 侧=C2 修饰键，见「预载信号」卡）
+    // 失败回滚）。预载的入口=C2 修饰键（MIDI 侧，见「预载信号」卡）；
+    // 格子只展示预载态（紫描边=隐藏源已装载该视频）
     d.rows.forEach(row => {
       const cell = document.createElement("div");
       const mode = row.default ? "default" : (row.loop ? "loop" : "off");
@@ -2626,12 +2626,9 @@ async function refreshVjMap(root, force) {
             + " · 现况" + (mode === "default" ? "默认回落"
                 : mode === "loop" ? "循环" : "播一遍停")
             + (row.preloaded ? " · 已预载" : "")
-            + " · 点击" + (vjPreMode
-                ? (row.preloaded ? "取消预载" : "预载")
-                : "切换为" + (mode === "default" ? "播一遍停"
-                    : mode === "loop" ? "默认回落" : "循环"));
-        const flip = () => vjPreMode ? toggleVjPreload(cell, row)
-                                     : toggleVjLoop(cell, row);
+            + " · 点击切换为" + (mode === "default" ? "播一遍停"
+                : mode === "loop" ? "默认回落" : "循环");
+        const flip = () => toggleVjLoop(cell, row);
         cell.addEventListener("click", flip);
         kbdRow(cell, flip, null, true);
       } else {
@@ -2657,50 +2654,7 @@ async function refreshVjMap(root, force) {
   } catch { /* 瞬断 */ }
 }
 
-// 预载模式：开启时格子点击=预载/取消预载（与三态模式互斥的点击语义），
-// 关闭时恢复三态。会话内状态（不落盘——预载是演出场次的临时准备）
-let vjPreMode = false;
-$("#vj-premode").addEventListener("click", () => {
-  vjPreMode = !vjPreMode;
-  const b = $("#vj-premode");
-  b.classList.toggle("on", vjPreMode);
-  b.setAttribute("aria-pressed", vjPreMode ? "true" : "false");
-  toast(vjPreMode ? "预载模式：点击格子预载/取消预载（隐藏源提前装载）"
-      : "预载模式已关：点击恢复循环/默认切换");
-  refreshVjMap(vjMapRoot, true);   // 立即重建：格子 title 的「点击…」段
-                                   // 按构建时 vjPreMode 定稿，不重建则最长
-                                   // 5s 提示与实际点击行为相反（审计 P2-5）
-});
 
-// 格子预载：乐观更新（同格在途忽略；预载全局只一格有效——隐藏侧单槽，
-// 切目标=覆盖，其它格的已预载高亮一并摘除）。失败回滚走 vjmap 强刷
-// （服务端态保真——别格可能是真预载格，本地行数据不含它）。
-const vjPreBusy = new Set();
-async function toggleVjPreload(cell, row) {
-  if (vjPreBusy.has(row.note)) return;
-  vjPreBusy.add(row.note);
-  const on = !row.preloaded;
-  const grid = cell.parentElement;
-  const paint = v => {
-    grid.querySelectorAll(".vj-cell.pre").forEach(c =>
-        c.classList.remove("pre"));
-    if (v) cell.classList.add("pre");
-  };
-  paint(on);
-  try {
-    const j = await post("/vjpreload", {note: row.note, on});
-    if (j.ok) {
-      row.preloaded = on;
-      // 预载全局单槽：其它行的 row 数据同步摘除——否则 5s 窗口内点旧
-      // 预载格会按陈旧 row.preloaded=true 发取消，把新预载清掉（审计
-      // A-P2-4）
-      (vjMapRows || []).forEach(r => {
-        if (r.note !== row.note) r.preloaded = false;
-      });
-    } else refreshVjMap(vjMapRoot, true);
-  } catch { refreshVjMap(vjMapRoot, true); }
-  finally { vjPreBusy.delete(row.note); }
-}
 
 // VJ 槽位三态：整格点击循环切换 播一遍停→循环→默认回落→播一遍停，
 // 乐观更新（同格在途忽略；post 失败自带 toast，此处只回滚视觉态）。
