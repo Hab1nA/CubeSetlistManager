@@ -2649,6 +2649,7 @@ async function refreshVjMap(root, force) {
       sub.className = "s-sub";
       sub.textContent = row.blackout ? "熄灭投影画面"
           : (row.hit ? "已就位" : "缺视频")
+            + " · 预载 " + noteName(row.preNote)
             + (row.preloaded ? " · 已预载" : "");
       cell.append(n, f, sub);
       box.appendChild(cell);
