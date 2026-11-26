@@ -206,9 +206,15 @@ function marquee(el) {
   el.dataset.mw = String(w);
   el.classList.remove("marq");
   el.style.removeProperty("--marq");
-  const full = el.scrollWidth;
-  if (full > w + 2) {
-    el.style.setProperty("--marq", (w - full) + "px");
+  // 文字宽用 Range 量：scrollWidth 会把在途滚动的位移算进去（动画中途换
+  // 文案时重测偏大=滚过头），Range 包围盒宽与位移无关
+  const rg = document.createRange();
+  rg.selectNodeContents(el);
+  const full = rg.getBoundingClientRect().width;
+  const cs = getComputedStyle(el);
+  const inner = w - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  if (full > inner + 2) {
+    el.style.setProperty("--marq", (inner - full) + "px");
     el.classList.add("marq");
   }
 }
@@ -550,17 +556,21 @@ function render(st) {
         : (st.ready ? "未打开工程" : "启动中…");
   // 超长歌名跑马灯：文本变化才重测重挂（每 500ms remove/add 会把
   // 14s 动画永远打回 0）；测量时临时 nowrap 拿单行宽（平时 break-all
-  // 折行恒不溢出）
+  // 折行恒不溢出）。宽度用 Range 量（同 marquee()），不受在途滚动干扰
   const nowEl = $("#now");
   if (nowEl.dataset.txt !== nowEl.textContent) {
     nowEl.dataset.txt = nowEl.textContent;
     nowEl.classList.remove("marq");
-    const probeW = nowEl.offsetWidth;
     nowEl.style.whiteSpace = "nowrap";
-    const fullW = nowEl.scrollWidth;
+    const rg = document.createRange();
+    rg.selectNodeContents(nowEl);
+    const fullW = rg.getBoundingClientRect().width;
+    const cs = getComputedStyle(nowEl);
+    const innerW = nowEl.clientWidth - parseFloat(cs.paddingLeft)
+        - parseFloat(cs.paddingRight);
     nowEl.style.whiteSpace = "";
-    if (fullW > probeW + 2) {
-      nowEl.style.setProperty("--marq", -(fullW - probeW) + "px");
+    if (fullW > innerW + 2) {
+      nowEl.style.setProperty("--marq", (innerW - fullW) + "px");
       nowEl.classList.add("marq");
     }
   }

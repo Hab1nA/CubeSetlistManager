@@ -356,12 +356,54 @@ def test_tone_switcher_survives_malformed_item(monkeypatch):
         sw.stop()
 
 
-# ---- 移调动作描述 ----
+# ---- 「最近切换」卡：失败原因只留短句 ----
+
+def test_brief_err():
+    be = kbd_auto.brief_err
+    assert be(None) is None and be("") == ""
+    assert be("未找到含「JUNO」的 MIDI 输出端口；现有：A、B") == "输出端口未找到"
+    assert be("SysEx 发送失败") == "SysEx 发送失败"
+    assert be("短消息发送失败，code 5") == "短消息发送失败，code 5"
+    assert be("超时；现有：X") == "超时"
+
 
 def test_shift_why_zero_says_reset():
     assert sg._shift_why("JUNO", 0) == "JUNO 移调归零"
     assert sg._shift_why("JUNO", 2) == "JUNO 全局移调 +2 半音"
     assert sg._shift_why("AX-09", -12) == "AX-09 全局移调 -12 半音"
+
+
+def test_kb_result_short_for_status_card():
+    app = _app()
+    sg.App._on_kb_result(app, "JUNO 移调归零",
+                         "未找到含「JUNO」的 MIDI 输出端口；现有：A、B、C")
+    assert app._kb_last == "JUNO 移调归零失败：输出端口未找到"
+    sg.App._on_kb_result(app, "音色切换", "SysEx 发送失败")
+    assert app._kb_last == "音色切换失败：SysEx 发送失败"
+    sg.App._on_kb_result(app, "JUNO 移调归零", None)
+    assert app._kb_last == "已发送：JUNO 移调归零"
+
+
+def test_port_missing_failure_keeps_card_short_log_full(monkeypatch):
+    """端到端：真 ToneSwitcher + 真发送器找不到端口的全长错误 → 运行日志留
+    全文，「最近切换」卡只拿短句。整句进卡有卡片四倍宽，会被跑马灯带着
+    整行滑走（11-25 真机实测 3.5s 后卡片空白）。"""
+    monkeypatch.setattr(kbd_auto, "all_out_devices",
+                        lambda: [(0, "Loop A"), (1, "Loop B")])
+    app = _app()
+    logs = []
+    sw = kbd_auto.ToneSwitcher(dict(kbd_auto.DEFAULT_JUNO), logs.append,
+                               on_result=lambda d, e: sg.App._on_kb_result(
+                                   app, d, e))
+    try:
+        app.switcher = sw
+        sg.App._shift_step(app, "juno", 0)
+        assert _wait(lambda: bool(logs))
+    finally:
+        sw.stop()
+    assert logs == ["JUNO 移调归零失败：未找到含「JUNO」的 MIDI 输出端口；"
+                    "现有：Loop A、Loop B"]
+    assert app._kb_last == "JUNO 移调归零失败：输出端口未找到"
 
 
 # ---- 网页步进 ----

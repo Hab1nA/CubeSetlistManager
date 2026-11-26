@@ -1370,9 +1370,10 @@ class App:
 
     def _on_kb_result(self, desc, err):
         """ToneSwitcher 线程回调：最近一次音色切换结果（只写属性）。
-        失败也带动作名（音色描述/移调半音数），否则看不出哪个动作失败。"""
-        self._kb_last = ("%s失败：%s" % (desc, err)) if err \
-            else ("已发送：%s" % desc)
+        失败也带动作名（音色描述/移调半音数），否则看不出哪个动作失败。
+        失败原因取短句：完整原因（含端口清单）在运行日志里。"""
+        self._kb_last = ("%s失败：%s" % (desc, kbd_auto.brief_err(err))) \
+            if err else ("已发送：%s" % desc)
 
     # ---- 播放列表编排（主线程） ----
 

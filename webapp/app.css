@@ -316,13 +316,16 @@ input.invalid { border-color: var(--err) !important; }
 /* 超长歌名跑马灯：溢出才启用（JS 量滚动距离），往返循环带停顿。
    reduced-motion 下不滚但保留可见性（截断+省略号，尾部不消失） */
 #now.marq { white-space: nowrap; word-break: keep-all; overflow: hidden;
-  text-overflow: ellipsis; animation: marq 14s var(--ease) infinite; }
+  text-overflow: clip; animation: marq 14s var(--ease) infinite; }
 @media (prefers-reduced-motion: reduce) {
-  #now.marq { animation: none; }
+  #now.marq { animation: none; text-overflow: ellipsis; }
 }
+/* 行首在盒子内左移露出尾部，盒子与裁剪框不动。不能用 transform 平移：
+   overflow:hidden 长在元素自己身上，平移连裁剪框一起搬走——尾部永远露
+   不出来，位移一超过盒宽整块滑出可视区（元素空白一个周期） */
 @keyframes marq {
-  0%, 12% { transform: translateX(0); }
-  88%, 100% { transform: translateX(var(--marq, -100px)); }
+  0%, 12% { text-indent: 0; }
+  88%, 100% { text-indent: var(--marq, -100px); }
 }
 /* 通用长文本跑马灯（歌名/音色名/视频名）：.mq 基类单行省略，溢出时 JS
    加 .marq 启用与 #now 同源的往返滚动；动画期 clip 掉省略号防滑动的「…」

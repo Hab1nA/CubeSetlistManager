@@ -552,6 +552,16 @@ def _send_long(h, data):
     return False
 
 
+def brief_err(err):
+    """send_slot 错误的状态行短句（「最近切换」卡）：端口清单是排障细节，
+    只进日志。整句进状态卡有卡片四倍宽，会被跑马灯带着整行滑走。"""
+    if not err:
+        return err
+    if err.startswith("未找到含「"):
+        return "输出端口未找到"
+    return err.partition("；现有：")[0]
+
+
 def send_slot(slot, cfg, msgs=None):
     """按 cfg（JUNO 或 AX-09）向输出端口发整个切换序列（或预构造 msgs）；
     返回错误文案，None=成功。open/close 走 midi_bridge 输出专线（与输入
