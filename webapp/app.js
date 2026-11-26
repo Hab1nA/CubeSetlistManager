@@ -2177,6 +2177,7 @@ function renderKbdStatus() {
   last.textContent = kbData.lastResult || "—";
   last.classList.toggle("dim", !kbData.lastResult);
   marquee(last);
+  renderKbdShift();
 }
 
 // 录制（琴上捕获）：点槽卡即开录，再点同卡=停止并保存（直写该曲）；
@@ -2553,6 +2554,44 @@ $("#dt-end-save").addEventListener("click", async () => {
   refreshEndBeh();
 });
 $("#kb-refresh").addEventListener("click", () => refreshKbd(true));
+
+// ---- 移调卡：格子点击=向琴发一步，归零=强制回 0。不做乐观更新——连点或
+// 与触发轨并发时以服务端累计值为准，成功即拉 /kbd 回填徽标 ----
+function fmtShift(n) {
+  if (!n) return "原调";
+  if (n % 12 === 0) return (n > 0 ? "+" : "") + n / 12 + " 八度";
+  return (n > 0 ? "+" : "") + n + " 半音";
+}
+function renderKbdShift() {
+  const paint = (id, v) => {
+    const el = $("#" + id);
+    if (!el) return;
+    el.textContent = fmtShift(v);
+    el.classList.toggle("off", !v);
+  };
+  paint("kb-jshift", (kbData && kbData.junoShift) | 0);
+  paint("kb-ashift", (kbData && kbData.axShift) | 0);
+}
+function shiftSend(inst, delta) {
+  return post("/shift", {inst, delta})
+      .then(j => { if (j._st === 200) refreshKbd(); });
+}
+$$("#p-kbd .shift-cell").forEach(cell => {
+  const act = () => shiftSend(cell.dataset.inst, Number(cell.dataset.delta));
+  cell.addEventListener("click", act);
+  kbdRow(cell, act, null, true);
+  // ←→=四格间移焦：放行会落到全局快捷键（←→ 在任何页面都切歌）
+  cell.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sibs = [...cell.parentElement.children];
+    const t = sibs[sibs.indexOf(cell) + (e.key === "ArrowLeft" ? -1 : 1)];
+    if (t) t.focus();
+  });
+});
+$$("#p-kbd [data-zero]").forEach(b =>
+  b.addEventListener("click", () => shiftSend(b.dataset.zero, 0)));
 $("#kb-save").addEventListener("click", async () => {
   if (!kbData) {              // /kbd 未装载（启动期 504 等）：裸取会抛
     toast("键盘配置未装载，稍候重试", "err");

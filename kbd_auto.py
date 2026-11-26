@@ -21,6 +21,10 @@ LSB=1）；Favorite/Special Tone 不在 PC 映射表里，MIDI 不可直达。
 MIDI Implementation，GM 通用 SysEx Master Coarse Tuning 写 SYSTEM Master
 Key Shift（±24 半音，全局、模式无关），连按累加（软件记累计值，反向键
 抵消）。
+移调也可由触发轨控制器直设绝对值（CC16=JUNO、CC17=AX-09，值 64 为原调）：
+Cubase 定位/起播时自动补发光标前的控制器，光标拖到哪移调跟到哪——增量
+音符只知道「经过过哪些音」，拖离移调段后状态悬空。控制器=设绝对值、
+音符=在现值上加减，两者共存。
 另有 AX-09 全局移调触发键（F2=53 起：同款四个方向）：真机实测（2026-10-18）
 AX-09 不收 SysEx，调音 RPN 与 CC64 都进不了本地发声路径，唯弯音进——
 发 RPN 0,0 弯音灵敏度=12 后用弯音钉位（灵敏度设 24 被钳回 12，故限
@@ -49,6 +53,9 @@ SHIFT_DESC = {48: "降1半音", 49: "升1半音", 50: "降1八度", 51: "升1八
 # 升/降改汉字直读，四行同款文案风格
 SHIFT_LIMIT = 24                            # JUNO Master Key Shift 硬件范围 ±24 半音
 AX_SHIFT_LIMIT = 12                         # AX-09 弯音灵敏度真机钳在 12（设 24 无效）
+JUNO_SHIFT_CC = 16                          # 触发轨控制器直设移调：值 64=原调，每 +1 升 1 半音
+AX_SHIFT_CC = 17                            # AX-09 同款
+SHIFT_CC_ZERO = 64
 PAGE_NAMES = ("JUNO DS-88", "AX-09 Lucina")     # 配置窗口的乐器分页
 _NOTE_CHR = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 MSG_GAP = 0.05                              # BS→PC 间隔
@@ -97,6 +104,16 @@ def note_name(note):
 
 def mode_for_msb(msb):
     return BANK_MAP[msb][2] if msb in BANK_MAP else None
+
+
+def cc_shift(cc, val):
+    """触发轨控制器直设的移调（绝对值、未钳位）→ ("juno"|"ax", 半音数)；
+    非移调控制器返回 None。"""
+    if cc == JUNO_SHIFT_CC:
+        return "juno", val - SHIFT_CC_ZERO
+    if cc == AX_SHIFT_CC:
+        return "ax", val - SHIFT_CC_ZERO
+    return None
 
 
 def mode_sysex(mode, device_id=0x10):
@@ -623,28 +640,35 @@ class ToneSwitcher:
         if slot:
             self._q.put((slot, why, self.epoch))
 
-    def submit_msgs(self, msgs, why=""):
-        """预构造消息序列（全局移调/全停静音）：全局意图不代际，永不作废。"""
-        self._q.put((msgs, why, None))
+    def submit_msgs(self, msgs, why="", quiet=False):
+        """预构造消息序列（全局移调/全停静音）：全局意图不代际，永不作废。
+        quiet=同值重发（Cubase 每次定位/起播都补发同一个控制器值）：成功
+        不写日志不回调，失败照常报——否则拖一次光标刷一屏日志。"""
+        self._q.put((msgs, why, None, quiet))
 
-    def submit_shift(self, total, why=""):
+    def submit_shift(self, total, why="", quiet=False):
         """全局移调走同一串行队列（预构造消息序列）。"""
-        self.submit_msgs(shift_msgs(total), why)
+        self.submit_msgs(shift_msgs(total), why, quiet)
 
     def _loop(self):
         while True:
             got = self._q.get()
             if got is None:        # stop 哨兵
                 return
-            item, why, gen = got
+            if not isinstance(got, tuple) or len(got) < 3:
+                continue           # 畸形队列项：解包在 try 外，不拦=发送线程即死
+            item, why, gen = got[:3]
+            quiet = len(got) > 3 and got[3]
             if gen is not None and gen != self.epoch:
                 continue           # 换歌/换点后旧歌槽位请求已过期：静默丢弃
             try:
                 if isinstance(item, list):      # 预构造序列（全局移调）
                     err = send_slot(None, self.cfg, msgs=item)
-                    self._log("%s%s" % (why, "失败：%s" % err if err else ""))
-                    if self.on_result:
-                        self.on_result(why, err)
+                    if err or not quiet:
+                        self._log("%s%s" % (
+                            why, "失败：%s" % err if err else ""))
+                        if self.on_result:
+                            self.on_result(why, err)
                     continue
                 slot = item
                 err = send_slot(slot, self.cfg)
@@ -725,6 +749,11 @@ if __name__ == "__main__":
         [0xF0, 0x7F, 0x7F, 0x04, 0x04, 0x00, 0x40, 0xF7])
     assert shift_msgs(24)[0][1][6] == 0x58 and shift_msgs(-24)[0][1][6] == 0x28
     assert shift_msgs(30)[0][1][6] == 0x58 and shift_msgs(-99)[0][1][6] == 0x28
+    assert cc_shift(JUNO_SHIFT_CC, 64) == ("juno", 0)
+    assert cc_shift(JUNO_SHIFT_CC, 78) == ("juno", 14)
+    assert cc_shift(AX_SHIFT_CC, 52) == ("ax", -12)
+    assert cc_shift(64, 66) is None
+    assert cc_shift(AX_SHIFT_CC, 0) == ("ax", -64)   # 只换算，钳位在调用方
     p = ax_shift_msgs(0, 1)
     assert p[2][1] >> 8 & 0xFF == 6 and p[2][1] >> 16 == 12  # 灵敏度 12 半音
     assert p[-1][1] == 0xE0 | 0x40 << 16                     # 归零=弯音回中

@@ -50,6 +50,18 @@ from obs_ctrl import ObsController, find_processes_by_prefix, \
 FOLLOW = ui_text.FOLLOW
 TX_NAMES = {"play": "播放", "pause": "暂停", "resume": "继续",
             "stop": "停止", "rewind": "回零"}
+# 移调累计值有四个写者：winmm 回调线程（触发轨音符/控制器）、主线程（网页
+# 点击）、切歌收尾线程与全停线程（归零）。「读现值→算新值→写回→提交」不加锁
+# 时两写者交错，琴上终态会与软件记账对不上
+_SHIFT_LOCK = threading.Lock()
+SHIFT_RESEND_SEC = 0.5      # JUNO 同值重发限流窗（Cubase 每次定位都补发同值）
+
+
+def _shift_why(inst, total):
+    """移调发送的动作描述（日志行与「最近切换」卡）：回 0 说「归零」。"""
+    if not total:
+        return "%s 移调归零" % inst
+    return "%s 全局移调 %+d 半音" % (inst, total)
 
 
 def panic_quiet_msgs(*cfgs):
@@ -596,8 +608,9 @@ class App:
         self._startup_done = False       # 门控 _apply_ports：启动期禁热切换
         self._pending_ports = False      # 启动期内保存过端口（完成后补热切换）
         self.switcher = self.ax_switcher = self.kb_port = None
-        self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）
+        self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）=上次发出的绝对值
         self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
+        self._juno_shift_at = 0.0       # JUNO 上次发出时刻（monotonic）：同值重发限流
         self.points = {}                # lib_key → 定位点数据（_load_songs 装载）
         self._goto_ack = None           # (发送前位置, 时戳, 标签)：GOTO 无回执告警
         self.mmc_out = None             # MMC 输出口句柄（定位点 GOTO）
@@ -1235,13 +1248,84 @@ class App:
                     pass
             time.sleep(mb.POLL_SEC)
 
+    def _juno_shift_set(self, total=0, delta=0):
+        """JUNO 移调落到绝对值 total（delta 非零=在现值上加减），越界钳 ±24。
+        同值重发：限流 SHIFT_RESEND_SEC 且静默。保留重发是琴被面板手动改过
+        后的自愈通道——下一次定位/起播 Cubase 补发同值即恢复；限流是因为
+        拖光标时补发连发，每个任务都要枚举端口并开关口一次。"""
+        with _SHIFT_LOCK:
+            total = max(-kbd_auto.SHIFT_LIMIT,
+                        min(kbd_auto.SHIFT_LIMIT,
+                            self.juno_shift + delta if delta else total))
+            same = total == self.juno_shift
+            now = time.monotonic()
+            if same and now - self._juno_shift_at < SHIFT_RESEND_SEC:
+                return
+            self.juno_shift = total
+            self._juno_shift_at = now
+            sw = getattr(self, "switcher", None)
+            if sw is None:
+                if not same:
+                    self.q.put(ui_text.TRANSPOSE_NOT_READY % total)
+                return
+            sw.submit_shift(total, why=_shift_why("JUNO", total),
+                            quiet=same)
+
+    def _ax_shift_set(self, total=0, delta=0):
+        """AX-09 移调（弯音钉位）落到绝对值 total（delta 非零=加减），钳 ±12。
+        同值直接跳过：弯音序列 6 条约 0.25s 且与 AX 音色切换同队列，追补发
+        会堵住音色切换（弯音杆一碰即覆盖是既有行为，不靠重发自愈）。"""
+        with _SHIFT_LOCK:
+            total = max(-kbd_auto.AX_SHIFT_LIMIT,
+                        min(kbd_auto.AX_SHIFT_LIMIT,
+                            self.ax_shift + delta if delta else total))
+            if total == self.ax_shift:
+                return
+            self.ax_shift = total
+            sw = getattr(self, "ax_switcher", None)
+            if sw is None:
+                self.q.put(ui_text.AX_TRANSPOSE_NOT_READY % total)
+                return
+            sw.submit_msgs(kbd_auto.ax_shift_msgs(total, self.axcfg["ch"]),
+                           why=_shift_why("AX-09", total))
+
+    def _shift_reset(self):
+        """两琴移调归零：跨工程切换收尾（旧歌的移调不得带进新歌）与全停。
+        已是 0 不发包——琴没接时不必每次切歌刷一条失败日志；AX 归零序列
+        还会把弯音灵敏度改成 12，不是空操作。"""
+        if self.juno_shift:
+            self._juno_shift_set(0)
+        if self.ax_shift:
+            self._ax_shift_set(0)
+
+    def _shift_step(self, inst, delta):
+        """键盘页移调卡点击（主线程）：delta=±1 半音/±12 八度步进，0=归零
+        （JUNO 已是 0 也重发一次：琴上被手动改过时的兜底）。返回 None=成功，
+        str=错误文案。"""
+        sw = getattr(self, "switcher" if inst == "juno" else "ax_switcher",
+                     None)
+        if sw is None:
+            return ui_text.SHIFT_NO_OUTPUT % (
+                "JUNO DS-88" if inst == "juno" else "AX-09 Lucina")
+        if inst == "juno":
+            self._juno_shift_set(delta=delta)
+        else:
+            self._ax_shift_set(delta=delta)
+
     def _on_kb_msg(self, status, d1, d2):
-        """Keyboard Automation 端口音符：48-51→JUNO 全局移调（连按累加）、
-        53-56→AX-09 全局移调（弯音钉位，连按累加）、72-81→JUNO、
-        84-89→AX-09 查映射切音色。"""
+        """Keyboard Automation 端口消息：CC16/CC17→两琴绝对移调（触发轨
+        直设，Cubase 定位/起播自动补发）、48-51→JUNO 增量移调、53-56→AX-09
+        增量移调（弯音钉位）、72-81→JUNO、84-89→AX-09 查映射切音色。
+        跑在 winmm 回调线程（_MIM_MOREDATA 同路）：只做记账级操作、不得抛。"""
         st = status & 0xF0
         if st == 0x90 and d2 == 0:
             st = 0x80                   # Note On vel=0 等价 Note Off
+        if st == 0xB0:
+            hit = kbd_auto.cc_shift(d1, d2)
+            if hit:                     # 不过「切歌中」门：新工程起播的补发不能丢
+                (self._juno_shift_set if hit[0] == "juno"
+                 else self._ax_shift_set)(hit[1])
+            return
         if st not in (0x90, 0x80):
             return
         down = st == 0x90
@@ -1251,17 +1335,7 @@ class App:
             if self.ctrl is not None and self.ctrl.busy:
                 self.q.put("切歌中，忽略移调音符 %s" % kbd_auto.note_name(d1))
                 return
-            self.juno_shift = max(
-                -kbd_auto.SHIFT_LIMIT,
-                min(kbd_auto.SHIFT_LIMIT,
-                    self.juno_shift + kbd_auto.SHIFT_NOTES[d1]))
-            if self.switcher:
-                self.switcher.submit_shift(
-                    self.juno_shift,
-                    why="JUNO 全局移调 %+d 半音" % self.juno_shift)
-            else:
-                self.q.put(ui_text.TRANSPOSE_NOT_READY
-                           % self.juno_shift)
+            self._juno_shift_set(delta=kbd_auto.SHIFT_NOTES[d1])
             return
         if d1 in kbd_auto.AX_SHIFT_NOTES:
             if not down:
@@ -1269,18 +1343,7 @@ class App:
             if self.ctrl is not None and self.ctrl.busy:
                 self.q.put("切歌中，忽略移调音符 %s" % kbd_auto.note_name(d1))
                 return
-            self.ax_shift = max(
-                -kbd_auto.AX_SHIFT_LIMIT,
-                min(kbd_auto.AX_SHIFT_LIMIT,
-                    self.ax_shift + kbd_auto.AX_SHIFT_NOTES[d1]))
-            if self.ax_switcher:
-                self.ax_switcher.submit_msgs(
-                    kbd_auto.ax_shift_msgs(self.ax_shift,
-                                           self.axcfg["ch"]),
-                    why="AX-09 全局移调 %+d 半音" % self.ax_shift)
-            else:
-                self.q.put(ui_text.AX_TRANSPOSE_NOT_READY
-                           % self.ax_shift)
+            self._ax_shift_set(delta=kbd_auto.AX_SHIFT_NOTES[d1])
             return
         if not down:
             return
@@ -1516,6 +1579,8 @@ class App:
             self.ax_slots = ax_slots
             self.cur_song_path = entry["path"]
             self.cur_point_id = pid
+        # 只走得到这里=工程关过重开（同工程 GOTO 不走此路）：旧歌移调不带进新歌
+        self._shift_reset()
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
@@ -3231,6 +3296,10 @@ class App:
                             (self.ax_switcher, self.axcfg)):
                 if sw is not None:
                     sw.submit_msgs(panic_quiet_msgs(cfg), "全停静音")
+            # 移调归零（跨歌同款：全停=两琴回安全态）。走带已被用户重新起播
+            # 则不动：段内移调是此时应有的状态，归零=演出中错音
+            if self.watch is None or not self.watch.is_transport_live():
+                self._shift_reset()
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
@@ -3716,13 +3785,15 @@ class App:
             return "playing"
         return "paused" if w.ever_live() else "stopped"
 
-    def _adopt(self, name):
+    def _adopt(self, name, changed=True):
         """手动跟随：Cubase 里的工程被人工变更（横幅发现标题对不上指针）
         → 按标题对位播放列表。命中=采纳：指针立即就位，时长/音色映射 IO
         后台装载（网络盘工程库时主线程 400ms 轮询链上做整文件读=无界卡顿，
         审计 D 项）；未命中=游离：清指针回第一首兜底、清映射、计时器清零
         （时长 0=未知=永不推进，防旧时长误切）。只改状态，不碰窗口不抢
-        焦点；播放列表未载入不动。"""
+        焦点；播放列表未载入不动。
+        changed=打开的工程真的换了（标题变过）才归零移调；本函数也会因
+        「工程没变、只是播放列表被编辑」被调到，那时不得动移调。"""
         if not self.pl_keys:
             return
         cur_e = (self._resolve_entry(self.pl_keys[self.cur])
@@ -3730,6 +3801,8 @@ class App:
                  else None)
         if cur_e is not None and cur_e["song_name"] == name:
             return          # 当前条目（含定位点）即该工程：指针已对，不重采
+        if changed:
+            self._shift_reset()
         for i, k in enumerate(self.pl_keys):
             e = self._resolve_entry(k)
             if e is not None and e["song_name"] == name:
@@ -3949,9 +4022,10 @@ class App:
                     # 流程抢跑。
                     if name != self._adopted_name or (want is not None
                                                       and want != name):
+                        changed = name != self._adopted_name   # 先取再写
                         self._adopted_name = name
                         if want is None or want != name:
-                            self._adopt(name)
+                            self._adopt(name, changed)
                             cur_e = _want()
                             want = cur_e["song_name"] if cur_e else None
                     # 定位点随位置对位：DAW 位置落在哪个点的区间里，指针

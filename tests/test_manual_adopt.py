@@ -73,6 +73,8 @@ def _app(name="X", durs=None, pl=("a", "b")):
     app.slots, app.ax_slots = {"keep": 1}, {"keep": 1}
     app.cur_song_path = "/old"
     app.cur = 99
+    app.juno_shift = app.ax_shift = 0     # _adopt 跨工程归零触及（桩=无收发器）
+    app._shift_reset = lambda: setlist_gui.App._shift_reset(app)
     app.q = app.logs = _Q()
     app.calls = queue.Queue()       # 装载完成回调（_refresh）走这里
     import threading as _th

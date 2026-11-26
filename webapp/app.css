@@ -643,7 +643,24 @@ input.invalid { border-color: var(--err) !important; }
    hover 动画/键帽/字号全部一致） */
 .shift-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
 .shift-col { min-width: 0; }
-.shift-col > .lbl { display: block; margin-bottom: var(--s2); }
+/* 列头：乐器名 · 当前移调 · 归零。当前值常驻右对齐（位置固定不跳）；非零用
+   警示色=非默认值（与时长「手动黄」同语义），原调走暗色不抢眼。
+   flex-wrap：双列最窄处三件合计约 200px、列宽 ≥388px 恒单行；窄屏
+   （<500 视口，容器不足 200px）换行而不外溢 */
+.shift-head { display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--s2); margin-bottom: var(--s2); }
+/* auto 边距挂在当前值上（而非标签右缘）：单行时两者等价；换行后第二行的
+   「当前值 · 归零」仍靠右，与单行位置一致 */
+.shift-val { margin-left: auto; font-size: var(--f-sm); font-weight: 700;
+  color: var(--warn); font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.shift-val.off { color: var(--dim); font-weight: 400; }
+/* 双列区间每琴四格恒为一排：共用 .vj-grid 的 105px 下限按默认窗宽调，最小
+   窗宽（1120）下列宽约 404px 放不下四张=折成 3+1。此区间列宽 ≥388px，
+   每格 ≥89px 容得下「降半音」；单列区间保持自动排布（窄到手机自然换行） */
+@media (min-width: 1081px) {
+  .shift-cols .vj-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 .input-row { display: flex; gap: var(--s3); align-items: stretch; }
 
 /* 音色槽网格卡：音名 / PC 大字 / MSB·LSB 副文本 / 未配置虚线 / 试听 */

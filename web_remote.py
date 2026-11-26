@@ -1783,7 +1783,8 @@ class _Handler(BaseHTTPRequestHandler):
                           (self._h_kbd_record, "/kbdrecord"),
                           (self._h_checkpath, "/checkpath"),
                           (self._h_slot_set, "/slotset"),
-                          (self._h_vjloop, "/vjloop")):
+                          (self._h_vjloop, "/vjloop"),
+                          (self._h_shift, "/shift")):
                 if path == p:
                     fn(body, ip)
                     return
@@ -1860,6 +1861,23 @@ class _Handler(BaseHTTPRequestHandler):
                                       "mode(off/loop/default)"})
             return
         self._run_on_app(lambda: app._set_video_mode(note, mode))
+
+    def _h_shift(self, body, _ip):
+        """键盘页移调卡点击：inst=juno|ax，delta=±1 半音/±12 八度步进，
+        0=归零；执行在 Tk 线程。"""
+        app = self.server.app
+        if getattr(app, "lite", False):
+            self._json(403, {"error": "简化版无键盘遥控"})
+            return
+        inst, delta = body.get("inst"), body.get("delta")
+        # bool 是 int 子类：True 会被当成 1 步进，显式拒
+        if inst not in ("juno", "ax") or isinstance(delta, bool) \
+                or not isinstance(delta, int) \
+                or delta not in (-12, -1, 0, 1, 12):
+            self._json(400, {"error": "参数应为 inst(juno/ax) 与 "
+                                      "delta(-12/-1/0/1/12)"})
+            return
+        self._run_on_app(lambda: app._shift_step(inst, delta))
 
     def _h_playlist(self):
         """编排页全量：素材库视图（启用定位点的工程已展开为点条目）+

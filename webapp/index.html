@@ -296,24 +296,34 @@
         </div>
       </div>
       <div class="card slotcard">
-        <h3>移调信号<span class="h3-note">由自动化轨键位控制</span></h3>
+        <h3 title="触发轨也可用控制器直设：CC16 为 JUNO，CC17 为 AX-09，64 为原调">移调信号<span class="h3-note">由自动化轨控制</span></h3>
         <div class="shift-cols">
           <div class="shift-col">
-            <span class="lbl">JUNO DS-88</span>
+            <div class="shift-head">
+              <span class="lbl">JUNO DS-88</span>
+              <span class="shift-val off" id="kb-jshift">原调</span>
+              <button type="button" class="btn ghost xs" data-zero="juno"
+                title="移调归零；下次定位或播放时按时间线恢复">归零</button>
+            </div>
             <div class="slot-grid vj-grid">
-              <div class="slot vj-cell"><span class="s-note">C2</span><span class="s-pc">降半音</span></div>
-              <div class="slot vj-cell"><span class="s-note">C#2</span><span class="s-pc">升半音</span></div>
-              <div class="slot vj-cell"><span class="s-note">D2</span><span class="s-pc">降八度</span></div>
-              <div class="slot vj-cell"><span class="s-note">D#2</span><span class="s-pc">升八度</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="-1" title="向 JUNO 发送一次降半音"><span class="s-note">C2</span><span class="s-pc">降半音</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="1" title="向 JUNO 发送一次升半音"><span class="s-note">C#2</span><span class="s-pc">升半音</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="-12" title="向 JUNO 发送一次降八度"><span class="s-note">D2</span><span class="s-pc">降八度</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="12" title="向 JUNO 发送一次升八度"><span class="s-note">D#2</span><span class="s-pc">升八度</span></div>
             </div>
           </div>
           <div class="shift-col">
-            <span class="lbl">AX-09 Lucina</span>
+            <div class="shift-head">
+              <span class="lbl">AX-09 Lucina</span>
+              <span class="shift-val off" id="kb-ashift">原调</span>
+              <button type="button" class="btn ghost xs" data-zero="ax"
+                title="移调归零；下次定位或播放时按时间线恢复">归零</button>
+            </div>
             <div class="slot-grid vj-grid">
-              <div class="slot vj-cell"><span class="s-note">F2</span><span class="s-pc">降半音</span></div>
-              <div class="slot vj-cell"><span class="s-note">F#2</span><span class="s-pc">升半音</span></div>
-              <div class="slot vj-cell"><span class="s-note">G2</span><span class="s-pc">降八度</span></div>
-              <div class="slot vj-cell"><span class="s-note">G#2</span><span class="s-pc">升八度</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="-1" title="向 AX-09 发送一次降半音"><span class="s-note">F2</span><span class="s-pc">降半音</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="1" title="向 AX-09 发送一次升半音"><span class="s-note">F#2</span><span class="s-pc">升半音</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="-12" title="向 AX-09 发送一次降八度"><span class="s-note">G2</span><span class="s-pc">降八度</span></div>
+              <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="12" title="向 AX-09 发送一次升八度"><span class="s-note">G#2</span><span class="s-pc">升八度</span></div>
             </div>
           </div>
         </div>
