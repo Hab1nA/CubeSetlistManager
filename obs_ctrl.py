@@ -451,6 +451,7 @@ class ObsController:
                                   else PRELOAD_READY_TIMEOUT)
         first = True
         last_pos = None
+        null_runs = 0
         while time.time() < deadline:
             if gen != self._media_gen:
                 return False
@@ -468,6 +469,15 @@ class ObsController:
                 # 末帧（旧文件 ENDED 后重播前的残留），交换上去就是黑屏
                 if not first and pos is not None and pos != last_pos:
                     return True
+                # mediaCursor 在协议里「未播放时为 null」，部分版本刚
+                # RESTART 后也短暂给 null：连续多次 PLAYING+null 视为
+                # 已就绪，否则每次都干等超时误判 not_ready
+                if pos is None:
+                    null_runs += 1
+                    if null_runs >= 5:
+                        return True
+                else:
+                    null_runs = 0
                 first = False
                 last_pos = pos
             elif r.get("mediaState") in (

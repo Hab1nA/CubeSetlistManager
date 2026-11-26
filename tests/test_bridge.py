@@ -1059,6 +1059,35 @@ class _FCtlLike:
         return True
 
 
+def test_ready_accepts_null_cursor(tmp_path):
+    """mediaCursor 在「未播放时/null 或刚 RESTART」时按协议可给 null：
+    连续 PLAYING+null 必须视为就绪，否则每次提交都干等超时（真机隐患）。"""
+    import obs_ctrl as oc
+
+    class _Null(_FakeWS):
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": None}
+            return super().request(kind, payload, **kw)
+
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _Null()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+    assert ctl.preload("3.mp4") is True
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 2.0
+    try:
+        res = ctl.commit_preload()
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old
+    assert res == "3.mp4", res          # 不就绪会返回 not_ready
+
+
 def test_natural_sort():
     assert sorted(["10 a", "2 a", "1 a"], key=natural_key) == \
         ["1 a", "2 a", "10 a"]
