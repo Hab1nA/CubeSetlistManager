@@ -74,7 +74,8 @@ def _app(monkeypatch=None):
     # SimpleNamespace 无类方法解析：显式绑定真实现（test_manual_adopt 同款）
     for name in ("_juno_shift_set", "_ax_shift_set", "_shift_reset",
                  "_shift_step", "_shift_plan", "_shift_reachable",
-                 "_shift_undo", "_shift_mark_ok"):
+                 "_shift_undo", "_shift_mark_ok", "_shift_report_blocked",
+                 "_shift_report_done", "_on_kb_result"):
         app.__dict__[name] = (lambda *a, _n=name, **kw:
                               getattr(sg.App, _n)(app, *a, **kw))
     if monkeypatch is not None:
@@ -216,25 +217,31 @@ def test_switcher_absent_does_not_accumulate(monkeypatch):
     app.switcher = None
     _cc(app, 16, 66)
     assert app.juno_shift == 0                         # 失败不累计
-    assert app.q == [sg.ui_text.SHIFT_NO_OUTPUT % "JUNO DS-88"]
+    # 用户可见：卡上失败短句（旧实现只进日志=界面全静默，用户以为没反应）
+    assert app._kb_last == ("JUNO 全局移调 +2 半音失败："
+                            "输出端口未接，移调未发送")
     _cc(app, 16, 66)                                   # 连点：值仍不动
     assert app.juno_shift == 0
+    # 网页点击路径另返回错误串（→ /shift 400 → 前端 toast）
+    assert sg.App._shift_step(app, "juno", 1) == sg.ui_text.SHIFT_NO_OUTPUT
     app.switcher = _Sw()                               # 端口接上了：按时间线落地
     monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: True)
     _cc(app, 16, 66)
     assert app.juno_shift == 2
     assert app.switcher.shifts == [(2, False)]
+    assert sg.App._shift_step(app, "juno", 1) is None   # 通了就不再报错
 
 
 def test_unreachable_reset_still_clears(monkeypatch):
-    """归零时端口不在：值仍清零（不必留一个永远发不出去的值），日志说明。"""
+    """归零时端口不在：值仍清零（不必留一个永远发不出去的值），且用户
+    可见地说明（不是静默）。"""
     app = _app()
     app.juno_shift = 5
     app._shift_ack["juno"] = 5
     monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: False)
     sg.App._shift_reset(app)
     assert app.juno_shift == 0 and app._shift_ack["juno"] == 0
-    assert app.q == [sg.ui_text.SHIFT_RESET_UNREACHED % "JUNO"]
+    assert app._kb_last == ("已发送：JUNO 移调归零（输出端口未接）")
     assert app.switcher.shifts == []
 
 
@@ -483,7 +490,7 @@ def test_shift_step_direct():
     sg.App._shift_step(app, "ax", 0)
     assert app.ax_shift == 0 and len(app.ax_switcher.msgs) == 2
     app.ax_switcher = None                             # 没配输出口：报错不记账
-    assert "AX-09 Lucina" in sg.App._shift_step(app, "ax", 1)
+    assert sg.App._shift_step(app, "ax", 1) == sg.ui_text.SHIFT_NO_OUTPUT
     assert app.ax_shift == 0
 
 
@@ -539,7 +546,7 @@ def test_shift_endpoint():
         assert (app.juno_shift, app.ax_shift) == (0, -12)   # 非法载荷不动记账
         app.ax_switcher = None
         code, body = _req(port, "/shift", {"inst": "ax", "delta": 1})
-        assert code == 400 and "AX-09 Lucina" in body["error"]
+        assert code == 400 and body["error"] == sg.ui_text.SHIFT_NO_OUTPUT
         app.lite = True
         code, _b = _req(port, "/shift", {"inst": "juno", "delta": 1})
         assert code == 403

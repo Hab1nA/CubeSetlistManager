@@ -1252,11 +1252,12 @@ class App:
             time.sleep(mb.POLL_SEC)
 
     def _shift_plan(self, key, total=0, delta=0):
-        """锁内只做「读现值→算目标→判可达→写值」并返回要发的值；发送与
-        回调都在锁外（收发器可能同步回调 on_done，持锁调用=非重入锁死锁）。
-        返回 (要发送的值, quiet, 现值是否已该值)；None=本次不发。"""
+        """锁内只做「读现值→算目标→判可达→写值」并返回动作；发送与回调
+        都在锁外（收发器可能同步回调 on_done，持锁调用=非重入锁死锁）。
+        None=无事可做（同值限流/无变化）；("blocked", 错误文案)=发不出去；
+        ("send", 要发的值, 是否同值重发)=照发。"""
+        inst = "JUNO" if key == "juno" else "AX-09"
         attr = "juno_shift" if key == "juno" else "ax_shift"
-        cfg = self.jcfg if key == "juno" else self.axcfg
         limit = (kbd_auto.SHIFT_LIMIT if key == "juno"
                  else kbd_auto.AX_SHIFT_LIMIT)
         with _SHIFT_LOCK:
@@ -1264,15 +1265,11 @@ class App:
             goal = max(-limit, min(limit, cur + delta if delta else total))
             if key == "juno":
                 now = time.monotonic()
-                if goal == cur:
-                    # 同值重发限流：窗外照发（琴被面板改过后的自愈通道）
-                    if now - self._juno_shift_at < SHIFT_RESEND_SEC:
-                        return None
-                    self._juno_shift_at = now
-                    same = True
-                else:
-                    self._juno_shift_at = now
-                    same = False
+                same = goal == cur
+                # 同值重发限流：窗外照发（琴被面板改过后的自愈通道）
+                if same and now - self._juno_shift_at < SHIFT_RESEND_SEC:
+                    return None
+                self._juno_shift_at = now
             else:
                 if goal == cur:
                     return None          # AX 同值跳过（序列长，会堵音色队列）
@@ -1280,47 +1277,75 @@ class App:
             if not (goal or cur):
                 return None              # 双零：没东西可发
             # 可达性在锁内判（读配置/枚举口，不阻塞；不发包不回调）
-            if not self._shift_reachable(cfg):
+            if not self._shift_reachable(key):
                 if goal == 0:
-                    self.q.put(ui_text.SHIFT_RESET_UNREACHED
-                               % ("JUNO" if key == "juno" else "AX-09"))
+                    err = ui_text.SHIFT_RESET_UNREACHED
                     setattr(self, attr, 0)   # 归零照清账：琴接上按时间线重来
                     self._shift_ack[key] = 0
-                    return None
-                self.q.put(ui_text.SHIFT_NO_OUTPUT % (
-                    "JUNO DS-88" if key == "juno" else "AX-09 Lucina"))
-                return None              # 失败不累计：值不动
+                    # 值确实改了：不是「失败」，按成功口吻报（避免自相矛盾）
+                    return ("done", err)
+                err = ui_text.SHIFT_NO_OUTPUT
+                # 失败不累计：值不动
+                return ("blocked", err, goal)
             setattr(self, attr, goal)
-            return goal, same
+            return ("send", goal, same)
 
-    def _shift_reachable(self, cfg):
-        sw = getattr(self, "switcher", None)
-        ax = getattr(self, "ax_switcher", None)
-        if sw is None and ax is None:
+    def _shift_reachable(self, key):
+        """该琴的输出通路是否可用：收发器在且配置的输出口当前在线。"""
+        sw = getattr(self, "switcher" if key == "juno" else "ax_switcher",
+                     None)
+        if sw is None:
             return False
-        return kbd_auto.out_present(cfg)
+        return kbd_auto.out_present(self.jcfg if key == "juno" else self.axcfg)
+
+    def _shift_report_blocked(self, key, err, goal):
+        """发不出去时的用户可见反馈（不能只写运行日志：预检拦下后界面全
+        静默=用户以为点了没反应）。desc 用「想做的动作」而不是现值——
+        拦截时值尚未写入，拿现值会报成上一动作（+2 被拦却显示归零失败）。
+        「最近切换」卡与发送失败同一通道；网页点击由 _shift_step 另弹提示。"""
+        name = "JUNO" if key == "juno" else "AX-09"
+        self._on_kb_result(_shift_why(name, goal), err)
+
+    def _shift_report_done(self, key, note):
+        """值改成了、只是琴没收到（端口不在的归零）：按「已发送」口吻报，
+        附一句说明；归零不是失败，不能拼成「归零失败」。"""
+        name = "JUNO" if key == "juno" else "AX-09"
+        self._kb_last = "已发送：%s 移调归零（%s）" % (name, note)
 
     def _juno_shift_set(self, total=0, delta=0):
         """JUNO 移调落到绝对值 total（delta 非零=在现值上加减），越界钳 ±24。
         成功才记账：输出口不在=这次必然发不出去，值不动、界面显示不变（失
-        败不累计）；发送途中拔口的竞态由失败回调回滚到上次确认成功的值。"""
+        败不累计）；发送途中拔口的竞态由失败回调回滚到上次确认成功的值。
+        返回 ("blocked", 文案) 供网页点击弹提示；触发轨路径不关心返回值。"""
         plan = self._shift_plan("juno", total, delta)
-        if plan is None:
-            return
-        goal, same = plan
-        sw = self.switcher
-        sw.submit_shift(goal, why=_shift_why("JUNO", goal), quiet=same,
-                        on_done=lambda err: (self._shift_mark_ok("juno", goal)
-                                             if not err else
-                                             self._shift_undo("juno", goal)))
+        if not plan:
+            return None
+        if plan[0] == "blocked":
+            self._shift_report_blocked("juno", plan[1], plan[2])
+            return plan
+        if plan[0] == "done":                  # 归零成功清账、只是没发出去
+            self._shift_report_done("juno", "输出端口未接")
+            return None
+        _, goal, same = plan
+        self.switcher.submit_shift(
+            goal, why=_shift_why("JUNO", goal), quiet=same,
+            on_done=lambda err: (self._shift_mark_ok("juno", goal)
+                                 if not err else self._shift_undo("juno", goal)))
+        return None
 
     def _ax_shift_set(self, total=0, delta=0):
         """AX-09 移调（弯音钉位）落到绝对值 total，钳 ±12。同值跳过（弯音
         序列 6 条约 0.25s，追补发会堵 AX 音色队列）；成功才记账同上。"""
         plan = self._shift_plan("ax", total, delta)
-        if plan is None:
-            return
-        goal, _same = plan
+        if not plan:
+            return None
+        if plan[0] == "blocked":
+            self._shift_report_blocked("ax", plan[1], plan[2])
+            return plan
+        if plan[0] == "done":                  # 归零成功清账、只是没发出去
+            self._shift_report_done("ax", "输出端口未接")
+            return None
+        _, goal, _same = plan
         self.ax_switcher.submit_msgs(
             kbd_auto.ax_shift_msgs(goal, self.axcfg["ch"]),
             why=_shift_why("AX-09", goal),
@@ -1355,17 +1380,13 @@ class App:
 
     def _shift_step(self, inst, delta):
         """键盘页移调卡点击（主线程）：delta=±1 半音/±12 八度步进，0=归零
-        （JUNO 已是 0 也重发一次：琴上被手动改过时的兜底）。返回 None=成功，
-        str=错误文案。"""
-        sw = getattr(self, "switcher" if inst == "juno" else "ax_switcher",
-                     None)
-        if sw is None:
-            return ui_text.SHIFT_NO_OUTPUT % (
-                "JUNO DS-88" if inst == "juno" else "AX-09 Lucina")
+        （JUNO 已是 0 也重发一次：琴上被手动改过时的兜底）。返回 None=已
+        发出，str=错误文案（网页弹提示；发不出去不能静默）。"""
         if inst == "juno":
-            self._juno_shift_set(delta=delta)
+            plan = self._juno_shift_set(delta=delta)
         else:
-            self._ax_shift_set(delta=delta)
+            plan = self._ax_shift_set(delta=delta)
+        return plan[1] if plan and plan[0] == "blocked" else None
 
     def _on_kb_msg(self, status, d1, d2):
         """Keyboard Automation 端口消息：CC16/CC17→两琴绝对移调（触发轨
