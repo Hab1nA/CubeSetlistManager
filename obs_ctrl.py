@@ -354,6 +354,14 @@ class ObsController:
         """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
         return self._hidden_file
 
+    def hidden_path(self):
+        """隐藏侧当前装载的绝对路径（提交前按路径比对目标身份）。"""
+        return self._hidden_path
+
+    def resolve_path(self, file_rel):
+        """名义文件名 → 视频库中的绝对路径（宽松匹配同 _abs_path）。"""
+        return self._abs_path(file_rel)
+
     def clear_pending_preload(self):
         """放弃「待提交」目标（事务取消时）：隐藏侧文件一并清空，紫框随之
         消隐——否则界面仍显示「松开 C2 上屏」，而 C2 早已松开（P1-9）。
@@ -385,10 +393,19 @@ class ObsController:
             return self._hidden_file, self._hidden_file is not None
 
     def commit_preload(self):
-        """提交预载目标（C2 note off）：首帧 READY 才交换上屏。
-        READY 轮询期间持 _act 锁，但代际不符/装载被覆盖即提前放弃——
-        旧画面不动。返回 "<file>"（成功）/ "cancel"（被作废）/
-        "not_ready"（超时未就绪，旧画面保留）/ False（失败，last_error）。"""
+        """提交预载目标（C2 note off）：**在开可见之后**才 RESTART 并等首帧。
+
+        OBS 上游语义决定了顺序（obs-ffmpeg-source.c）：
+        - `ffmpeg_source_restart` 只在 `obs_source_showing()` 为真时才真正
+          起播，隐藏侧调用等于 no-op（只强置 mediaState）；
+        - `restart_on_activate=True` 时 `update` 只在源 active 才 start，
+          所以预载阶段隐藏侧**不播放**（只预取）。
+        因此必须：开新侧可见 → RESTART（此时 showing 为真）→ 等首帧 →
+        再关旧侧。若在开可见前就去 RESTART/等 READY，会永远等不到
+        （2026-11-27 复查阻断项）。
+
+        返回 "<file>"（成功）/ "cancel"（被作废）/ "not_ready"（未就绪，
+        旧画面保留）/ False（失败，last_error）。"""
         with self._lock:
             gen = self._media_gen
             name = self._hidden_file
@@ -399,118 +416,78 @@ class ObsController:
             return False
         ready = [False]
 
-        def do(ws):
+        def swap(ws):
             if gen != self._media_gen:
                 raise _Abort()
             # 场景实况校准：用户切了 OBS 节目场景时 _active 可能陈旧，
-            # 不能把当前可见源当隐藏侧操作（会隐藏现场画面）
+            # 不能把当前可见源当隐藏侧操作
             self._sync_active_from_scene(ws)
             if new_name != self._hidden_name():
-                raise _Abort()          # 校准后隐藏侧变了：本次提交作废
+                raise _Abort()          # 校准后隐藏侧变了：本次作废
+            scene = ws.request("GetCurrentProgramScene")[
+                "currentProgramSceneName"]
+            new_id = self._item_id(ws, scene, new_name)
+            old_name = self._active_name()
+            old_id = (self._item_id(ws, scene, old_name)
+                      if old_name != new_name else None)
+            # 1) 先开新侧（旧侧仍压着画面，装载期不可见）
+            ws.request("SetSceneItemEnabled", {
+                "sceneName": scene, "sceneItemId": new_id,
+                "sceneItemEnabled": True})
+            # 2) showing 已为真，RESTART 才真正从头起播
             ws.request("TriggerMediaInputAction", {
                 "inputName": new_name,
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
-            if gen != self._media_gen:      # 熄屏/全停已发生：立即放弃，
-                raise _Abort()              # 不等 READY 超时（黑场要即时）
-        ok = self._act("提交预载%s" % name, do, abort_ok=True)
-        if ok:
-            # READY 等待必须在 _act 锁外：_wait_ready 每次轮询短暂持锁，
-            # 轮询间隙让 poll 的 media_state/pause 能插入——否则走带暂停
-            # 判定会被堵住最长 8 秒（演出级阻塞）
-            ready[0] = self._wait_ready(new_name, gen)
+            # 3) 等首帧（仍在 _act 锁内：此段必须原子，避免旧侧提前关）
+            if gen != self._media_gen:
+                raise _Abort()
+            ready[0] = self._wait_ready_inline(ws, new_name, gen=gen)
+            if ready[0]:
+                self._active = "B" if new_name == self._b_name() else "A"
+                self._hidden_file = None
+                self._hidden_path = None
+                # 4) 新画面已就绪，关旧侧
+                if old_id is not None:
+                    ws.request("SetSceneItemEnabled", {
+                        "sceneName": scene, "sceneItemId": old_id,
+                        "sceneItemEnabled": False})
+        ok = self._act("提交预载%s" % name, swap, abort_ok=True)
+        with self._lock:
+            stale = gen != self._media_gen
+        if stale:
+            return "cancel"
         if not ok:
-            # 区分「代际作废」与「网络失败」：作废是正常路径，调用方按
-            # cancel 处理（不报错、不重试）
-            with self._lock:
-                if gen != self._media_gen:
-                    return "cancel"
             return False
         if not ready[0]:
             self.last_error = ("预载视频 %.1fs 未就绪，旧画面保留"
                                % PRELOAD_READY_TIMEOUT)
             return "not_ready"
-        # 交换（重新拿锁：_act 已释放；交换前再验代际与目标未被覆盖）
-        with self._lock:
-            gen_ok = gen == self._media_gen
-            same = name == self._hidden_file and self._hidden_name() == new_name
-        if not (gen_ok and same):
-            return "cancel"
-        # 交换：先开新侧（此时旧侧仍压着画面）→ RESTART 从头播 →
-        # 等首帧 → 再关旧侧。RESTART 必须在 showing=true 之后，
-        # 否则 OBS 静默忽略（obs-ffmpeg-source.c ffmpeg_source_restart）
-        def swap(ws):
-            if gen != self._media_gen:
-                raise _Abort()
-            scene = ws.request("GetCurrentProgramScene")[
-                "currentProgramSceneName"]
-            new_id = self._item_id(ws, scene, new_name)
-            old_name = self._active_name()
-            old_id = self._item_id(ws, scene, old_name)                 if old_name != new_name else None
-            ws.request("SetSceneItemEnabled", {
-                "sceneName": scene, "sceneItemId": new_id,
-                "sceneItemEnabled": True})
-            ws.request("TriggerMediaInputAction", {
-                "inputName": new_name,
-                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
-            self._wait_playing(ws, new_name)
-            self._active = "B" if new_name == self._b_name() else "A"
-            self._hidden_file = None
-            self._hidden_path = None
-            if old_id is not None:
-                ws.request("SetSceneItemEnabled", {
-                    "sceneName": scene, "sceneItemId": old_id,
-                    "sceneItemEnabled": False})
-        if not self._act("上屏%s" % name, swap, abort_ok=True):
-            return False
-        # 上屏后再验一次代际：全停/熄屏若在 swap 期间发生，不得把状态
-        # 写回「播放中」（P1-1）
-        with self._lock:
-            if gen != self._media_gen:
-                return "cancel"
         return name
 
-    def _wait_ready(self, name, gen, timeout=None):
-        """首帧就绪判定：PLAYING 且游标前进（仅 PLAYING 会把已到末帧的
-        旧文件当就绪）。逐轮短暂持锁取一次状态——轮询间隙释放锁，走带
-        暂停检测（media_state）与其它动作可插入，不被 8 秒等待堵死。"""
+    def _wait_ready_inline(self, ws, name, timeout=None, gen=None):
+        """等新侧首帧：必须看到游标前进（PLAYING 但游标不动=末帧残留）。
+        ENDED/PAUSED/ERROR/STOPPED 立即失败，不空转。仅在 swap 的 _act
+        锁内调用，内部不再取 self._lock（避免自锁）。代际变了（全停/
+        熄屏）立即返回，黑场要即时。"""
         deadline = time.time() + (timeout if timeout is not None
                                   else PRELOAD_READY_TIMEOUT)
         first = True
         last_pos = None
-        null_runs = 0
         while time.time() < deadline:
-            if gen != self._media_gen:
-                return False
-            with self._lock:
-                if not self._ws:
-                    return False
-                try:
-                    r = self._ws.request("GetMediaInputStatus",
-                                         {"inputName": name}, timeout=0.5)
-                except (ObsError, OSError):
-                    return False
-            if r.get("mediaState") == "OBS_MEDIA_STATE_PLAYING":
+            if gen is not None and gen != self._media_gen:
+                return False                 # 已被作废：立即放弃
+            r = ws.request("GetMediaInputStatus", {"inputName": name},
+                           timeout=0.5)
+            st = r.get("mediaState")
+            if st == "OBS_MEDIA_STATE_PLAYING":
                 pos = r.get("mediaCursor")
-                # 必须看到游标真的前进才算就绪：PLAYING 但游标停住=源停在
-                # 末帧（旧文件 ENDED 后重播前的残留），交换上去就是黑屏
+                # 必须看到游标真的前进：PLAYING 但游标停住=源停在末帧
                 if not first and pos is not None and pos != last_pos:
                     return True
-                # mediaCursor 在协议里「未播放时为 null」，部分版本刚
-                # RESTART 后也短暂给 null：连续多次 PLAYING+null 视为
-                # 已就绪，否则每次都干等超时误判 not_ready
-                if pos is None:
-                    null_runs += 1
-                    if null_runs >= 5:
-                        return True
-                else:
-                    null_runs = 0
                 first = False
                 last_pos = pos
-            elif r.get("mediaState") in (
-                    "OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED",
-                    "OBS_MEDIA_STATE_ENDED", "OBS_MEDIA_STATE_PAUSED"):
-                # ENDED=片长耗尽（按住太久/预载滞留）立即失败，
-                # 不要空转 8 秒堵住整个 VJ worker（P1-4）
+            elif st in ("OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED",
+                        "OBS_MEDIA_STATE_ENDED", "OBS_MEDIA_STATE_PAUSED"):
                 return False
             time.sleep(0.02)
         return False

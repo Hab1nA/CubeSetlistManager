@@ -68,7 +68,9 @@ def default_target(cfg):
 
 _winmm = ctypes.WinDLL("winmm")
 _MIM_DATA = 0x3C3         # 短消息到达（本机驱动实测：回调模式也走 MM_MIM_* 常量）
-_MIM_MOREDATA = 0x3C5     # 回调跟不上时改投此码，载荷与 DATA 相同——不同样处理就会静默丢消息
+_MIM_MOREDATA = 0x3CC     # 回调跟不上时改投此码（MM_MIM_MOREDATA），载荷与
+                          # DATA 相同——不同样处理就会静默丢消息。0x3C5 是
+                          # MM_MIM_ERROR（Windows SDK mmsyscom.h 实证）。
 _MIM_LONGDATA = 0x3C4     # SysEx 缓冲收满（须先 AddBuffer 投缓冲，否则 SysEx 被静默丢弃）
 _MIM_LONGERROR = 0x3C6    # SysEx 接收错误（缓冲同样要回收重投；旧值 0x3C2 是 MIM_CLOSE，错装）
 _MIM_CLOSE = 0x3C2        # 口关闭=设备被移除/loopMIDI 端口被删（winmm 热拔通知，11-11 修正）
@@ -778,6 +780,13 @@ class TransportSync:
         target = default_target(self.ctl.cfg)
         if target is None:
             return
+        # 有待提交的预载目标时不得回落：两者共用同一个隐藏侧，回落会
+        # 覆盖用户刚选好的视频（P1-4），松开 C2 就上错片
+        try:
+            if self.ctl.hidden_file():
+                return
+        except Exception:
+            pass
         with self._lock:
             if self.video_state != "playing" or self._fallback_active:
                 return
@@ -940,7 +949,10 @@ def note_handler(ctl, sync, report=print):
                     except queue.Empty:
                         break
                     ok_pair = (kind0 == "slot" and nxt[0] == "slot"
-                               and not snap0[0] and not nxt[2][0])
+                               and not snap0[0] and not nxt[2][0]
+                               # 102 熄屏是黑场安全阀：绝不参与合并
+                               and NOTE_MAP.get(_n0) is not None
+                               and NOTE_MAP.get(nxt[1]) is not None)
                     if ok_pair:
                         ev = nxt          # 两个普通触发：留最新
                         continue
@@ -989,7 +1001,18 @@ def note_handler(ctl, sync, report=print):
             report("C2 提交失败：目标未装载成功（%s）" % target)
             ctl.clear_pending_preload()
             return
-        if os.path.basename(str(cur)) != os.path.basename(str(target)):
+        # 目标身份按「解析后的路径」比对：视频库支持「N 描述.mp4」宽松
+        # 匹配，名义名 3.mp4 ↔ 实际 3 开场钢琴.mp4（只比 basename 会把
+        # 正常命名全部误拒）。拿不到解析路径时退回名字比对。
+        tgt_path = getattr(ctl, "resolve_path", lambda _f: None)(target)
+        cur_path = getattr(ctl, "hidden_path", lambda: None)()
+        if tgt_path is not None and cur_path is not None:
+            same_target = (os.path.normcase(os.path.abspath(cur_path))
+                           == os.path.normcase(os.path.abspath(tgt_path)))
+        else:
+            same_target = (os.path.basename(str(cur))
+                           == os.path.basename(str(target)))
+        if not same_target:
             # 隐藏侧残留的是上一事务的文件（上一事务 off 丢失/目标装载
             # 失败）：不得冒充本事务目标上屏（P1-6）
             report("C2 提交失败：隐藏侧残留 %s，非本次目标 %s"
@@ -998,10 +1021,12 @@ def note_handler(ctl, sync, report=print):
             return
         res = ctl.commit_preload()
         with lock:
-            # 提交返回后先判是否已被取消（全停/熄屏/新事务），再结束本事务
+            # 提交返回后先判是否已换事务：若已开新事务（B），target/gen
+            # 归 B 所有，绝不能在这里清掉/再加代际（否则 B 静默失效）
             stale = gen != st["gen"]
-            st["target"] = None
-            st["gen"] += 1
+            if not stale:
+                st["target"] = None
+                st["gen"] += 1
         err = ""
         if res == "cancel":
             err = "C2 提交已作废（停止/全停/现场变化），旧画面保留"
