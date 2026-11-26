@@ -881,6 +881,8 @@ def note_handler(ctl, sync, report=print):
                 st["target"] = None
             with lock:
                 gen = st["gen"]
+            if ctl is not None:
+                ctl.bump_media_gen()   # 作废旧事务在途 commit（P1-2）
             q.put(("open", None, (True, gen)))
             return
         if note in NOTE_MAP:
@@ -947,6 +949,11 @@ def note_handler(ctl, sync, report=print):
                 kind, note, (held_at_arrival, gen) = ev
                 if kind == "open":
                     continue            # 开事务本身不动作（目标由槽位音符选）
+                if kind == "cancel":
+                    if ctl is not None:
+                        ctl.bump_media_gen()
+                        ctl.clear_pending_preload()
+                    continue
                 if kind == "commit":
                     _commit(note, gen)
                     continue
@@ -982,8 +989,17 @@ def note_handler(ctl, sync, report=print):
             report("C2 提交失败：目标未装载成功（%s）" % target)
             ctl.clear_pending_preload()
             return
+        if os.path.basename(str(cur)) != os.path.basename(str(target)):
+            # 隐藏侧残留的是上一事务的文件（上一事务 off 丢失/目标装载
+            # 失败）：不得冒充本事务目标上屏（P1-6）
+            report("C2 提交失败：隐藏侧残留 %s，非本次目标 %s"
+                   % (cur, target))
+            ctl.clear_pending_preload()
+            return
         res = ctl.commit_preload()
-        with lock:                  # 提交完成即结束事务
+        with lock:
+            # 提交返回后先判是否已被取消（全停/熄屏/新事务），再结束本事务
+            stale = gen != st["gen"]
             st["target"] = None
             st["gen"] += 1
         err = ""
@@ -992,6 +1008,10 @@ def note_handler(ctl, sync, report=print):
         elif res == "not_ready":
             err = "C2 提交未就绪，旧画面保留"
         elif res:
+            if stale:
+                # 画面已换但三态已被 blackout 收敛：不写回「播放中」（P1-1）
+                report("C2 上屏完成但事务已作废（停止/全停），状态不改写")
+                return
             sync.note_seen()
             sync.note_playing(res)
             report("C2 提交 → 上屏%s" % res)
@@ -1045,9 +1065,18 @@ def note_handler(ctl, sync, report=print):
 
     threading.Thread(target=worker, daemon=True).start()
     def on_cc(cc):
-        # All Sound Off(120)/All Notes Off(123)：只取消事务，不提交
+        # All Sound Off(120)/All Notes Off(123)：只取消事务，不提交。
+        # 回调线程禁止做 OBS 网络（文件头硬规则）：只改状态+入队，
+        # 由 worker 执行清目标（P1-3）
         if cc in (120, 123):
-            cancel_transaction("取消（All Notes Off）")
+            with lock:
+                had = st["held"] or st["target"] is not None
+                st["held"] = False
+                st["target"] = None
+                st["gen"] += 1
+            q.put(("cancel", None, (False, st["gen"])))
+            if had:
+                report("C2 预载事务已取消（All Notes Off）")
 
     on_note.note_off = on_note_off
     on_note.cc = on_cc

@@ -548,8 +548,10 @@ def test_ensure_creates_missing_sides():
     ws = _W()
     ctl._ensure_media_input(ws)
     assert set(ws.items) == {"舞台视频", "舞台视频 B"}
-    assert ws.items["舞台视频"][1] is True          # A 可见建出
-    assert ws.items["舞台视频 B"][1] is False       # B 隐藏建出
+    # 两侧都以 disabled 建出：可见性只由 swap/预载显式控制
+    # （A 若 enabled 建出，切场景/分组场景下可能带残留文件上屏，P1-5）
+    assert ws.items["舞台视频"][1] is False
+    assert ws.items["舞台视频 B"][1] is False
     assert "SetSceneItemTransform" in ws.kinds      # 等比铺满画布
     assert ctl._active == "A"
     ctl._ensure_media_input(ws)                     # 幂等：不重建
@@ -565,7 +567,9 @@ def test_preload_loads_hidden_side(tmp_path):
     sets = [c for c in ws.calls if c[0] == "SetInputSettings"]
     assert len(sets) == 1 and sets[0][1]["inputName"] == "舞台视频 B"
     assert sets[0][1]["inputSettings"]["local_file"].endswith("3.mp4")
-    assert sets[0][1]["inputSettings"]["restart_on_activate"] is False
+    # OBS 上游：restart_on_activate=true 时隐藏侧不 active → 只预取不播放；
+    # 写 False 会让装载即开始播放，正式上屏从中段接续（阻断级，11-27）
+    assert sets[0][1]["inputSettings"]["restart_on_activate"] is True
     assert sets[0][1]["inputSettings"]["clear_on_media_end"] is True
     assert ws.items["舞台视频 B"][1] is False     # 不开可见
     assert ctl.hidden_file() == "3.mp4"
@@ -580,7 +584,7 @@ def test_preload_then_trigger_seamless(tmp_path):
     assert ctl.set_media("3.mp4", False) is True
     sets = [c for c in ws.calls[n0:] if c[0] == "SetInputSettings"]
     assert sets and sets[0][1]["inputName"] == "舞台视频 B"
-    assert sets[0][1]["inputSettings"]["restart_on_activate"] is False
+    assert sets[0][1]["inputSettings"]["restart_on_activate"] is True
     restarts = [c for c in ws.calls[n0:]
                 if c[0] == "TriggerMediaInputAction"]
     assert restarts and restarts[0][1]["inputName"] == "舞台视频 B"
@@ -1086,6 +1090,38 @@ def test_ready_accepts_null_cursor(tmp_path):
     finally:
         oc.PRELOAD_READY_TIMEOUT = old
     assert res == "3.mp4", res          # 不就绪会返回 not_ready
+
+
+def test_commit_rejects_stale_hidden_target(tmp_path):
+    """隐藏侧残留上一事务的文件（本事务目标装载失败）时不得冒充上屏：
+    用户选槽位 4、屏上出现 3 属演出事故（P1-6）。用真实 ObsController
+    走 commit_preload，验证 midi_bridge 的目标比对把它拦下。"""
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")       # 只有 3 存在，4 缺失
+
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _FakeWS()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+
+    sync = mb.TransportSync(ctl)
+    lines = []
+    on = mb.note_handler(ctl, sync, report=lines.append)
+
+    # 上一事务残留：直接预载 3（模拟上一个事务没提交也没取消）
+    assert ctl.preload("3.mp4") is True
+    # 新事务选槽位 4（对应 4.mp4，缺文件 → 装载失败，隐藏侧仍是 3）
+    on(48, 100)
+    on(76, 100)                              # 76 → 5.mp4，同样缺文件
+    on.note_off(48)
+    deadline = time.time() + 4
+    while time.time() < deadline:
+        if any("隐藏侧残留" in ln for ln in lines):
+            break
+        time.sleep(0.02)
+    assert any("隐藏侧残留" in ln for ln in lines), lines
+    assert sync.video_state != "playing"     # 不得把残留当目标上屏
 
 
 def test_natural_sort():

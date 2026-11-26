@@ -435,12 +435,38 @@ class ObsController:
             same = name == self._hidden_file and self._hidden_name() == new_name
         if not (gen_ok and same):
             return "cancel"
+        # 交换：先开新侧（此时旧侧仍压着画面）→ RESTART 从头播 →
+        # 等首帧 → 再关旧侧。RESTART 必须在 showing=true 之后，
+        # 否则 OBS 静默忽略（obs-ffmpeg-source.c ffmpeg_source_restart）
         def swap(ws):
             if gen != self._media_gen:
                 raise _Abort()
-            self._swap(ws, new_name)
+            scene = ws.request("GetCurrentProgramScene")[
+                "currentProgramSceneName"]
+            new_id = self._item_id(ws, scene, new_name)
+            old_name = self._active_name()
+            old_id = self._item_id(ws, scene, old_name)                 if old_name != new_name else None
+            ws.request("SetSceneItemEnabled", {
+                "sceneName": scene, "sceneItemId": new_id,
+                "sceneItemEnabled": True})
+            ws.request("TriggerMediaInputAction", {
+                "inputName": new_name,
+                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
+            self._wait_playing(ws, new_name)
+            self._active = "B" if new_name == self._b_name() else "A"
+            self._hidden_file = None
+            self._hidden_path = None
+            if old_id is not None:
+                ws.request("SetSceneItemEnabled", {
+                    "sceneName": scene, "sceneItemId": old_id,
+                    "sceneItemEnabled": False})
         if not self._act("上屏%s" % name, swap, abort_ok=True):
             return False
+        # 上屏后再验一次代际：全停/熄屏若在 swap 期间发生，不得把状态
+        # 写回「播放中」（P1-1）
+        with self._lock:
+            if gen != self._media_gen:
+                return "cancel"
         return name
 
     def _wait_ready(self, name, gen, timeout=None):
@@ -481,7 +507,10 @@ class ObsController:
                 first = False
                 last_pos = pos
             elif r.get("mediaState") in (
-                    "OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED"):
+                    "OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED",
+                    "OBS_MEDIA_STATE_ENDED", "OBS_MEDIA_STATE_PAUSED"):
+                # ENDED=片长耗尽（按住太久/预载滞留）立即失败，
+                # 不要空转 8 秒堵住整个 VJ worker（P1-4）
                 return False
             time.sleep(0.02)
         return False
@@ -522,17 +551,18 @@ class ObsController:
             if self._active == "B" else self._b_name()
 
     def _load_hidden(self, ws, name, path, loop):
-        """装载（或清空）隐藏侧文件：统一合并 restart_on_activate=False
-        （上屏重播由显式 RESTART 管，不赌 OBS 默认值——enable 隐式重播会
-        与 RESTART 叠一次开头重闪）与 clear_on_media_end=True（一遍停播完
-        清屏=真黑，默认定格末帧与「播完黑屏等回落/触发」的设计口径不符，
-        审计 A-P2-6）。同值合并不触发重载=预载的核心机制。成功后记账
-        _hidden_file（swap 换侧后由调用方刷新）。"""
+        """装载（或清空）隐藏侧文件。OBS 上游语义（obs-ffmpeg-source.c）：
+        restart_on_activate=true 时，update 只在源 active 才开始播放——隐藏
+        侧（场景项 disabled）不 active，因此**仅预取不解码播放**；等到提交
+        开可见后由显式 RESTART 从头起播。若写 False，update 会立刻在隐藏侧
+        开始播放，正式上屏就从视频中段接续（阻断级缺陷，2026-11-27 定案）。
+        clear_on_media_end=True：一遍停播完清屏=真黑（审计 A-P2-6）。同值
+        合并不触发重载=预载的核心机制。成功后记账 _hidden_file/_hidden_path。"""
         ws.request("SetInputSettings", {
             "inputName": name,
             "inputSettings": {"local_file": path, "is_local_file": True,
                               "looping": bool(loop),
-                              "restart_on_activate": False,
+                              "restart_on_activate": True,
                               "clear_on_media_end": True},
             "overlay": True})
         self._hidden_file = os.path.basename(path) if path else None
@@ -585,15 +615,22 @@ class ObsController:
         id 不同，值里记 scene 不符即重建，防旧场景 id 打新场景被拒断链；
         审计 P2-2）。"""
         hit = self._item_ids.get(name)
-        if hit is None or hit[0] != scene:
-            hit = (scene, self._ensure_side(ws, scene, name))
-            self._item_ids[name] = hit
+        if hit is not None and hit[0] == scene:
+            # 校验缓存 id 在场景里仍存在：用户重组/删除场景项后旧 id
+            # 打过去会被协议拒绝 → 断链（P1-5）
+            items = ws.request("GetSceneItemList", {"sceneName": scene})
+            if any(i["sceneItemId"] == hit[1]
+                   for i in items["sceneItems"]):
+                return hit[1]
+        hit = (scene, self._ensure_side(ws, scene, name))
+        self._item_ids[name] = hit
         return hit[1]
 
     def _ensure_side(self, ws, scene, name):
-        """输入+场景项双确保在场，返回场景项 id（幂等）。新建的 B 侧隐藏
-        （可见性由 swap 管，防残文件自动播到画面上），A 侧保持原行为可见
-        建出（空源无画面，视觉等价）。"""
+        """输入+场景项双确保在场，返回场景项 id（幂等）。**一律以 disabled
+        建出**：可见性只由 swap/预载显式控制。A 侧若 enabled 建出，在切过
+        节目场景/分组场景等情形下可能带着残留文件直接上屏（P1-5）；
+        空源虽无画面，但多一到三个往返的窗口足够闪帧，且禁用失败即持续可见。"""
         items = ws.request("GetSceneItemList", {"sceneName": scene})
         hit = next((i for i in items["sceneItems"]
                     if i["sourceName"] == name), None)
@@ -604,14 +641,14 @@ class ObsController:
         if have:
             item = ws.request("CreateSceneItem", {
                 "sceneName": scene, "sourceName": name,
-                "sceneItemEnabled": name != self._b_name()})
+                "sceneItemEnabled": False})
         else:
             item = ws.request("CreateInput", {
                 "sceneName": scene, "inputName": name,
                 "inputKind": "ffmpeg_source",
                 "inputSettings": {"is_local_file": True,
                                   "clear_on_media_end": True},
-                "sceneItemEnabled": name != self._b_name()})
+                "sceneItemEnabled": False})
         ws.request("SetSceneItemTransform", {
             "sceneName": scene, "sceneItemId": item["sceneItemId"],
             "sceneItemTransform": {
