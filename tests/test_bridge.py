@@ -692,25 +692,30 @@ def test_c2_transaction():
         def __init__(self):
             self.cfg = {}
             self.pre = []
+            self.loops = []
             self.sets = []
             self.commits = []
             self.stops = 0
             self.gen_bumps = 0
             self.hidden = None
             self.last_error = ""
-        def preload(self, f):
+        def preload(self, f, loop=False):
             self.pre.append(f)
+            self.loops.append(loop)
             self.hidden = f
             return True
         def hidden_file(self):
             return self.hidden
-        def commit_preload(self, loop=False):
-            self.commits.append((self.hidden, loop))
+        def commit_preload(self):
+            self.commits.append((self.hidden, self.loops[-1]
+                                 if self.loops else False))
             f = self.hidden
             self.hidden = None
             return f
         def bump_media_gen(self):
             self.gen_bumps += 1
+        def clear_pending_preload(self):
+            self.hidden = None
         def loop_for(self, f):                  # 借真实现（只摸 self.cfg）
             return ObsController.loop_for(self, f)
         def set_media(self, f, loop):
@@ -829,7 +834,7 @@ def test_c2_transaction():
 
     # 10) 提交失败（未就绪/被作废）：不记在播，旧画面保留由 ctl 层负责
     class _Bad(_Ctl):
-        def commit_preload(self, loop=False):
+        def commit_preload(self):
             self.last_error = "预载视频 8.0s 未就绪，旧画面保留"
             return "not_ready"
     ctl = _Bad()
@@ -871,7 +876,7 @@ def test_commit_preload_ready_and_cancel(tmp_path):
     ctl._item_ids = {}
     ctl._ensure_media_input(ws2)
     assert ctl.preload("3.mp4") is True
-    res = ctl.commit_preload(False)
+    res = ctl.commit_preload()
     assert res == "3.mp4"
     assert ctl._active == "B"
     assert ctl.hidden_file() is None
@@ -894,7 +899,7 @@ def test_commit_preload_ready_and_cancel(tmp_path):
     old = oc.PRELOAD_READY_TIMEOUT
     oc.PRELOAD_READY_TIMEOUT = 0.3
     try:
-        res = sql.commit_preload(False)
+        res = sql.commit_preload()
     finally:
         oc.PRELOAD_READY_TIMEOUT = old
     assert res == "not_ready"
@@ -921,7 +926,7 @@ def test_commit_preload_ready_and_cancel(tmp_path):
     oc.PRELOAD_READY_TIMEOUT = 5.0        # 若未快速中止，测试会明显变慢
     try:
         t0 = time.time()
-        res = ctl2.commit_preload(False)
+        res = ctl2.commit_preload()
         cost = time.time() - t0
     finally:
         oc.PRELOAD_READY_TIMEOUT = old_t
@@ -942,6 +947,116 @@ def test_commit_preload_ready_and_cancel(tmp_path):
     ctl3._item_ids = {}
     ctl3._sync_active_from_scene(ws6)
     assert ctl3._active == "A"             # 按实况改成 A
+
+
+def test_ready_wait_does_not_block_watchdog(tmp_path):
+    """READY 等待期间必须能插入其它 OBS 动作（media_state 走同一把锁）：
+    否则走带暂停检测被堵最长 8 秒（演出级阻塞，自查发现）。"""
+    import threading as _th
+    import obs_ctrl as oc
+
+    class _Never(_FakeWS):
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": 0}      # 永不前进
+            return super().request(kind, payload, **kw)
+
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _Never()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+    assert ctl.preload("3.mp4") is True
+
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 1.5
+    out = {}
+
+    def commit():
+        out["res"] = ctl.commit_preload()
+
+    try:
+        t = _th.Thread(target=commit, daemon=True)
+        t.start()
+        time.sleep(0.25)          # 让 READY 循环进入等待
+        t0 = time.time()
+        st = ctl.media_state()    # 走带看门狗同路径：不得被堵住
+        cost = time.time() - t0
+        t.join(5)
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old
+    assert st is not None and cost < 0.6, cost
+    assert out.get("res") == "not_ready"
+
+
+def test_preload_carries_loop_flag(tmp_path):
+    """循环槽位经 C2 提交后必须仍循环：preload 装载时就要写入 looping
+    （原实现固定 False，commit 的 loop 形参被忽略——P1-2）。"""
+    ctl, ws = _ab_ctl(tmp_path)
+    ctl.cfg["videoLoops"] = {"3": True}
+    assert ctl.preload("3.mp4", ctl.loop_for("3.mp4")) is True
+    sets = [c for c in ws.calls if c[0] == "SetInputSettings"]
+    assert sets[-1][1]["inputSettings"]["looping"] is True
+    assert ctl.preload("4.mp4", ctl.loop_for("4.mp4")) is True
+    sets = [c for c in ws.calls if c[0] == "SetInputSettings"]
+    assert sets[-1][1]["inputSettings"]["looping"] is False
+
+
+def test_c2_short_press_commits(tmp_path):
+    """短按：C2 on → 槽位 → 立刻 off（off 早于 worker 处理槽位）也必须
+    提交，不能静默丢失（P1-1：原实现 off 时 target 还是 None）。"""
+    class _Slow(_FCtlLike):
+        pass
+
+    ctl = _Slow()
+    sync = mb.TransportSync(ctl)
+    lines = []
+    on = mb.note_handler(ctl, sync, report=lines.append)
+    on(48, 100)
+    on(74, 100)
+    on.note_off(48)                 # 不等 worker：模拟立即松开
+    deadline = time.time() + 3
+    while time.time() < deadline and not ctl.commits:
+        time.sleep(0.01)
+    assert ctl.commits, lines
+    assert ctl.commits[0][0] == "3.mp4"
+
+
+class _FCtlLike:
+    """短按测试用假 ctl：preload 稍慢（模拟 OBS 装载延迟）。"""
+    def __init__(self):
+        self.cfg = {}
+        self.pre, self.loops, self.commits = [], [], []
+        self.sets, self.last_error = [], ""
+        self.hidden = None
+    def preload(self, f, loop=False):
+        time.sleep(0.15)            # 装载慢于 off
+        self.pre.append(f)
+        self.loops.append(loop)
+        self.hidden = f
+        return True
+    def hidden_file(self):
+        return self.hidden
+    def commit_preload(self):
+        self.commits.append((self.hidden, self.loops[-1]
+                             if self.loops else False))
+        f = self.hidden
+        self.hidden = None
+        return f
+    def clear_pending_preload(self):
+        self.hidden = None
+    def bump_media_gen(self):
+        pass
+    def loop_for(self, f):
+        return ObsController.loop_for(self, f)
+    def set_media(self, f, loop):
+        self.sets.append((f, loop))
+        return True
+    def stop_media(self):
+        return True
 
 
 def test_natural_sort():

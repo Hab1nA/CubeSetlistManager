@@ -1221,6 +1221,7 @@ class App:
     def _watch(self):
         f8_mark = None                 # F8-only 诊断：起见时刻与一次性闩锁
         f8_hinted = False
+        was_live = False               # 走带在播沿：由在播→停止=取消 C2 事务
         while True:
             try:
                 # watch 先于 sync：段尾两者同轮触发（断流超时同时到期），
@@ -1228,6 +1229,14 @@ class App:
                 # 判定顺延一个网络超时；watch 判完推进后 sync 慢多少都无碍
                 self.watch.poll()
                 self.sync.poll()
+                # DAW 里自行停止（空格/panic）不会经过本程序的 _transport：
+                # 走带在播→停止的沿上取消 C2 预载事务，防 note-off 永不到达
+                # 导致事务悬置、下次 off 误提交（§5.2）
+                live_now = bool(self.watch is not None
+                                and self.watch.is_transport_live())
+                if was_live and not live_now:
+                    self._vj_cancel_transaction("走带停止取消")
+                was_live = live_now
                 m = self.mtc
                 if m is not None and m.qf_seen:
                     f8_mark = None      # 时码已到：F8 计数是残留，撤销计窗

@@ -327,17 +327,19 @@ class ObsController:
             self._swap(ws, new_name)
         return self._act(file_rel + ("（循环）" if loop else ""), do)
 
-    def preload(self, file_rel):
+    def preload(self, file_rel, loop=False):
         """预载：把 file_rel 装载到隐藏侧（disabled 场景项不播不响=纯装载），
-        触发该槽位时同值合并零重载、RESTART 毫秒级起播=准点切换。装载耗时
-        （大头）提前到预载时花掉。幂等：重复预载/换预载目标都是覆盖。
-        装载前强制隐藏侧归位（SetSceneItemEnabled=False）——用户在 OBS 里
-        手动点开过 B 侧可见时，装载即自动播出叠画（审计 P2-7）。"""
+        提交时同值合并零重载、RESTART 毫秒级起播=准点切换。装载耗时（大头）
+        提前到预载时花掉。幂等：重复预载/换预载目标都是覆盖。
+        装载前按**场景实况**校准活动侧并强制隐藏侧归位——用户在 OBS 里切过
+        节目场景或手动点开过 B 侧时，按陈旧记账操作会隐藏正在看的画面
+        （P1-5/P2-7）。loop=槽位循环三态，装载即写入，提交后照常循环（P1-2）。"""
         path = self._abs_path(file_rel)
         if path is None:
             self.last_error = "视频文件不存在：%s" % file_rel
             return False
         def do(ws):
+            self._sync_active_from_scene(ws)   # 先校准，防隐藏可见侧
             name = self._hidden_name()
             scene = ws.request("GetCurrentProgramScene")[
                 "currentProgramSceneName"]
@@ -345,12 +347,30 @@ class ObsController:
                 "sceneName": scene,
                 "sceneItemId": self._item_id(ws, scene, name),
                 "sceneItemEnabled": False})
-            self._load_hidden(ws, name, path, False)
+            self._load_hidden(ws, name, path, bool(loop))
         return self._act("预载%s" % file_rel, do)
 
     def hidden_file(self):
         """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
         return self._hidden_file
+
+    def clear_pending_preload(self):
+        """放弃「待提交」目标（事务取消时）：隐藏侧文件一并清空，紫框随之
+        消隐——否则界面仍显示「松开 C2 上屏」，而 C2 早已松开（P1-9）。
+        不递增代际（调用方负责），不报错：清空失败只是展示层残留。"""
+        self._hidden_file = None
+        self._hidden_path = None
+        try:
+            def do(ws):
+                name = self._hidden_name()
+                ws.request("SetInputSettings", {
+                    "inputName": name,
+                    "inputSettings": {"local_file": "",
+                                      "is_local_file": True},
+                    "overlay": True})
+            self._act("清空预载目标", do, abort_ok=True)
+        except Exception:
+            pass
 
     def bump_media_gen(self):
         """作废在途媒体提交（熄屏/全停/回零/换工程调用）：已在飞的
@@ -364,7 +384,7 @@ class ObsController:
         with self._lock:
             return self._hidden_file, self._hidden_file is not None
 
-    def commit_preload(self, loop=False):
+    def commit_preload(self):
         """提交预载目标（C2 note off）：首帧 READY 才交换上屏。
         READY 轮询期间持 _act 锁，但代际不符/装载被覆盖即提前放弃——
         旧画面不动。返回 "<file>"（成功）/ "cancel"（被作废）/
@@ -392,8 +412,12 @@ class ObsController:
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
             if gen != self._media_gen:      # 熄屏/全停已发生：立即放弃，
                 raise _Abort()              # 不等 READY 超时（黑场要即时）
-            ready[0] = self._wait_ready(ws, new_name, gen)
         ok = self._act("提交预载%s" % name, do, abort_ok=True)
+        if ok:
+            # READY 等待必须在 _act 锁外：_wait_ready 每次轮询短暂持锁，
+            # 轮询间隙让 poll 的 media_state/pause 能插入——否则走带暂停
+            # 判定会被堵住最长 8 秒（演出级阻塞）
+            ready[0] = self._wait_ready(new_name, gen)
         if not ok:
             # 区分「代际作废」与「网络失败」：作废是正常路径，调用方按
             # cancel 处理（不报错、不重试）
@@ -419,9 +443,10 @@ class ObsController:
             return False
         return name
 
-    def _wait_ready(self, ws, name, gen, timeout=None):
-        """首帧就绪判定：PLAYING 且时间戳前进（仅 PLAYING 会把已到末帧的
-        旧文件当就绪）。代际作废/目标被覆盖时提前放弃。"""
+    def _wait_ready(self, name, gen, timeout=None):
+        """首帧就绪判定：PLAYING 且游标前进（仅 PLAYING 会把已到末帧的
+        旧文件当就绪）。逐轮短暂持锁取一次状态——轮询间隙释放锁，走带
+        暂停检测（media_state）与其它动作可插入，不被 8 秒等待堵死。"""
         deadline = time.time() + (timeout if timeout is not None
                                   else PRELOAD_READY_TIMEOUT)
         first = True
@@ -429,8 +454,14 @@ class ObsController:
         while time.time() < deadline:
             if gen != self._media_gen:
                 return False
-            r = ws.request("GetMediaInputStatus", {"inputName": name},
-                           timeout=0.5)
+            with self._lock:
+                if not self._ws:
+                    return False
+                try:
+                    r = self._ws.request("GetMediaInputStatus",
+                                         {"inputName": name}, timeout=0.5)
+                except (ObsError, OSError):
+                    return False
             if r.get("mediaState") == "OBS_MEDIA_STATE_PLAYING":
                 pos = r.get("mediaCursor")
                 # 必须看到游标真的前进才算就绪：PLAYING 但游标停住=源停在

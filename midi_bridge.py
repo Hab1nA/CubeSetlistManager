@@ -12,11 +12,13 @@
 Cubase 侧：新建 MIDI 轨（非乐器轨），输出端口选 loopMIDI Port，
 在触发位置画音符：C4(72)→1.mp4、C#4(73)→2.mp4 …（只认 Note On，音符长度
 无所谓；0.16.2 起锚点对齐 Cubase 显示，72 起才是 VJ 区）。
-预载修饰键 C2(48)：按住期间到达的槽位音符=预载该视频到隐藏源（不播不
-响）；单独到达的槽位音符=正常触发（已预载的槽位零装载开销、准点切换，
-未预载则触发时现装载——无黑闪但时机随装载时长延后）。DAW 画法：C2 从
-预载点画长音延伸过触发音符，或与槽位音符同起点（同拍容差 20ms 内按住
-即算）。VJ 页格子紫色描边=已预载（预载唯一入口=C2，格子点击仍切三态）。
+预载事务键 C2(48)：C2 on 开事务 → 事务内槽位音符选定唯一目标装入隐藏源
+（不播不响）→ C2 off 首帧就绪后立即上屏（A/B 互换后台）。两种写法：
+提前数拍按住 C2、到目标时刻松开（准点切换）；或与槽位音符几乎同时按下
+后立即松开（按下即确认）。不按 C2 时槽位音符单独到达=直接触发（旧工程
+无需改动）。一次事务只提交一个目标；停止/回零/全停/换歌/102 熄屏自动
+取消事务。VJ 页格子紫色描边=待提交；格子点击仍切三态。
+完整规格见 docs/VJ设计与演出复查.md §5。
 视频文件名支持「编号 空格 自定义名」如 `4 开场钢琴.mp4`，按编号匹配；
 纯编号 `4.mp4` 优先。
 暂停跟随（可选）：走带 → 工程同步设置 → 传输，勾选“MIDI 时码输出”
@@ -51,6 +53,7 @@ NOTE_MAP[102] = None  # F#6 → 熄屏
 # 行为直接触发。熄屏(102) 不受修饰。完整规则与工程写法见
 # docs/VJ设计与演出复查.md §5。VJ 端口上 48 此前零定义，无冲突。
 PRELOAD_KEY = 48
+PRELOAD_SETTLE_SEC = 3.0   # 提交等待装载落账上限（短按场景）
 
 
 def default_target(cfg):
@@ -511,6 +514,9 @@ class MidiIn:
         # （C2 预载修饰键的按住判定）；其它口（翻谱/时钟）的 on_note 无
         # 此属性=note-off 照旧被丢弃，零行为变化
         self._on_note_off = getattr(on_note, "note_off", None)
+        # CC（All Notes Off/All Sound Off）用于取消预载事务：DAW 里手动停止
+        # 或 panic 时 note-off 可能永远不来（§5.6）
+        self._on_cc = getattr(on_note, "cc", None)
         self._on_mtc = on_mtc
         self._on_f8 = on_f8
         self._on_sysex = on_sysex
@@ -565,6 +571,8 @@ class MidiIn:
                     or (status & 0xF0 == 0x90
                         and not (p1 >> 16) & 0xFF)):   # 0x90 vel0=note-off
                 self._on_note_off((p1 >> 8) & 0xFF)
+            elif self._on_cc is not None and status & 0xF0 == 0xB0:
+                self._on_cc((p1 >> 8) & 0xFF)
         elif msg in (_MIM_LONGDATA, _MIM_LONGERROR) and p1:
             self._done_push(int(p1), msg == _MIM_LONGERROR)
         elif msg == _MIM_CLOSE and not self._closing:
@@ -860,7 +868,6 @@ def note_handler(ctl, sync, report=print):
         "gen": 0,           # 事务代际：取消/新事务递增，作废在途提交
         "target": None,     # 事务内已选目标（名义文件名）
     }
-    cancel = threading.Event()   # 取消闩：worker 的提交前检查
 
     def snapshot():
         with lock:
@@ -872,7 +879,6 @@ def note_handler(ctl, sync, report=print):
                 st["held"] = True
                 st["gen"] += 1      # 新事务：作废旧事务的在途动作
                 st["target"] = None
-            cancel.clear()
             with lock:
                 gen = st["gen"]
             q.put(("open", None, (True, gen)))
@@ -880,7 +886,14 @@ def note_handler(ctl, sync, report=print):
         if note in NOTE_MAP:
             # 磁吸窗（note_seen）由 worker 触发分支记——C2 组合预载不换
             # 画面不得记（复审 R2 语义），判定后才知情
-            q.put(("slot", note, snapshot()))
+            snap = snapshot()
+            if snap[0] and NOTE_MAP[note] is not None:
+                # C2 按住：到达即登记名义目标。短按（off 早于 worker 处理）
+                # 时 note-off 也能拿到目标提交，不静默丢失（P1-1）
+                with lock:
+                    if st["held"] and snap[1] == st["gen"]:
+                        st["target"] = NOTE_MAP[note]
+            q.put(("slot", note, snap))
         elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
             report("音符 %d 不在 VJ 映射：触发音已整体升八度，请检查工程" % note)
 
@@ -901,9 +914,9 @@ def note_handler(ctl, sync, report=print):
             st["held"] = False
             st["target"] = None
             st["gen"] += 1
-        cancel.set()
         if ctl is not None:
             ctl.bump_media_gen()     # 作废已发往 OBS 的在途提交
+            ctl.clear_pending_preload()   # 紫框「待提交」随之消隐
         if had:
             report("C2 预载事务已%s" % why)
 
@@ -911,7 +924,9 @@ def note_handler(ctl, sync, report=print):
 
     def worker():
         while True:
-            ev = pending.pop() if pending else q.get()
+            # FIFO：pending 里暂存的事件必须按到达顺序先处理，
+            # 否则 commit 可能抢到 slot 前面（短按丢提交，P1-1 根因）
+            ev = pending.pop(0) if pending else q.get()
             try:
                 # 积压合并只针对「普通触发」槽位：连发切换归最新一个。
                 # 事务事件（open/commit）与事务内槽位（C2 选目标）不得被
@@ -927,7 +942,7 @@ def note_handler(ctl, sync, report=print):
                     if ok_pair:
                         ev = nxt          # 两个普通触发：留最新
                         continue
-                    pending.append(nxt)   # 其它事件先存着，本轮处理完再取
+                    pending.append(nxt)   # 其它事件按序排队，本轮后处理
                     break
                 kind, note, (held_at_arrival, gen) = ev
                 if kind == "open":
@@ -953,32 +968,53 @@ def note_handler(ctl, sync, report=print):
             return                  # 已被取消/被新事务取代：静默作废
         if target is None:
             return                  # 事务内无目标：无操作
+        # 短按时提交可能早于装载完成：有界等待目标落账（§5.2 允许
+        # 「按下即确认」写法，不能因为抢跑就丢弃）
+        deadline = time.time() + PRELOAD_SETTLE_SEC
         cur = getattr(ctl, "hidden_file", lambda: None)()
+        while not cur and time.time() < deadline:
+            with lock:
+                if gen != st["gen"]:      # 期间被取消/新事务：作废
+                    return
+            time.sleep(0.01)
+            cur = getattr(ctl, "hidden_file", lambda: None)()
         if not cur:
-            report("C2 提交失败：目标未装载成功")
+            report("C2 提交失败：目标未装载成功（%s）" % target)
+            ctl.clear_pending_preload()
             return
-        res = ctl.commit_preload(loop=ctl.loop_for(target))
+        res = ctl.commit_preload()
         with lock:                  # 提交完成即结束事务
             st["target"] = None
             st["gen"] += 1
+        err = ""
         if res == "cancel":
-            report("C2 提交已作废（现场已变），旧画面保留")
+            err = "C2 提交已作废（停止/全停/现场变化），旧画面保留"
         elif res == "not_ready":
-            report("C2 提交未就绪：%s，旧画面保留" % ctl.last_error)
+            err = "C2 提交未就绪，旧画面保留"
         elif res:
             sync.note_seen()
             sync.note_playing(res)
             report("C2 提交 → 上屏%s" % res)
+            return
         else:
-            report("C2 提交失败：%s" % ctl.last_error)
+            err = "C2 提交失败：%s" % (ctl.last_error or "未知原因")
+        # 失败必须走事件通道（GUI 状态面可见），不只是日志（P1-4）
+        report(err)
+        try:
+            sync.on_event(err)
+        except Exception:
+            pass
+        ctl.clear_pending_preload()   # 紫框不能停在「待提交」骗人
 
     def _slot(note, held_at_arrival, gen):
         target = NOTE_MAP[note]
         if target is not None and held_at_arrival:
-            with lock:              # 事务仍有效才选目标
-                if gen != st["gen"] or not st["held"]:
-                    return          # 事务已取消：迟到的槽位音符不再预载
-            ok = ctl.preload(target)
+            with lock:              # 只按代际判事务仍有效
+                # 不能同时要求 st["held"]：短按时 note-off 已把 held 置
+                # False，但本事件在到达时确属该事务（P1-1 根因）
+                if gen != st["gen"]:
+                    return          # 事务已取消/被取代：迟到的槽位不再预载
+            ok = ctl.preload(target, ctl.loop_for(target))
             if ok:
                 with lock:
                     if gen == st["gen"]:
@@ -1008,7 +1044,13 @@ def note_handler(ctl, sync, report=print):
             "" if ok else " 失败：%s" % ctl.last_error))
 
     threading.Thread(target=worker, daemon=True).start()
+    def on_cc(cc):
+        # All Sound Off(120)/All Notes Off(123)：只取消事务，不提交
+        if cc in (120, 123):
+            cancel_transaction("取消（All Notes Off）")
+
     on_note.note_off = on_note_off
+    on_note.cc = on_cc
     on_note.cancel_transaction = cancel_transaction
     return on_note
 
@@ -1102,11 +1144,34 @@ def main():
         hit = _pick(_out_devices())
         if hit is None:
             sys.exit("没找到 %s 输出端口" % PORT_HINT)
-        send_note(hit[0], note)
         m = NOTE_MAP.get(note)
-        if m is None and note == PRELOAD_KEY:
-            m = "预载修饰键（按住+槽位音符=预载）"
+        if note == PRELOAD_KEY:
+            # C2 是事务键：单发 on 会把运行中的桥永久留在「按住」态。
+            # 调试口自动配对 on/off（空事务，不提交任何目标），
+            # 要测完整预载请用 --vjtx <槽位音符>
+            send_note(hit[0], note)
+            time.sleep(0.15)
+            send_note(hit[0], note, vel=0)
+            print("已发 C2 on/off（空事务，不提交；完整预载用 "
+                  "--vjtx <槽位音符>）", flush=True)
+            return
+        send_note(hit[0], note)
         print("已发 note %d（映射 %s）" % (note, m), flush=True)
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--vjtx":
+        # 完整预载事务：C2 on → 槽位 → C2 off（首帧就绪后上屏）
+        slot = int(sys.argv[2])
+        hit = _pick(_out_devices())
+        if hit is None:
+            sys.exit("没找到 %s 输出端口" % PORT_HINT)
+        send_note(hit[0], PRELOAD_KEY)
+        time.sleep(0.05)
+        send_note(hit[0], slot)
+        print("已发 C2 on + %d（预载中，0.8s 后松开提交）" % slot,
+              flush=True)
+        time.sleep(0.8)
+        send_note(hit[0], PRELOAD_KEY, vel=0)
+        print("已发 C2 off（提交上屏）", flush=True)
         return
     ctl = ObsController(load_obs_cfg())
     sync = TransportSync(ctl, on_event=lambda m: print(m, flush=True))
