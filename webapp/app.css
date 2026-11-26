@@ -658,6 +658,13 @@ input.invalid { border-color: var(--err) !important; }
   color: var(--warn); font-variant-numeric: tabular-nums;
   white-space: nowrap; }
 .shift-val.off { color: var(--dim); font-weight: 400; }
+/* 每琴的控制器号（CC16/CC17）：紧贴网格上方，与列标签同字号档 */
+.shift-cc { font-size: var(--f-xs); color: var(--fg); margin: 0 0 var(--s2);
+  font-variant-numeric: tabular-nums; }
+/* CC 轨写法规则：卡片脚注一句话；完整规则在卡头悬停 */
+.shift-rule { margin: var(--s3) 0 0; font-size: var(--f-xs);
+  line-height: 1.6; color: var(--fg); }
+.shift-rule .dim { color: var(--dim); }
 /* 双列区间每琴四格恒为一排：共用 .vj-grid 的 105px 下限按默认窗宽调，最小
    窗宽（1120）下列宽约 404px 放不下四张=折成 3+1。此区间列宽 ≥388px，
    每格 ≥89px 容得下「降半音」；单列区间保持自动排布（窄到手机自然换行） */

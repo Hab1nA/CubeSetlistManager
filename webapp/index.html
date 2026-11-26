@@ -296,7 +296,7 @@
         </div>
       </div>
       <div class="card slotcard">
-        <h3 title="触发轨也可用控制器直设：CC16 为 JUNO，CC17 为 AX-09，64 为原调">移调信号<span class="h3-note">由自动化轨控制</span></h3>
+        <h3 title="触发轨两种写法：控制器直设（推荐，定位/起播自动补发）或键位步进（增量累加），两者可共存">移调信号<span class="h3-note">由自动化轨控制</span></h3>
         <div class="shift-cols">
           <div class="shift-col">
             <div class="shift-head">
@@ -305,6 +305,7 @@
               <button type="button" class="btn ghost xs" data-zero="juno"
                 title="移调归零；下次定位或播放时按时间线恢复">归零</button>
             </div>
+            <div class="shift-cc">控制器 CC16<span class="dim"> · 64 = 原调 · 范围 ±24 半音</span></div>
             <div class="slot-grid vj-grid">
               <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="-1" title="向 JUNO 发送一次降半音"><span class="s-note">C2</span><span class="s-pc">降半音</span></div>
               <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="juno" data-delta="1" title="向 JUNO 发送一次升半音"><span class="s-note">C#2</span><span class="s-pc">升半音</span></div>
@@ -319,6 +320,7 @@
               <button type="button" class="btn ghost xs" data-zero="ax"
                 title="移调归零；下次定位或播放时按时间线恢复">归零</button>
             </div>
+            <div class="shift-cc">控制器 CC17<span class="dim"> · 64 = 原调 · 范围 ±12 半音</span></div>
             <div class="slot-grid vj-grid">
               <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="-1" title="向 AX-09 发送一次降半音"><span class="s-note">F2</span><span class="s-pc">降半音</span></div>
               <div class="slot vj-cell shift-cell" role="button" tabindex="0" data-inst="ax" data-delta="1" title="向 AX-09 发送一次升半音"><span class="s-note">F#2</span><span class="s-pc">升半音</span></div>
@@ -327,6 +329,7 @@
             </div>
           </div>
         </div>
+        <p class="shift-rule">CC 轨写法<span class="dim">：移调段开头写目标值、结尾写回 64；目标值 = 64 + 半音数（升 2 个半音写 66，降 1 个八度写 52），定位与起播时 Cubase 自动补发。上方键位是增量步进，两种写法可混用。</span></p>
       </div>
       <div class="page-foot">
         <span class="dim sm-txt">应用后生效：JUNO DS-88 / AX-09 Lucina 输入输出端口</span>

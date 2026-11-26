@@ -12,6 +12,8 @@ import threading
 import time
 import types
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import kbd_auto
@@ -26,22 +28,32 @@ class _Q(list):
 
 
 class _Sw:
-    """假收发器：只记提交。"""
+    """假收发器：记提交；on_done 按 submit_err 同步回调（None=发送成功）。
+    真收发器在发送线程回调，这里同步回调即可覆盖记账逻辑（回滚/确认）。"""
 
-    def __init__(self):
+    def __init__(self, submit_err=None):
         self.shifts, self.msgs, self.bumps = [], [], 0
+        self.submit_err = submit_err
 
-    def submit_shift(self, total, why="", quiet=False):
+    def _done(self, on_done):
+        if on_done:
+            on_done(self.submit_err)
+
+    def submit_shift(self, total, why="", quiet=False, on_done=None):
         self.shifts.append((total, quiet))
+        self._done(on_done)
 
-    def submit_msgs(self, msgs, why="", quiet=False):
+    def submit_msgs(self, msgs, why="", quiet=False, on_done=None):
         self.msgs.append(msgs)
+        self._done(on_done)
 
     def bump(self):
         self.bumps += 1
 
 
-def _app():
+def _app(monkeypatch=None):
+    """桩 App：给了 monkeypatch 就把 out_present 接到桩的 _port_ok（默认
+    在场）；不给则调用方自己 patch。"""
     app = types.SimpleNamespace()
     app.q = _Q()
     app.ctrl = None
@@ -57,16 +69,23 @@ def _app():
     app.cur = 0
     app._load_lock = threading.Lock()
     app._load_gen = 0
+    app._shift_ack = {"juno": 0, "ax": 0}
+    app._port_ok = True            # out_present 的桩开关（缺端口用例改 False）
     # SimpleNamespace 无类方法解析：显式绑定真实现（test_manual_adopt 同款）
     for name in ("_juno_shift_set", "_ax_shift_set", "_shift_reset",
-                 "_shift_step"):
+                 "_shift_step", "_shift_plan", "_shift_reachable",
+                 "_shift_undo", "_shift_mark_ok"):
         app.__dict__[name] = (lambda *a, _n=name, **kw:
                               getattr(sg.App, _n)(app, *a, **kw))
+    if monkeypatch is not None:
+        monkeypatch.setattr(kbd_auto, "out_present",
+                            lambda cfg: app._port_ok)
     return app
 
 
 def _cc(app, cc, val, ch=0):
     sg.App._on_kb_msg(app, 0xB0 | ch, cc, val)
+
 
 
 def _note(app, note, on=True):
@@ -76,6 +95,13 @@ def _note(app, note, on=True):
 def _aged(app):
     """上次发出时刻拨到限流窗之前。"""
     app._juno_shift_at = time.monotonic() - sg.SHIFT_RESEND_SEC - 0.01
+
+
+@pytest.fixture(autouse=True)
+def _ports_present(monkeypatch):
+    """本文件默认「输出端口在场」：移调发送前的可达性预检恒过。测端口缺
+    席的用例在用例体内再 monkeypatch 成 False 覆盖（后设生效）。"""
+    monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: True)
 
 
 # ---- 纯换算 ----
@@ -182,18 +208,49 @@ def test_ax_same_value_skipped():
     assert len(app.ax_switcher.msgs) == 2
 
 
-def test_switcher_absent_logs_once_and_heals_later():
+def test_switcher_absent_does_not_accumulate(monkeypatch):
+    """收发器/端口不在：值不累计、不显示假音高（旧实现先记账再发送，连点
+    会一路加到最大值而琴上毫无反应）；接上后按时间线重来。"""
     app = _app()
+    monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: False)
     app.switcher = None
     _cc(app, 16, 66)
-    assert app.juno_shift == 2
-    assert app.q == [sg.ui_text.TRANSPOSE_NOT_READY % 2]
-    _cc(app, 16, 66)                                   # 同值窗内：连日志都没有
-    assert app.q == [sg.ui_text.TRANSPOSE_NOT_READY % 2]
-    app.switcher = _Sw()                               # 端口配上了：补发落到琴
-    _aged(app)
+    assert app.juno_shift == 0                         # 失败不累计
+    assert app.q == [sg.ui_text.SHIFT_NO_OUTPUT % "JUNO DS-88"]
+    _cc(app, 16, 66)                                   # 连点：值仍不动
+    assert app.juno_shift == 0
+    app.switcher = _Sw()                               # 端口接上了：按时间线落地
+    monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: True)
     _cc(app, 16, 66)
-    assert app.switcher.shifts == [(2, True)]
+    assert app.juno_shift == 2
+    assert app.switcher.shifts == [(2, False)]
+
+
+def test_unreachable_reset_still_clears(monkeypatch):
+    """归零时端口不在：值仍清零（不必留一个永远发不出去的值），日志说明。"""
+    app = _app()
+    app.juno_shift = 5
+    app._shift_ack["juno"] = 5
+    monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: False)
+    sg.App._shift_reset(app)
+    assert app.juno_shift == 0 and app._shift_ack["juno"] == 0
+    assert app.q == [sg.ui_text.SHIFT_RESET_UNREACHED % "JUNO"]
+    assert app.switcher.shifts == []
+
+
+def test_send_failure_rolls_back(monkeypatch):
+    """预检通过但发送失败（运行中拔口）：回滚到上次确认成功的值，不累计。"""
+    app = _app()
+    _cc(app, 16, 66)                                   # +2 成功
+    assert (app.juno_shift, app._shift_ack["juno"]) == (2, 2)
+    app.switcher.submit_err = "未找到含「JUNO」的 MIDI 输出端口"
+    app.switcher.shifts.clear()
+    _cc(app, 16, 68)                                   # 想 +4，发送失败
+    assert app.juno_shift == 2                         # 回到确认值，不是 4
+    assert app.switcher.shifts == [(4, False)]
+    app.switcher.submit_err = None
+    _cc(app, 16, 66)                                   # 恢复后再改：正常
+    assert app.juno_shift == 2
 
 
 # ---- 归零 ----
@@ -213,7 +270,7 @@ def test_finish_switch_common_resets(monkeypatch):
     """跨工程切换收尾：旧歌移调不带进新歌。"""
     monkeypatch.setattr(sg.kbd_auto, "load_slots",
                         lambda p, kind=None, point_id=None: {})
-    app = _app()
+    app = _app(monkeypatch)
     app.juno_shift, app.ax_shift = 7, 5
     sg.App._finish_switch_common(
         app, {"path": "/p2", "song_name": "S", "point": None}, False)
@@ -227,7 +284,7 @@ def test_reload_entry_slots_never_resets(monkeypatch):
     """同工程定位点跳转/对位只重装槽位：移调不动。"""
     monkeypatch.setattr(sg.kbd_auto, "load_slots",
                         lambda p, kind=None, point_id=None: {})
-    app = _app()
+    app = _app(monkeypatch)
     app.juno_shift, app.ax_shift = 7, 5
     sg.App._reload_entry_slots(app, {"path": "/p1", "point": None})
     assert (app.juno_shift, app.ax_shift) == (7, 5)
@@ -385,25 +442,29 @@ def test_kb_result_short_for_status_card():
 
 
 def test_port_missing_failure_keeps_card_short_log_full(monkeypatch):
-    """端到端：真 ToneSwitcher + 真发送器找不到端口的全长错误 → 运行日志留
-    全文，「最近切换」卡只拿短句。整句进卡有卡片四倍宽，会被跑马灯带着
-    整行滑走（11-25 真机实测 3.5s 后卡片空白）。"""
+    """端到端：预检过后发送才失败（运行中拔口）→ 运行日志留全文，「最近
+    切换」卡只拿短句。整句进卡有卡片四倍宽，会被跑马灯带着整行滑走
+    （11-25 真机实测 3.5s 后卡片空白）。"""
     monkeypatch.setattr(kbd_auto, "all_out_devices",
                         lambda: [(0, "Loop A"), (1, "Loop B")])
-    app = _app()
+    app = _app(monkeypatch)
     logs = []
     sw = kbd_auto.ToneSwitcher(dict(kbd_auto.DEFAULT_JUNO), logs.append,
                                on_result=lambda d, e: sg.App._on_kb_result(
                                    app, d, e))
     try:
         app.switcher = sw
-        sg.App._shift_step(app, "juno", 0)
+        app.juno_shift, app._shift_ack["juno"] = 0, 0
+        # all_out_devices 只列「Loop」，配置却要「JUNO」：预检放行由 autouse
+        # fixture 给，发送器实际找不到口=走失败路径（等价运行中拔口）
+        sg.App._shift_step(app, "juno", 1)
         assert _wait(lambda: bool(logs))
     finally:
         sw.stop()
-    assert logs == ["JUNO 移调归零失败：未找到含「JUNO」的 MIDI 输出端口；"
-                    "现有：Loop A、Loop B"]
-    assert app._kb_last == "JUNO 移调归零失败：输出端口未找到"
+    assert logs == ["JUNO 全局移调 +1 半音失败：未找到含「JUNO」的 MIDI "
+                    "输出端口；现有：Loop A、Loop B"]
+    assert app._kb_last == "JUNO 全局移调 +1 半音失败：输出端口未找到"
+    assert app.juno_shift == 0                         # 失败不累计
 
 
 # ---- 网页步进 ----

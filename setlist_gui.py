@@ -611,6 +611,9 @@ class App:
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）=上次发出的绝对值
         self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
         self._juno_shift_at = 0.0       # JUNO 上次发出时刻（monotonic）：同值重发限流
+        # 上次确认「发送成功」的值：发送失败回滚到此（失败不累计）；也是
+        # 继续步进的基准（琴上没收到就不该一路加到最大值）
+        self._shift_ack = {"juno": 0, "ax": 0}
         self.points = {}                # lib_key → 定位点数据（_load_songs 装载）
         self._goto_ack = None           # (发送前位置, 时戳, 标签)：GOTO 无回执告警
         self.mmc_out = None             # MMC 输出口句柄（定位点 GOTO）
@@ -1248,46 +1251,98 @@ class App:
                     pass
             time.sleep(mb.POLL_SEC)
 
+    def _shift_plan(self, key, total=0, delta=0):
+        """锁内只做「读现值→算目标→判可达→写值」并返回要发的值；发送与
+        回调都在锁外（收发器可能同步回调 on_done，持锁调用=非重入锁死锁）。
+        返回 (要发送的值, quiet, 现值是否已该值)；None=本次不发。"""
+        attr = "juno_shift" if key == "juno" else "ax_shift"
+        cfg = self.jcfg if key == "juno" else self.axcfg
+        limit = (kbd_auto.SHIFT_LIMIT if key == "juno"
+                 else kbd_auto.AX_SHIFT_LIMIT)
+        with _SHIFT_LOCK:
+            cur = getattr(self, attr)
+            goal = max(-limit, min(limit, cur + delta if delta else total))
+            if key == "juno":
+                now = time.monotonic()
+                if goal == cur:
+                    # 同值重发限流：窗外照发（琴被面板改过后的自愈通道）
+                    if now - self._juno_shift_at < SHIFT_RESEND_SEC:
+                        return None
+                    self._juno_shift_at = now
+                    same = True
+                else:
+                    self._juno_shift_at = now
+                    same = False
+            else:
+                if goal == cur:
+                    return None          # AX 同值跳过（序列长，会堵音色队列）
+                same = False
+            if not (goal or cur):
+                return None              # 双零：没东西可发
+            # 可达性在锁内判（读配置/枚举口，不阻塞；不发包不回调）
+            if not self._shift_reachable(cfg):
+                if goal == 0:
+                    self.q.put(ui_text.SHIFT_RESET_UNREACHED
+                               % ("JUNO" if key == "juno" else "AX-09"))
+                    setattr(self, attr, 0)   # 归零照清账：琴接上按时间线重来
+                    self._shift_ack[key] = 0
+                    return None
+                self.q.put(ui_text.SHIFT_NO_OUTPUT % (
+                    "JUNO DS-88" if key == "juno" else "AX-09 Lucina"))
+                return None              # 失败不累计：值不动
+            setattr(self, attr, goal)
+            return goal, same
+
+    def _shift_reachable(self, cfg):
+        sw = getattr(self, "switcher", None)
+        ax = getattr(self, "ax_switcher", None)
+        if sw is None and ax is None:
+            return False
+        return kbd_auto.out_present(cfg)
+
     def _juno_shift_set(self, total=0, delta=0):
         """JUNO 移调落到绝对值 total（delta 非零=在现值上加减），越界钳 ±24。
-        同值重发：限流 SHIFT_RESEND_SEC 且静默。保留重发是琴被面板手动改过
-        后的自愈通道——下一次定位/起播 Cubase 补发同值即恢复；限流是因为
-        拖光标时补发连发，每个任务都要枚举端口并开关口一次。"""
-        with _SHIFT_LOCK:
-            total = max(-kbd_auto.SHIFT_LIMIT,
-                        min(kbd_auto.SHIFT_LIMIT,
-                            self.juno_shift + delta if delta else total))
-            same = total == self.juno_shift
-            now = time.monotonic()
-            if same and now - self._juno_shift_at < SHIFT_RESEND_SEC:
-                return
-            self.juno_shift = total
-            self._juno_shift_at = now
-            sw = getattr(self, "switcher", None)
-            if sw is None:
-                if not same:
-                    self.q.put(ui_text.TRANSPOSE_NOT_READY % total)
-                return
-            sw.submit_shift(total, why=_shift_why("JUNO", total),
-                            quiet=same)
+        成功才记账：输出口不在=这次必然发不出去，值不动、界面显示不变（失
+        败不累计）；发送途中拔口的竞态由失败回调回滚到上次确认成功的值。"""
+        plan = self._shift_plan("juno", total, delta)
+        if plan is None:
+            return
+        goal, same = plan
+        sw = self.switcher
+        sw.submit_shift(goal, why=_shift_why("JUNO", goal), quiet=same,
+                        on_done=lambda err: (self._shift_mark_ok("juno", goal)
+                                             if not err else
+                                             self._shift_undo("juno", goal)))
 
     def _ax_shift_set(self, total=0, delta=0):
-        """AX-09 移调（弯音钉位）落到绝对值 total（delta 非零=加减），钳 ±12。
-        同值直接跳过：弯音序列 6 条约 0.25s 且与 AX 音色切换同队列，追补发
-        会堵住音色切换（弯音杆一碰即覆盖是既有行为，不靠重发自愈）。"""
+        """AX-09 移调（弯音钉位）落到绝对值 total，钳 ±12。同值跳过（弯音
+        序列 6 条约 0.25s，追补发会堵 AX 音色队列）；成功才记账同上。"""
+        plan = self._shift_plan("ax", total, delta)
+        if plan is None:
+            return
+        goal, _same = plan
+        self.ax_switcher.submit_msgs(
+            kbd_auto.ax_shift_msgs(goal, self.axcfg["ch"]),
+            why=_shift_why("AX-09", goal),
+            on_done=lambda err: (self._shift_mark_ok("ax", goal)
+                                 if not err else self._shift_undo("ax", goal)))
+
+    def _shift_undo(self, key, sent):
+        """发送失败回滚（发送线程调用）：只有「上次确认成功的值」仍是
+        sent 才回滚——其后用户又改过（并发点击/触发轨补发）时新值才是
+        用户想要的，不能倒回旧值。回滚不重发（发不出去才走到这里）。"""
         with _SHIFT_LOCK:
-            total = max(-kbd_auto.AX_SHIFT_LIMIT,
-                        min(kbd_auto.AX_SHIFT_LIMIT,
-                            self.ax_shift + delta if delta else total))
-            if total == self.ax_shift:
+            attr = "juno_shift" if key == "juno" else "ax_shift"
+            if getattr(self, attr) != sent:
                 return
-            self.ax_shift = total
-            sw = getattr(self, "ax_switcher", None)
-            if sw is None:
-                self.q.put(ui_text.AX_TRANSPOSE_NOT_READY % total)
-                return
-            sw.submit_msgs(kbd_auto.ax_shift_msgs(total, self.axcfg["ch"]),
-                           why=_shift_why("AX-09", total))
+            setattr(self, attr, self._shift_ack[key])
+
+    def _shift_mark_ok(self, key, total):
+        """发送成功：记为「上次确认成功」（失败回滚的落点）。"""
+        with _SHIFT_LOCK:
+            if getattr(self, "juno_shift" if key == "juno"
+                       else "ax_shift") == total:
+                self._shift_ack[key] = total
 
     def _shift_reset(self):
         """两琴移调归零：跨工程切换收尾（旧歌的移调不得带进新歌）与全停。

@@ -467,6 +467,13 @@ def all_out_devices():
     return mb._out_devices() + midi_ble.out_devices()
 
 
+def out_present(cfg):
+    """配置的输出口当前在不在。发送前的同步预检（枚举有缓存，代价可忽
+    略）：不在=这次必然发不出去，调用方据此不记账、不动界面显示的值。"""
+    return pick_hit(all_out_devices(), cfg.get("outHint"),
+                    cfg.get("dev", 0)) is not None
+
+
 class RawMidiIn:
     """按名字子串打开 MIDI 输入口；on_msg(status, d1, d2) 只收短消息。
     open/close 走 midi_bridge 的 winmm 专线（限时+弃单回收）——主线程
@@ -650,15 +657,17 @@ class ToneSwitcher:
         if slot:
             self._q.put((slot, why, self.epoch))
 
-    def submit_msgs(self, msgs, why="", quiet=False):
+    def submit_msgs(self, msgs, why="", quiet=False, on_done=None):
         """预构造消息序列（全局移调/全停静音）：全局意图不代际，永不作废。
         quiet=同值重发（Cubase 每次定位/起播都补发同一个控制器值）：成功
-        不写日志不回调，失败照常报——否则拖一次光标刷一屏日志。"""
-        self._q.put((msgs, why, None, quiet))
+        不写日志不回调，失败照常报——否则拖一次光标刷一屏日志。
+        on_done(错误文案|None) 在发送线程收尾时调用（成功失败都调）：
+        移调用它把「发送失败」回滚成上次确认成功的值（失败不累计）。"""
+        self._q.put((msgs, why, None, quiet, on_done))
 
-    def submit_shift(self, total, why="", quiet=False):
+    def submit_shift(self, total, why="", quiet=False, on_done=None):
         """全局移调走同一串行队列（预构造消息序列）。"""
-        self.submit_msgs(shift_msgs(total), why, quiet)
+        self.submit_msgs(shift_msgs(total), why, quiet, on_done)
 
     def _loop(self):
         while True:
@@ -669,6 +678,7 @@ class ToneSwitcher:
                 continue           # 畸形队列项：解包在 try 外，不拦=发送线程即死
             item, why, gen = got[:3]
             quiet = len(got) > 3 and got[3]
+            on_done = got[4] if len(got) > 4 else None
             if gen is not None and gen != self.epoch:
                 continue           # 换歌/换点后旧歌槽位请求已过期：静默丢弃
             try:
@@ -679,6 +689,8 @@ class ToneSwitcher:
                             why, "失败：%s" % err if err else ""))
                         if self.on_result:
                             self.on_result(why, err)
+                    if on_done:        # 成功失败都要通知（移调记账要据此回滚）
+                        on_done(err)
                     continue
                 slot = item
                 err = send_slot(slot, self.cfg)
