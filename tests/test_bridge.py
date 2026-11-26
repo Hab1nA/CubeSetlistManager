@@ -682,22 +682,36 @@ def test_retire_names_removes_old_pair(tmp_path):
     assert ctl._item_ids["新名"][0] == "S"
 
 
-def test_c2_preload_modifier():
-    """C2(48) 预载修饰键：按住期间槽位音符=预载（不记磁吸窗）；note-off
-    松开后=正常触发（记磁吸窗）；同拍容差（槽位先到、C2 在窗内后到）=
-    预载；C2 单独到达=no-op；102 熄屏不被修饰。"""
+def test_c2_transaction():
+    """C2 预载事务（docs/VJ设计与演出复查.md §5.7）：
+    on 开事务 → 事务内槽位选唯一目标 → off 提交上屏；
+    无事务时槽位单发=旧行为直触发；同事务后到覆盖前到；
+    off 无目标 no-op；102 熄屏不受修饰且取消事务；取消后不提交不上屏。"""
 
     class _Ctl:
         def __init__(self):
             self.cfg = {}
             self.pre = []
             self.sets = []
+            self.commits = []
             self.stops = 0
-            self.last_error = None
+            self.gen_bumps = 0
+            self.hidden = None
+            self.last_error = ""
         def preload(self, f):
             self.pre.append(f)
+            self.hidden = f
             return True
-        def loop_for(self, f):                      # 借真实现（只摸 self.cfg）
+        def hidden_file(self):
+            return self.hidden
+        def commit_preload(self, loop=False):
+            self.commits.append((self.hidden, loop))
+            f = self.hidden
+            self.hidden = None
+            return f
+        def bump_media_gen(self):
+            self.gen_bumps += 1
+        def loop_for(self, f):                  # 借真实现（只摸 self.cfg）
             return ObsController.loop_for(self, f)
         def set_media(self, f, loop):
             self.sets.append((f, loop))
@@ -706,66 +720,228 @@ def test_c2_preload_modifier():
             self.stops += 1
             return True
 
-    ctl = _Ctl()
+    def fresh():
+        ctl = _Ctl()
+        sync = mb.TransportSync(ctl)
+        lines = []
+        on = mb.note_handler(ctl, sync, report=lines.append)
+        return ctl, sync, on, lines
+
+    def wait(cond, sec=2):
+        deadline = time.time() + sec
+        while time.time() < deadline:
+            if cond():
+                return True
+            time.sleep(0.005)
+        return False
+
+    # 1) C2 on + 槽位 → off：装载到隐藏侧并提交上屏，不记磁吸窗
+    ctl, sync, on, lines = fresh()
+    on(48, 100)
+    on(74, 100)                                  # 槽位3
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    assert ctl.commits == [] and sync._last_note == 0.0
+    on.note_off(48)
+    assert wait(lambda: ctl.commits == [("3.mp4", False)])
+    assert wait(lambda: sync.video_state == "playing"
+                and sync.current_video == "3.mp4")
+    assert ctl.sets == []                        # 提交走 commit 不走 set_media
+    assert any("C2 提交 → 上屏3.mp4" in ln for ln in lines)
+
+    # 2) 同事务两个槽位：只有最后目标可提交（事件不被静默吞掉）
+    ctl, _sync, on, _lines = fresh()
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    on(73, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4", "2.mp4"])
+    on.note_off(48)
+    assert wait(lambda: ctl.commits == [("2.mp4", False)])
+
+    # 3) off 时没有目标：无操作、不报错
+    ctl, _sync, on, _lines = fresh()
+    on(48, 100)
+    on.note_off(48)
+    time.sleep(0.08)
+    assert ctl.commits == [] and ctl.sets == []
+
+    # 4) 无 C2 事务时槽位单发 = 旧行为直接触发（记磁吸窗）
+    ctl, sync, on, _lines = fresh()
+    on(76, 100)
+    assert wait(lambda: ctl.sets == [("5.mp4", False)])
+    assert sync._last_note > 0.0 and ctl.commits == []
+
+    # 5) 102 熄屏不受 C2 修饰，且取消事务（off 不再提交）
+    ctl, sync, on, _lines = fresh()
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    on(102, 100)
+    assert wait(lambda: ctl.stops == 1)
+    assert wait(lambda: sync.video_state == "stopped")
+    on.note_off(48)
+    time.sleep(0.08)
+    assert ctl.commits == [] and ctl.pre == ["3.mp4"]
+
+    # 6) 显式取消（停止/回零/全停/换工程）：不提交、不卡键，
+    #    之后的槽位音符回到旧触发语义
+    ctl, sync, on, lines = fresh()
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    on.cancel_transaction("取消")
+    assert wait(lambda: any("C2 预载事务已取消" in ln for ln in lines))
+    on.note_off(48)                              # 迟到的 off：不提交
+    time.sleep(0.08)
+    assert ctl.commits == []
+    on(74, 100)                                  # C2 未按住：正常触发
+    assert wait(lambda: ctl.sets == [("3.mp4", False)])
+
+    # 7) 取消会作废已发往 OBS 的在途提交（bump 代际）
+    ctl, _sync, on, _lines = fresh()
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    n0 = ctl.gen_bumps
+    on.cancel_transaction("全停")
+    assert ctl.gen_bumps == n0 + 1
+    assert ctl.commits == []
+
+    # 8) 提交后目标清空：重复 off 不会再上屏
+    ctl, _sync, on, _lines = fresh()
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    on.note_off(48)
+    assert wait(lambda: ctl.commits == [("3.mp4", False)])
+    on.note_off(48)
+    time.sleep(0.08)
+    assert len(ctl.commits) == 1
+
+    # 9) 事件按到达时 C2 快照判定：C2 之前到达的槽位音符不被后来的
+    #    C2 改判成预载
+    ctl, _sync, on, _lines = fresh()
+    on(77, 100)                                  # 槽位6（C2 尚未按下）
+    on(48, 100)                                  # 紧随其后的 C2 on
+    assert wait(lambda: ctl.sets == [("6.mp4", False)])
+    assert ctl.pre == []
+    on.note_off(48)
+
+    # 10) 提交失败（未就绪/被作废）：不记在播，旧画面保留由 ctl 层负责
+    class _Bad(_Ctl):
+        def commit_preload(self, loop=False):
+            self.last_error = "预载视频 8.0s 未就绪，旧画面保留"
+            return "not_ready"
+    ctl = _Bad()
     sync = mb.TransportSync(ctl)
     lines = []
-    on_note = mb.note_handler(ctl, sync, report=lines.append)
-    on_note_off = on_note.note_off
+    on = mb.note_handler(ctl, sync, report=lines.append)
+    on(48, 100)
+    on(74, 100)
+    assert wait(lambda: ctl.pre == ["3.mp4"])
+    on.note_off(48)
+    assert wait(lambda: any("C2 提交未就绪" in ln for ln in lines))
+    assert sync.video_state != "playing"
+def test_commit_preload_ready_and_cancel(tmp_path):
+    """obs_ctrl 提交路径：
+    1) 就绪（PLAYING+游标前进）才交换，成功后隐藏侧目标清零；
+    2) 游标不动（到末帧的旧文件）不算就绪 → not_ready，旧画面保留；
+    3) 代际递增（熄屏/全停）作废在途提交，不交换；
+    4) 切换 OBS 节目场景后按实况校准活动侧，不隐藏可见源。"""
+    import obs_ctrl as oc
 
-    def wait(lst, want, sec=2):
-        deadline = time.time() + sec
-        while time.time() < deadline and lst[-1:] != [want]:
-            time.sleep(0.005)
-        assert lst[-1] == want, (lst, want)
+    class _W(_FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.cursor = 0
+            self.state = "OBS_MEDIA_STATE_PLAYING"
+            self.scene = "S"
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetCurrentProgramScene":
+                return {"currentProgramSceneName": self.scene}
+            if kind == "GetMediaInputStatus":
+                self.cursor += 5
+                return {"mediaState": self.state,
+                        "mediaCursor": self.cursor}
+            return super().request(kind, payload, **kw)
 
-    # 1) C2 按住 + 槽位音符 = 预载；不记磁吸窗
-    on_note(48, 100)
-    on_note(74, 100)                            # 槽位3
-    wait(ctl.pre, "3.mp4")
-    assert ctl.sets == [] and sync._last_note == 0.0
-    assert any("C2+音符 74 → 预载3.mp4" in ln for ln in lines)
+    ctl, ws = _ab_ctl(tmp_path)
+    ws2 = _W()
+    ctl._ws = ws2
+    ctl._item_ids = {}
+    ctl._ensure_media_input(ws2)
+    assert ctl.preload("3.mp4") is True
+    res = ctl.commit_preload(False)
+    assert res == "3.mp4"
+    assert ctl._active == "B"
+    assert ctl.hidden_file() is None
+    assert ws2.items["舞台视频 B"][1] is True
+    assert ws2.items["舞台视频"][1] is False
 
-    # 2) C2 按住期间另一槽位 = 换预载目标（隐藏侧单槽覆盖）
-    on_note(73, 100)
-    wait(ctl.pre, "2.mp4")
+    # 游标不前进：不是就绪，旧画面保留（不交换）
+    class _Stuck(_W):
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": 0}
+            return super().request(kind, payload, **kw)
 
-    # 3) note-off 松开后槽位音符 = 正常触发（记磁吸窗）
-    on_note_off(48)
-    on_note(74, 100)
-    wait(ctl.sets, ("3.mp4", False))
-    assert sync._last_note > 0.0
+    sql = ObsController({"videoRoot": str(tmp_path / "v")})
+    w3 = _Stuck()
+    sql._ws = w3
+    sql._ensure_media_input(w3)
+    assert sql.preload("4.mp4") is True
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 0.3
+    try:
+        res = sql.commit_preload(False)
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old
+    assert res == "not_ready"
+    assert sql._active == "A"              # 未交换
+    assert sql.hidden_file() == "4.mp4"    # 目标保留供重试
 
-    # 4) 同拍容差：槽位先到、C2 窗内后到 = 预载
-    on_note(76, 100)                            # 槽位5 先到（C2 未按住）
-    time.sleep(0.005)
-    on_note(48, 100)                            # 5ms 后 C2 到（窗内）
-    wait(ctl.pre, "5.mp4")
-    assert ("5.mp4", False) not in ctl.sets
-    on_note_off(48)
+    # 代际递增作废在途提交：提交进行中熄屏（真实时序），立即放弃
+    class _Slow(_FakeWS):
+        def __init__(self, on_restart):
+            super().__init__()
+            self.on_restart = on_restart
+        def request(self, kind, payload=None, **kw):
+            if kind == "TriggerMediaInputAction" and self.on_restart:
+                self.on_restart()
+            return super().request(kind, payload, **kw)
 
-    # 5) 超窗 = 触发（容差窗外 C2 才到）
-    on_note(77, 100)                            # 槽位6 先到
-    time.sleep(mb.PRELOAD_TOL + 0.05)           # 窗过后 worker 已按触发执行
-    wait(ctl.sets, ("6.mp4", False))
-    on_note(48, 100)                            # 迟到的 C2：对已处理音符无效
-    on_note_off(48)
+    ctl2 = ObsController({"videoRoot": str(tmp_path / "v")})
+    fired = []
+    w4 = _Slow(lambda: (ctl2.bump_media_gen(), fired.append(1)))
+    ctl2._ws = w4
+    ctl2._ensure_media_input(w4)
+    assert ctl2.preload("3.mp4") is True
+    old_t = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 5.0        # 若未快速中止，测试会明显变慢
+    try:
+        t0 = time.time()
+        res = ctl2.commit_preload(False)
+        cost = time.time() - t0
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old_t
+    assert fired == [1]
+    assert res == "cancel" and cost < 1.0
+    assert ctl2._active == "A"
 
-    # 6) C2 单独到达/松开 = no-op
-    n0 = (len(ctl.pre), len(ctl.sets))
-    on_note(48, 100)
-    on_note_off(48)
-    time.sleep(0.05)
-    assert (len(ctl.pre), len(ctl.sets)) == n0
-
-    # 7) 熄屏(102) 不被 C2 修饰（按住也照常熄屏）
-    on_note(48, 100)
-    on_note(102, 100)
-    deadline = time.time() + 2
-    while time.time() < deadline and ctl.stops == 0:
-        time.sleep(0.005)
-    assert ctl.stops == 1
-    on_note_off(48)
-    assert ctl.pre == ["3.mp4", "2.mp4", "5.mp4"]   # 熄屏没进预载
+    # 切场景后校准：新场景只有 A 可见 → 活动侧认 A，
+    # 预载不应隐藏 A
+    ctl3, w5 = _ab_ctl(tmp_path)
+    ctl3._active = "B"                     # 旧记账：B 在前台
+    class _Scene(_FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.items = {"舞台视频": [7, True], "舞台视频 B": [9, False]}
+    ws6 = _Scene()
+    ctl3._ws = ws6
+    ctl3._item_ids = {}
+    ctl3._sync_active_from_scene(ws6)
+    assert ctl3._active == "A"             # 按实况改成 A
 
 
 def test_natural_sort():

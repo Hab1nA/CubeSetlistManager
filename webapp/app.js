@@ -2674,7 +2674,7 @@ async function refreshVjMap(root, force) {
             : "视频库中未找到 " + row.file + "，可按「N 描述」命名放入视频目录")
             + " · 现况" + (mode === "default" ? "默认回落"
                 : mode === "loop" ? "循环" : "播一遍停")
-            + (row.preloaded ? " · 已预载" : "")
+            + (row.preloaded ? " · 待提交（松开 C2 上屏）" : "")
             + " · 点击切换为" + (mode === "default" ? "播一遍停"
                 : mode === "loop" ? "默认回落" : "循环");
         const flip = () => toggleVjLoop(cell, row);
@@ -2694,7 +2694,7 @@ async function refreshVjMap(root, force) {
       sub.className = "s-sub";
       sub.textContent = row.blackout ? "熄灭投影画面"
           : (row.hit ? "已就位" : "缺视频")
-            + (row.preloaded ? " · 已预载" : "");
+            + (row.preloaded ? " · 待提交" : "");
       cell.append(n, f, sub);
       box.appendChild(cell);
     });

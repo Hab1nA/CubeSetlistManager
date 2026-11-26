@@ -233,6 +233,12 @@ def natural_key(s):
 
 
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi")
+PRELOAD_READY_TIMEOUT = 8.0   # 预载提交等首帧上限（秒）：超时保留旧画面
+
+
+class _Abort(Exception):
+    """媒体动作中途作废（代际不符/目标被覆盖）：_act 按成功路径收尾，
+    不记错误不断链。"""
 
 
 def autodetect_obs():
@@ -270,10 +276,14 @@ class ObsController:
         # A/B 双源（无黑闪切换）：A=mediaInput、B=mediaInput+" B"，_active=
         # 当前可见侧；_item_ids=输入名→(scene, sceneItemId)（连接期校准，
         # 断链作废，值带 scene 防跨场景用旧 id）；_hidden_file=隐藏侧当前
-        # 装载文件（预载态展示，触发路径不依赖它）
+        # 待提交目标文件名（展示+提交校验）、_hidden_path=其绝对路径；
+        # _media_gen=媒体动作代际（熄屏/全停递增，作废在途提交：黑场后
+        # 旧事务不得重新上屏）
         self._active = "A"
         self._item_ids = {}
         self._hidden_file = None
+        self._hidden_path = None
+        self._media_gen = 0
 
     # ---- 生命周期 ----
 
@@ -342,6 +352,121 @@ class ObsController:
         """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
         return self._hidden_file
 
+    def bump_media_gen(self):
+        """作废在途媒体提交（熄屏/全停/回零/换工程调用）：已在飞的
+        commit_preload 完成时发现代际不符即放弃交换，黑场后不得复活。
+        锁外递增（RLock 语义不需要，但调用方可能在其它动作回调里触发）：
+        裸 int 自增在 CPython 下原子，且只被比较不参与复合条件。"""
+        self._media_gen += 1
+
+    def preload_state(self):
+        """预载态快照：(目标文件名, 已装载?)；未预载=(None, False)。"""
+        with self._lock:
+            return self._hidden_file, self._hidden_file is not None
+
+    def commit_preload(self, loop=False):
+        """提交预载目标（C2 note off）：首帧 READY 才交换上屏。
+        READY 轮询期间持 _act 锁，但代际不符/装载被覆盖即提前放弃——
+        旧画面不动。返回 "<file>"（成功）/ "cancel"（被作废）/
+        "not_ready"（超时未就绪，旧画面保留）/ False（失败，last_error）。"""
+        with self._lock:
+            gen = self._media_gen
+            name = self._hidden_file
+            path = self._hidden_path
+            new_name = self._hidden_name()
+        if not name or not path:
+            self.last_error = "无预载目标：先按 C2 + 槽位音符预载"
+            return False
+        ready = [False]
+
+        def do(ws):
+            if gen != self._media_gen:
+                raise _Abort()
+            # 场景实况校准：用户切了 OBS 节目场景时 _active 可能陈旧，
+            # 不能把当前可见源当隐藏侧操作（会隐藏现场画面）
+            self._sync_active_from_scene(ws)
+            if new_name != self._hidden_name():
+                raise _Abort()          # 校准后隐藏侧变了：本次提交作废
+            ws.request("TriggerMediaInputAction", {
+                "inputName": new_name,
+                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
+            if gen != self._media_gen:      # 熄屏/全停已发生：立即放弃，
+                raise _Abort()              # 不等 READY 超时（黑场要即时）
+            ready[0] = self._wait_ready(ws, new_name, gen)
+        ok = self._act("提交预载%s" % name, do, abort_ok=True)
+        if not ok:
+            # 区分「代际作废」与「网络失败」：作废是正常路径，调用方按
+            # cancel 处理（不报错、不重试）
+            with self._lock:
+                if gen != self._media_gen:
+                    return "cancel"
+            return False
+        if not ready[0]:
+            self.last_error = ("预载视频 %.1fs 未就绪，旧画面保留"
+                               % PRELOAD_READY_TIMEOUT)
+            return "not_ready"
+        # 交换（重新拿锁：_act 已释放；交换前再验代际与目标未被覆盖）
+        with self._lock:
+            gen_ok = gen == self._media_gen
+            same = name == self._hidden_file and self._hidden_name() == new_name
+        if not (gen_ok and same):
+            return "cancel"
+        def swap(ws):
+            if gen != self._media_gen:
+                raise _Abort()
+            self._swap(ws, new_name)
+        if not self._act("上屏%s" % name, swap, abort_ok=True):
+            return False
+        return name
+
+    def _wait_ready(self, ws, name, gen, timeout=None):
+        """首帧就绪判定：PLAYING 且时间戳前进（仅 PLAYING 会把已到末帧的
+        旧文件当就绪）。代际作废/目标被覆盖时提前放弃。"""
+        deadline = time.time() + (timeout if timeout is not None
+                                  else PRELOAD_READY_TIMEOUT)
+        first = True
+        last_pos = None
+        while time.time() < deadline:
+            if gen != self._media_gen:
+                return False
+            r = ws.request("GetMediaInputStatus", {"inputName": name},
+                           timeout=0.5)
+            if r.get("mediaState") == "OBS_MEDIA_STATE_PLAYING":
+                pos = r.get("mediaCursor")
+                # 必须看到游标真的前进才算就绪：PLAYING 但游标停住=源停在
+                # 末帧（旧文件 ENDED 后重播前的残留），交换上去就是黑屏
+                if not first and pos is not None and pos != last_pos:
+                    return True
+                first = False
+                last_pos = pos
+            elif r.get("mediaState") in (
+                    "OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED"):
+                return False
+            time.sleep(0.02)
+        return False
+
+    def _sync_active_from_scene(self, ws):
+        """按当前节目场景实况重校 _active（防切场景后旧记账把可见源当
+        隐藏侧）：仅一侧可见=认该侧；双显=按记账侧归一；双隐不动。"""
+        scene = ws.request("GetCurrentProgramScene")["currentProgramSceneName"]
+        a = self.cfg.get("mediaInput", "舞台视频")
+        b = self._b_name()
+        items = ws.request("GetSceneItemList", {"sceneName": scene})
+        ena = {i["sourceName"]: i["sceneItemEnabled"]
+               for i in items["sceneItems"] if i["sourceName"] in (a, b)}
+        ea, eb = bool(ena.get(a)), bool(ena.get(b))
+        if ea and not eb:
+            self._active = "A"
+        elif eb and not ea:
+            self._active = "B"
+        elif ea and eb:
+            other = b if self._active == "A" else a
+            self._item_ids.pop(other, None)
+            ws.request("SetSceneItemEnabled", {
+                "sceneName": scene,
+                "sceneItemId": self._item_id(ws, scene, other),
+                "sceneItemEnabled": False})
+
     # ---- A/B 双源辅助 ----
 
     def _b_name(self):
@@ -370,6 +495,7 @@ class ObsController:
                               "clear_on_media_end": True},
             "overlay": True})
         self._hidden_file = os.path.basename(path) if path else None
+        self._hidden_path = path or None
 
     def _swap(self, ws, new_name):
         """可见性换切到 new_name：先开新侧（旧侧还压着画面，装载/起播都
@@ -391,6 +517,7 @@ class ObsController:
         # 换侧后隐藏侧=旧视频文件，不是用户预载意图的落点；预载态展示
         # 归零（触发路径不依赖此记账——SetInputSettings 幂等装载）
         self._hidden_file = None
+        self._hidden_path = None
         self._wait_playing(ws, new_name)
         if old_id is not None:
             ws.request("SetSceneItemEnabled", {
@@ -496,6 +623,8 @@ class ObsController:
                 "inputName": name,
                 "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"})
         self._hidden_file = None
+        self._hidden_path = None
+        self._media_gen += 1      # 作废在途预载提交：黑场后不得复活
 
     def stop_media(self):
         """熄屏：停掉双侧媒体源并忘掉文件（显示空/黑，OBS 下次启动不续播）。"""
@@ -575,8 +704,10 @@ class ObsController:
             if self._hidden_file is not None and \
                     (os.path.basename(f) if f else None) != self._hidden_file:
                 self._hidden_file = None
+                self._hidden_path = None
         except (ObsError, OSError, KeyError):
             self._hidden_file = None
+            self._hidden_path = None
 
     def retire_names(self, old_a):
         """mediaInput 改名后的旧源对清理（设置保存链调用，工作线程执行）：
@@ -606,6 +737,8 @@ class ObsController:
                 ws.request("RemoveInput", {"inputName": name})
                 self._item_ids.pop(name, None)
             self._hidden_file = None
+            self._hidden_path = None
+            self._media_gen += 1      # 名字已换：在途提交作废
             self._ensure_media_input(ws)           # 就地补建新名源对
         return self._act("清理旧媒体源", do)
 
@@ -683,7 +816,7 @@ class ObsController:
             self.last_error = "关闭投影窗口失败：%s" % e
             return False
 
-    def _act(self, label, fn):
+    def _act(self, label, fn, abort_ok=False):
         with self._lock:
             if not self._ws:
                 self.last_error = "未连接 OBS：启动中或断线"
@@ -692,6 +825,10 @@ class ObsController:
                 fn(self._ws)
                 self.last_error = ""
                 return True
+            except _Abort:
+                if not abort_ok:
+                    self.last_error = "%s：已作废" % label
+                return False
             except (ObsError, OSError) as e:
                 self.last_error = "%s：%s" % (label, e)
                 try:

@@ -593,6 +593,37 @@ def test_daw_proj_here(monkeypatch):
     monkeypatch.setattr(sg.daw_ctrl, "current_project",
                         lambda: (1, "歌二.cpr"))
     assert sg.App._daw_proj_here(app, "歌一") is False    # 手开了他工程
+def test_vj_cancel_transaction_wiring():
+    """停止/回零/全停/换歌都要取消 C2 预载事务（§5.2）：
+    入口经 MidiIn._on_note.cancel_transaction 到达处理器；
+    port 缺席/旧口无该属性=静默无异常。"""
+    import midi_bridge as _mb
+
+    class _Ctl:
+        def __init__(self):
+            self.cfg = {}
+            self.last_error = ""
+    class _Sync:
+        pass
+
+    ctl = _Ctl()
+    on = _mb.note_handler(ctl, _Sync(), report=lambda _m: None)
+
+    class _Port:
+        _on_note = on
+
+    app = types.SimpleNamespace(port=_Port(), q=_Q())
+    assert sg.App._vj_cancel_transaction(app, "取消") is None
+
+    # 无 port（VJ 未启用）与口上无取消属性：都不得抛
+    app2 = types.SimpleNamespace(port=None, q=_Q())
+    assert sg.App._vj_cancel_transaction(app2, "取消") is None
+    class _OldPort:
+        _on_note = lambda n, v: None
+    app3 = types.SimpleNamespace(port=_OldPort(), q=_Q())
+    assert sg.App._vj_cancel_transaction(app3, "取消") is None
+
+
 def test_checkpath_endpoint(tmp_path):
     """/checkpath：路径存在性探测（设置页即时校验）；仅 loopback、
     简化版拒绝、缺 path 400。"""

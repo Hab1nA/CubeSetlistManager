@@ -46,14 +46,11 @@ NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸�
 # C4(72) → 1.mp4，向上每个音顺延：C#4(73) → 2.mp4 … F6(101) → 30.mp4
 NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
 NOTE_MAP[102] = None  # F#6 → 熄屏
-# 预载修饰键：C2(48) 按住期间到达的槽位音符 = 预载该视频到隐藏源
-# （Shift+字母同构的组合语义）；单独到达的槽位音符 = 正常触发——已
-# 预载的槽位触发时同值合并零装载+RESTART 毫秒级上屏（准点切换）。
-# DAW 画法：C2 画长音（从预载点延伸过触发音符）或与槽位同起点；
-# 同拍时槽位可能先到几毫秒，判定前留 PRELOAD_TOL 容差窗。熄屏(102)
-# 不被修饰。VJ 端口上 48 此前零定义（60-90 提示区不含），无冲突。
+# 预载事务键 C2(48)：C2 on 开事务 → 事务内槽位音符选定唯一目标装载到
+# 隐藏侧 → C2 off 提交上屏（首帧 READY 才交换）；无 C2 时槽位音符=旧
+# 行为直接触发。熄屏(102) 不受修饰。完整规则与工程写法见
+# docs/VJ设计与演出复查.md §5。VJ 端口上 48 此前零定义，无冲突。
 PRELOAD_KEY = 48
-PRELOAD_TOL = 0.02   # 同拍容差：槽位先到而 C2 未按住时等这么久再定
 
 
 def default_target(cfg):
@@ -844,59 +841,101 @@ def note_handler(ctl, sync, report=print):
     """音符→OBS 动作的标准处理器；report 输出事件行（print 或 GUI 日志）。
     winmm 回调线程只记带入队，OBS 网络动作由内部串行工作线程执行——
     回调里做网络会拖住同一端口的时钟投递（winmm 按序回调），时钟停
-    超 CLOCK_TIMEOUT 就误判暂停；连发积压时只执行最新的一个触发。
-    C2(48)=预载修饰键：按住期间到达的槽位音符=预载（不换画面不记
-    磁吸窗）；note-off 判定挂在返回函数的 .note_off 属性上（MidiIn
-    duck-typing 识别，非 VJ 口的 on_note 无此属性=note-off 照旧丢弃）。"""
+    超 CLOCK_TIMEOUT 就误判暂停。
+
+    C2(48)=预载事务键（设计见 docs/VJ设计与演出复查.md §5）：
+      C2 on  开事务（清上一目标）；
+      事务内槽位音符 = 选唯一目标装载到隐藏侧（后一个覆盖前一个）；
+      C2 off 提交：首帧 READY 才交换上屏；
+      无事务时槽位音符 = 旧行为直接触发；
+      102 熄屏不受修饰且取消事务。
+    每条事件在**到达时**带上 C2 快照与序号（不读 worker 处理时的全局
+    状态），避免历史音符被按后来的 C2 状态误判。
+    取消入口挂在返回函数的 .cancel_transaction 属性上（停止/回零/全停/
+    换工程调用）；note-off 判定同样经 .note_off 属性挂载。"""
     q = queue.Queue()
-    held = [False]      # C2 按住标志：回调线程写、worker 读（GIL 原子布尔）
+    lock = threading.Lock()
+    st = {
+        "held": False,      # C2 是否按住（事务是否开启）
+        "gen": 0,           # 事务代际：取消/新事务递增，作废在途提交
+        "target": None,     # 事务内已选目标（名义文件名）
+    }
+    cancel = threading.Event()   # 取消闩：worker 的提交前检查
+
+    def snapshot():
+        with lock:
+            return st["held"], st["gen"]
 
     def on_note(note, vel):
         if note == PRELOAD_KEY:
-            held[0] = vel > 0
+            with lock:
+                st["held"] = True
+                st["gen"] += 1      # 新事务：作废旧事务的在途动作
+                st["target"] = None
+            cancel.clear()
+            with lock:
+                gen = st["gen"]
+            q.put(("open", None, (True, gen)))
             return
         if note in NOTE_MAP:
-            q.put(note)     # 磁吸窗（note_seen）由 worker 触发分支记——
-            #   C2 组合预载不换画面不得记（复审 R2 语义），判定后才知情
+            # 磁吸窗（note_seen）由 worker 触发分支记——C2 组合预载不换
+            # 画面不得记（复审 R2 语义），判定后才知情
+            q.put(("slot", note, snapshot()))
         elif 60 <= note <= 90:   # 旧口径触发号（锚点已升八度）：点名提示
             report("音符 %d 不在 VJ 映射：触发音已整体升八度，请检查工程" % note)
 
     def on_note_off(note):
         if note == PRELOAD_KEY:
-            held[0] = False
+            with lock:
+                if not st["held"]:
+                    return          # C2 本就没按住（重复 off/被取消）：不提交
+                st["held"] = False
+                target = st["target"]
+                gen = st["gen"]
+            q.put(("commit", target, (False, gen)))
+
+    def cancel_transaction(why="取消"):
+        """停止/回零/全停/换工程/熄屏：中止事务，不提交、不卡键。"""
+        with lock:
+            had = st["held"] or st["target"] is not None
+            st["held"] = False
+            st["target"] = None
+            st["gen"] += 1
+        cancel.set()
+        if ctl is not None:
+            ctl.bump_media_gen()     # 作废已发往 OBS 的在途提交
+        if had:
+            report("C2 预载事务已%s" % why)
+
+    pending = []
 
     def worker():
         while True:
-            note = q.get()
+            ev = pending.pop() if pending else q.get()
             try:
-                while True:             # 倒掉积压：切换归最新音符管
+                # 积压合并只针对「普通触发」槽位：连发切换归最新一个。
+                # 事务事件（open/commit）与事务内槽位（C2 选目标）不得被
+                # 静默吞掉——否则 C2 on 紧随槽位时目标丢失（§5.2）
+                while True:
+                    kind0, _n0, snap0 = ev
                     try:
-                        note = q.get_nowait()
+                        nxt = q.get_nowait()
                     except queue.Empty:
                         break
-                target = NOTE_MAP[note]
-                # C2 修饰判定（熄屏不修饰）：按住=预载；未按住=留同拍
-                # 容差窗等迟到的 C2（同起点两音符的发送顺序 DAW 不保证）
-                if target is not None and not held[0]:
-                    time.sleep(PRELOAD_TOL)
-                if target is not None and held[0]:
-                    ok = ctl.preload(target)
-                    report("C2+音符 %d → 预载%s%s" % (
-                        note, target,
-                        "" if ok else " 失败：%s" % ctl.last_error))
+                    ok_pair = (kind0 == "slot" and nxt[0] == "slot"
+                               and not snap0[0] and not nxt[2][0])
+                    if ok_pair:
+                        ev = nxt          # 两个普通触发：留最新
+                        continue
+                    pending.append(nxt)   # 其它事件先存着，本轮处理完再取
+                    break
+                kind, note, (held_at_arrival, gen) = ev
+                if kind == "open":
+                    continue            # 开事务本身不动作（目标由槽位音符选）
+                if kind == "commit":
+                    _commit(note, gen)
                     continue
-                sync.note_seen()
-                if target is None:
-                    ok = ctl.stop_media()
-                    if ok:
-                        sync.blackout()      # stopped+清回落旗标（熄屏优先）
-                else:
-                    ok = ctl.set_media(target, ctl.loop_for(target))
-                    if ok:
-                        sync.note_playing(target)
-                report("音符 %d → %s%s" % (
-                    note, "熄屏" if target is None else target,
-                    "" if ok else " 失败：%s" % ctl.last_error))
+                _slot(note, held_at_arrival, gen)
             except Exception as e:
                 # 工作线程绝不允许静默死亡（死=VJ 触发全场失效且零日志）
                 try:
@@ -904,8 +943,73 @@ def note_handler(ctl, sync, report=print):
                            % (type(e).__name__, e))
                 except Exception:
                     pass
+
+    def _commit(target, gen):
+        """C2 note off 提交：目标必须仍是当前事务目标（同一事务后到覆盖
+        前到），且未被取消。"""
+        with lock:
+            alive = gen == st["gen"] and not st["held"]
+        if not alive:
+            return                  # 已被取消/被新事务取代：静默作废
+        if target is None:
+            return                  # 事务内无目标：无操作
+        cur = getattr(ctl, "hidden_file", lambda: None)()
+        if not cur:
+            report("C2 提交失败：目标未装载成功")
+            return
+        res = ctl.commit_preload(loop=ctl.loop_for(target))
+        with lock:                  # 提交完成即结束事务
+            st["target"] = None
+            st["gen"] += 1
+        if res == "cancel":
+            report("C2 提交已作废（现场已变），旧画面保留")
+        elif res == "not_ready":
+            report("C2 提交未就绪：%s，旧画面保留" % ctl.last_error)
+        elif res:
+            sync.note_seen()
+            sync.note_playing(res)
+            report("C2 提交 → 上屏%s" % res)
+        else:
+            report("C2 提交失败：%s" % ctl.last_error)
+
+    def _slot(note, held_at_arrival, gen):
+        target = NOTE_MAP[note]
+        if target is not None and held_at_arrival:
+            with lock:              # 事务仍有效才选目标
+                if gen != st["gen"] or not st["held"]:
+                    return          # 事务已取消：迟到的槽位音符不再预载
+            ok = ctl.preload(target)
+            if ok:
+                with lock:
+                    if gen == st["gen"]:
+                        st["target"] = target
+            report("C2+音符 %d → 预载%s%s" % (
+                note, target, "" if ok else " 失败：%s" % ctl.last_error))
+            return
+        sync.note_seen()
+        if target is None:
+            # 熄屏：不受 C2 修饰，且取消事务——之后迟到的 C2 off 不得把
+            # 已预载目标重新推上屏
+            with lock:
+                st["held"] = False
+                st["target"] = None
+                st["gen"] += 1
+            if ctl is not None:
+                ctl.bump_media_gen()
+            ok = ctl.stop_media()
+            if ok:
+                sync.blackout()      # stopped+清回落旗标（熄屏优先）
+        else:
+            ok = ctl.set_media(target, ctl.loop_for(target))
+            if ok:
+                sync.note_playing(target)
+        report("音符 %d → %s%s" % (
+            note, "熄屏" if target is None else target,
+            "" if ok else " 失败：%s" % ctl.last_error))
+
     threading.Thread(target=worker, daemon=True).start()
     on_note.note_off = on_note_off
+    on_note.cancel_transaction = cancel_transaction
     return on_note
 
 

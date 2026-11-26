@@ -1469,6 +1469,8 @@ class App:
         if entry is None:
             self.q.put("歌单项不在素材库里：%s" % key)
             return False
+        # 换工程/换定位点=现场语义切换：在途 C2 预载事务作废（§5.2）
+        self._vj_cancel_transaction("换歌取消")
         if via == "手动" and i == self.cur and entry["point"] is None:
             ws = daw_ctrl.current_project()
             if ws and daw_ctrl.project_name_from_title(ws[1]) \
@@ -3377,6 +3379,7 @@ class App:
             # 则不动：段内移调是此时应有的状态，归零=演出中错音
             if self.watch is None or not self.watch.is_transport_live():
                 self._shift_reset()
+            self._vj_cancel_transaction("全停取消")
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
@@ -3596,6 +3599,9 @@ class App:
     def _transport_thread(self, action):
         # 焦点收口在 daw_ctrl.transport 内（还原操作前前台，不再事后
         # 收回本软件——踩钉/手机触发时用户原窗口可能不是本软件）
+        if action in ("stop", "rewind"):
+            # 停止/回零=现场语义切换：在途 C2 预载事务作废（§5.2）
+            self._vj_cancel_transaction("取消")
         if action == "play" and self._point_play():
             return
         if action == "rewind" and self._point_rewind():
@@ -3634,6 +3640,18 @@ class App:
                 sync.blackout()
 
         threading.Thread(target=apply, daemon=True).start()
+
+    def _vj_cancel_transaction(self, why):
+        """C2 预载事务取消（停止/回零/全停/换工程/熄屏同源）：不让
+        迟到的 C2 off 把旧目标推上屏，也不让 C2 卡在按住态。"""
+        port = self.port
+        fn = getattr(port, "_on_note", None) if port is not None else None
+        cb = getattr(fn, "cancel_transaction", None)
+        if cb is not None:
+            try:
+                cb(why)
+            except Exception as e:
+                self.q.put("C2 事务取消异常：%s" % _err(e))
 
     def _cur_point_entry(self):
         """指针条目解析：属定位点模式且正是已装载工程时返回 entry，否则
