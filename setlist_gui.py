@@ -1375,7 +1375,7 @@ class App:
             self._shift_report_blocked("juno", plan[1], plan[2])
             return plan
         if plan[0] == "done":                  # 归零成功清账、只是没发出去
-            self._shift_report_done("juno", "输出端口未接")
+            self._shift_report_done("juno", plan[1])
             return None
         _, goal, same = plan
         self.switcher.submit_shift(
@@ -1394,7 +1394,7 @@ class App:
             self._shift_report_blocked("ax", plan[1], plan[2])
             return plan
         if plan[0] == "done":                  # 归零成功清账、只是没发出去
-            self._shift_report_done("ax", "输出端口未接")
+            self._shift_report_done("ax", plan[1])
             return None
         _, goal, _same = plan
         self.ax_switcher.submit_msgs(
@@ -3504,8 +3504,13 @@ class App:
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程
                 # 竞争），主线程直跑=全停按钮最坏卡 10s+（黑面+指令积压）
                 # 熄屏成功才 blackout 收敛（与 automator _blackout 同款条件
-                # 式）：失败保真旧态，置 stopped 反而让 poll 对在投画面失明
-                if ctl.stop_media() and self.sync is not None:
+                # 式）：失败保真旧态，置 stopped 反而让 poll 对在投画面失明。
+                # stop_media 自带一次代际递增；若期间音符 worker 已完成一次
+                # 新触发（又递增了），说明有更新的用户意图——收敛会把在播
+                # 画面记成 stopped 而 OBS 实际在播（UI 与画面分叉）
+                gen0 = getattr(ctl, "_media_gen", 0)
+                if ctl.stop_media() and self.sync is not None \
+                        and getattr(ctl, "_media_gen", gen0) == gen0 + 1:
                     self.sync.blackout()
             # 焦点收口在 daw_ctrl.panic 内（还原操作前前台）；skip_keys 路
             # 径没碰 DAW 焦点，不事后抢——本就未在播放时按全停不该把用户

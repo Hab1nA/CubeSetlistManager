@@ -423,8 +423,14 @@ class App:
                 self.q.put("OBS 未就绪，熄屏未执行")
                 return
             if self.ctl.stop_media():
-                if self.sync is not None:
-                    self.sync.blackout()   # 熄屏收敛三态：poll 循环豁免不兜底
+                # 熄屏收敛三态（poll 循环豁免不兜底）。stop_media 自带一次
+                # 代际递增；期间若音符 worker 又完成一次触发（代际再增），
+                # 说明有更新的用户意图——此时收敛会把在播画面记成 stopped
+                # 而 OBS 实际在播（UI 与画面分叉）
+                gen0 = getattr(self.ctl, "_media_gen", 0)
+                if self.sync is not None and \
+                        getattr(self.ctl, "_media_gen", gen0) == gen0 + 1:
+                    self.sync.blackout()
                 self.q.put("已熄屏（视频已停并清空，下次启动不续播）")
             else:
                 self.q.put("熄屏失败：%s" % self.ctl.last_error)

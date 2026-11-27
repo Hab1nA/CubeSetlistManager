@@ -332,6 +332,11 @@ input.invalid { border-color: var(--err) !important; }
    残影；reduced-motion 下不滚但省略号保底 */
 .mq { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mq.marq { text-overflow: clip; animation: marq 14s var(--ease) infinite; }
+/* 各页面自己的 .row .nm / .slot .s-pc 等规则带 ID/两级选择器，特异性高于
+   上面的 .mq.marq，会把 clip 覆盖回 ellipsis——滚动期右缘留一个静止的
+   「…」压在移动文字上。这里按同款特异性补一遍 */
+#next.marq, .row .nm.marq, .slot .s-pc.marq, .vj-cell .s-pc.marq,
+.stat-big.marq, .stat-song.marq { text-overflow: clip; }
 @media (prefers-reduced-motion: reduce) {
   .mq.marq { animation: none; text-overflow: ellipsis; }
 }

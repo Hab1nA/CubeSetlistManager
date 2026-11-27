@@ -196,9 +196,17 @@ function marquee(el) {
   const txt = el.textContent;
   const w = el.clientWidth;
   if (!w) {
+    // 离屏节点（调用方建好行才 append）宽=0：不缓存、不判「不溢出」，
+    // 登记到挂载后补测——否则这些跑马灯永远不会滚（VJ 格每 5 秒重建时
+    // 也不在进页 rAF 覆盖范围）
     el.classList.remove("marq");
     el.dataset.txt = txt;
     delete el.dataset.mw;
+    if (!el.isConnected) {
+      if (!mqPending.includes(el))
+        mqPending.push(el);
+      scheduleMqPending();
+    }
     return;
   }
   if (el.dataset.txt === txt && el.dataset.mw === String(w)) return;
@@ -206,13 +214,14 @@ function marquee(el) {
   el.dataset.mw = String(w);
   el.classList.remove("marq");
   el.style.removeProperty("--marq");
-  // 文字宽用 Range 量：scrollWidth 会把在途滚动的位移算进去（动画中途换
-  // 文案时重测偏大=滚过头），Range 包围盒宽与位移无关
-  const rg = document.createRange();
-  rg.selectNodeContents(el);
-  const full = rg.getBoundingClientRect().width;
+  // 文字宽用 scrollWidth（布局溢出宽度）：与位移/动画无关（transform 平移
+  // 和 text-indent 都不影响 layout overflow，实测两者恒等），也不受祖先
+  // 变换缩放影响——Range 包围盒会带上 #main 的 show-in scale(.985)，演出
+  // 模式下重测会把文字量短 1.5%，尾部裁掉一截
   const cs = getComputedStyle(el);
-  const inner = w - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const inner = w - pad;
+  const full = el.scrollWidth - pad;
   if (full > inner + 2) {
     el.style.setProperty("--marq", (inner - full) + "px");
     el.classList.add("marq");
@@ -220,6 +229,31 @@ function marquee(el) {
 }
 function marqueePage(root) {
   $$(".mq", root || document).forEach(marquee);
+}
+// 离屏补测队列：建行时 marquee() 拿不到宽（未挂载），挂载后统一补一次。
+// rAF 负责「下一帧就补」（探针/首屏采样不会取到未测态），辅以 timeout
+// 兜底——页面隐藏时 rAF 不派发，只靠它会把队列永久挂住
+const mqPending = [];
+let mqPendingT = null;
+function marqueePending() {
+  mqPendingT = null;
+  for (let i = mqPending.length - 1; i >= 0; i--) {
+    const el = mqPending[i];
+    if (!el.isConnected) continue;      // 还没挂上：留着下轮
+    mqPending.splice(i, 1);
+    marquee(el);
+  }
+  if (mqPending.length) scheduleMqPending();
+}
+function scheduleMqPending() {
+  if (mqPendingT) return;
+  const once = () => {
+    if (!mqPendingT) return;
+    mqPendingT = null;
+    marqueePending();
+  };
+  requestAnimationFrame(once);
+  mqPendingT = setTimeout(once, 120);
 }
 window.__marq = marquee;   // 测试钩子（探针/控制台校验用，同 __qr 先例）
 let mqResizeT = null;
@@ -556,18 +590,17 @@ function render(st) {
         : (st.ready ? "未打开工程" : "启动中…");
   // 超长歌名跑马灯：文本变化才重测重挂（每 500ms remove/add 会把
   // 14s 动画永远打回 0）；测量时临时 nowrap 拿单行宽（平时 break-all
-  // 折行恒不溢出）。宽度用 Range 量（同 marquee()），不受在途滚动干扰
+  // 折行恒不溢出）。宽度用 scrollWidth（布局溢出宽，同 marquee()）：
+  // Range 会被 #main 的演出模式入场缩放带偏，量短后尾部裁掉一截
   const nowEl = $("#now");
   if (nowEl.dataset.txt !== nowEl.textContent) {
     nowEl.dataset.txt = nowEl.textContent;
     nowEl.classList.remove("marq");
     nowEl.style.whiteSpace = "nowrap";
-    const rg = document.createRange();
-    rg.selectNodeContents(nowEl);
-    const fullW = rg.getBoundingClientRect().width;
     const cs = getComputedStyle(nowEl);
-    const innerW = nowEl.clientWidth - parseFloat(cs.paddingLeft)
-        - parseFloat(cs.paddingRight);
+    const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const innerW = nowEl.clientWidth - pad;
+    const fullW = nowEl.scrollWidth - pad;
     nowEl.style.whiteSpace = "";
     if (fullW > innerW + 2) {
       nowEl.style.setProperty("--marq", (innerW - fullW) + "px");

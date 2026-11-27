@@ -260,14 +260,17 @@ def test_switcher_absent_does_not_accumulate(monkeypatch):
 
 def test_unreachable_reset_still_clears(monkeypatch):
     """归零时端口不在：值仍清零（不必留一个永远发不出去的值），且用户
-    可见地说明（不是静默）。"""
+    可见地说明（不是静默）——文案说明「已清零，接上后按时间线重来」，
+    不能只说「输出端口未接」（看不出值到底改没改）。"""
     app = _app()
     app.juno_shift = 5
     app._shift_ack["juno"] = 5
     monkeypatch.setattr(kbd_auto, "out_present", lambda cfg: False)
     sg.App._shift_reset(app)
     assert app.juno_shift == 0 and app._shift_ack["juno"] == 0
-    assert app._kb_last == ("已发送：JUNO 移调归零（输出端口未接）")
+    assert app._kb_last == ("已发送：JUNO 移调归零（%s）"
+                            % sg.ui_text.SHIFT_RESET_UNREACHED)
+    assert "已清零" in app._kb_last
     assert app.switcher.shifts == []
 
 
