@@ -5,6 +5,7 @@ __pycache__/
 # 打包产物与工作目录（build.bat 可重建）
 build/
 dist/
+dist_old_locked/   # 构建时 dist 被占用的换名暂存（重启后手动删）
 
 # ⚠ 运行时真实数据（OBS 密码/歌单/时长/设置）——严禁入库
 config.json
