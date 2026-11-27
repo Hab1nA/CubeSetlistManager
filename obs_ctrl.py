@@ -365,20 +365,29 @@ class ObsController:
     def clear_pending_preload(self):
         """放弃「待提交」目标（事务取消时）：隐藏侧文件一并清空，紫框随之
         消隐——否则界面仍显示「松开 C2 上屏」，而 C2 早已松开（P1-9）。
-        不递增代际（调用方负责），不报错：清空失败只是展示层残留。"""
+        不递增代际（调用方负责），不报错：清空失败只是展示层残留。
+        OBS 清源走后台线程（调用方含主线程的切歌/手动跟随，网络 IO 不得
+        上主线程）；记账同步清=UI 立即正确。执行时复核 `_hidden_file` 仍
+        为空才清——迟到的清空不得擦掉其后新落的预载目标。"""
         self._hidden_file = None
         self._hidden_path = None
-        try:
-            def do(ws):
-                name = self._hidden_name()
-                ws.request("SetInputSettings", {
-                    "inputName": name,
-                    "inputSettings": {"local_file": "",
-                                      "is_local_file": True},
-                    "overlay": True})
-            self._act("清空预载目标", do, abort_ok=True)
-        except Exception:
-            pass
+
+        def run():
+            try:
+                def do(ws):
+                    if self._hidden_file is not None:
+                        return          # 已有更新的预载目标：不清
+                    name = self._hidden_name()
+                    ws.request("SetInputSettings", {
+                        "inputName": name,
+                        "inputSettings": {"local_file": "",
+                                          "is_local_file": True},
+                        "overlay": True})
+                self._act("清空预载目标", do, abort_ok=True)
+            except Exception:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
 
     def bump_media_gen(self):
         """作废在途媒体提交（熄屏/全停/回零/换工程调用）：已在飞的
@@ -434,14 +443,26 @@ class ObsController:
             ws.request("SetSceneItemEnabled", {
                 "sceneName": scene, "sceneItemId": new_id,
                 "sceneItemEnabled": True})
-            # 2) showing 已为真，RESTART 才真正从头起播
-            ws.request("TriggerMediaInputAction", {
-                "inputName": new_name,
-                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
-            # 3) 等首帧（仍在 _act 锁内：此段必须原子，避免旧侧提前关）
-            if gen != self._media_gen:
-                raise _Abort()
-            ready[0] = self._wait_ready_inline(ws, new_name, gen=gen)
+            try:
+                # 2) showing 已为真，RESTART 才真正从头起播
+                ws.request("TriggerMediaInputAction", {
+                    "inputName": new_name,
+                    "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
+                # 3) 等首帧（仍在 _act 锁内：此段必须原子，避免旧侧提前关）
+                if gen != self._media_gen:
+                    raise _Abort()
+                ready[0] = self._wait_ready_inline(ws, new_name, gen=gen)
+            finally:
+                # 未就绪/被作废：把刚开的新侧关回去——否则两源同时可见，
+                # 新侧（z 序在上时）已把目标画面推上屏，与「旧画面保留」
+                # 的失败口径相反；记账侧未翻，可见性与记账分叉
+                if not ready[0]:
+                    try:
+                        ws.request("SetSceneItemEnabled", {
+                            "sceneName": scene, "sceneItemId": new_id,
+                            "sceneItemEnabled": False})
+                    except (ObsError, OSError):
+                        pass
             if ready[0]:
                 self._active = "B" if new_name == self._b_name() else "A"
                 self._hidden_file = None

@@ -3446,6 +3446,9 @@ class App:
         ctl = self.ctl
 
         def run():
+            # C2 事务先杀：全停=静场，静音序列/2 秒核验窗内迟到的 C2 off
+            # 不得把预载目标推上屏（原顺序排在核验之后=窗内可提交）
+            self._vj_cancel_transaction("全停取消")
             if not skip_keys:
                 self.ctrl.panic()
                 time.sleep(2.0)         # 全停核验：停止落地+时码尾流排空
@@ -3464,7 +3467,6 @@ class App:
             # 则不动：段内移调是此时应有的状态，归零=演出中错音
             if self.watch is None or not self.watch.is_transport_live():
                 self._shift_reset()
-            self._vj_cancel_transaction("全停取消")
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket
                 # 请求（各 5s 超时）且全程持 ctl._lock（与看门狗/音符线程

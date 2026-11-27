@@ -909,6 +909,10 @@ def test_commit_preload_ready_and_cancel(tmp_path):
     assert res == "not_ready"
     assert sql._active == "A"              # 未交换
     assert sql.hidden_file() == "4.mp4"    # 目标保留供重试
+    # 失败后新侧必须关回去：开着=两源同屏，目标画面已在旧画面上（失败
+    # 口径是「旧画面保留」，且记账侧未翻=可见性与记账分叉）
+    assert w3.items["舞台视频"][1] is True
+    assert w3.items["舞台视频 B"][1] is False
 
     # 代际递增作废在途提交：提交进行中熄屏（真实时序），立即放弃
     class _Slow(_FakeWS):

@@ -67,6 +67,7 @@ def _app(monkeypatch=None):
     app.cur_song_path = "/p1"
     app.cur_point_id = None
     app.cur = 0
+    app.port = None                # _vj_cancel_transaction：无 C2 口=无操作
     app._load_lock = threading.Lock()
     app._load_gen = 0
     app._shift_ack = {"juno": 0, "ax": 0}
@@ -75,7 +76,8 @@ def _app(monkeypatch=None):
     for name in ("_juno_shift_set", "_ax_shift_set", "_shift_reset",
                  "_shift_step", "_shift_plan", "_shift_reachable",
                  "_shift_undo", "_shift_mark_ok", "_shift_report_blocked",
-                 "_shift_report_done", "_on_kb_result"):
+                 "_shift_report_done", "_on_kb_result",
+                 "_vj_cancel_transaction"):
         app.__dict__[name] = (lambda *a, _n=name, **kw:
                               getattr(sg.App, _n)(app, *a, **kw))
     if monkeypatch is not None:
@@ -360,6 +362,30 @@ def test_panic_resets_shift():
     sg.App._panic(app)
     assert _wait(lambda: app.juno_shift == 0 and app.ax_shift == 0)
     assert app.switcher.shifts == [(0, False)]
+
+
+def test_panic_cancels_c2_before_quiet_window():
+    """全停立刻取消 C2 预载事务（2 秒走带核验窗内迟到的 C2 off 不得
+    把预载目标推上屏）；取消发生在发走带停止之前。"""
+    calls = []
+
+    class _Port:
+        class _On:
+            def cancel_transaction(self, why):
+                calls.append(("cancel", why))
+        _on_note = _On()
+
+    app = _panic_app()
+    app.port = _Port()
+
+    def panic():
+        calls.append(("panic", None))
+    app.ctrl = types.SimpleNamespace(panic=panic)
+    app.live = True                 # 播放中：走核验+发停止路径
+    sg.App._panic(app)
+    assert _wait(lambda: any(c[0] == "cancel" for c in calls))
+    assert [c[0] for c in calls].index("cancel") \
+        < [c[0] for c in calls].index("panic")
 
 
 def test_panic_keeps_shift_if_transport_restarted():
