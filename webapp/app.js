@@ -3531,6 +3531,15 @@ setInterval(() => {
   if (pageOn("kbd")) refreshKbd();   // 状态行/移调徽标随切歌走
 }, 1500);
 setInterval(() => { if (pageOn("pedal")) refreshPedal(); }, 1500);
+// 谱面服务器「上次信号」实时刷新：演出前就坐在设置页发测试音符看结果，
+// 只在保存后/进页时才刷会一直停在旧值。只取状态行（不碰表单编辑值）。
+setInterval(async () => {
+  if (!pageOn("settings") || stBase === null) return;
+  try {
+    const d = await (await fetch("/settings")).json();
+    renderScore(d.score, false);
+  } catch { /* 瞬断 */ }
+}, 2000);
 setInterval(refreshLog, 1500);
 // VJ 映射即放即扫：/vjmap 是 HTTP 线程直出的轻量快照（每次请求实时扫
 // 目录），仅 VJ 页打开且表单装载后 5s 拉一次——放/删视频文件后网格自动
