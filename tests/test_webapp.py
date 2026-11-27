@@ -1505,6 +1505,49 @@ def test_settings_score_roundtrip(monkeypatch):
     assert disk["scoreServer"]["note"] == 52
 
 
+def test_rejected_score_save_leaves_web_cfg_untouched(monkeypatch):
+    """谱面服务器校验驳回时不得留下半截运行时写入：此前 web_cfg 在
+    校验之前就 update 了——用户改好 URL 再存时 web_changed 已变 false，
+    新端口/翻谱口只落盘不热应用；点遥控启用钮更会把被驳回的 web 配置
+    直接应用并落盘。"""
+    disk = {"scoreServer": {"enabled": True, "url": "http://old:1",
+                            "token": "t0", "note": 50, "bars": 2}}
+    monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
+        json.dumps(disk)))
+    monkeypatch.setattr(sg, "_save_config",
+                        lambda cfg: disk.clear() or disk.update(cfg))
+    calls = []
+    before = dict(web_remote.DEFAULT_WEB_REMOTE)
+    fake = types.SimpleNamespace(
+        vj_hint="", kb_hint="", clock_hint="", top_most=True,
+        exit_close_apps=False, launch_apps=True, daw="cubase",
+        ccfg={"projectsRoot": "C:/x"}, web=None, ctl=None, cur=None,
+        pl_keys=[], web_cfg=dict(before),
+        _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
+        _apply_ports=lambda: calls.append("ports"),
+        _apply_web=lambda: calls.append("web"),
+        _apply_score=lambda: calls.append("score"),
+        _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f))
+    err = sg.App._settings_apply_web(fake, {
+        "web": {"serverPort": 9005, "midiIn": "loopMIDI Port",
+                "mode": "lan"},
+        "score": {"enabled": True, "url": "192.168.1.20:8765",
+                  "note": 50, "bars": 2}})
+    assert err and "地址无效" in err
+    assert fake.web_cfg == before          # 驳回=运行时零写入
+    assert disk["scoreServer"]["url"] == "http://old:1"
+    assert calls == []
+    # 改好地址重存：web 改动仍被识别并热应用（不是静默落盘不生效）
+    assert sg.App._settings_apply_web(fake, {
+        "web": {"serverPort": 9005, "midiIn": "loopMIDI Port",
+                "mode": "lan"},
+        "score": {"enabled": True, "url": "http://192.168.1.20:8765",
+                  "note": 50, "bars": 2}}) is None
+    assert "web" in calls and "score" in calls
+    assert fake.web_cfg["serverPort"] == 9005
+
+
 def test_score_payload_reads_runtime(monkeypatch):
     """设置页载荷：URL/令牌取落盘值，音符/小节取运行态，last 直通。"""
     monkeypatch.setattr(sg, "_load_config", lambda: {"scoreServer": {

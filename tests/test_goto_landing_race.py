@@ -51,6 +51,7 @@ def _app(tmp_path):
         watch=advance.AdvanceWatch(on_finished=lambda: None),
         mtc=_FakeMtc(), mmc_out=7,
         ctrl=types.SimpleNamespace(busy=False, transport=lambda a: None),
+        _shift_reset=lambda: None,   # 切歌收尾前的移调归零（不在本测范围）
         q=_Q())
     app._resolve_entry = lambda k: setlist_gui.App._resolve_entry(app, k)
     app._reseed_landed = lambda start: setlist_gui.App._reseed_landed(app, start)

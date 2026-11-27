@@ -43,7 +43,11 @@ def parse_url(url):
 
 
 def cfg_int(v, default):
-    """手改配置容错：非整数（None/空/乱填）回落默认值，不炸启动。"""
+    """手改配置容错：非整数（None/空/乱填）回落默认值，不炸启动。
+    整值浮点（JSON 里写成 52.0）按整数收——`int(str(52.0))` 会 ValueError
+    回落默认，静默改掉用户填的音符。"""
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
     try:
         return int(str(v).strip())
     except (TypeError, ValueError):
@@ -71,7 +75,7 @@ class ScoreServer:
         self.song = None            # 当前歌名（切歌完成时 preload 记下）
         self.last = None            # 最近一次信号结果（设置页状态行）
         self.apply(cfg)
-        self.q = queue.Queue()
+        self.q = queue.Queue()          # song=预载（可丢），cue=准点信号
         threading.Thread(target=self._loop, daemon=True).start()
 
     def apply(self, cfg):
@@ -80,7 +84,7 @@ class ScoreServer:
         self.enabled = bool(c.get("enabled"))
         self.url = str(c.get("url") or "")
         self.token = str(c.get("token") or "")
-        self.note = cfg_int(c.get("note"), 50)
+        self.note = max(0, min(127, cfg_int(c.get("note"), 50)))
         self.bars = max(0, min(8, cfg_int(c.get("bars"), 2)))
         self._target = None
         if self.enabled:
@@ -92,6 +96,9 @@ class ScoreServer:
             try:
                 self._target = parse_url(self.url)
             except ValueError as e:
+                # 地址坏=确实没启用：设置卡别继续显示「启用」（它的启用态
+                # 读落盘 enabled）。磁盘配置不动，用户改好地址保存即恢复
+                self.enabled = False
                 self._report("谱面服务器未启用：%s，当前 %r" % (e, self.url))
 
     @property
@@ -101,9 +108,13 @@ class ScoreServer:
     # -- 入口 --
 
     def on_note(self, note):
-        """winmm 回调线程：命中启动音符才入队，返回是否已消费。"""
+        """winmm 回调线程：命中启动音符才入队，返回是否已消费。cue 走
+        **独立 worker**：预载（切歌时发）可能正卡在对端 2s 超时上，同队列
+        串行会让 cue 整段晚到——对端从收到才开始数拍，晚到=进歌晚。"""
         if self.active and note == self.note:
-            self.q.put(("cue", self.song, self._clock()))
+            threading.Thread(target=self._send_safe,
+                             args=(("cue", self.song, self._clock()),),
+                             daemon=True).start()
             return True
         return False
 
@@ -123,14 +134,19 @@ class ScoreServer:
             job = self.q.get()
             if job is None:
                 return
+            self._send_safe(job)
+
+    def _send_safe(self, job):
+        """单条信号发送+异常兜底（worker 与 cue 独立线程共用）：发送路径
+        绝不静默死亡，也绝不把异常抛回 winmm 回调线程。"""
+        try:
+            self._send(*job)
+        except Exception as e:
             try:
-                self._send(*job)
-            except Exception as e:      # worker 绝不静默死亡
-                try:
-                    self._report("谱面服务器信号异常，已恢复：%s: %s"
-                                 % (type(e).__name__, e))
-                except Exception:
-                    pass
+                self._report("谱面服务器信号异常，已恢复：%s: %s"
+                             % (type(e).__name__, e))
+            except Exception:
+                pass
 
     def _send(self, action, song, t0):
         target = self._target

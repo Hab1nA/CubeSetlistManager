@@ -60,6 +60,7 @@ def _app(monkeypatch=None):
     app.juno_shift = 0
     app.ax_shift = 0
     app._juno_shift_at = 0.0
+    app._ax_shift_at = 0.0
     app.jcfg = dict(kbd_auto.DEFAULT_JUNO)
     app.axcfg = dict(kbd_auto.DEFAULT_AX)
     app.switcher, app.ax_switcher = _Sw(), _Sw()
@@ -211,6 +212,29 @@ def test_ax_same_value_skipped():
     assert len(app.ax_switcher.msgs) == 2
 
 
+def test_original_pitch_explicit_send_heals_stuck_keyboard(monkeypatch):
+    """原调（CC=64 / 归零钮）是显式绝对值，不得被「双零/同值」提前返回
+    吃掉：琴被面板改过或上次复位没送到时，段首 CC16=64 必须真发一条，
+    否则琴停在旧移调、界面显示原调（静默错音一整套）。"""
+    app = _app()
+    # JUNO：值已是 0 仍要发（限流窗外；同值=静默重发，不刷日志）
+    _aged(app)
+    _cc(app, 16, 64)
+    assert app.switcher.shifts == [(0, True)]
+    # AX：同上（限流窗外）
+    app._ax_shift_at = time.monotonic() - sg.SHIFT_RESEND_SEC - 0.01
+    _cc(app, 17, 64)
+    assert len(app.ax_switcher.msgs) == 1
+    # 归零钮（delta=0）在已是 0 时同样重发 = 琴上被手动改过的兜底
+    _aged(app)
+    sg.App._shift_step(app, "juno", 0)
+    assert app.switcher.shifts[-1] == (0, True)
+    # 限流窗内连拖光标仍被吃掉（弯音序列不许堵音色队列）
+    app._ax_shift_at = time.monotonic()
+    _cc(app, 17, 64)
+    assert len(app.ax_switcher.msgs) == 1
+
+
 def test_switcher_absent_does_not_accumulate(monkeypatch):
     """收发器/端口不在：值不累计、不显示假音高（旧实现先记账再发送，连点
     会一路加到最大值而琴上毫无反应）；接上后按时间线重来。"""
@@ -275,17 +299,55 @@ def test_shift_reset_only_sends_when_nonzero():
     assert app.ax_switcher.msgs == [kbd_auto.ax_shift_msgs(0, 1)]
 
 
-def test_finish_switch_common_resets(monkeypatch):
-    """跨工程切换收尾：旧歌移调不带进新歌。"""
+def test_switch_done_resets_before_goto(monkeypatch):
+    """跨工程切换：移调归零在 GOTO 之前发出——Cubase 追补 CC16/17 会随
+    GOTO 到达，归零排在后面会把新值盖回 0（切歌后琴停在旧移调）。"""
     monkeypatch.setattr(sg.kbd_auto, "load_slots",
                         lambda p, kind=None, point_id=None: {})
     app = _app(monkeypatch)
+    order = []
     app.juno_shift, app.ax_shift = 7, 5
+    orig_shift = app.switcher.submit_shift
+
+    def shift_send(total, why="", quiet=False, on_done=None):
+        order.append(("shift", total))
+        orig_shift(total, why, quiet, on_done)
+
+    app.switcher.submit_shift = shift_send
+    app._goto_send = lambda start, label: order.append(("goto", start))
+    app._reseed_landed = lambda pos: None
+    app.mtc = None
+    app._finish_switch_common = lambda entry, play_after: None
+    app._switch_key = "a"
+    app._play_after_switch = False
+    ents = {"a": {"path": "/p2", "song_name": "S", "point": None,
+                  "display": "S 段1"}}
+    # 定位点条目：走 GOTO 分支
+    ents["a"]["point"] = {"id": "p1", "start": 10.0, "end": 90.0}
+    app._resolve_entry = lambda k: ents.get(k)
+    app.watch = types.SimpleNamespace(
+        reset=lambda: None, set_duration=lambda d, left=None: None,
+        ever_live=lambda: True, is_transport_live=lambda: False)
+    app.durations = {}
+    app.dur_src = {}
+    app._persist = lambda: None
+    sg.App._switch_done(app, "S")
+    assert ("shift", 0) in order and ("goto", 10.0) in order
+    assert order.index(("shift", 0)) < order.index(("goto", 10.0))
+    assert (app.juno_shift, app.ax_shift) == (0, 0)
+
+
+def test_finish_switch_common_does_not_repeat_reset(monkeypatch):
+    """收尾公共段不再补归零：归零已在 _switch_done 开头、GOTO 之前发出，
+    重复发会把 Cubase 刚追补的新歌移调值盖回 0。"""
+    monkeypatch.setattr(sg.kbd_auto, "load_slots",
+                        lambda p, kind=None, point_id=None: {})
+    app = _app(monkeypatch)
+    app.juno_shift, app.ax_shift = 2, 1      # 模拟 Cubase 已追补新歌的值
     sg.App._finish_switch_common(
         app, {"path": "/p2", "song_name": "S", "point": None}, False)
-    assert (app.juno_shift, app.ax_shift) == (0, 0)
-    assert app.switcher.shifts == [(0, False)]
-    assert len(app.ax_switcher.msgs) == 1
+    assert (app.juno_shift, app.ax_shift) == (2, 1)
+    assert app.switcher.shifts == []
     assert app.cur_song_path == "/p2"
 
 
@@ -339,8 +401,9 @@ def _panic_app():
     app.ctl = app.sync = None
     app.clock_hint, app.clock_port = "", None
     app.live = False
+    app.ever = True             # 本工程收到过 QF=走带状态已知（未配时码=未知）
     app.watch = types.SimpleNamespace(
-        is_transport_live=lambda: app.live, ever_live=lambda: False,
+        is_transport_live=lambda: app.live, ever_live=lambda: app.ever,
         suppress_advance=lambda: None)
     app._delay_play_cancel = lambda: None
     app._transport_state = lambda: sg.App._transport_state(app)
@@ -362,6 +425,19 @@ def test_panic_resets_shift():
     sg.App._panic(app)
     assert _wait(lambda: app.juno_shift == 0 and app.ax_shift == 0)
     assert app.switcher.shifts == [(0, False)]
+
+
+def test_panic_keeps_shift_when_transport_state_unknown():
+    """时码端口未配/本工程从未收到 QF=走带未知：全停不得把移调归零——
+    没开时码的工程全停时可能真在播，归零=演出中把两琴掰回原调。"""
+    app = _panic_app()
+    app.ever = False                       # 从未收到过 QF
+    app.juno_shift, app.ax_shift = 7, 5
+    sg.App._panic(app)
+    assert _wait(lambda: bool(app.switcher.msgs))   # 静音序列已发=线程跑完
+    time.sleep(0.05)
+    assert app.juno_shift == 7 and app.ax_shift == 5
+    assert app.switcher.shifts == []
 
 
 def test_panic_cancels_c2_before_quiet_window():

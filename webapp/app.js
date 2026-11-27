@@ -2823,24 +2823,32 @@ const portOk = id => {
 // 翻谱动作静默丢失——后端同表拒绝，前端先标红给出原因
 const TURN_NOTES = new Set([48, 49, ...Array.from({length: 10}, (_, i) => 72 + i)]);
 const scoreNoteOk = () => {
-  const v = Number($("#st-score-note").value);
+  const raw = $("#st-score-note").value.trim();
+  if (raw === "") return false;           // 空=0 会落成永远发不出的音符
+  const v = Number(raw);
   return Number.isInteger(v) && v >= 0 && v <= 127 && !TURN_NOTES.has(v);
 };
 const scoreBarsOk = () => {
-  const v = Number($("#st-score-bars").value);
+  const raw = $("#st-score-bars").value.trim();
+  if (raw === "") return false;           // 空=0 会落成到手就进歌
+  const v = Number(raw);
   return Number.isInteger(v) && v >= 0 && v <= 8;
 };
+// 谱面服务器钮关着时字段不参与校验：卡停用着却挡住整页保存（端口/遥控
+// 都改不了）纯属连坐；后端同口径（仅 enabled 时校验）
+const scoreOn = () => $("#st-score-on").getAttribute("aria-pressed") === "true";
 function stScoreNote() {
   const n = Number($("#st-score-note").value);
   const el = $("#st-score-note-name");
   el.textContent = Number.isInteger(n) && n >= 0 && n <= 127
       ? noteName(n) : "—";
-  el.classList.toggle("warn-txt", !scoreNoteOk());
+  el.classList.toggle("warn-txt", scoreOn() && !scoreNoteOk());
 }
 function stDirty() {
   const ports = ["st-srv", "st-app", "st-tsk"];
   const badPort = ports.some(id => !portOk(id));
-  const badNote = !scoreNoteOk(), badBars = !scoreBarsOk();
+  const on = scoreOn();
+  const badNote = on && !scoreNoteOk(), badBars = on && !scoreBarsOk();
   const bad = badPort || badNote || badBars;
   ports.forEach(id =>
       $("#" + id).classList.toggle("invalid", !portOk(id)));
@@ -3162,11 +3170,11 @@ async function saveSettings() {
     toast("端口须为 1-65535 的整数", "err");
     return false;
   }
-  if (!scoreNoteOk()) {
+  if (scoreOn() && !scoreNoteOk()) {
     toast("启动音符须为 0-127 且避开 48/49 与 72-81（翻谱音符）", "err");
     return false;
   }
-  if (!scoreBarsOk()) {
+  if (scoreOn() && !scoreBarsOk()) {
     toast("预备小节须为 0-8 的整数", "err");
     return false;
   }

@@ -589,3 +589,41 @@ def test_sync_watch_span_reanchors_after_edit(monkeypatch):
     app.pl_keys = ["A"]
     setlist_gui.App._sync_watch_span(app)
     assert len(app.watch.durs) == 2
+
+
+def test_startup_restore_preloads_score_song(monkeypatch, tmp_path):
+    """启动恢复（DAW 里已开着某工程）必须补谱面服务器预载：这条是演出
+    第一首的常态路径，漏了=首歌启动音符的 cue 不带歌名（对端按它自己的
+    当前曲进、放错谱），且对端迟迟拿不到歌名只能到 cue 才加载。"""
+    app = _app()
+    app._startup_done = False               # 启动线程（恢复段唯一入口）
+    app.ccfg = {"projectsRoot": str(tmp_path)}
+    app.facts = {"song_ext": ".cpr"}
+    app._lib_query = ""
+    app._probe_durations = lambda songs: None
+    app.dur_src = {}
+    app.cur_song_path = None
+    app.cur = None
+    app.points = {}
+    app.by_key = {"a": {"name": "X", "path": "/p1"}}
+    app.pl_keys = ["a"]
+    app.end_beh = [""]
+    app.songs = []
+    app._persist = lambda: None
+    app._entry_alive = lambda k: True
+    monkeypatch.setattr(setlist_gui, "scan_library",
+                        lambda root, ext: [{"key": "a", "name": "X",
+                                            "path": "/p1"}])
+    monkeypatch.setattr(setlist_gui.points, "load_points",
+                        lambda d: (setlist_gui.points.empty_data(), None))
+    monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
+                        lambda p, kind=None, point_id=None: {})
+    monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
+                        lambda p: (0.0, 120.0))
+    monkeypatch.setattr(setlist_gui.daw_ctrl, "current_project",
+                        lambda: (1, "Cubase Pro 工程 - X"))
+    fed = []
+    app.score_server = types.SimpleNamespace(preload=lambda s: fed.append(s))
+    setlist_gui.App._load_songs(app)
+    assert app.cur == 0
+    assert fed == ["X"]                     # 恢复即预载（首歌 cue 带歌名）

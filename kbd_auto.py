@@ -662,7 +662,13 @@ class ToneSwitcher:
         quiet=同值重发（Cubase 每次定位/起播都补发同一个控制器值）：成功
         不写日志不回调，失败照常报——否则拖一次光标刷一屏日志。
         on_done(错误文案|None) 在发送线程收尾时调用（成功失败都调）：
-        移调用它把「发送失败」回滚成上次确认成功的值（失败不累计）。"""
+        移调用它把「发送失败」回滚成上次确认成功的值（失败不累计）。
+        已 stop 的收发器直接回调失败：线程已退、队列无人消费，静默入队
+        会让移调值前进而琴永远收不到（端口热重建窗口内可撞上）。"""
+        if self._stopping:
+            if on_done:
+                on_done("收发器已停止")
+            return
         self._q.put((msgs, why, None, quiet, on_done))
 
     def submit_shift(self, total, why="", quiet=False, on_done=None):
@@ -679,10 +685,11 @@ class ToneSwitcher:
             item, why, gen = got[:3]
             quiet = len(got) > 3 and got[3]
             on_done = got[4] if len(got) > 4 else None
+            is_msgs = isinstance(item, list)
             if gen is not None and gen != self.epoch:
                 continue           # 换歌/换点后旧歌槽位请求已过期：静默丢弃
             try:
-                if isinstance(item, list):      # 预构造序列（全局移调）
+                if is_msgs:                     # 预构造序列（全局移调）
                     err = send_slot(None, self.cfg, msgs=item)
                     if err or not quiet:
                         self._log("%s%s" % (
@@ -711,6 +718,13 @@ class ToneSwitcher:
                     try:
                         self.on_result(why or "音色切换",
                                        "内部异常：%s" % e)
+                    except Exception:
+                        pass
+                if on_done and is_msgs:
+                    # 移调序列在发送路径抛异常：不回滚=值已进、琴没收到
+                    # （「失败不累计」在这条路上曾经失效）
+                    try:
+                        on_done("内部异常：%s" % e)
                     except Exception:
                         pass
             time.sleep(0.05)

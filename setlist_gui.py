@@ -639,6 +639,7 @@ class App:
         self.juno_shift = 0             # JUNO 全局移调累计值（半音，±24）=上次发出的绝对值
         self.ax_shift = 0               # AX-09 全局移调累计值（半音，±12）
         self._juno_shift_at = 0.0       # JUNO 上次发出时刻（monotonic）：同值重发限流
+        self._ax_shift_at = 0.0         # AX 显式同值重发（CC17=64 自愈）同款限流
         # 上次确认「发送成功」的值：发送失败回滚到此（失败不累计）；也是
         # 继续步进的基准（琴上没收到就不该一路加到最大值）
         self._shift_ack = {"juno": 0, "ax": 0}
@@ -1201,6 +1202,9 @@ class App:
                         if e["point"] else None)
                     self.cur_song_path = e["path"]
                     self.cur_point_id = e["point"]["id"] if e["point"] else None
+                    # 重启恢复=当前歌已确认：补预载，否则首歌启动音符发出的
+                    # cue 不带歌名（对端按它自己的当前曲进，放错谱）
+                    _score_preload(self, e["song_name"])
                     self.q.put("已恢复当前工程：《%s》" % name)
                     break
         self._probe_durations(songs)
@@ -1292,14 +1296,18 @@ class App:
         """锁内只做「读现值→算目标→判可达→写值」并返回动作；发送与回调
         都在锁外（收发器可能同步回调 on_done，持锁调用=非重入锁死锁）。
         None=无事可做（同值限流/无变化）；("blocked", 错误文案)=发不出去；
-        ("send", 要发的值, 是否同值重发)=照发。"""
-        inst = "JUNO" if key == "juno" else "AX-09"
+        ("send", 要发的值, 是否同值重发)=照发。
+        explicit=调用方明确要这个绝对值（网页归零钮 delta=0、CC 直设）：
+        目标为原调 0 时不再被「双零/同值」提前返回吃掉——否则琴上手动改过
+        移调（或断电复位失败）后，段首 CC16=64 永远发不出去，琴停在旧
+        移调而界面显示原调（静默错音）"""
         attr = "juno_shift" if key == "juno" else "ax_shift"
         limit = (kbd_auto.SHIFT_LIMIT if key == "juno"
                  else kbd_auto.AX_SHIFT_LIMIT)
         with _SHIFT_LOCK:
             cur = getattr(self, attr)
             goal = max(-limit, min(limit, cur + delta if delta else total))
+            explicit = not delta
             if key == "juno":
                 now = time.monotonic()
                 same = goal == cur
@@ -1308,10 +1316,16 @@ class App:
                     return None
                 self._juno_shift_at = now
             else:
-                if goal == cur:
-                    return None          # AX 同值跳过（序列长，会堵音色队列）
-                same = False
-            if not (goal or cur):
+                same = goal == cur
+                if same and not explicit:
+                    return None      # AX 同值跳过（序列长，会堵音色队列）
+                # 显式同值重发（CC17=64 自愈）也限流：弯音序列 6 条约
+                # 0.25s，拖光标会连发几十条堵住音色队列
+                if same and time.monotonic() - self._ax_shift_at \
+                        < SHIFT_RESEND_SEC:
+                    return None
+                self._ax_shift_at = time.monotonic()
+            if not (goal or cur) and not explicit:
                 return None              # 双零：没东西可发
             # 可达性在锁内判（读配置/枚举口，不阻塞；不发包不回调）
             if not self._shift_reachable(key):
@@ -1328,10 +1342,10 @@ class App:
             return ("send", goal, same)
 
     def _shift_reachable(self, key):
-        """该琴的输出通路是否可用：收发器在且配置的输出口当前在线。"""
+        """该琴的输出通路是否可用：收发器在且未停止、配置的输出口当前在线。"""
         sw = getattr(self, "switcher" if key == "juno" else "ax_switcher",
                      None)
-        if sw is None:
+        if sw is None or getattr(sw, "_stopping", False):
             return False
         return kbd_auto.out_present(self.jcfg if key == "juno" else self.axcfg)
 
@@ -1653,6 +1667,14 @@ class App:
         entry = self._resolve_entry(key)
         if entry is None:
             return
+        # 谱面服务器歌名立即落账：后面 _read_span（网络盘整文件读）与两次
+        # load_slots 可能秒级，期间 DAW 里抢先起播的启动音符会带上一首的
+        # 歌名发 cue（对端放错谱）。project 已打开=当前歌确定，先记。
+        _score_preload(self, entry["song_name"])
+        # 移调归零先于 GOTO：工程一开/光标一挪，Cubase 就把 CC16/17 追补
+        # 成新位置的值；归零排在 GOTO 之后会把它盖回旧值（切歌后琴停在
+        # 上一首的移调）。非定位点分支同样在慢 IO 之前归零。
+        self._shift_reset()
         if entry["point"] is not None:
             # 定位点条目：时长=段区间（不动 durations/dur_src）；打开工程
             # 后光标停在上次保存位，必须补 GOTO 到段起点
@@ -1696,9 +1718,8 @@ class App:
             self.cur_song_path = entry["path"]
             self.cur_point_id = pid
         # 只走得到这里=工程关过重开（同工程 GOTO 不走此路）：旧歌移调不带进新歌
-        self._shift_reset()
-        # 谱面服务器先把这首歌加载好，启动音符到时不用等
-        _score_preload(self, entry["song_name"])
+        # （真正归零已在 _switch_done 开头、慢 IO 与 GOTO 之前完成；
+        #  此处不再重复——再发一次会把 Cubase 刚追补的新歌值盖回 0）
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
@@ -2219,8 +2240,11 @@ class App:
         app_p = web_fields.get("appPort", self.web_cfg.get("appPort"))
         if srv_p and app_p and srv_p == app_p:
             return "网页端口与 APP 端口不能相同"
-        self.web_cfg.update(web_fields)
-        # 谱面服务器：缺席键不动；启用态先校验，不合法就地拒绝不落盘
+        # 谱面服务器：缺席键不动；启用态先校验，不合法就地拒绝不落盘。
+        # 校验必须先于任何运行时写入：此前排在 web_cfg.update 之后，驳回
+        # 时内存已脏——改好 URL 再存 web_changed 变 false，_apply_web 不跑
+        # （落盘新端口/翻谱口但运行态仍旧）；点遥控启用钮更会把被驳回的
+        # web 配置直接热应用并落盘
         score_fields = None
         score_in = p.get("score")
         score_in = score_in if isinstance(score_in, dict) else {}
@@ -2229,7 +2253,10 @@ class App:
                 "enabled": bool(score_in["enabled"]),
                 "url": str(score_in.get("url") or "").strip(),
                 "token": str(score_in.get("token") or ""),
-                "note": score_server.cfg_int(score_in.get("note"), 50),
+                # 音符/小节做值域钳位：空白表单 Number("")=0 会落成
+                # note 0（任何工程都不会发）或 bars 0（到手就进歌）
+                "note": max(0, min(127, score_server.cfg_int(
+                    score_in.get("note"), 50))),
                 "bars": max(0, min(8, score_server.cfg_int(
                     score_in.get("bars"), 2))),
             }
@@ -2241,6 +2268,7 @@ class App:
                 if score_fields["note"] in score_server.TURN_NOTES:
                     return ("启动音符 %d 与翻谱音符冲突"
                             % score_fields["note"])
+        self.web_cfg.update(web_fields)
         if "topMost" in p:      # 只落盘：置顶由演出模式 js_api 承担
             self.top_most = bool(p["topMost"])
         if "exitCloseApps" in p:
@@ -3464,8 +3492,12 @@ class App:
                 if sw is not None:
                     sw.submit_msgs(panic_quiet_msgs(cfg), "全停静音")
             # 移调归零（跨歌同款：全停=两琴回安全态）。走带已被用户重新起播
-            # 则不动：段内移调是此时应有的状态，归零=演出中错音
-            if self.watch is None or not self.watch.is_transport_live():
+            # 则不动：段内移调是此时应有的状态，归零=演出中错音。
+            # 时码不可用（端口未配/从未收到 QF）=走带状态未知：不能按
+            # 「未播放」处理——没开时码的工程全停时可能真在播，此时归零
+            # 等于演出中把两琴掰回原调。状态未知就不动移调。
+            w = self.watch
+            if w is None or (w.ever_live() and not w.is_transport_live()):
                 self._shift_reset()
             if ctl is not None:
                 # 顺带熄掉 OBS 视频。绝不上主线程：stop_media=2 个 WebSocket

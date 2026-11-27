@@ -188,3 +188,28 @@ def test_web_remote_routes_cue_note_before_turn_hub():
     wr._on_midi(0x80, 50, 64)
     assert App.score_server.seen == [50, 49]
     assert wr.hub.seen == [49]
+
+
+def test_cue_not_blocked_by_slow_preload(fake):
+    """cue 不与预载串行：切歌预载正卡在对端超时上时，启动音符必须照常
+    立即发出——对端从「收到 cue」才数拍，串行排队=进歌整段晚到。"""
+    release = threading.Event()
+    sent = []
+
+    def post(host, port, path, token):
+        if "/api/room/slow" in path:
+            release.wait(5)               # 模拟对端不响应（预载超时窗口）
+        fake.got.put((path, token, time.monotonic()))
+        return 200, "{}", None
+
+    cfg = {"enabled": True, "url": "http://127.0.0.1:%d" % fake.server_port,
+           "token": "t"}
+    s = ss.ScoreServer(cfg, lambda m: None, post=post)
+    s.q.put(("slow", None, time.monotonic()))   # worker 被慢请求占住
+    time.sleep(0.1)
+    t0 = time.monotonic()
+    assert s.on_note(s.note)
+    path, _tok, t1 = fake.got.get(timeout=2)
+    assert "/api/room/cue" in path
+    assert t1 - t0 < 0.5                  # 不等预载释放
+    release.set()
