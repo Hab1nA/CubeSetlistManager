@@ -741,6 +741,22 @@ input.invalid { border-color: var(--err) !important; }
    主字用预载族紫色——与 .pre 态同色系，色彩语义同源 */
 .vj-cell.pre-signal { cursor: default; }
 .vj-cell.pre-signal .s-pc { color: #a882d6; }
+/* 预载信号卡：说明格 + 右侧规则说明。卡片窄时纵向堆叠（说明文字
+   不被压成一行两字）；宽度够时并排，说明区吃掉剩余空间 */
+.pre-row { display: flex; align-items: flex-start; gap: var(--s4); }
+.pre-row > .pre-signal { flex: 0 0 105px; }
+.pre-note { flex: 1 1 auto; min-width: 0; font-size: var(--f-sm);
+  line-height: 1.65; color: var(--fg); }
+.pre-note p { margin: 0 0 6px; }
+.pre-note p:last-child { margin-bottom: 0; }
+.pre-note b { color: #a882d6; font-weight: 700; }
+.pre-note .dim { color: var(--dim); font-size: var(--f-xs); }
+@media (max-width: 700px) {
+  /* 极窄（手机）：说明区放旁边只会剩几个字宽，改上下堆叠 */
+  .pre-row { flex-direction: column; gap: var(--s3); }
+  /* 卡片本身也要收窄：极窄内容区里固定 105px 会横向溢出 */
+  .pre-row > .pre-signal { flex: 0 0 auto; width: 100%; max-width: 200px; }
+}
 
 /* ---- VJ / 设置页 ---- */
 .card + .card { margin-top: 14px; }

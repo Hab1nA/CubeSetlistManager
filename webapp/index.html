@@ -356,12 +356,18 @@
         <div id="vjmap" class="slot-grid vj-grid"></div>
       </div>
       <div class="card"><h3>预载信号</h3>
-        <div class="slot-grid vj-grid">
-          <div class="slot vj-cell pre-signal"
-            title="C2(48) 预载事务：C2 on 开始准备 → 事务内槽位音符（C4–F6）选定目标装载到隐藏源（不播不响）→ C2 off 首帧就绪后立即上屏。无 C2 时槽位音符单独到达=直接触发。停止/回零/全停/换歌自动取消事务。详见 README「VJ 视频联动」">
+        <div class="pre-row">
+          <div class="slot vj-cell pre-signal">
             <span class="s-note">C2</span>
             <span class="s-pc">预载事务键</span>
             <span class="s-sub">按住选片·松开上屏</span>
+          </div>
+          <div class="pre-note">
+            <p><b>C2 on</b> 开始准备，事务内发一个槽位音符选片，
+              <b>C2 off</b> 首帧就绪后立即上屏，A/B 互换后台。</p>
+            <p><b>不按 C2</b> 时槽位音符单独到达 = 直接触发。</p>
+            <p class="dim">一次事务只提交一个视频；停止 / 回零 / 全停 /
+              换歌会自动取消。</p>
           </div>
         </div>
       </div>
