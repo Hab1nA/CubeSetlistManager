@@ -3746,8 +3746,15 @@ class App:
         if ctl is None:
             return
         target = mb.default_target(ctl.cfg)
+        t_mark = getattr(sync, "_last_note", 0.0) if sync is not None else 0.0
 
         def apply():
+            # 排队期间来了新的 VJ 触发（用户按回零同时又发了槽位音符）：
+            # 回落不得盖掉更新的意图——回零清台只对「清台那一刻的现场」
+            # 负责，晚到的触发才是用户最后一步操作
+            if sync is not None \
+                    and getattr(sync, "_last_note", 0.0) != t_mark:
+                return
             if target and ctl.set_media(target, True):
                 if sync is not None:
                     sync.fallback_start(target)

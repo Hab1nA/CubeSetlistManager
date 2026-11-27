@@ -494,6 +494,7 @@ class ObsController:
                                   else PRELOAD_READY_TIMEOUT)
         first = True
         last_pos = None
+        null_runs = 0
         while time.time() < deadline:
             if gen is not None and gen != self._media_gen:
                 return False                 # 已被作废：立即放弃
@@ -503,8 +504,19 @@ class ObsController:
             if st == "OBS_MEDIA_STATE_PLAYING":
                 pos = r.get("mediaCursor")
                 # 必须看到游标真的前进：PLAYING 但游标停住=源停在末帧
+                # （旧文件 ENDED 后重播前的残留），交换上去就是黑屏
                 if not first and pos is not None and pos != last_pos:
                     return True
+                # mediaCursor 在协议里「未播放时为 null」，部分版本刚
+                # RESTART 后也短暂给 null：连续多次 PLAYING+null 视为
+                # 已就绪，否则每次提交都干等超时误判 not_ready
+                # （50a0984 修复在 658f6eb 重写时丢失，此处恢复）
+                if pos is None:
+                    null_runs += 1
+                    if null_runs >= 5:
+                        return True
+                else:
+                    null_runs = 0
                 first = False
                 last_pos = pos
             elif st in ("OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED",

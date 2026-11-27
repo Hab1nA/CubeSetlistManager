@@ -3681,3 +3681,37 @@ def test_learn_vk_whitelist_wired():
     finally:
         pedal.mb._in_devices = orig_in
         pedal.mb.open_in = orig_open
+
+
+def test_ready_accepts_null_cursor(tmp_path):
+    """mediaCursor 协议上「未播放时为 null」，部分 OBS 版本刚 RESTART 后
+    也短暂给 null：连续 PLAYING+null 必须视为就绪，否则每次提交都干等
+    超时误判 not_ready（50a0984 的修复在 658f6eb 重写中丢失，此处锚定）。"""
+    import obs_ctrl as oc
+
+    class _Null(_FakeWS):
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": None}
+            return super().request(kind, payload, **kw)
+
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _Null()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+    assert ctl.preload("3.mp4") is True
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 3.0
+    try:
+        t0 = time.time()
+        res = ctl.commit_preload()
+        cost = time.time() - t0
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old
+    assert res == "3.mp4", res            # 视为就绪并交换
+    assert cost < 1.0, cost               # 不干等满超时
+    assert ctl._active == "B"
