@@ -416,6 +416,13 @@ class _FakeWS:
                     v[1] = payload["sceneItemEnabled"]
             return {}
         if kind == "RemoveSceneItem":
+            # 真协议要 sceneName + sceneItemId；坏形状必须炸出来，否则
+            # 生产端删场景项静默失败也测不出来
+            if "sceneName" not in payload or "sceneItemId" not in payload:
+                raise obs_ctrl.ObsError("RemoveSceneItem: MissingRequestField")
+            for name, v in list(self.items.items()):
+                if v[0] == payload["sceneItemId"]:
+                    self.items.pop(name, None)
             return {}
         if kind == "RemoveInput":
             self.settings.pop(payload["inputName"], None)
@@ -684,6 +691,11 @@ def test_retire_names_removes_old_pair(tmp_path):
     assert "新名" in ws.items and "新名 B" in ws.items   # 新对就地补建
     assert "舞台视频" not in ctl._item_ids
     assert ctl._item_ids["新名"][0] == "S"
+    # 显式 RemoveSceneItem 必须真的发出（不是靠 RemoveInput 级联兜底）：
+    # 生产端吞掉协议错误，只有形状严格 + 计数才能验出坏负载
+    rm = [c for c in ws.calls
+          if c[0] == "RemoveSceneItem" and c[1].get("sceneName") == "S"]
+    assert len(rm) == 2, rm                          # 旧 A、旧 B 各一条
 
 
 def test_c2_transaction():
@@ -1011,9 +1023,13 @@ def test_commit_bounded_and_cancel_wins(tmp_path):
         oc.PRELOAD_READY_TIMEOUT = old
 
 
-def test_ready_inline_ended_fails_fast(tmp_path):
-    """READY 遇 ENDED 立即失败，不空转整个超时（P1-4：按住超过片长时
-    不该冻结 VJ worker 8 秒）。"""
+def test_ready_inline_persistent_ended_fails_fast(tmp_path):
+    """READY 持续 ENDED 超过宽限即失败，不空转整个超时（P1-4：按住超过
+    片长时不该冻结 VJ worker 8 秒）。
+
+    注意：首次读到 ENDED **不能**立即失败——A/B 换切两轮后隐藏侧残留
+    上一轮播放的 ENDED，RESTART 要等 OBS 下一视频 tick 才生效。旧实现
+    首次即判死，导致第 3 次起预载提交静默失败（P0，见下一条测试）。"""
     import obs_ctrl as oc
 
     class _Ended(_FakeWS):
@@ -1039,7 +1055,47 @@ def test_ready_inline_ended_fails_fast(tmp_path):
     finally:
         oc.PRELOAD_READY_TIMEOUT = old
     assert res == "not_ready"
-    assert cost < 1.0, cost        # 快速失败，不是等满 3s
+    assert cost < 1.0, cost        # 过宽限即失败，不等满 3s
+
+
+def test_ready_accepts_stale_ended_then_playing(tmp_path):
+    """P0 回归：A/B 换切两轮之后，每一侧都播过——源被 deactivate 时停在
+    ENDED，而预载只改文件路径不复位该 state；开可见与 RESTART 都要等
+    OBS 下一个视频 tick。头一两次轮询读到残留 ENDED 属正常，必须继续等
+    到 PLAYING，否则「第 3 次起每次 C2 提交都静默失败」（松开无反应）。"""
+    import obs_ctrl as oc
+
+    class _Stale(_FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                self.n += 1
+                if self.n <= 2:           # 残留 1-2 拍
+                    return {"mediaState": "OBS_MEDIA_STATE_ENDED"}
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": self.n * 5}
+            return super().request(kind, payload, **kw)
+
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _Stale()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+    assert ctl.preload("3.mp4") is True
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 3.0
+    try:
+        res = ctl.commit_preload()
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old
+    assert res == "3.mp4", res        # 残留 ENDED 不算失败
+    assert ctl._active == "B"         # 正常换切
+    assert w.items["舞台视频 B"][1] is True
+    assert w.items["舞台视频"][1] is False
 
 
 def test_commit_rejects_stale_hidden_target(tmp_path):
@@ -3715,3 +3771,47 @@ def test_ready_accepts_null_cursor(tmp_path):
     assert res == "3.mp4", res            # 视为就绪并交换
     assert cost < 1.0, cost               # 不干等满超时
     assert ctl._active == "B"
+
+
+def test_ready_wait_does_not_block_watchdog(tmp_path):
+    """提交等首帧的整段等待不得持 _act 锁：看门狗每 100ms 要查
+    media_state/pause，全停/熄屏也要插进来。原实现把
+    enable+RESTART+等首帧全塞进一个临界区，慢视频（网络盘）会让暂停
+    跟随与黑场冻结最长 8 秒。（658f6eb 删掉了同款测试，此处恢复）"""
+    import threading as _th
+    import obs_ctrl as oc
+
+    class _Slow(_FakeWS):
+        """永远 PLAYING 且游标不动：触发 8s 等待窗口。"""
+        def request(self, kind, payload=None, **kw):
+            if kind == "GetMediaInputStatus":
+                return {"mediaState": "OBS_MEDIA_STATE_PLAYING",
+                        "mediaCursor": 0}
+            return super().request(kind, payload, **kw)
+
+    root = tmp_path / "v"
+    root.mkdir(exist_ok=True)
+    (root / "3.mp4").write_bytes(b"x")
+    ctl = ObsController({"videoRoot": str(root)})
+    w = _Slow()
+    ctl._ws = w
+    ctl._ensure_media_input(w)
+    assert ctl.preload("3.mp4") is True
+    old = oc.PRELOAD_READY_TIMEOUT
+    oc.PRELOAD_READY_TIMEOUT = 8.0
+    box = {}
+    try:
+        t = _th.Thread(target=lambda: box.setdefault("r",
+                                                    ctl.commit_preload()),
+                       daemon=True)
+        t.start()
+        time.sleep(0.4)                 # 已在等待窗口内
+        t0 = time.time()
+        assert ctl.media_state() is not None   # 看门狗要的查询必须能进
+        cost = time.time() - t0
+        assert cost < 0.6, "media_state 被等首帧阻塞 %.2fs" % cost
+        ctl.bump_media_gen()            # 全停插进来：应快速中止
+        t.join(3)
+        assert box.get("r") == "cancel"
+    finally:
+        oc.PRELOAD_READY_TIMEOUT = old

@@ -45,6 +45,8 @@ PORT_HINT = "loopMIDI Port"   # 默认端口全名；不能宽匹配 loopMIDI，
 CLOCK_TIMEOUT = 0.25   # 这么久没有走带时码（QF）就视为暂停/停止
 POLL_SEC = 0.1         # 看门狗轮询间隔
 NOTE_SUPPRESS = 0.2    # 音符到达后此窗口内不恢复旧视频（磁吸对齐音符起播时，切换归音符管）
+FALLBACK_PROBE_SEC = 0.4   # 默认回落 ENDED 探测节流：未节流时每个轮询
+                           # （100ms）都会发一次 GetMediaInputStatus
 # C4(72) → 1.mp4，向上每个音顺延：C#4(73) → 2.mp4 … F6(101) → 30.mp4
 NOTE_MAP = {n: "%d.mp4" % (n - 71) for n in range(72, 102)}
 NOTE_MAP[102] = None  # F#6 → 熄屏
@@ -669,6 +671,7 @@ class TransportSync:
         self._enabled = False
         self._last_pulse = 0.0
         self._last_note = 0.0
+        self._fallback_probe_at = 0.0   # 默认回落探测节流时刻
         self.video_state = "stopped"
         self.current_video = None   # 最近成功触发的视频文件名（仅展示用）
         self._fallback_active = False   # 在播的是默认回落（poll 豁免判它）
@@ -776,10 +779,17 @@ class TransportSync:
         画面。只认 playing 态——熄屏/全停/回零收敛置 stopped 天然抑制
         （显式熄屏优先于回落），暂停定格也不抢；循环槽位永不 ENDED、不经
         此路。默认已设（armed）才查 OBS——media_state 是一个网络往返，
-        未设默认的常规场次零开销。"""
+        未设默认的常规场次零开销；设了默认且视频在播时按
+        FALLBACK_PROBE_SEC 节流（每 100ms 轮询一次会白烧 10 RPC/s，还会
+        拉长看门狗与其它 OBS 动作的锁等待）。"""
         target = default_target(self.ctl.cfg)
         if target is None:
             return
+        now = time.time()
+        if now - getattr(self, "_fallback_probe_at", 0.0) \
+                < FALLBACK_PROBE_SEC:
+            return
+        self._fallback_probe_at = now
         # 有待提交的预载目标时不得回落：两者共用同一个隐藏侧，回落会
         # 覆盖用户刚选好的视频（P1-4），松开 C2 就上错片
         try:

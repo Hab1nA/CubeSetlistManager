@@ -234,6 +234,10 @@ def natural_key(s):
 
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi")
 PRELOAD_READY_TIMEOUT = 8.0   # 预载提交等首帧上限（秒）：超时保留旧画面
+READY_STALE_GRACE = 0.35      # 提交后 ENDED/STOPPED/PAUSED 的宽限（秒）：
+                              # 换切两轮后隐藏侧残留上轮 ENDED，RESTART 要等
+                              # OBS 下一个视频 tick 才生效，首两次轮询常读到
+                              # 残留态——持续超过宽限才算真未就绪
 
 
 class _Abort(Exception):
@@ -338,6 +342,7 @@ class ObsController:
         if path is None:
             self.last_error = "视频文件不存在：%s" % file_rel
             return False
+        gen = self._media_gen          # 入锁前快照：取消会递增代际
         def do(ws):
             self._sync_active_from_scene(ws)   # 先校准，防隐藏可见侧
             name = self._hidden_name()
@@ -347,8 +352,13 @@ class ObsController:
                 "sceneName": scene,
                 "sceneItemId": self._item_id(ws, scene, name),
                 "sceneItemEnabled": False})
+            # 装载期间事务可能已被取消（cancel 递增代际 + 清目标）：
+            # 迟到写回会把「待提交」重新点亮，随后 clear 线程看到非空
+            # 目标又跳过清理——紫框永久残留，默认回落也被它挡住
+            if gen != self._media_gen:
+                raise _Abort()
             self._load_hidden(ws, name, path, bool(loop))
-        return self._act("预载%s" % file_rel, do)
+        return self._act("预载%s" % file_rel, do, abort_ok=True)
 
     def hidden_file(self):
         """隐藏侧当前装载的文件名（预载态展示；None=未装载/未连接）。"""
@@ -367,16 +377,22 @@ class ObsController:
         消隐——否则界面仍显示「松开 C2 上屏」，而 C2 早已松开（P1-9）。
         不递增代际（调用方负责），不报错：清空失败只是展示层残留。
         OBS 清源走后台线程（调用方含主线程的切歌/手动跟随，网络 IO 不得
-        上主线程）；记账同步清=UI 立即正确。执行时复核 `_hidden_file` 仍
-        为空才清——迟到的清空不得擦掉其后新落的预载目标。"""
+        上主线程）；记账同步清=UI 立即正确。
+
+        清源执行前复核代际未变：代际变了=其后又落了新预载（preload 只在
+        代际未变时才写目标），此时不得清——否则擦掉更新的意图。用代际而
+        不是 `_hidden_file is not None`：后者在同步清空之后恒为 None，
+        永远拦不住迟到写回（取消与在途 preload 的竞态会让紫框永久残留、
+        并挡住默认回落）。"""
         self._hidden_file = None
         self._hidden_path = None
+        gen = self._media_gen
 
         def run():
             try:
                 def do(ws):
-                    if self._hidden_file is not None:
-                        return          # 已有更新的预载目标：不清
+                    if gen != self._media_gen:
+                        return          # 期间落了新预载：不清
                     name = self._hidden_name()
                     ws.request("SetInputSettings", {
                         "inputName": name,
@@ -424,6 +440,8 @@ class ObsController:
             self.last_error = "无预载目标：先按 C2 + 槽位音符预载"
             return False
         ready = [False]
+        swapped = [False]
+        ctx = {}
 
         def swap(ws):
             if gen != self._media_gen:
@@ -443,41 +461,56 @@ class ObsController:
             ws.request("SetSceneItemEnabled", {
                 "sceneName": scene, "sceneItemId": new_id,
                 "sceneItemEnabled": True})
-            try:
-                # 2) showing 已为真，RESTART 才真正从头起播
-                ws.request("TriggerMediaInputAction", {
-                    "inputName": new_name,
-                    "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
-                # 3) 等首帧（仍在 _act 锁内：此段必须原子，避免旧侧提前关）
-                if gen != self._media_gen:
-                    raise _Abort()
-                ready[0] = self._wait_ready_inline(ws, new_name, gen=gen)
-            finally:
-                # 未就绪/被作废：把刚开的新侧关回去——否则两源同时可见，
-                # 新侧（z 序在上时）已把目标画面推上屏，与「旧画面保留」
-                # 的失败口径相反；记账侧未翻，可见性与记账分叉
+            # 2) showing 已为真，RESTART 才真正从头起播
+            ws.request("TriggerMediaInputAction", {
+                "inputName": new_name,
+                "mediaAction": "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"})
+            # 记账：等首帧在锁外（见下方），此处只留待收尾用的 id
+            ctx.update(scene=scene, new_id=new_id, old_id=old_id)
+        ctx = {}
+        ok = self._act("提交预载%s" % name, swap, abort_ok=True)
+        if ok and ctx:
+            # 3) 等首帧：**锁外**——每轮只短暂持锁做一次请求，
+            #    看门狗（100ms 的 pause/STATE）与全停/熄屏可以插进来
+            ready[0] = self._wait_ready_inline(new_name, gen=gen)
+        if ok and ctx:
+            def finish(ws):
                 if not ready[0]:
-                    try:
-                        ws.request("SetSceneItemEnabled", {
-                            "sceneName": scene, "sceneItemId": new_id,
-                            "sceneItemEnabled": False})
-                    except (ObsError, OSError):
-                        pass
-            if ready[0]:
+                    # 未就绪/被作废：把刚开的新侧关回去——否则两源同时
+                    # 可见，新侧（z 序在上时）已把目标画面推上屏，与
+                    # 「旧画面保留」的失败口径相反，且可见性与记账分叉
+                    if gen == self._media_gen:
+                        try:
+                            ws.request("SetSceneItemEnabled", {
+                                "sceneName": ctx["scene"],
+                                "sceneItemId": ctx["new_id"],
+                                "sceneItemEnabled": False})
+                        except (ObsError, OSError):
+                            pass
+                    return
+                if gen != self._media_gen:
+                    raise _Abort()      # 等待期被全停/熄屏作废
                 self._active = "B" if new_name == self._b_name() else "A"
                 self._hidden_file = None
                 self._hidden_path = None
-                # 4) 新画面已就绪，关旧侧
-                if old_id is not None:
+                swapped[0] = True
+                old_id = ctx["old_id"]
+                if old_id is not None:   # 4) 新画面就绪，关旧侧
                     ws.request("SetSceneItemEnabled", {
-                        "sceneName": scene, "sceneItemId": old_id,
+                        "sceneName": ctx["scene"], "sceneItemId": old_id,
                         "sceneItemEnabled": False})
-        ok = self._act("提交预载%s" % name, swap, abort_ok=True)
+            ok = self._act("提交预载%s 收尾" % name, finish, abort_ok=True)
         with self._lock:
             stale = gen != self._media_gen
         if stale:
             return "cancel"
         if not ok:
+            # ok=False 且代际没变、也从未进入成功收尾=swap 在校准处
+            # _Abort（用户切了 OBS 节目场景，隐藏侧换了）：不是故障而是
+            # 现场已变，按 cancel 报，别让操作者看到「C2 提交失败：未知
+            # 原因」去反复重载
+            if not swapped[0] and not ready[0]:
+                return "cancel"
             return False
         if not ready[0]:
             self.last_error = ("预载视频 %.1fs 未就绪，旧画面保留"
@@ -485,23 +518,47 @@ class ObsController:
             return "not_ready"
         return name
 
-    def _wait_ready_inline(self, ws, name, timeout=None, gen=None):
+    def _wait_ready_inline(self, name, timeout=None, gen=None):
         """等新侧首帧：必须看到游标前进（PLAYING 但游标不动=末帧残留）。
-        ENDED/PAUSED/ERROR/STOPPED 立即失败，不空转。仅在 swap 的 _act
-        锁内调用，内部不再取 self._lock（避免自锁）。代际变了（全停/
-        熄屏）立即返回，黑场要即时。"""
+        ERROR 立即失败。
+
+        ENDED/STOPPED/PAUSED 给一段宽限再判失败：A/B 换切两轮之后，每一侧
+        都被播放过——`ffmpeg_source_deactivate` 会把它置 ENDED，而预载的
+        `SetInputSettings` 只改文件路径、不复位这个 state。开可见与 RESTART
+        都只是把动作排进 OBS 的下一个视频 tick，头一两次 `GetMediaInputStatus`
+        常常读到的还是上一轮残留的 ENDED（约 16–33ms 一帧内）。原实现首次
+        读到 ENDED 就判死，导致「第 3 次起预载提交静默失败」。
+        只有持续 ENDED/STOPPED 超过宽限（或 ERROR）才算真失败。
+
+        仅在 swap 的 _act 锁内调用，内部不再取 self._lock（避免自锁）。
+        代际变了（全停/熄屏）立即返回，黑场要即时。
+
+        锁纪律（2026-11-27 复查 P1）：本函数每轮只做一次请求，调用方在
+        **等待期间不得持 _act 锁**——否则 8 秒等待会把看门狗（每 100ms 的
+        pause/STATE 查询）和全停/熄屏全部堵住。故 commit_preload 分两段：
+        开新侧+RESTART 在锁内，等首帧在锁外，关旧侧再回锁内复验。"""
         deadline = time.time() + (timeout if timeout is not None
                                   else PRELOAD_READY_TIMEOUT)
+        # 宽限起点=首次读到非就绪非错误态的时刻；宽限内继续轮询
+        stalled_since = None
         first = True
         last_pos = None
         null_runs = 0
         while time.time() < deadline:
             if gen is not None and gen != self._media_gen:
                 return False                 # 已被作废：立即放弃
-            r = ws.request("GetMediaInputStatus", {"inputName": name},
-                           timeout=0.5)
+            # 每次请求短暂持锁：看门狗/全停能插进来（单次超时 0.5s 上限）
+            with self._lock:
+                if not self._ws:
+                    return False
+                try:
+                    r = self._ws.request("GetMediaInputStatus",
+                                         {"inputName": name}, timeout=0.5)
+                except (ObsError, OSError):
+                    return False
             st = r.get("mediaState")
             if st == "OBS_MEDIA_STATE_PLAYING":
+                stalled_since = None
                 pos = r.get("mediaCursor")
                 # 必须看到游标真的前进：PLAYING 但游标停住=源停在末帧
                 # （旧文件 ENDED 后重播前的残留），交换上去就是黑屏
@@ -519,9 +576,15 @@ class ObsController:
                     null_runs = 0
                 first = False
                 last_pos = pos
-            elif st in ("OBS_MEDIA_STATE_ERROR", "OBS_MEDIA_STATE_STOPPED",
-                        "OBS_MEDIA_STATE_ENDED", "OBS_MEDIA_STATE_PAUSED"):
+            elif st == "OBS_MEDIA_STATE_ERROR":
                 return False
+            elif st in ("OBS_MEDIA_STATE_STOPPED", "OBS_MEDIA_STATE_ENDED",
+                        "OBS_MEDIA_STATE_PAUSED"):
+                # 残留态：给宽限等 RESTART 生效；持续不翻身才是真失败
+                if stalled_since is None:
+                    stalled_since = time.time()
+                elif time.time() - stalled_since >= READY_STALE_GRACE:
+                    return False
             time.sleep(0.02)
         return False
 
@@ -817,9 +880,12 @@ class ObsController:
                 for it in items["sceneItems"]:
                     if it["sourceName"] == name:
                         try:
-                            # 协议要完整场景项对象（GetSceneItemList 条目
-                            # 即该形状），不是裸 id
-                            ws.request("RemoveSceneItem", {"sceneItem": it})
+                            # obs-websocket 要 sceneName + sceneItemId；
+                            # 传整条列表项（旧写法）会 MissingRequestField
+                            # 被拒——删除静默失败，全靠 RemoveInput 的级联
+                            ws.request("RemoveSceneItem", {
+                                "sceneName": scene,
+                                "sceneItemId": it["sceneItemId"]})
                         except (ObsError, OSError):
                             pass
                 ws.request("RemoveInput", {"inputName": name})

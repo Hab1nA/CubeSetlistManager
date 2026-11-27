@@ -595,25 +595,62 @@ def test_daw_proj_here(monkeypatch):
     assert sg.App._daw_proj_here(app, "歌一") is False    # 手开了他工程
 def test_vj_cancel_transaction_wiring():
     """停止/回零/全停/换歌都要取消 C2 预载事务（§5.2）：
-    入口经 MidiIn._on_note.cancel_transaction 到达处理器；
-    port 缺席/旧口无该属性=静默无异常。"""
+    入口经 MidiIn._on_note.cancel_transaction 到达处理器；取消必须真的
+    落到收发器（代际递增 + 清待提交目标），不能只验证「没抛异常」——
+    桩缺方法时异常被内部 catch 吞掉，旧断言永远为真。"""
     import midi_bridge as _mb
 
     class _Ctl:
         def __init__(self):
             self.cfg = {}
             self.last_error = ""
+            self.gen_bumps = 0
+            self.cleared = 0
+            self.hidden = None
+            self.sets, self.pre = [], []
+
+        def bump_media_gen(self):
+            self.gen_bumps += 1
+
+        def clear_pending_preload(self):
+            self.cleared += 1
+            self.hidden = None
+
+        def hidden_file(self):
+            return self.hidden
+
+        def preload(self, f, loop=False):
+            self.pre.append(f)
+            self.hidden = f
+            return True
+
+        def loop_for(self, f):
+            return False
+
     class _Sync:
-        pass
+        def note_seen(self): pass
+        def note_playing(self, t): pass
+        def on_event(self, m): pass
 
     ctl = _Ctl()
-    on = _mb.note_handler(ctl, _Sync(), report=lambda _m: None)
+    lines = []
+    on = _mb.note_handler(ctl, _Sync(), report=lines.append)
 
     class _Port:
         _on_note = on
 
     app = types.SimpleNamespace(port=_Port(), q=_Q())
+    # 开事务并选目标（按住 C2 + 槽位）
+    on(48, 100)
+    on(74, 100)
+    deadline = time.monotonic() + 2.0
+    while ctl.hidden is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ctl.hidden == "3.mp4"            # 预载已落账
     assert sg.App._vj_cancel_transaction(app, "取消") is None
+    assert ctl.gen_bumps >= 1               # 代际递增（作废在途提交）
+    assert ctl.cleared >= 1 and ctl.hidden is None   # 待提交目标真清了
+    assert not any(m.startswith("C2 事务取消异常") for m in app.q._l), app.q._l
 
     # 无 port（VJ 未启用）与口上无取消属性：都不得抛
     app2 = types.SimpleNamespace(port=None, q=_Q())

@@ -2759,16 +2759,19 @@ async function toggleVjLoop(cell, row) {
     if (j.ok) {
       row.loop = mode === "loop";
       row.default = mode === "default";
-      // default 全局单值：本格设默认=摘其它格角标；本格改档=若旧默认在
-      // 他格仍保（后端 cfg 没动他格）——只摘「本格曾是默认」之外的场景
-      // 不成立，直接按 mode 归一视觉（跨格 row 数据 5s 重建保真）
-      const grid2 = cell.parentElement;
+      // default 全局单值：本格设默认=后端已顶掉旧默认槽位，前端同步把
+      // 其它格的行数据与角标一起摘掉。只摘 DOM class 不摘 row.default
+      // 会让那一格在 5s 重建前算错档位——点它得到 "off"（以为已经是
+      // 默认）而画成关闭，用户要点两次才生效
       if (mode === "default") {
+        const grid2 = cell.parentElement;
         grid2.querySelectorAll(".vj-cell.default").forEach(c => {
-          if (c !== cell) {
-            c.classList.remove("default");
-            c.setAttribute("aria-pressed", "false");  // 摘类同步摘 aria
-          }
+          if (c === cell) return;
+          c.classList.remove("default");
+          c.setAttribute("aria-pressed", "false");  // 摘类同步摘 aria
+          const n = Number(c.dataset.note);
+          const r = (vjMapRows || []).find(x => x.note === n);
+          if (r) r.default = false;
         });
       }
     } else paint(rowMode());
