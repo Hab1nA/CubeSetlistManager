@@ -482,7 +482,8 @@
           </div>
         </div>
       </div>
-      <div class="card"><h3>谱面服务器</h3>
+      <div class="card"><h3>谱面服务器<button id="st-score-on" class="tgl"
+        title="DAW 在进歌点前 N 小节画启动音符，经翻谱端口通知谱面服务器">启用</button></h3>
         <div class="grid2">
           <div class="field wide"><label for="st-score-url">服务器地址</label>
             <input id="st-score-url" placeholder="http://192.168.1.20:8765"></div>
@@ -494,9 +495,6 @@
           <div class="field"><label for="st-score-bars">预备小节</label>
             <div class="input-row suf"><input id="st-score-bars"
               inputmode="numeric"><span class="suf-txt">小节</span></div></div>
-          <label class="switch wide" title="DAW 在进歌点前 N 小节画启动音符，经翻谱端口通知谱面服务器">
-            <input type="checkbox" id="st-score-on"><i></i>
-            <span>启用谱面服务器</span></label>
         </div>
         <div class="kv"><span class="k">上次信号</span>
           <span class="mr-cell"><span class="v off" id="st-score-last">尚未发送</span></span></div>

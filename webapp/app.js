@@ -2802,7 +2802,8 @@ function renderVjState() {
   }
 }
 
-// ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪）----
+// ---- 设置页（分组卡 + 脏标记；移动端遥控「启用」为即点即发，不入脏跟踪；
+//      谱面服务器同名按钮只是表单开关——启用态要配地址，随保存一起提交）----
 const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb",
                    "st-exit", "st-launch",
                    "st-root", "st-exe", "st-mode", "st-srv", "st-app",
@@ -2810,10 +2811,10 @@ const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb",
                    "st-score-on", "st-score-url", "st-score-token",
                    "st-score-note", "st-score-bars"];
 let stBase = null;
-const stSnap = () => ST_FIELDS.map(id => {
-  const el = $("#" + id);
-  return el.type === "checkbox" ? el.checked : el.value;
-}).join("¦");
+const stVal = el => el.type === "checkbox" ? el.checked
+    : el.classList.contains("tgl") ? el.getAttribute("aria-pressed") === "true"
+    : el.value;
+const stSnap = () => ST_FIELDS.map(id => stVal($("#" + id))).join("¦");
 const portOk = id => {
   const v = Number($("#" + id).value);
   return Number.isInteger(v) && v >= 1 && v <= 65535;
@@ -3053,7 +3054,7 @@ function renderScore(d, fields) {
   el.textContent = last ? last.msg : "尚未发送";
   el.title = last ? last.msg : "保存启用后切歌或收到启动音符时才有记录";
   if (!fields) return;
-  $("#st-score-on").checked = !!d.enabled;
+  setTgl($("#st-score-on"), !!d.enabled);
   $("#st-score-url").value = d.url || "";
   $("#st-score-token").value = d.token || "";
   $("#st-score-note").value = d.note;
@@ -3179,7 +3180,7 @@ async function saveSettings() {
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
           ip: $v("#st-ip")},
-    score: {enabled: $("#st-score-on").checked,
+    score: {enabled: $("#st-score-on").getAttribute("aria-pressed") === "true",
             url: $v("#st-score-url"), token: $v("#st-score-token"),
             note: Number($v("#st-score-note")),
             bars: Number($v("#st-score-bars"))}});
@@ -3191,6 +3192,13 @@ async function saveSettings() {
   return r.ok;
 }
 $("#st-save").addEventListener("click", saveSettings);
+// 谱面服务器启用钮：视觉/结构与「移动端遥控」同款（绿=启用），但只翻表单
+// 状态不即点即发——启用态必须配地址，随「保存并应用」一起提交
+$("#st-score-on").addEventListener("click", () => {
+  setTgl($("#st-score-on"),
+         $("#st-score-on").getAttribute("aria-pressed") !== "true");
+  stDirty();
+});
 // 底座重启：仅底座改动态可点（stDawNote 管 disabled）；表单有未保存
 // 编辑先保存再重启，底座切换的落盘由这次保存完成
 $("#st-daw-restart").addEventListener("click", async () => {
