@@ -29,6 +29,9 @@ DEFAULT_SCORE_SERVER = {
     "bars": 2,          # 预备拍小节数：DAW 里启动音符画在起点前几小节就填几
 }
 TIMEOUT = 2.0
+# 翻谱口上的其它消费者：48/49=翻页命令、72–81=设备槽位。启动音符撞号时
+# _on_midi 会把它先截给本模块，翻谱动作静默丢失——启用态直接拒绝。
+TURN_NOTES = frozenset((48, 49) + tuple(range(72, 82)))
 
 
 def parse_url(url):
@@ -37,6 +40,14 @@ def parse_url(url):
     if u.scheme != "http" or not u.hostname:
         raise ValueError("地址须是 http://<IP>:<端口>")
     return u.hostname, u.port or 80, u.path.rstrip("/")
+
+
+def cfg_int(v, default):
+    """手改配置容错：非整数（None/空/乱填）回落默认值，不炸启动。"""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def build_path(base, action, song=None, bars=None):
@@ -58,24 +69,30 @@ class ScoreServer:
         self._clock = clock
         self._post = post or self._http_post
         self.song = None            # 当前歌名（切歌完成时 preload 记下）
+        self.last = None            # 最近一次信号结果（设置页状态行）
         self.apply(cfg)
         self.q = queue.Queue()
         threading.Thread(target=self._loop, daemon=True).start()
 
     def apply(self, cfg):
         c = dict(DEFAULT_SCORE_SERVER)
-        c.update(cfg or {})
+        c.update(cfg if isinstance(cfg, dict) else {})
         self.enabled = bool(c.get("enabled"))
         self.url = str(c.get("url") or "")
         self.token = str(c.get("token") or "")
-        self.note = int(c.get("note", 50))
-        self.bars = max(0, min(8, int(c.get("bars", 2))))
+        self.note = cfg_int(c.get("note"), 50)
+        self.bars = max(0, min(8, cfg_int(c.get("bars"), 2)))
         self._target = None
         if self.enabled:
+            if self.note in TURN_NOTES:
+                self.enabled = False
+                self._report("谱面服务器未启用：启动音符 %d 与翻谱音符冲突"
+                             % self.note)
+                return
             try:
                 self._target = parse_url(self.url)
             except ValueError as e:
-                self._report("谱面服务器未启用：%s（当前 %r）" % (e, self.url))
+                self._report("谱面服务器未启用：%s，当前 %r" % (e, self.url))
 
     @property
     def active(self):
@@ -124,17 +141,19 @@ class ScoreServer:
         path = build_path(base, action, song, bars)
         status, body, err = self._post(host, port, path, self.token)
         lag = (self._clock() - t0) * 1000
-        what = ("启动《%s》（预备 %d 小节）" % (song, bars) if action == "cue" and song
-                else "启动当前歌（预备 %d 小节）" % bars if action == "cue"
+        what = ("启动《%s》，预备 %d 小节" % (song, bars) if action == "cue" and song
+                else "启动当前歌，预备 %d 小节" % bars if action == "cue"
                 else "预载《%s》" % song)
         if err:
-            self._report("谱面服务器%s失败：%s" % (what, err))
+            msg = "谱面服务器%s失败：%s" % (what, err)
         elif status >= 300:
-            self._report("谱面服务器%s被拒（%d）：%s" % (what, status, body[:120]))
+            msg = "谱面服务器%s被拒 %d：%s" % (what, status, body[:120])
         elif action == "cue":
-            self._report("谱面服务器%s已送达，%.0f ms" % (what, lag))
+            msg = "谱面服务器%s已送达，%.0f ms" % (what, lag)
         else:
-            self._report("谱面服务器%s完成" % what)
+            msg = "谱面服务器%s完成" % what
+        self.last = {"ok": not err and status < 300, "msg": msg}
+        self._report(msg)
 
     @staticmethod
     def _http_post(host, port, path, token):

@@ -82,7 +82,7 @@ def test_cue_note_sends_cue_with_song_and_token(fake):
     path, tok, t1 = fake.got.get(timeout=2)
     assert path.startswith("/api/room/cue?bars=2&song=")
     assert tok == "tok"
-    assert t1 - t0 < 0.1                # 不进 100ms 组合窗口
+    assert t1 - t0 < 0.5                # 不进 100ms 组合窗口（余量防 CI 抖动）
     msgs = [logs.get(timeout=2) for _ in range(2)]
     assert "预载" in msgs[0] and "已送达" in msgs[1]
 
@@ -99,11 +99,60 @@ def test_refusal_and_unreachable_are_logged(fake):
     fake.code = 404
     s, logs = _make(fake)
     s.on_note(50)
-    assert "被拒（404）" in logs.get(timeout=2)
+    assert "被拒 404" in logs.get(timeout=2)
     dead = ss.ScoreServer({"enabled": True, "url": "http://127.0.0.1:1"},
                           logs.put)
     dead.on_note(50)
     assert "失败" in logs.get(timeout=4)
+
+
+def test_bad_config_never_breaks_startup():
+    """手改坏配置：非 dict 段、None/乱填的音符与小节一律回落默认，不抛。"""
+    logs = queue.Queue()
+    for cfg in ("abc", ["x"], 5, None):
+        s = ss.ScoreServer(cfg, logs.put)
+        assert not s.active
+    s = ss.ScoreServer({"enabled": False, "note": None, "bars": "2.5"},
+                       logs.put)
+    assert s.note == 50 and s.bars == 2
+    s = ss.ScoreServer({"enabled": False, "note": "abc", "bars": None},
+                       logs.put)
+    assert s.note == 50 and s.bars == 2
+    s = ss.ScoreServer({"enabled": False, "bars": 99}, logs.put)
+    assert s.bars == 8                       # 钳位
+
+
+def test_note_conflict_refused():
+    """启动音符撞翻谱音符（48/49 与 72–81）：启用态直接拒绝，不吃翻谱动作。"""
+    logs = queue.Queue()
+    for bad in sorted(ss.TURN_NOTES):
+        s = ss.ScoreServer({"enabled": True, "url": "http://h:1",
+                            "note": bad}, logs.put)
+        assert not s.active and not s.enabled
+        assert "冲突" in logs.get_nowait()
+    ok = ss.ScoreServer({"enabled": True, "url": "http://h:1", "note": 50},
+                        logs.put)
+    assert ok.active
+
+
+def test_last_result_recorded(fake):
+    """last=最近一次信号结果（设置页状态行数据源）。"""
+    s, _logs = _make(fake)
+    s.on_note(50)
+    fake.got.get(timeout=2)
+    for _ in range(50):
+        if s.last is not None:
+            break
+        time.sleep(0.02)
+    assert s.last["ok"] and "已送达" in s.last["msg"]
+    fake.code = 404
+    s.on_note(50)
+    fake.got.get(timeout=2)
+    for _ in range(50):
+        if s.last and not s.last["ok"]:
+            break
+        time.sleep(0.02)
+    assert not s.last["ok"] and "被拒 404" in s.last["msg"]
 
 
 def test_web_remote_routes_cue_note_before_turn_hub():

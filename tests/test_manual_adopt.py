@@ -116,6 +116,8 @@ def test_adopt_match(monkeypatch):
     monkeypatch.setattr(setlist_gui.kbd_auto, "load_slots",
                         lambda p, kind=None, point_id=None: loaded.append(p) or {"s": 1})
     app = _app()
+    fed = []
+    app.score_server = types.SimpleNamespace(preload=lambda s: fed.append(s))
     setlist_gui.App._adopt(app, "Y")
     assert app.cur == 1                      # 指针指到命中的那首（立即）
     assert _wait(app, lambda: app.cur_song_path == "/p2"
@@ -130,6 +132,7 @@ def test_adopt_match(monkeypatch):
     assert loaded == ["/p2", "/p2"]          # JUNO + AX 槽都按新工程装载
     assert app.ax_slots == {"s": 1}
     assert any("已跟随" in m for m in app.logs)
+    assert fed == ["Y"]                      # 手动跟随=当前歌变更，预载同步
 
 
 def test_adopt_match_keeps_manual_duration(monkeypatch):
@@ -145,16 +148,20 @@ def test_adopt_match_keeps_manual_duration(monkeypatch):
 
 
 def test_adopt_miss_clears(monkeypatch):
-    """游离：清指针回第一首兜底、清映射、计时器清零（永不推进）。"""
+    """游离：清指针回第一首兜底、清映射、计时器清零（永不推进）；谱面服
+    务器歌名同清（cue 不得带上一首的旧名）。"""
     fired = []
     monkeypatch.setattr(setlist_gui.cpr_meta, "read_locators",
                         lambda p: fired.append(p))    # 不该被探时长
     app = _app()
+    fed = []
+    app.score_server = types.SimpleNamespace(preload=lambda s: fed.append(s))
     setlist_gui.App._adopt(app, "别的歌")
     assert app.cur is None and app.cur_song_path is None
     assert app.slots == {} and app.ax_slots == {}
     assert app.watch.resets == 1 and app.watch.durs == [0]
     assert fired == [] and any("不在播放列表" in m for m in app.logs)
+    assert fed == [None]                     # 游离清歌名
 
 
 def test_adopt_duplicate_name_takes_first(monkeypatch):

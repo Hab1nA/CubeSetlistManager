@@ -2806,7 +2806,9 @@ function renderVjState() {
 const ST_FIELDS = ["st-daw", "st-clock", "st-vj", "st-kb",
                    "st-exit", "st-launch",
                    "st-root", "st-exe", "st-mode", "st-srv", "st-app",
-                   "st-tsk", "st-pg", "st-ip"];
+                   "st-tsk", "st-pg", "st-ip",
+                   "st-score-on", "st-score-url", "st-score-token",
+                   "st-score-note", "st-score-bars"];
 let stBase = null;
 const stSnap = () => ST_FIELDS.map(id => {
   const el = $("#" + id);
@@ -2816,15 +2818,40 @@ const portOk = id => {
   const v = Number($("#" + id).value);
   return Number.isInteger(v) && v >= 1 && v <= 65535;
 };
+// 启动音符撞翻谱音符（48/49 翻页、72–81 设备槽位）就会被本模块先截走、
+// 翻谱动作静默丢失——后端同表拒绝，前端先标红给出原因
+const TURN_NOTES = new Set([48, 49, ...Array.from({length: 10}, (_, i) => 72 + i)]);
+const scoreNoteOk = () => {
+  const v = Number($("#st-score-note").value);
+  return Number.isInteger(v) && v >= 0 && v <= 127 && !TURN_NOTES.has(v);
+};
+const scoreBarsOk = () => {
+  const v = Number($("#st-score-bars").value);
+  return Number.isInteger(v) && v >= 0 && v <= 8;
+};
+function stScoreNote() {
+  const n = Number($("#st-score-note").value);
+  const el = $("#st-score-note-name");
+  el.textContent = Number.isInteger(n) && n >= 0 && n <= 127
+      ? noteName(n) : "—";
+  el.classList.toggle("warn-txt", !scoreNoteOk());
+}
 function stDirty() {
   const ports = ["st-srv", "st-app", "st-tsk"];
-  const bad = ports.some(id => !portOk(id));
+  const badPort = ports.some(id => !portOk(id));
+  const badNote = !scoreNoteOk(), badBars = !scoreBarsOk();
+  const bad = badPort || badNote || badBars;
   ports.forEach(id =>
       $("#" + id).classList.toggle("invalid", !portOk(id)));
+  $("#st-score-note").classList.toggle("invalid", badNote);
+  $("#st-score-bars").classList.toggle("invalid", badBars);
+  stScoreNote();
   const dirty = stBase !== null && stSnap() !== stBase;
   $("#st-dirty").hidden = !dirty;
   $("#st-save").disabled = dirty && !bad ? false : true;
-  $("#st-save").title = bad ? "端口须为 1-65535 的整数" : "";
+  $("#st-save").title = badPort ? "端口须为 1-65535 的整数"
+      : badNote ? "启动音符须为 0-127 且避开 48/49 与 72-81（翻谱音符）"
+      : badBars ? "预备小节须为 0-8 的整数" : "";
 }
 // ---- 底座切换：两底座各自记忆工程库/程序路径（后端 dawSettings 按底座
 // 分段），切换时字段未被手改则联动换显；落盘≠生效（dawActive）提示重启。
@@ -3018,13 +3045,31 @@ $("#st-mr-portbtn").addEventListener("click", async () => {
   }
 });
 
+function renderScore(d, fields) {
+  if (!d) return;
+  const el = $("#st-score-last");     // 状态行不受脏保护（同 renderNetStat）
+  const last = d.last;
+  el.className = "v " + (!last ? "off" : last.ok ? "on" : "err");
+  el.textContent = last ? last.msg : "尚未发送";
+  el.title = last ? last.msg : "保存启用后切歌或收到启动音符时才有记录";
+  if (!fields) return;
+  $("#st-score-on").checked = !!d.enabled;
+  $("#st-score-url").value = d.url || "";
+  $("#st-score-token").value = d.token || "";
+  $("#st-score-note").value = d.note;
+  $("#st-score-bars").value = d.bars;
+  stScoreNote();
+}
+
 async function refreshSettings(force) {
   try {
     const d = await (await fetch("/settings")).json();
     renderNetStat(d);   // 状态行不受脏保护（非表单字段，随时可刷）
+    renderScore(d.score, false);
     // 用户已弄脏时不覆盖：慢响应迟到会静默吃掉正在编辑的值
     // （保存成功后的回读走 force=true 重抓基线）
     if (!force && stBase !== null && stSnap() !== stBase) return;
+    renderScore(d.score, true);
     fillSel("st-clock", d.clockHint, d.ports || [], " · 未接入");
     fillSel("st-vj", d.vjHint, d.ports || [], " · 未接入");
     fillSel("st-kb", d.kbHint, d.ports || [], " · 未接入");
@@ -3111,9 +3156,17 @@ $("#st-web").addEventListener("click", async () => {
   }
 });
 async function saveSettings() {
-  const bad = ["st-srv", "st-app", "st-tsk"].some(id => !portOk(id));
-  if (bad) {                           // 校验下沉：保存与重启两条路共用
+  // 校验下沉：保存与底座重启两条路共用
+  if (["st-srv", "st-app", "st-tsk"].some(id => !portOk(id))) {
     toast("端口须为 1-65535 的整数", "err");
+    return false;
+  }
+  if (!scoreNoteOk()) {
+    toast("启动音符须为 0-127 且避开 48/49 与 72-81（翻谱音符）", "err");
+    return false;
+  }
+  if (!scoreBarsOk()) {
+    toast("预备小节须为 0-8 的整数", "err");
     return false;
   }
   const r = await post("/settings", {
@@ -3125,7 +3178,11 @@ async function saveSettings() {
     web: {mode: $v("#st-mode"),
           serverPort: Number($v("#st-srv")), appPort: Number($v("#st-app")),
           taskerPort: Number($v("#st-tsk")), midiIn: $v("#st-pg"),
-          ip: $v("#st-ip")}});
+          ip: $v("#st-ip")},
+    score: {enabled: $("#st-score-on").checked,
+            url: $v("#st-score-url"), token: $v("#st-score-token"),
+            note: Number($v("#st-score-note")),
+            bars: Number($v("#st-score-bars"))}});
   if (r.ok) {
     toast($("#st-daw").value !== stDawActive && stDawActive !== ""
           ? "设置已保存，底座切换待重启生效" : "设置已保存并应用");
