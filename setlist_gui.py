@@ -476,6 +476,30 @@ def _reprobe(songs, durations, dur_src):
 
 
 
+def _score_preload(app, song):
+    """谱面服务器当前歌名唯一写口（切歌完成/手动跟随/游离三路同源）：
+    歌名错=对端按错曲预载、cue 时放错谱。song=None=清空（不发请求）。"""
+    ss = getattr(app, "score_server", None)
+    if ss is not None:
+        ss.preload(song)
+
+
+def _score_payload(app):
+    """设置页谱面服务器载荷：地址/令牌取落盘值，音符/小节取运行态（热应
+    用后已生效），last=最近一次信号结果，None=本次运行尚未发过。"""
+    d = score_server.DEFAULT_SCORE_SERVER
+    ss = getattr(app, "score_server", None)
+    cfg = _load_config().get("scoreServer")
+    cfg = cfg if isinstance(cfg, dict) else {}
+    return {"enabled": bool(cfg.get("enabled")),
+            "url": str(cfg.get("url") or ""),
+            "token": str(cfg.get("token") or ""),
+            "note": ss.note if ss is not None else d["note"],
+            "bars": ss.bars if ss is not None else d["bars"],
+            "active": bool(getattr(ss, "active", False)),
+            "last": getattr(ss, "last", None)}
+
+
 class App:
     """业务栈根对象。界面唯一入口=webapp 前端（webui.py/pywebview）；
     App 在隐藏 Tk 根上构建的业务骨架承载轮询与业务态，web 业务面走
@@ -1674,9 +1698,7 @@ class App:
         # 只走得到这里=工程关过重开（同工程 GOTO 不走此路）：旧歌移调不带进新歌
         self._shift_reset()
         # 谱面服务器先把这首歌加载好，启动音符到时不用等
-        ss = getattr(self, "score_server", None)
-        if ss is not None:
-            ss.preload(entry["song_name"])
+        _score_preload(self, entry["song_name"])
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
@@ -2019,6 +2041,7 @@ class App:
             "web": {k: web.get(k) for k in
                     ("enabled", "serverPort", "appPort", "taskerPort",
                      "midiIn", "mode", "ip")},
+            "score": _score_payload(self),
             "screens": [n for n, _r in list_screens()],
             "adapters": adapters,
             "ports": [n for _i, n in mb.in_devices()],
@@ -2197,6 +2220,27 @@ class App:
         if srv_p and app_p and srv_p == app_p:
             return "网页端口与 APP 端口不能相同"
         self.web_cfg.update(web_fields)
+        # 谱面服务器：缺席键不动；启用态先校验，不合法就地拒绝不落盘
+        score_fields = None
+        score_in = p.get("score")
+        score_in = score_in if isinstance(score_in, dict) else {}
+        if "enabled" in score_in:
+            score_fields = {
+                "enabled": bool(score_in["enabled"]),
+                "url": str(score_in.get("url") or "").strip(),
+                "token": str(score_in.get("token") or ""),
+                "note": score_server.cfg_int(score_in.get("note"), 50),
+                "bars": max(0, min(8, score_server.cfg_int(
+                    score_in.get("bars"), 2))),
+            }
+            if score_fields["enabled"]:
+                try:
+                    score_server.parse_url(score_fields["url"])
+                except ValueError as e:
+                    return "谱面服务器地址无效：%s" % e
+                if score_fields["note"] in score_server.TURN_NOTES:
+                    return ("启动音符 %d 与翻谱音符冲突"
+                            % score_fields["note"])
         if "topMost" in p:      # 只落盘：置顶由演出模式 js_api 承担
             self.top_most = bool(p["topMost"])
         if "exitCloseApps" in p:
@@ -2294,6 +2338,8 @@ class App:
                 cfg["daw"] = daw_new
             if web_fields:
                 cfg["webRemote"] = self._web_config_payload(**web_fields)
+            if score_fields is not None:      # 整段替换：来源=表单全量
+                cfg["scoreServer"] = dict(score_fields)
             _save_config(cfg)
         except (ValueError, OSError) as e:
             self.q.put("配置保存失败：%s" % e)
@@ -2302,8 +2348,30 @@ class App:
             self._apply_ports()
         if web_changed:
             self._apply_web()
+        if score_fields is not None:
+            self._apply_score()
         self.q.put("设置已保存")
         return None
+
+    def _apply_score(self):
+        """谱面服务器热应用：改配置即生效（端口名/开关无需重启）。启用
+        且当前有已装载曲目时补一次预载，对端不必等下一首切歌才拿到歌名。"""
+        ss = getattr(self, "score_server", None)
+        if ss is None:
+            self.q.put("谱面服务器模块未就绪：重启程序后生效")
+            return
+        try:
+            ss.apply(_load_config().get("scoreServer"))
+        except Exception as e:      # 手改坏配置：不炸设置保存
+            self.q.put("谱面服务器应用失败：%s" % _err(e))
+            return
+        if not ss.active:
+            return
+        cur = self.cur
+        if cur is not None and 0 <= cur < len(self.pl_keys):
+            e = self._resolve_entry(self.pl_keys[cur])
+            if e is not None:
+                ss.preload(e["song_name"])
 
     def _pedal_get_web(self):
         p = self.pedal
@@ -3931,6 +3999,9 @@ class App:
                     self.watch.set_duration(0, 0.0)  # 秒立即作废——装载 IO 窗
                     #   口（网络盘秒级）内不得拿旧位置参与新工程对位/显示
                 self._adopted_load(k, gen)
+                # 手动跟随也是「当前歌」变更：cue 带错歌名=谱面放错，预载
+                # 与切歌路径同口径（工程内音色映射装载是另一回事）
+                _score_preload(self, name)
                 self.q.put("已跟随手动打开：《%s》" % name)
                 return
         self.cur = None
@@ -3941,6 +4012,7 @@ class App:
         if self.watch is not None:
             self.watch.reset()
             self.watch.set_duration(0, 0.0)   # 游离歌坐标未知：左偏移一并清
+        _score_preload(self, None)             # 游离：清歌名，cue 不再带旧名
         self.q.put("《%s》不在播放列表：不自动推进，NEXT 置空" % name)
 
     def _adopted_load(self, key, gen):

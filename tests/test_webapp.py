@@ -1460,6 +1460,71 @@ def test_settings_partial_payload_no_wipe(monkeypatch):
     assert calls == ["web"]
 
 
+def test_settings_score_roundtrip(monkeypatch):
+    """谱面服务器设置往返：非法地址/撞翻谱音符就地拒绝（不落盘不热应用）；
+    合法载荷整段落盘并触发热应用；缺席键不动已存段。"""
+    disk = {"scoreServer": {"enabled": True, "url": "http://old:1",
+                            "token": "t0", "note": 50, "bars": 2}}
+    monkeypatch.setattr(sg, "_load_config", lambda: json.loads(
+        json.dumps(disk)))
+    monkeypatch.setattr(sg, "_save_config",
+                        lambda cfg: disk.clear() or disk.update(cfg))
+    calls = []
+    fake = types.SimpleNamespace(
+        vj_hint="", kb_hint="", clock_hint="", top_most=True,
+        exit_close_apps=False, launch_apps=True, daw="cubase",
+        ccfg={"projectsRoot": "C:/x"}, web=None, ctl=None, cur=None,
+        pl_keys=[], web_cfg=dict(web_remote.DEFAULT_WEB_REMOTE),
+        _obs_apply_lock=threading.Lock(), _clock_changed=False, q=_Q(),
+        _apply_ports=lambda: calls.append("ports"),
+        _apply_web=lambda: calls.append("web"),
+        _apply_score=lambda: calls.append("score"),
+        _web_config_payload=lambda **f: dict(
+            web_remote.DEFAULT_WEB_REMOTE, **f))
+    # 非法地址：拒绝，磁盘不动
+    err = sg.App._settings_apply_web(fake, {"score": {
+        "enabled": True, "url": "192.168.1.20:8765", "note": 50, "bars": 2}})
+    assert err and "地址无效" in err
+    assert disk["scoreServer"]["url"] == "http://old:1"
+    assert calls == []
+    # 撞翻谱音符（49=翻页）：拒绝
+    err = sg.App._settings_apply_web(fake, {"score": {
+        "enabled": True, "url": "http://h:1", "note": 49, "bars": 2}})
+    assert err and "冲突" in err
+    assert calls == []
+    # 合法：整段落盘 + 热应用
+    assert sg.App._settings_apply_web(fake, {"score": {
+        "enabled": True, "url": " http://192.168.1.20:8765 ",
+        "token": "tok", "note": "52", "bars": "1"}}) is None
+    assert disk["scoreServer"] == {"enabled": True,
+                                   "url": "http://192.168.1.20:8765",
+                                   "token": "tok", "note": 52, "bars": 1}
+    assert calls == ["score"]
+    # 缺席 score 键（其它页/旧前端载荷）：已存段不动
+    assert sg.App._settings_apply_web(fake, {"topMost": True}) is None
+    assert disk["scoreServer"]["note"] == 52
+
+
+def test_score_payload_reads_runtime(monkeypatch):
+    """设置页载荷：URL/令牌取落盘值，音符/小节取运行态，last 直通。"""
+    monkeypatch.setattr(sg, "_load_config", lambda: {"scoreServer": {
+        "enabled": True, "url": "http://h:1", "token": "t",
+        "note": 50, "bars": 2}})
+    ss = types.SimpleNamespace(note=52, bars=1, active=True,
+                               last={"ok": True, "msg": "m"})
+    app = types.SimpleNamespace(score_server=ss)
+    d = sg._score_payload(app)
+    assert (d["url"], d["token"], d["note"], d["bars"]) == \
+        ("http://h:1", "t", 52, 1)
+    assert d["active"] is True and d["last"]["msg"] == "m"
+    # 手改坏段（非 dict）：回落默认值不炸
+    monkeypatch.setattr(sg, "_load_config",
+                        lambda: {"scoreServer": "bogus"})
+    app = types.SimpleNamespace(score_server=None)
+    d = sg._score_payload(app)
+    assert d["enabled"] is False and d["note"] == 50 and d["bars"] == 2
+
+
 def test_design_tokens_shared_values():
     """移动页内嵌 CSS 与桌面 app.css 共享 token 同值：三端同一设计语言是
     手工同步约定，必须有硬校验（5 个 token 桌面侧已改名，按别名映射）。"""
