@@ -2711,5 +2711,11 @@ class WebRemote:
 
     def _on_midi(self, status, d1, d2):
         # winmm 回调线程：只滤 note-on 入队，禁止重活（note_handler 铁律）
-        if self.hub is not None and status & 0xF0 == 0x90 and d2 > 0:
+        if status & 0xF0 != 0x90 or d2 == 0:
+            return
+        # 谱面服务器启动音符先于翻谱组合窗口：到达即发，不陪等 100ms
+        score = getattr(self.app, "score_server", None)
+        if score is not None and score.on_note(d1):
+            return
+        if self.hub is not None:
             self.hub.submit(d1)

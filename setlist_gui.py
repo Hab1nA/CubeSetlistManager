@@ -39,6 +39,7 @@ import mtc
 import midi_bridge as mb
 import pedal
 import points
+import score_server
 import song_meta
 import stallguard
 import ui_text
@@ -576,6 +577,9 @@ class App:
         self.web_cfg.update(cfg.get("webRemote") or {})
         self.web = None
         self._web_snap = {}     # /state 快照（_tick_banner 每 400ms 重建）
+        # 谱面服务器（scoreServer 段）：启动音符经翻谱信号口到达，见 score_server.py
+        self.score_server = score_server.ScoreServer(
+            cfg.get("scoreServer"), self.q.put)
         pl = _load_playlist(daw=self.daw)
         self._pl_discarded = bool(pl.get("discarded"))   # 丢弃态：探测不落盘
         self.pl_keys = pl["playlist"]   # 播放列表（用户编排，持久化）
@@ -1669,6 +1673,10 @@ class App:
             self.cur_point_id = pid
         # 只走得到这里=工程关过重开（同工程 GOTO 不走此路）：旧歌移调不带进新歌
         self._shift_reset()
+        # 谱面服务器先把这首歌加载好，启动音符到时不用等
+        ss = getattr(self, "score_server", None)
+        if ss is not None:
+            ss.preload(entry["song_name"])
         if self.slots or self.ax_slots:
             self.q.put(ui_text.MAP_LOADED_LOG
                        % (entry["song_name"], len(slots), len(ax_slots)))
